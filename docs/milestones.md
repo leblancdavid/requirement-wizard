@@ -1,14 +1,17 @@
 # Milestone backlog
 
-Status: M1 runner implemented and partially verified; remaining milestones planned. Requirements refer to
+Status: M1 partially verified; M2 persistent engine and local API implemented with
+remaining review/UI work; M3 browser-first workspace implemented; M4 research/epic
+coverage/context slice implemented with readiness work pending. Requirements refer to
 [product-specification.md](product-specification.md). Complete and verify each
 vertical slice before expanding it. The integrated build pilot follows the initial release.
 
 ## M1 — OpenCode runtime integration spike
 
 Progress: version-pinned runner, provider discovery, live ChatGPT JSON-text response,
-streaming, cancellation, and completed-session recovery verified. Copilot quota and
-native structured-output/recovery failures remain. See [runtime-spike.md](runtime-spike.md)
+streaming, cancellation, and completed-session recovery verified. Native
+structured-output/recovery failures remain. Copilot support is deferred and its
+quota does not block M1. See [runtime-spike.md](runtime-spike.md)
 for evidence and outstanding checks; M1 exit criteria are not all met.
 
 Dependencies: none. Covers RW-004–006; investigates RW-010 and the runtime/tool boundary.
@@ -17,7 +20,7 @@ Work:
 
 - M1.1 Inspect installed runtime and current SDK interfaces; pin tested versions.
 - M1.2 Create a minimal TypeScript integration runner with explicit provider/model selection.
-- M1.3 Exercise supported GitHub Copilot and ChatGPT sign-in and model discovery.
+- M1.3 Exercise supported ChatGPT sign-in and model discovery. Copilot checks are deferred.
 - M1.4 Request a small schema-validated interpretation/question response with streaming.
 - M1.5 Exercise cancellation, provider failure, and reconnection after process restart.
 - M1.6 Inspect effective configuration/tool profiles and verify discovery can run with
@@ -26,7 +29,7 @@ Work:
 
 Exit checks:
 
-- A live authenticated response succeeds through each requested subscription.
+- A live authenticated response succeeds through the ChatGPT subscription connection.
 - Schema errors and runtime failures are surfaced; cancellation permits a subsequent call.
 - Restart behavior and actual tool-profile behavior are recorded.
 - Record model IDs and available usage metadata without recording secrets.
@@ -37,6 +40,17 @@ Deliverables: runnable spike, versioned runtime notes, capability report, and up
 technical decisions. Do not commit to full UI infrastructure before reviewing the result.
 
 ## M2 — Shared engine and terminal vertical slice
+
+Progress: project/evidence/proposal schemas, SQLite revision snapshots, durable jobs,
+in-process discovery service, runtime adapter, and terminal create/show/answer/review
+commands implemented. A two-round live ChatGPT interview preserved answers and an
+accepted requirement across processes. Deterministic checks cover failures, stale
+updates, cancellation, and restart/lease recovery. See
+[terminal-discovery.md](terminal-discovery.md) for verification details.
+
+M2 remains in progress: richer terminal help, explanation/recommendation requests,
+requirement editing, and automatic service discovery are outstanding. The browser
+now uses an authenticated loopback API; CLI commands still use the in-process facade.
 
 Dependencies: M1 adapter path established. Covers RW-001, 003, 005–008, 011–012.
 
@@ -57,17 +71,24 @@ Exit checks:
 - Malformed/stale model output does not overwrite newer project records.
 - Provider/model switching preserves project state.
 
-## M3 — Desktop client and cross-client continuity
+## M3 — Browser workspace and cross-client continuity
 
-Dependencies: M2. Covers RW-002–003 and desktop access to M2 behavior.
+Priority changed by DEC-008: browser first; desktop packaging is deferred.
+Implemented: React browser shell, same-store project selection, clickable answers,
+requirement confirmation/rejection, epic map, discovery progress/cancellation, and
+responsive layout. Playwright checks creation, answering without IDs, review, reload
+continuity, and mobile overflow. See [browser-workspace.md](browser-workspace.md).
+
+Dependencies: M2. Covers RW-002–003 and RW-017–020.
 
 Work:
 
-- M3.1 Add Electron shell and React interface using the shared local service.
+- M3.1 Add a local browser API and React interface using the shared service.
 - M3.2 Add project/model selection, interview cards, explanations, and specification panel.
 - M3.3 Add proposed-change review and visible pending/interrupted work states.
 - M3.4 Verify cross-client continuity, stale-edit handling, and keyboard access.
-- M3.5 Document a Windows development/run path and verify a packaged desktop launch.
+- M3.5 Document the Windows browser run path. Desktop packaging follows after the
+  browser discovery experience is validated with users.
 
 Exit checks:
 
@@ -76,6 +97,12 @@ Exit checks:
 - Both clients support the same persisted decisions and review actions.
 
 ## M4 — Research, scenario review, and readiness
+
+Progress: opt-in source-backed webfetch was verified live; nine-area epic assessments,
+deterministic coverage scoring, split/merge/move operations, confirmed-organization
+review, map undo, and bounded revision-aware context are implemented. Websearch and
+adversarial tool-budget/permission checks still need live qualification. Full scenario
+review, conflict resolution, release baselines, and readiness gates remain pending.
 
 Dependencies: M2 and M1 research recommendation; M3 required for full client verification.
 Covers RW-009–010 and RW-013–014.
@@ -139,6 +166,7 @@ Exit checks:
 
 ## Immediate next work package
 
-Finish the outstanding M1 checks documented in [runtime-spike.md](runtime-spike.md).
-In parallel with resolving external quota/compatibility limits, M2 schema and storage
-work can use explicit JSON text with local validation as the demonstrated adapter path.
+Try real ideas in the browser, calibrate the epic/coverage/context loop, and refine
+requirement editing and material-change review. Then implement deeper scenario and
+conflict review and an explicit release baseline before planning/handoff work.
+Continue tracking the outstanding M1 checks in [runtime-spike.md](runtime-spike.md).

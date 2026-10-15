@@ -2,6 +2,10 @@
 
 Observed October 15, 2026. M1 is **partially verified**, not complete.
 
+Current scope: ChatGPT is the initial provider. Copilot support and live checks are
+deferred by DEC-007 in [decisions.md](decisions.md). Earlier Copilot results below
+are retained as observations, not outstanding release gates.
+
 ## Run locally
 
 Prerequisites: Node.js 20.11 or newer, npm, and OpenCode. Install dependencies with
@@ -28,7 +32,7 @@ Connect missing providers with OpenCode's supported interactive flow:
 opencode auth login
 ```
 
-Choose GitHub Copilot device login or ChatGPT subscription login. The runner never
+Choose ChatGPT subscription login for current development. The runner never
 reads the runtime's credential file. Existing credentials were used for these checks;
 fresh sign-in and an embedded onboarding flow have not been exercised.
 
@@ -44,7 +48,7 @@ npm run spike -- probe --provider openai --model gpt-6.1-sol --format text-json
 # Native structured-output compatibility check (failed in the tested runtime).
 npm run spike -- probe --provider openai --model gpt-6.1-sol
 
-# Copilot example; currently blocked by this account's quota.
+# Deferred Copilot example; only run when support is brought back into scope.
 npm run spike -- probe --provider github-copilot --model gpt-5-mini --format text-json
 
 # Cancel an in-flight request; then run a fresh probe to check subsequent work.
@@ -118,7 +122,7 @@ OpenCode session storage; native-format recovery failure reinforces this boundar
 
 Before declaring M1 complete:
 
-1. Obtain a successful Copilot response when quota is available and exercise fresh sign-in.
+1. Exercise fresh ChatGPT subscription sign-in (existing credentials were used so far).
 2. Resolve or deliberately adopt an alternative to native schema output/recovery.
 3. Behaviorally verify discovery permissions and inherited instruction handling.
 4. Exercise research retrieval with source capture and a bounded tool-call budget.
@@ -126,3 +130,19 @@ Before declaring M1 complete:
 
 M2 schema/storage development can proceed against the demonstrated text-JSON adapter
 without claiming these remaining capabilities are verified.
+
+## Browser-loop integration follow-up
+
+The browser work added a narrow opt-in websearch/webfetch profile. On October 15,
+2026, ChatGPT `gpt-6.1-sol` fetched the official RSS 2.0 specification and Atom RFC
+4287 through two webfetch calls and produced verified-URL findings plus epic
+assessments. See [browser-workspace.md](browser-workspace.md) for the job and results.
+This exercises retrieval/source capture from item 4 above; live websearch, adversarial
+tool-budget cancellation, and broader permission enforcement remain unverified.
+
+The first research attempt failed because the custom SDK fetch wrapper imposed a
+90-second timeout and overlooked signals carried by Request objects. The wrapper now
+combines the caller's Request/RequestInit signal with a five-minute prompt or
+90-second metadata deadline. A local HTTP test verifies Request-signal cancellation;
+the research retry completed. Application analysis retains its combined five-minute
+bound and six-minute worker lease.

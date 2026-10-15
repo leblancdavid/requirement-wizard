@@ -1,6 +1,6 @@
 # Product specification
 
-Status: initial planning baseline, revision 0.1. Requirements below define intended
+Status: planning baseline, revision 0.2 (browser-first epic discovery). Requirements below define intended
 behavior; they are not claims of implemented functionality. Technical proposals
 and unresolved details are recorded in [decisions.md](decisions.md).
 
@@ -17,11 +17,13 @@ success measures.
 
 ## 2. Initial release scope
 
-Include desktop and terminal clients, shared local projects, GitHub Copilot and
+Include a browser workspace and terminal client, shared local projects,
 ChatGPT subscription connections through OpenCode, adaptive interviews,
 source-backed research, specification review, readiness assessment, and portable
 OpenCode handoffs.
 
+GitHub Copilot support is deferred and is not an initial-release acceptance gate.
+A desktop wrapper remains a follow-on delivery target.
 An integrated coding workspace follows the initial release. Hosted collaboration,
 cloud synchronization, direct-provider adapters, and autonomous deployment are
 outside this release.
@@ -50,10 +52,10 @@ decisions, specifications, and work status locally.
 - After restart, a saved project retains its answers, pending questions, and revision.
 - A failed model call does not discard already saved human input.
 
-**RW-002 — Desktop and terminal parity.** Both clients use the same project model
+**RW-002 — Browser and terminal continuity.** Both clients use the same project model
 and support the main journey, including review and export.
 
-- A project created in the terminal can be continued on desktop and vice versa.
+- A project created in the terminal can be continued in the browser and vice versa.
 - Concurrent edits cannot silently overwrite one another; a stale edit receives a
   refresh/retry response.
 
@@ -65,11 +67,11 @@ technical detail, tradeoffs, and recommendations per question.
 
 ### Providers and model work
 
-**RW-004 — Subscription connections.** Support GitHub Copilot and ChatGPT subscription
-access through supported OpenCode connection flows, with no separate API key required
-for those flows.
+**RW-004 — Subscription connections.** Support ChatGPT subscription access through
+supported OpenCode connection flows, with no separate API key required for that flow.
+GitHub Copilot support is deferred.
 
-- Verify each provider with an authenticated live response during milestone 1.
+- Verify ChatGPT with an authenticated live response during milestone 1.
 - Show actionable states for missing runtime, disconnected account, expired login,
   unavailable model, and provider limits when reported by the runtime.
 - Initial onboarding may hand off to OpenCode's own connection interface.
@@ -169,6 +171,38 @@ for the selected baseline and implementation phases.
   requirements, acceptance scenarios, and per-phase instructions.
 - A fresh OpenCode session can use the package without the original interview chat.
 - Export into an explicitly selected destination without silently replacing existing files.
+
+### Epic discovery and visual progress
+
+**RW-017 — Playable browser workspace.** Provide project selection/creation,
+clickable questions, free-form input, requirement review, progress, and cancellation.
+
+- Normal discovery/review does not require copying IDs.
+- Existing persisted projects remain usable without losing human input or history.
+
+**RW-018 — Living epic organization.** Each round can create/edit epics, assign
+records, split/merge areas, and identify dependencies.
+
+- Routine organization of unconfirmed material is automatic and visible.
+- Changes affecting confirmed information require review; stale proposals are rejected.
+- Splits/merges preserve records and identities, reject cycles, and invalidate inherited assessments.
+- Restoring an earlier map preserves current answers and requirement decisions.
+
+**RW-019 — Estimated completeness.** Assess applicable coverage areas per epic and
+show a deterministic project aggregate with explanations and evidence.
+
+- Unknown areas remain visible; unconfirmed proposals cannot count as fully defined.
+- Show critical gaps, assessment freshness, and qualitative scope confidence separately.
+- Explain that newly discovered scope can lower the estimate; even 100% is not proof of readiness.
+- Expose the rubric and the supporting records behind each assessment.
+
+**RW-020 — Bounded AI context.** Assemble fresh, revision-bound working sets with
+global information, focused epics, dependencies, exact evidence, and omission manifests.
+
+- Summaries do not replace original human decisions.
+- Reject oversized calls before inference rather than silently truncating decisions.
+- Reject generated references outside the detailed working set; support focused rounds.
+- Record the context revision, selection, budget, and usage metadata available from the runtime.
 
 ## 5. Quality expectations
 

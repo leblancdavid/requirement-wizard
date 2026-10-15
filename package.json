@@ -3,19 +3,34 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20.11" },
+  "engines": {
+    "node": ">=20.11"
+  },
   "scripts": {
+    "app": "npm run build:ui && tsx src/web/server.ts",
+    "build:ui": "vite build",
+    "wizard": "tsx src/terminal/cli.ts",
     "spike": "tsx src/spike/cli.ts",
     "check": "tsc --noEmit",
-    "test": "tsx --test src/spike/contract.test.ts"
+    "test": "tsx --test src/spike/contract.test.ts src/storage/store.test.ts src/service/discovery.test.ts src/core/epics.test.ts src/runtime/http.test.ts src/runtime/research.test.ts src/web/server.test.ts",
+    "test:browser": "npm run build:ui && tsx src/web/browser-check.ts"
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.18.32",
-    "zod": "3.24.2"
+    "better-sqlite3": "11.10.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "3.24.2",
+    "zod-to-json-schema": "3.24.5"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/better-sqlite3": "7.6.13",
     "@types/node": "20.17.30",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
     "tsx": "4.23.15",
-    "typescript": "5.8.3"
+    "typescript": "5.8.3",
+    "vite": "6.4.4"
   }
 }

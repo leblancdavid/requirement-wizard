@@ -1,14 +1,39 @@
 # Architecture outline
 
-Status: proposed technical design. Validate the runtime boundary in milestone 1
-before building the full clients. See [decisions.md](decisions.md).
+Status: shared engine, browser API/UI, and the first epic/assessment/context loop
+implemented under `src/`. See [decisions.md](decisions.md),
+[browser-workspace.md](browser-workspace.md), and [terminal-discovery.md](terminal-discovery.md).
+
+## Implemented slice
+
+- `src/core/model.ts`: project/evidence/proposal schemas and reference rules.
+- `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`: organization, material
+  change review, deterministic coverage, and bounded working sets.
+- `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.
+- `src/service/discovery.ts`: in-process orchestration and runtime adapter contract.
+- `src/runtime/`: shared owned-server lifecycle, provider validation, and discovery adapter.
+- `src/terminal/cli.ts`: scriptable commands and a readline interview menu.
+- `src/spike/`: compatibility runner using the shared runtime implementation.
+- `src/web/server.ts`: authenticated loopback browser API and built-asset hosting.
+- `src/ui/`: React workspace and responsive styles, built with Vite 6.4.4.
+
+Storage uses `better-sqlite3` 11.10.0, compatible with the current Node 20.11 baseline.
+SQLite has a versioned schema and WAL mode. Initial records use versioned JSON
+snapshots; dedicated relation tables can be introduced as richer models require them.
+
+The service core remains an in-process facade; the browser API wraps it and hosts
+background jobs inside a foreground Node server. CLI processes share SQLite using
+transactional expected-revision checks. Automatic daemon discovery, CLI-to-HTTP
+attachment, and the proposed Ink/Electron wrappers remain future work.
 
 ## Components
 
 ```text
-Electron / React desktop       Ink / React terminal
+React browser                   Readline terminal
+      |                               |
+Loopback HTTP API                In-process facade
              \                    /
-               Local service API
+                  Shared service
                        |
               Requirements engine
              /         |          \
@@ -18,17 +43,17 @@ Electron / React desktop       Ink / React terminal
                        |
               OpenCode server / SDK
                        |
-                Copilot / ChatGPT
+                     ChatGPT
 ```
 
-TypeScript is shared across the service, schemas, and clients. Neither client owns
-requirements logic or writes directly to SQLite. A local service serializes writes
-and streams job events. Desktop and terminal attach to the same user-local service;
-startup discovers an existing compatible instance or starts one.
+TypeScript is shared across service, schemas, and clients. UI components do not own
+requirements logic or issue SQL. The browser polls durable job state/progress while
+the server subscribes to OpenCode events. Same-store CLI/browser writes use expected
+revisions. Future wrappers can reuse this API; discovery/attachment is not yet automatic.
 
-Use a loopback-only endpoint with a per-installation access token (or an equivalent
-authenticated local transport). Establish the exact transport and lifecycle in
-milestone 2. Do not expose the local service as a public server.
+The API binds only to loopback and uses a per-launch bootstrap token, Host checks,
+same-origin mutations, bounded bodies, and a self-only script policy. Credentials
+remain with OpenCode. It is a local personal workspace, not a hosted multi-user service.
 
 ## Engine workflow
 
@@ -73,8 +98,29 @@ project operations. The later coding adapter operates against an explicitly sele
 target workspace. Verify how OpenCode configuration and inherited instructions affect
 these profiles during the spike.
 
-Search is a separately configured capability. Establish a search/fetch integration
-with source capture; do not assume that subscription access includes web research.
+Research is an opt-in runtime profile exposing only websearch/webfetch, with monitored
+tool counts and final-trace validation. Source URLs must originate in actual tool
+results; snippets and fetched pages are distinguished. Live webfetch is verified;
+websearch and adversarial enforcement still need qualification.
+
+## Epic organization, assessment, and context
+
+Epics and typed memberships live in revisioned snapshots. A pure round applier
+validates temporary model aliases, IDs, dependencies, splits/merges, and assessment
+evidence before a transaction can commit. Confirmed material is protected by a queued
+organization review. Manual map restoration retains current source/decision records.
+
+The model provides evidence-backed statuses, never an authoritative percentage.
+`coverage.ts` computes a fixed-nine-dimension weighted estimate, caps unresolved
+proposals, keeps unknowns in the denominator, and invalidates superseded evidence.
+Project scope confidence and critical gaps are separate from the arithmetic.
+
+`context.ts` constructs a fresh working set from exact source records, project-wide
+information, focused epics/dependencies, an excerpted recent index, and research.
+Jobs persist a versioned manifest. Oversized inputs fail before inference; evidence
+outside the detailed working set cannot justify generated requirements/assessments.
+The character bound is not an exact tokenizer/model-window estimate. See the browser
+guide for the implemented rubric and limitations.
 
 ## Storage and revisions
 
@@ -138,8 +184,10 @@ Create packages as milestones require them; avoid empty scaffolding in advance.
 - Engine checks: revisions, stale results, provenance, dependency cycles, readiness rules.
 - Workflow checks: interruption, resumption, changed answers, contradictory inputs.
 - Client checks: keyboard operation and the same project continued across clients.
-- Live compatibility checks: both requested subscriptions, structured output, cancellation,
+- Live compatibility checks: ChatGPT subscription access, structured output, cancellation,
   restart, available research tools, and tool profile behavior.
+- Existing Copilot adapter paths remain available experimentally, but Copilot support
+  and its compatibility checks are deferred.
 - Product evaluation: a fresh builder consumes an export and executes acceptance scenarios.
 
 ## Documentation consulted
