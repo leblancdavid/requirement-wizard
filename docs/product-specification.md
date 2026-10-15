@@ -24,6 +24,9 @@ OpenCode handoffs.
 
 GitHub Copilot support is deferred and is not an initial-release acceptance gate.
 A desktop wrapper remains a follow-on delivery target.
+Existing-project discovery is a follow-on after review and portable handoffs (M7),
+starting with a local source folder and a one-time, read-only analysis. Repository
+refresh and automatic change detection are later extensions.
 An integrated coding workspace follows the initial release. Hosted collaboration,
 cloud synchronization, direct-provider adapters, and autonomous deployment are
 outside this release.
@@ -222,6 +225,42 @@ global information, focused epics, dependencies, exact evidence, and omission ma
 - Reject oversized calls before inference rather than silently truncating decisions.
 - Reject generated references outside the detailed working set; support focused rounds.
 - Record the context revision, selection, budget, and usage metadata available from the runtime.
+
+### Existing-project discovery (follow-on; not implemented)
+
+**RW-021 — Evidence-backed project reconstruction.** Import a selected local source
+folder and propose a structured understanding of its goals, actors, epics, workflows,
+business rules, integrations, and technical constraints.
+
+- Inspect selected documentation, source, tests, and configuration without modifying
+  the target project or running its scripts as part of the initial import.
+- Record inspected and omitted scope, analysis limitations, and snapshot identity.
+  Link each finding to file evidence at that snapshot; a Git commit alone is insufficient
+  when selected files contain uncommitted or untracked content.
+- Keep observed implementation behavior, documented/tested intent, AI-inferred
+  requirements, user-confirmed requirements, and requested changes distinguishable.
+  Static inspection and test definitions do not establish successful runtime behavior.
+- Present inferred requirements for acceptance, correction, or rejection. Code behavior
+  does not automatically establish desired behavior or increase confirmed completeness.
+- Ask targeted questions about missing intent, conflicting evidence, and incomplete
+  workflows; preserve unknowns rather than inventing a complete specification.
+- Preserve prior human input and apply validated results atomically with expected-revision
+  checks. Failed, cancelled, interrupted, or stale analysis cannot confirm requirements.
+
+**RW-022 — Feature work from a reviewed existing-project baseline.** Use reviewed
+project understanding to discover and plan new or revised behavior.
+
+- Capture the requested change separately from existing behavior and ask questions in
+  the context of affected workflows, constraints, integrations, and dependencies.
+- Review which behavior should be retained, changed, or left unresolved. A discovered
+  defect is not automatically a preservation requirement.
+- Produce acceptance scenarios for the change and relevant behavior to preserve, with
+  links to reviewed requirements and imported evidence.
+- Export a change-focused handoff identifying the specification revision, source
+  snapshot, affected areas, additions/modifications, preservation scenarios, and unknowns.
+  Impact analysis remains an estimate, not a claim of exhaustive dependency coverage.
+- Keep the initial imported baseline tied to its captured snapshot; do not imply that
+  a one-time analysis stays synchronized with subsequent source changes.
 
 ## 5. Quality expectations
 

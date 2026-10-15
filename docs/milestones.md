@@ -167,6 +167,45 @@ Exit checks:
 - A builder question can revise the specification and produce a revised work package.
 - Model-reported completion alone does not mark a phase verified.
 
+## M7 — Existing-project discovery and feature planning (follow-on)
+
+Status: planned, not implemented. Follows DEC-014. The milestone number identifies
+the backlog item; M6 integrated execution is not a dependency.
+
+Dependencies: M4 review/baseline capabilities and M5 portable handoffs. Covers RW-021–022.
+Initial scope is a local source folder and a one-time, read-only analysis; automatic
+repository refresh/change detection remains later work.
+
+Work:
+
+- M7.1 Define folder selection, evidence retention, snapshot identity, file exclusions,
+  and bounded inspection/context budgets, including non-Git and dirty working trees.
+- M7.2 Capture documentation, source, tests, and configuration with file-linked evidence,
+  an inspected/omitted manifest, and durable cancellable analysis jobs.
+- M7.3 Propose goals, actors, epics, workflows, rules, integrations, and constraints;
+  distinguish observed behavior, documented/tested intent, and inferred requirements.
+- M7.4 Add human review and targeted questions for ambiguity, conflicting artifacts,
+  incomplete workflows, and behavior the user wants to retain or change.
+- M7.5 Discover one new feature against the reviewed baseline, identify affected areas,
+  and produce change and preservation acceptance scenarios.
+- M7.6 Export a change-focused handoff tied to the specification and source snapshot;
+  evaluate it with a fresh coding session.
+
+Exit checks:
+
+- Import a small existing application, review its reconstructed requirements, specify
+  one new feature, and export a handoff identifying affected behavior and preservation
+  scenarios. Record builder clarifications and acceptance outcomes.
+- Findings resolve to captured file evidence even after local source files change;
+  exclusions and analysis limits remain visible.
+- Conflicting documentation/code and missing intent produce reviewable questions;
+  inferred behavior does not silently become confirmed intent or completeness credit.
+- Initial import leaves target files unchanged and does not run project scripts.
+- Malformed references, stale revisions, failure, cancellation, and restart preserve
+  saved human decisions and never partially apply or automatically repeat analysis.
+- The handoff clearly identifies its one-time source snapshot and unresolved impact
+  assumptions; it does not imply synchronization with the current working tree.
+
 ## Immediate next work package
 
 Try real ideas in the browser, calibrate the epic/coverage/context loop, and refine

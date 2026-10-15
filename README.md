@@ -97,3 +97,9 @@ specification revision used to generate them.
 
 The initial release ends with portable build packages. A subsequent integrated
 Build workspace will launch and monitor OpenCode against a target project.
+
+Existing-project discovery is also planned as a follow-on after review and handoffs:
+select a local source folder, reconstruct evidence-backed requirements, review the
+findings, and use that baseline for new feature work. Initial scope is a one-time,
+read-only analysis of documentation, source, and tests, with change-focused handoffs
+and explicit preservation scenarios. See [M7 in the milestone backlog](docs/milestones.md#m7--existing-project-discovery-and-feature-planning-follow-on).

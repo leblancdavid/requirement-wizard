@@ -44,13 +44,13 @@ try {
   await page.getByRole("button", { name: "Create & explore" }).click();
   await expect(page.getByRole("heading", { name: "Who will use the first release?", exact: true })).toBeVisible();
   await expect(page.locator(".insight-column")).toHaveCount(0);
-  await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toBeVisible();
+  await expect(page.locator(".question-card.expanded")).toHaveCount(1);
   await page.getByLabel("Filter by feature").selectOption({ label: "Job tracking" });
   const card = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Who will use the first release?", exact: true }) });
   await expect(card.locator(".question-meta")).toContainText("Job tracking");
   await expect(card.locator(".question-meta")).toContainText("Permissions");
   await page.screenshot({ path: ".wizard-state/browser-questions.png", fullPage: true });
-  await card.getByRole("button", { name: "Answer", exact: true }).click();
   const answer = card.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true });
   await answer.fill("My unfinished answer");
   const concept = card.getByRole("button", { name: "Explain permission", exact: true });
@@ -93,6 +93,9 @@ try {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: /Owner only.*Keeps account/ }).click();
   await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Who will use the first release?", exact: true }) }).getByRole("button", { name: "Save response" }).click();
+  await expect(page.locator(".question-card").first().getByRole("heading")).toHaveText("What job details should be saved?");
+  await expect(page.getByRole("textbox", { name: "Your answer to What job details should be saved?", exact: true })).toBeVisible();
+  await expect(page.locator(".question-card.expanded")).toHaveCount(1);
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await expect(card.locator(".answer-preview")).toHaveText("Owner only");
   await card.getByRole("button", { name: "Edit answer", exact: true }).click();
@@ -133,7 +136,6 @@ try {
   const offline = page.getByRole("textbox", { name: "Your answer to What should happen offline?", exact: true });
   const detailsCard = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "What job details should be saved?", exact: true }) });
   const offlineCard = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "What should happen offline?", exact: true }) });
-  await detailsCard.getByRole("button", { name: "Answer", exact: true }).click();
   await expect(details).toBeEnabled();
   await details.fill("Save the job name and customer");
   await offlineCard.getByRole("button", { name: "Answer", exact: true }).click();
@@ -141,6 +143,9 @@ try {
   await detailsCard.getByRole("button", { name: "Answer", exact: true }).click();
   await expect(details).toHaveValue("Save the job name and customer");
   await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "What job details should be saved?", exact: true }) }).getByRole("button", { name: "Save response" }).click();
+  await expect(page.locator(".question-card").first().getByRole("heading")).toHaveText("What should happen offline?");
+  await expect(offline).toBeVisible();
+  await expect(offline).toHaveValue("An unfinished offline draft");
   await page.getByRole("button", { name: /Submitted/ }).click();
   await detailsCard.getByRole("button", { name: "Edit answer", exact: true }).click();
   await details.fill("Corrected job details");
@@ -161,7 +166,6 @@ try {
   await expect(details).toHaveCount(0);
   await page.getByRole("tab", { name: /^Questions/ }).click();
   await page.getByRole("button", { name: /To answer/ }).click();
-  await offlineCard.getByRole("button", { name: "Answer", exact: true }).click();
   await expect(offline).toHaveValue("An unfinished offline draft");
   await offline.fill("Keep offline work locally");
   await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "What should happen offline?", exact: true }) }).getByRole("button", { name: "Save response" }).click();

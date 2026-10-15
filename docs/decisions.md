@@ -20,6 +20,7 @@ every technical detail proposed in the planning documents.
 | DEC-011 | Show estimated completeness for epics and the project, with explanations and explicit uncertainty. Manage AI context as part of the engine. | User requested progress feedback and appropriate context management |
 | DEC-012 | Explain ambiguous concepts inline and offer question-level rephrasing, context, examples, and decision support without automatically answering the question. | User requested concept tooltips and clarification/help deciding, then approved the proposed behavior |
 | DEC-013 | Make the browser question-first with a compact expandable list, visible answer revision, feature/category context, a grouped feature map, and on-demand progress/details. | User selected the compact question list, requested broader map/health/header cleanup, and approved implementation |
+| DEC-014 | Add existing-project discovery as a follow-on after core review and portable handoffs: reconstruct evidence-backed requirements from a local source folder, review them with the user, and use them as the starting point for feature work. | User proposed importing existing projects and approved the recommended follow-on scope |
 
 ## Proposed implementation defaults
 
@@ -36,6 +37,7 @@ every technical detail proposed in the planning documents.
 | TECH-009 | Use Vite 6.4.4 and React for the browser build. | Compatible with Node 20.11; built assets served by the local Node API. |
 | TECH-010 | Nine fixed coverage dimensions with evidence-gated statuses and 3/2/1 importance weights. | Implemented deterministic estimate; calibration and model semantic judgment remain limitations. |
 | TECH-011 | Fresh revision-bound context with a 48,000-character detail budget. | Implemented dependency selection, manifests, and explicit compaction of explanatory question annotations/duplicate index labels on overflow; exact evidence is retained. Exact tokenization/model-capacity adaptation remain future work. |
+| TECH-012 | Start existing-project discovery with a one-time, read-only source snapshot and bounded analysis of documentation, source, and tests. | Proposed M7 design; capture file identity and inspected/omitted scope. Automatic refresh and repository change detection follow later. |
 
 ## Open questions
 
@@ -48,6 +50,7 @@ every technical detail proposed in the planning documents.
 | OPEN-005 | How should service discovery, lifecycle, and local authentication work? | Milestone 2 | Foreground loopback browser server with per-launch token and same-origin checks implemented; daemon discovery/CLI attachment remain open. |
 | OPEN-006 | What budgets should apply to discovery and research? | Milestone 4 | Start with bounded configurable calls/retries; calibrate from observed use. |
 | OPEN-007 | What export layout best supports fresh OpenCode sessions? | Milestone 5 | Evaluate a manifest, baseline documents, and per-phase packages. |
+| OPEN-008 | Which files and snapshot limits give useful existing-project coverage without excessive context or storage? | Milestone 7 | Define selection/exclusion rules, file and total budgets, and evidence retention before implementation; surface omissions explicitly. |
 
 ## Revision policy
 

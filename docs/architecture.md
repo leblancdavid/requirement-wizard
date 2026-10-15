@@ -208,6 +208,40 @@ packages. Revision invalidation marks dependent assessments and plans for review
 Dependency traversal can identify candidates for review; it does not prove semantic
 impact completeness. Model analysis may propose additional affected records.
 
+## Existing-project discovery (proposed follow-on)
+
+M7 adds a second entry path into the shared discovery engine:
+
+```text
+Local source folder → Bounded evidence snapshot → Proposed project understanding
+    → Human review → Requested feature/change → Discovery → Plan → Export
+```
+
+The local service owns folder access and snapshot capture; the renderer presents
+selection, inspection scope, progress, and review. A proposed import adapter selects
+documentation, source, tests, and configuration under explicit file/total budgets,
+recording exclusions and omissions. Initial import is read-only and does not execute
+project scripts. Target files and repository instructions are evidence, not authority
+to alter the discovery tool profile. Selection must exclude credentials and generated
+or dependency content before model context is assembled; exact rules remain OPEN-008.
+
+Capture repository identity/commit when available plus file hashes and retained evidence
+for the actual selected content, including local changes and non-Git folders. Findings
+reference snapshot ID, path, location, and supporting excerpts. Bounded working sets
+must identify omitted files; references are validated against the captured evidence.
+The snapshot design must keep links usable after the source folder changes.
+
+Imported observations and documented/tested intent remain evidence types, distinct from
+AI-inferred requirements and human confirmation. Existing proposal/review, epic, and
+coverage rules apply; finding code or a test does not confirm desired product behavior
+or prove execution. Unclear intent and conflicting artifacts become review questions.
+
+Import runs through durable jobs with cancellation, interruption recovery, and
+expected-revision application. It cannot silently replace confirmed decisions. A reviewed
+baseline then supports change discovery with explicit additions, modifications, and
+preservation scenarios. Handoffs identify both specification revision and source snapshot.
+Initial capture is one-time; automatic refresh/change detection is future work.
+
 ## Export boundary
 
 Export one versioned manifest plus Markdown and JSON artifacts. The manifest records

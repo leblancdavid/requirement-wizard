@@ -39,7 +39,9 @@ another explicit model ID. There is no automatic provider/model fallback.
 
 1. Create a named project with an idea; **Create & explore** starts its first round.
 2. Start in **Questions**. Use the feature filter to focus on an area if needed.
-3. Open a compact question row, choose an option or type an answer, then save.
+3. The first unanswered question opens automatically. Choose an option or type an
+   answer, then save; the response moves to Submitted and the next question moves
+   to the top and opens automatically. Other compact rows can be opened manually.
    Only one question is expanded at a time; unsaved answer drafts survive switching
    questions and background polling within the current page. No IDs are needed.
 4. By default, submitted responses queue a follow-up organization/discovery round.
