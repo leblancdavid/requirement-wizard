@@ -1,0 +1,21 @@
+{
+  "name": "requirement-wizard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20.11" },
+  "scripts": {
+    "spike": "tsx src/spike/cli.ts",
+    "check": "tsc --noEmit",
+    "test": "tsx --test src/spike/contract.test.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "1.18.32",
+    "zod": "3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.30",
+    "tsx": "4.23.15",
+    "typescript": "5.8.3"
+  }
+}
