@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal } from "./epics.js";
+import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal } from "./epics.js";
 
 const text = z.string().trim().min(1).max(12000);
 export const modelSelection = z.object({
@@ -13,12 +13,36 @@ const source = z.object({
   requirementID: z.string().optional(),
   epicID: z.string().default("project"),
 });
+export const conceptSchema = z.object({
+  field: z.enum(["text", "whyItMatters", "label", "consequence"]),
+  optionIndex: z.number().int().min(0).max(4).optional(),
+  phrase: z.string().trim().min(1).max(160),
+  meaning: z.string().trim().min(1).max(800),
+  impact: z.string().trim().min(1).max(800),
+}).strict();
+export type Concept = z.infer<typeof conceptSchema>;
+
+export const questionHelpRequestSchema = z.object({
+  questionID: z.string().min(1),
+  action: z.enum(["rephrase", "why", "example", "decide", "follow-up"]),
+  message: z.string().min(1).max(4000).refine((value) => !!value.trim()).optional(),
+}).strict().refine((value) => value.action !== "follow-up" || !!value.message, "A follow-up needs a message.");
+export type QuestionHelpRequest = z.infer<typeof questionHelpRequestSchema>;
+export const questionHelpResponseSchema = z.object({
+  explanation: z.string().trim().min(1).max(6000),
+  assumptions: z.array(z.string().trim().min(1).max(600)).max(5),
+  followUp: z.string().trim().min(1).max(1000).nullable(),
+}).strict();
+export type QuestionHelpResponse = z.infer<typeof questionHelpResponseSchema>;
+
 const question = z.object({
   id: z.string(), text, whyItMatters: text,
   epicID: z.string().default("inbox"),
   options: z.array(z.object({ label: text, consequence: text }).strict()).min(2).max(5),
   status: z.enum(["pending", "answered", "deferred", "delegated", "retired"]),
   sourceID: z.string().optional(), retirementReason: z.string().optional(),
+  concepts: z.array(conceptSchema).max(8).optional(),
+  category: z.enum(dimensions).optional(),
 });
 const requirement = z.object({
   id: z.string(), statement: text, rationale: text, sourceIDs: z.array(z.string()).min(1),
@@ -69,6 +93,20 @@ export const answerSchema = z.object({
 }).strict();
 export type Answer = z.infer<typeof answerSchema>;
 
+export const submissionSchema = z.object({
+  id: z.string().uuid(),
+  input: z.discriminatedUnion("type", [
+    z.object({ type: z.literal("answer"), questionID: z.string(), questionText: z.string(), sourceID: z.string().nullable(), answer: answerSchema }).strict(),
+    z.object({ type: z.literal("note"), text: answerSchema.shape.text, epicID: z.string() }).strict(),
+  ]),
+  auto: z.boolean(), research: z.boolean(),
+  replaces: z.string().uuid().optional(),
+}).strict();
+export type Submission = z.infer<typeof submissionSchema> & {
+  projectID: string; status: "queued" | "saved" | "processing" | "completed" | "needs-attention" | "superseded";
+  applied: boolean; appliedSourceID?: string; conflict?: boolean; submittedAt: string; jobID?: string; diagnostic?: string;
+};
+
 export const telemetrySchema = z.object({
   actualModel: z.object({ providerID: z.string(), modelID: z.string() }),
   usage: z.object({ input: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(),
@@ -82,8 +120,11 @@ export type Job = {
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
   model: ModelSelection; leaseUntil: number | null;
   diagnostic?: string; sessionID?: string; result?: Analysis; telemetry?: Telemetry;
-  context?: { revision: number; focusEpicID: string | null; characters: number; budget: number; includedIDs: string[]; omittedIDs: string[]; epicIDs?: string[]; version?: string };
+  context?: { revision: number; focusEpicID: string | null; characters: number; budget: number; includedIDs: string[]; omittedIDs: string[]; epicIDs?: string[]; version?: string; sectionCharacters?: Record<string, number>;
+    compaction?: { originalCharacters: number; omittedQuestionConcepts: number; duplicateIndexEntries: number } };
   researchEvidence?: ResearchEvidence[];
+  helpRequest?: QuestionHelpRequest;
+  helpResponse?: QuestionHelpResponse;
 };
 
 export class StaleRevisionError extends Error {
@@ -91,6 +132,7 @@ export class StaleRevisionError extends Error {
 }
 
 export function validateAnalysisReferences(project: Project, result: Analysis) {
+  for (const question of result.questions) validateConcepts(question);
   const superseded = new Set(project.sources.flatMap((item) => item.supersedes ? [item.supersedes] : []));
   const normative = new Set(project.sources.filter((item) => {
     if (superseded.has(item.id)) return false;
@@ -126,5 +168,23 @@ export function validateAnalysisReferences(project: Project, result: Analysis) {
     const key = item.statement.toLowerCase().trim();
     if (requirements.has(key)) throw new Error("Analysis repeated an existing requirement instead of preserving its stable ID.");
     requirements.add(key);
+  }
+}
+
+/** Exact field references prevent invented or overlapping highlights. */
+export function validateConcepts(question: { text: string; whyItMatters: string; options: { label: string; consequence: string }[]; concepts?: Concept[] }) {
+  const spans = new Map<string, Array<[number, number]>>();
+  for (const concept of question.concepts ?? []) {
+    const optionField = concept.field === "label" || concept.field === "consequence";
+    if (optionField !== (concept.optionIndex !== undefined)) throw new Error("Concept option reference does not match its field.");
+    const value = concept.field === "text" || concept.field === "whyItMatters" ? question[concept.field]
+      : question.options[concept.optionIndex!]?.[concept.field];
+    const start = value?.indexOf(concept.phrase) ?? -1;
+    if (start < 0 || value!.indexOf(concept.phrase, start + 1) >= 0) throw new Error("Concept phrase must appear exactly once in its field.");
+    const key = `${concept.field}:${concept.optionIndex ?? ""}`;
+    const ranges = spans.get(key) ?? [];
+    const end = start + concept.phrase.length;
+    if (ranges.some(([a, b]) => start < b && end > a)) throw new Error("Concept highlights cannot overlap.");
+    ranges.push([start, end]); spans.set(key, ranges);
   }
 }

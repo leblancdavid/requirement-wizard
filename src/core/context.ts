@@ -1,14 +1,28 @@
 import type { Project, Job } from "./model.js";
+import { organizationRecords } from "./epics.js";
 
 export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]> };
 
+export class ContextBudgetError extends Error {
+  constructor(readonly manifest: ContextPack["manifest"]) {
+    const largest = Object.entries(manifest.sectionCharacters ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([name, size]) => `${name}: ${size.toLocaleString("en-US")}`).join(", ");
+    const compacted = manifest.compaction ? ` Explanatory metadata and duplicate labels were already compacted from ${manifest.compaction.originalCharacters.toLocaleString("en-US")} characters.` : "";
+    super(`Project context exceeds the bounded input budget (${manifest.characters.toLocaleString("en-US")} / ${manifest.budget.toLocaleString("en-US")} characters; ${manifest.epicIDs?.length ?? 0} areas included).${largest ? ` Largest sections (characters): ${largest}.` : ""}${compacted} Select one epic in the project map and resume discovery to process its saved responses separately. If that area still exceeds the limit, reduce its dependency scope or split its work. No model call was made; saved responses are retained.`);
+  }
+}
+
 /** Fresh, revision-bound working set; no growing runtime chat or silent token truncation. */
-export function buildContext(project: Project, focusEpicID?: string, budget = 48000): ContextPack {
+export function buildContext(project: Project, focusEpicID?: string, budget = 48000, requiredEpicIDs: string[] = []): ContextPack {
   const active = project.epics.filter((item) => !item.archived);
   if (focusEpicID && !active.some((item) => item.id === focusEpicID)) throw new Error("Focused epic does not exist.");
   const focus = focusEpicID ?? (active.filter((item) => !["project", "inbox"].includes(item.id)).length > 4
-    ? project.questions.find((item) => item.status === "pending")?.epicID ?? active.find((item) => !["project", "inbox"].includes(item.id))?.id : undefined);
+    ? requiredEpicIDs[0] ?? project.questions.find((item) => item.status === "pending")?.epicID ?? active.find((item) => !["project", "inbox"].includes(item.id))?.id : undefined);
   const selected = new Set<string>(focus ? ["project", focus] : active.map((item) => item.id));
+  for (const id of requiredEpicIDs) {
+    if (!active.some((item) => item.id === id)) throw new Error("A submitted response's epic is no longer active.");
+    selected.add(id);
+  }
   const addDependencies = (id: string) => {
     for (const dependency of active.find((item) => item.id === id)?.dependencies ?? []) {
       if (!selected.has(dependency)) { selected.add(dependency); addDependencies(dependency); }
@@ -23,11 +37,12 @@ export function buildContext(project: Project, focusEpicID?: string, budget = 48
   const includedIDs = [...sources, ...questions, ...requirements, ...research].map((item) => item.id);
   const included = new Set(includedIDs);
   const omittedIDs = [...project.sources, ...project.questions, ...project.requirements, ...project.research].filter((item) => !included.has(item.id)).map((item) => item.id);
-  const data = {
+  const fullData = {
     id: project.id, name: project.name, revision: project.revision, focusEpicID: focus ?? null,
     previousInterpretation: { summary: project.summary, generatedAtRevision: project.analysisRevision, stale: project.analysisRevision !== project.revision },
     goals: project.goals, actors: project.actors, assumptions: project.assumptions,
     epicMap: active.map((item) => ({ ...item, purpose: item.purpose.slice(0, 300), purposeIsExcerpt: item.purpose.length > 300 })),
+    movableRecordIDs: organizationRecords(project).filter((item) => included.has(item.id)).map((item) => item.id),
     focusedEpics: active.filter((item) => selected.has(item.id)).map((epic) => ({ ...epic,
       recordIDs: [...project.questions, ...project.requirements, ...project.research, ...project.sources.filter((item) => item.kind === "note")].filter((item) => item.epicID === epic.id).map((item) => item.id) })), sources, questions, requirements, research,
     recordIndex: [...project.questions.map((item) => ({ id: item.id, epicID: item.epicID, status: item.status, label: item.text.slice(0, 180) })),
@@ -37,7 +52,36 @@ export function buildContext(project: Project, focusEpicID?: string, budget = 48
     assessments: project.assessments.filter((item) => selected.has(item.epicID)),
     limitations: omittedIDs.length ? "Other records are indexed only. Do not claim to have reviewed them or cite evidence not in this working set. Request a focused round for full detail." : "All current working records included; historical retired records may be omitted.",
   };
-  const characters = JSON.stringify(data).length;
-  if (characters > budget) throw new Error("Project context exceeds the bounded input budget. Focus on a smaller epic or split its work before retrying; no model call was made.");
-  return { data, manifest: { version: "epics-v1", revision: project.revision, focusEpicID: focus ?? null, characters, budget, includedIDs, omittedIDs, epicIDs: [...selected] } };
+  let data: typeof fullData & { contextCompaction?: NonNullable<ContextPack["manifest"]["compaction"]> & { explanation: string } } = fullData;
+  let characters = JSON.stringify(data).length;
+  if (characters > budget) {
+    // Tooltips are AI-authored explanations, not question/answer evidence.
+    // Index entries for detailed records merely repeat text already present.
+    // Keep every decision-bearing field and exact source; never edit storage.
+    const compaction = { originalCharacters: characters,
+      omittedQuestionConcepts: questions.reduce((total, item) => total + (item.concepts?.length ?? 0), 0),
+      duplicateIndexEntries: fullData.recordIndex.filter((item) => included.has(item.id)).length };
+    const compactData = { ...fullData,
+      questions: questions.map(({ concepts: _, ...item }) => item),
+      recordIndex: fullData.recordIndex.filter((item) => !included.has(item.id)),
+      contextCompaction: { ...compaction, explanation: "Question concept tooltips are omitted as explanatory UI metadata. Duplicate index labels are omitted only where the record is already detailed. Exact question wording, rationale, options, status, answer links, requirements, human sources, assessments, and dependencies are retained." },
+    };
+    const compactCharacters = JSON.stringify(compactData).length;
+    if (compactCharacters < characters) { data = compactData; characters = compactCharacters; }
+  }
+  const sectionCharacters = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, JSON.stringify(value).length]));
+  const manifest = { version: "epics-v3", revision: project.revision, focusEpicID: focus ?? null, characters, budget, includedIDs, omittedIDs, epicIDs: [...selected], sectionCharacters,
+    ...(data.contextCompaction ? { compaction: { originalCharacters: data.contextCompaction.originalCharacters,
+      omittedQuestionConcepts: data.contextCompaction.omittedQuestionConcepts, duplicateIndexEntries: data.contextCompaction.duplicateIndexEntries } } : {}) };
+  if (characters > budget) {
+    // Small epic counts can still carry a large amount of detail. Narrow only
+    // automatic selection, retaining every explicitly required response area.
+    if (!focusEpicID && !focus) {
+      const candidate = requiredEpicIDs[0] ?? questions.find((item) => item.status === "pending")?.epicID
+        ?? active.find((item) => !["project", "inbox"].includes(item.id))?.id;
+      if (candidate) return buildContext(project, candidate, budget, requiredEpicIDs);
+    }
+    throw new ContextBudgetError(manifest);
+  }
+  return { data, manifest };
 }

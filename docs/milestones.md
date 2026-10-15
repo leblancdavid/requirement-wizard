@@ -85,6 +85,9 @@ Work:
 
 - M3.1 Add a local browser API and React interface using the shared service.
 - M3.2 Add project/model selection, interview cards, explanations, and specification panel.
+  Inline concept annotations and durable question-help panels (rephrase, rationale,
+  example, decision support, follow-up) are implemented in the browser. Terminal help
+  presentation and live qualification of explanation quality remain outstanding.
 - M3.3 Add proposed-change review and visible pending/interrupted work states.
 - M3.4 Verify cross-client continuity, stale-edit handling, and keyboard access.
 - M3.5 Document the Windows browser run path. Desktop packaging follows after the

@@ -27,6 +27,57 @@ function complete(store: ProjectStore, project: Project, result = proposal(proje
 
 const selection = { providerID: "openai", modelID: "example" } as const;
 
+test("durable queue retains exact responses across reopen, rejects reused IDs, and flags changed questions", () => {
+  const directory = mkdtempSync(join(testDirectory, "queue-"));
+  let store = new ProjectStore(join(directory, "project.sqlite"));
+  try {
+    const project = complete(store, store.create("Queue", "Track jobs", selection));
+    const question = project.questions[0]!;
+    const submission = { id: crypto.randomUUID(), auto: false, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: null, answer: { kind: "answer", text: "  My answer\n" } } };
+    const queued = store.enqueue(project.id, submission);
+    assert.equal(store.get(project.id).revision, project.revision);
+    assert.deepEqual(store.enqueue(project.id, submission), queued);
+    assert.throws(() => store.enqueue(project.id, { ...submission, auto: true }), /already used/);
+    store.close(); store = new ProjectStore(join(directory, "project.sqlite"));
+    assert.deepEqual(store.submissions(project.id), [queued]);
+    store.applyQueued(project.id);
+    assert.equal(store.submissions(project.id)[0]!.status, "saved");
+    assert.equal(store.get(project.id).sources.at(-1)!.text, "  My answer\n");
+    const current = store.get(project.id);
+    const changed = { ...submission, id: crypto.randomUUID(), input: { ...submission.input, sourceID: current.questions[0]!.sourceID } };
+    store.enqueue(project.id, changed);
+    store.answer(project.id, current.revision, question.id, { kind: "answer", text: "Newer human decision" });
+    store.applyQueued(project.id);
+    assert.equal(store.submissions(project.id)[1]!.status, "needs-attention");
+    assert.equal(store.get(project.id).sources.at(-1)!.text, "Newer human decision");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("waiting corrections replace atomically, retain originals, and cannot replace applied or unrelated answers", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = complete(store, store.create("Corrections", "Track jobs", selection));
+    const question = project.questions[0]!;
+    const original = { id: crypto.randomUUID(), auto: false, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: null, answer: { kind: "answer", text: "Wrong choice" } } };
+    store.enqueue(project.id, original);
+    const correction = { ...original, id: crypto.randomUUID(), replaces: original.id, input: { ...original.input, answer: { kind: "answer", text: " Correct choice\n" } } };
+    const saved = store.enqueue(project.id, correction);
+    assert.deepEqual(store.enqueue(project.id, correction), saved, "retry is idempotent");
+    assert.equal(store.submissions(project.id)[0]!.status, "superseded");
+    assert.deepEqual(store.submissions(project.id)[0]!.input, original.input);
+    assert.throws(() => store.enqueue(project.id, { ...correction, id: crypto.randomUUID() }), /already changed/);
+    store.applyQueued(project.id);
+    const updated = store.get(project.id);
+    assert.equal(updated.sources.at(-1)!.text, " Correct choice\n");
+    assert.equal(updated.sources.filter((s) => s.kind === "answer").length, 1, "original waiting response is never applied");
+    assert.throws(() => store.enqueue(project.id, { ...correction, id: crypto.randomUUID(), replaces: correction.id, input: { ...correction.input, sourceID: updated.questions[0]!.sourceID } }), /started processing/);
+    const note = { id: crypto.randomUUID(), auto: false, research: false, input: { type: "note", text: "A note", epicID: "project" } };
+    store.enqueue(project.id, note);
+    assert.throws(() => store.enqueue(project.id, { ...note, id: crypto.randomUUID(), replaces: note.id }), /already changed/);
+    assert.equal(store.submissions(project.id).find((s) => s.id === note.id)!.status, "queued", "failed replacement leaves original intact");
+  } finally { store.close(); }
+});
+
 test("SQLite reopen retains exact human input, questions, decisions, and immutable revision snapshots", () => {
   const directory = mkdtempSync(join(testDirectory, "reopen-"));
   let store = new ProjectStore(join(directory, "project.sqlite"));

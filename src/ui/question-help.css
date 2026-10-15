@@ -1,0 +1,12 @@
+.concept{position:relative;display:inline;font:inherit}
+.concept-trigger{padding:0;border-radius:2px;color:#27634e;text-decoration:underline dotted;text-underline-offset:4px;font:inherit;text-align:inherit}
+.concept-tip{position:absolute;z-index:20;left:0;top:100%;width:260px;max-width:75vw;padding:13px 15px;background:#183b30;color:#fff;border:1px solid #557364;border-radius:8px;box-shadow:0 6px 20px #142d2833;font-size:12px;font-weight:400;letter-spacing:normal;line-height:1.6;text-align:left;overflow-wrap:anywhere}
+.concept-tip>span{display:block}.concept-tip>span+span{margin-top:9px}.concept-tip b{display:block;color:#e4d6a7;font-size:11px}
+.question-help{border-top:1px solid #dce2db;border-bottom:1px solid #dce2db;margin:18px 0;padding:12px 0}
+.question-help>summary{font-weight:600;color:#27634e;font-size:12px}.question-help>p{margin:12px 0;font-size:12px}
+.help-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.help-actions .secondary{font-size:11px;padding:8px 10px}
+.help-exchange{background:#f4f6f1;border:1px solid #dce2db;border-radius:8px;margin:12px 0;padding:14px;font-size:12px;overflow-wrap:anywhere}
+.help-exchange>small{display:block}.help-exchange p{margin-top:10px;margin-bottom:8px}.help-exchange ul{padding-left:18px}.question-help form{margin-top:12px}.question-help form button{margin-top:8px}
+.option .option-copy{flex:1;min-width:0}.option .option-choose{align-self:stretch;border-left:1px solid #dce2db;padding:0 0 0 10px;font-size:11px;flex-shrink:0;color:#27634e}
+.option .concept-tip{display:block;color:#fff}.option .concept-tip b{color:#e4d6a7}
+@media(max-width:540px){.concept-tip{position:fixed;left:20px;right:20px;top:auto;bottom:20px;width:auto;max-width:none}.option{gap:8px}.option .option-choose{padding-left:6px}}

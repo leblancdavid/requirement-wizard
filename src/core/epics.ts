@@ -39,8 +39,28 @@ export const initialEpics = () => [
   { id: "inbox", title: "Unorganized ideas", purpose: "Information awaiting an appropriate epic.", archived: false, dependencies: [] },
 ];
 
+export function organizationRecords(project: Project) {
+  return [...project.questions, ...project.requirements, ...project.research, ...project.sources.filter((item) => item.kind === "note")];
+}
+
+export function requireOrganizationRecord(project: Project, id: string, operation: string) {
+  const record = organizationRecords(project).find((item) => item.id === id);
+  if (record) return record;
+  const reference = JSON.stringify(id);
+  if (project.sources.some((item) => item.id === id)) {
+    throw new Error(`${operation} references non-movable evidence source ${reference}. Only questions, requirements, research findings, and notes can be organized; move the related question or requirement instead. No proposals were applied.`);
+  }
+  if (project.epics.some((item) => item.id === id)) {
+    throw new Error(`${operation} uses epic ID ${reference} as a record ID. Use a question, requirement, research finding, or note ID. No proposals were applied.`);
+  }
+  if (id.startsWith("new:")) {
+    throw new Error(`${operation} references undeclared record alias ${reference}. Declare it as a new question, requirement, or research finding localID in the same round. No proposals were applied.`);
+  }
+  throw new Error(`${operation} references missing record ${reference}. Use an exact question, requirement, research finding, or note ID from the working context. No proposals were applied.`);
+}
+
 export function organize(project: Project, operations: Organization[]) {
-  const records = [...project.questions, ...project.requirements, ...project.research, ...project.sources.filter((item) => item.kind === "note")];
+  const records = organizationRecords(project);
   const get = (id: string) => {
     const epic = project.epics.find((item) => item.id === id && !item.archived);
     if (!epic) throw new Error("Organization references a missing or archived epic.");
@@ -55,8 +75,7 @@ export function organize(project: Project, operations: Organization[]) {
       else project.epics.push({ id: op.epicID, title: op.title, purpose: op.purpose, archived: false, dependencies: op.dependencies });
     } else if (op.type === "move") {
       get(op.epicID);
-      const record = records.find((item) => item.id === op.recordID);
-      if (!record) throw new Error("Organization references a missing record.");
+      const record = requireOrganizationRecord(project, op.recordID, "Organization move");
       record.epicID = op.epicID;
     } else if (op.type === "merge") {
       const ids = new Set(op.epicIDs);
@@ -82,8 +101,8 @@ export function organize(project: Project, operations: Organization[]) {
         const target = get(destination.epicID);
         target.dependencies = [...new Set([...target.dependencies, ...source.dependencies])].filter((id) => id !== source.id && id !== target.id);
         for (const id of destination.recordIDs) {
-          const record = records.find((item) => item.id === id && item.epicID === source.id);
-          if (!record || assigned.has(id)) throw new Error("A split must assign each source record exactly once.");
+          const record = requireOrganizationRecord(project, id, "Organization split");
+          if (record.epicID !== source.id || assigned.has(id)) throw new Error("A split must assign each source record exactly once.");
           assigned.add(id);
         }
       }

@@ -64,6 +64,17 @@ technical detail, tradeoffs, and recommendations per question.
 
 - Expanding an explanation does not alter the selected answer.
 - Users can supply technical constraints directly without following every suggested option.
+- Unfamiliar concepts in question text, rationale, and suggested answers can carry
+  subtle inline explanations of meaning and practical impact. Explanations open on
+  hover, keyboard focus, or tap and can be dismissed without selecting an answer.
+- Each question offers simpler rephrasing, explanation of why it matters, concrete
+  examples, contextual decision support, and free-text clarification follow-ups.
+- Rephrasing preserves the original decision, constraints, and options. Recommendations
+  distinguish known human preferences from assumptions and ask for missing context.
+- Help retains the original question and draft answer. Requests and responses are
+  saved as revision-linked advisory exchanges, never automatically as answers,
+  delegated choices, or confirmed requirements. Loading, cancellation, failure,
+  interruption, and stale-context states are visible; retries require user action.
 
 ### Providers and model work
 
@@ -179,6 +190,14 @@ clickable questions, free-form input, requirement review, progress, and cancella
 
 - Normal discovery/review does not require copying IDs.
 - Existing persisted projects remain usable without losing human input or history.
+- Default to a compact question list with one expanded answer form, feature/category
+  context, and visible previous/submitted-response editing. Preserve drafts while
+  switching questions in the current page; saving a correction retains earlier input.
+- Replace waiting answers atomically; processing-time corrections wait for the next
+  round. Never let a correction silently overwrite a newer answer or active snapshot.
+- Group requirements under expandable features in Project map; show progress,
+  supporting evidence, settings, and diagnostics on demand rather than as permanent
+  competing columns. Use plain-language labels without implying build readiness.
 
 **RW-018 — Living epic organization.** Each round can create/edit epics, assign
 records, split/merge areas, and identify dependencies.

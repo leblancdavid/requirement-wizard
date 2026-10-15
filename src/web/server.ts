@@ -8,21 +8,21 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService, type DiscoveryAdapter } from "../service/discovery.js";
+import { DiscoveryQueue } from "../service/queue.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
-import { modelSelection, answerSchema, StaleRevisionError } from "../core/model.js";
+import { modelSelection, answerSchema, questionHelpRequestSchema, StaleRevisionError, type Job } from "../core/model.js";
 import { organizationSchema } from "../core/epics.js";
 import { coverage } from "../core/coverage.js";
 import { safeMessage } from "../runtime/contract.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
-type Work = { controller: AbortController; progress: string[]; promise: Promise<unknown> };
 
 export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; port?: number; staticDir?: string }) {
   const token = randomBytes(32).toString("hex");
   const service = new DiscoveryService(options.store, options.adapter);
-  const active = new Map<string, Work>();
-  const messages = new Map<string, string[]>();
+  const queue = new DiscoveryQueue(service);
+  const helpWork = new Map<string, { controller: AbortController; promise: Promise<unknown> }>();
   const root = resolve(options.staticDir ?? "dist/web");
   let origin = "";
   const json = (res: ServerResponse, status: number, data: unknown) => {
@@ -72,30 +72,46 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       const project = options.store.get(id);
       const action = route[2];
       if (req.method === "GET" && !action) {
-        const jobs = options.store.jobs(id, 20).map(({ result: _, researchEvidence: __, ...job }) => job);
+        const jobs = options.store.jobs(id).filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, ...job }) => job);
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? coverage(options.store.get(id, lastRound.expectedRevision)).percent : null;
-        json(res, 200, { project, coverage: coverage(project), previousCoverage, jobs, active: active.has(id), progress: messages.get(id) ?? [] }); return;
+        const helpJobs = options.store.jobs(id).filter((j) => j.helpRequest).map(({ result: _, researchEvidence: __, ...job }) => job);
+        json(res, 200, { project, coverage: coverage(project), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id) }); return;
       }
       if (req.method === "GET" && action === "history") { json(res, 200, options.store.history(id)); return; }
       if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
       const raw = await body(req);
+      if (action === "question-help") {
+        const input = z.object({ revision, request: questionHelpRequestSchema }).strict().parse(raw);
+        const controller = new AbortController();
+        let job: Job | undefined;
+        const promise = service.clarify(id, input.revision, input.request, { signal: controller.signal, onJob: (created) => { job = created; } });
+        // beginJob and onJob run synchronously before the first inference await.
+        if (!job) { await promise; throw new Error("Question help could not start."); }
+        const jobID = job.id;
+        helpWork.set(jobID, { controller, promise });
+        void promise.finally(() => helpWork.delete(jobID)).catch(() => {});
+        json(res, 202, { jobID }); return;
+      }
+      if (action === "cancel-help") {
+        const input = z.object({ jobID: z.string() }).strict().parse(raw);
+        const job = options.store.getJob(input.jobID);
+        if (job.projectID !== id || !job.helpRequest) throw new Error("Question-help job not found.");
+        const work = helpWork.get(job.id);
+        work?.controller.abort();
+        json(res, 200, { cancelled: !!work }); return;
+      }
       if (action === "analyze") {
         const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional() }).strict().parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();
-        if (active.has(id) || options.store.jobs(id).some((job) => job.status === "running" && (job.leaseUntil ?? 0) > Date.now())) {
+        if (queue.isActive(id)) {
           json(res, 409, { error: "This project already has an active discovery job." }); return;
         }
-        const controller = new AbortController(); const progress: string[] = [];
-        messages.set(id, progress);
-        const promise = service.analyze(id, input.revision, { signal: controller.signal, focusEpicID: input.focusEpicID, research: input.research,
-          onProgress: (message) => { progress.push(message); if (progress.length > 20) progress.shift(); },
-        }).catch((error: unknown) => { progress.push(safeMessage(error instanceof Error ? error.message : error)); })
-          .finally(() => { active.delete(id); });
-        active.set(id, { controller, progress, promise });
+        queue.resume(id, input);
         json(res, 202, { started: true }); return;
       }
-      if (action === "cancel") { z.object({}).strict().parse(raw); active.get(id)?.controller.abort(); json(res, 200, { cancelled: active.has(id) }); return; }
+      if (action === "cancel") { z.object({}).strict().parse(raw); queue.stop(id); json(res, 200, { cancelled: queue.isActive(id) }); return; }
+      if (action === "submit") { json(res, 202, queue.submit(id, raw)); return; }
       if (action === "answer") {
         const input = z.object({ revision, questionID: z.string(), answer: answerSchema }).strict().parse(raw);
         json(res, 200, options.store.answer(id, input.revision, input.questionID, input.answer)); return;
@@ -141,8 +157,9 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
   if (!address || typeof address === "string") throw new Error("Local app did not bind a TCP port.");
   origin = `http://127.0.0.1:${address.port}`;
   return { origin, token, close: async () => {
-    for (const work of active.values()) work.controller.abort();
-    await Promise.all([...active.values()].map((work) => work.promise));
+    for (const work of helpWork.values()) work.controller.abort();
+    await Promise.allSettled([...helpWork.values()].map((work) => work.promise));
+    await queue.close();
     server.closeAllConnections();
     await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
   } };

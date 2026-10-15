@@ -11,6 +11,10 @@ implemented under `src/`. See [decisions.md](decisions.md),
   change review, deterministic coverage, and bounded working sets.
 - `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.
 - `src/service/discovery.ts`: in-process orchestration and runtime adapter contract.
+  Question clarification shares bounded runtime/job orchestration but saves only
+  advisory responses; it cannot apply discovery proposals or mutate project decisions.
+- `src/service/queue.ts`: durable-submission orchestration, per-project serial rounds,
+  batched follow-ups, pause/resume, and interrupted-batch reconciliation.
 - `src/runtime/`: shared owned-server lifecycle, provider validation, and discovery adapter.
 - `src/terminal/cli.ts`: scriptable commands and a readline interview menu.
 - `src/spike/`: compatibility runner using the shared runtime implementation.
@@ -68,6 +72,45 @@ Human answers are persisted before follow-up model work begins. The engine assem
 context from relevant project records and sources; the transcript is retained as
 evidence rather than being the only source of truth.
 
+The browser saves responses/notes to SQLite `submissions` before acknowledging them.
+Submission IDs deduplicate retries; exact question text and previous source IDs protect
+against conflicting answers without rejecting unrelated project changes. Queued inputs
+do not mutate an active round's snapshot. At round boundaries a transaction applies
+waiting inputs in order, retaining conflicts as needs-attention records. Follow-up
+rounds batch saved inputs and require all their epic areas in bounded context.
+An optional submission `replaces` ID atomically supersedes an unapplied waiting
+answer for the same question; its exact original payload remains in history with
+status `superseded` and is excluded from application/processing. Already-applied
+answers use the normal source-linked correction path. Processing-time corrections
+queue for the next round without changing the active snapshot. Replacement validation
+and insertion share the enqueue transaction, including idempotent retry checks.
+An explicitly focused resume selects submissions by their current epic membership,
+applies only that subset, and runs one round. Other submissions remain pending;
+remaining work pauses the queue for an explicit next resume. Previously applied
+sources are reused, and dependencies remain context rather than completion claims
+for other areas' submissions.
+Each processing submission links to its job; completed means that job's result applied.
+Failures/cancellation pause the durable queue state. Restart preserves the queue and
+requires explicit resume instead of repeating inference; other workers' live leases
+are left intact. Existing direct CLI mutations still use revision checks and can make
+an in-flight result stale.
+
+Question help uses the existing durable jobs table with optional `helpRequest` and
+`helpResponse` payloads. Starting help checks the expected project revision and
+question identity; completion rejects changed revisions and expired leases. Help
+does not increment project revisions or affect coverage. Each project can have one
+help request alongside discovery; discovery can make that help stale. Browser
+snapshots expose help history separately from discovery jobs. Shutdown cancels owned
+requests; expired leases recover without automatic inference retries.
+
+The clarification adapter disables research and uses focused, revision-bound context,
+the original question, and the latest six completed help exchanges (older history is
+explicitly counted as omitted). Combined context must fit 48,000 characters. User
+help messages and model explanations remain advisory, outside normative evidence.
+The original question/options are not replaced. Concept annotations reference exact,
+unique phrases in specified question/option fields; missing, ambiguous, overlapping,
+or invalid option references reject the discovery round atomically.
+
 Question selection combines applicable coverage templates, model gap analysis, and
 research findings. Start with a simple impact/uncertainty/dependency rubric. Store
 why questions were asked, resolved, deferred, or retired.
@@ -117,7 +160,14 @@ Project scope confidence and critical gaps are separate from the arithmetic.
 
 `context.ts` constructs a fresh working set from exact source records, project-wide
 information, focused epics/dependencies, an excerpted recent index, and research.
-Jobs persist a versioned manifest. Oversized inputs fail before inference; evidence
+Jobs persist a versioned manifest, including section sizes and failed oversized
+attempts. Automatic full-project selection retries with a focused area if the
+detail exceeds the budget; required batch areas and dependencies cannot be dropped.
+Before narrowing or rejecting oversized context, deterministic compaction removes
+question concept-tooltip metadata and index labels duplicated by detailed records.
+The package declares this compaction and the manifest retains original size and
+omission counts; saved records and all decision/evidence fields remain exact.
+Oversized inputs fail before inference; evidence
 outside the detailed working set cannot justify generated requirements/assessments.
 The character bound is not an exact tokenizer/model-window estimate. See the browser
 guide for the implemented rubric and limitations.

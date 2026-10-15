@@ -4,7 +4,7 @@ import { ProjectStore } from "../storage/store.js";
 import { analysisSchema, projectSchema, type Project } from "./model.js";
 import { coverage } from "./coverage.js";
 import { dimensions } from "./epics.js";
-import { buildContext } from "./context.js";
+import { buildContext, ContextBudgetError } from "./context.js";
 
 function fixture(store: ProjectStore) { return store.create("Jobs", "A single owner needs to track jobs on one computer.", { providerID: "openai", modelID: "fixture" }); }
 function round(store: ProjectStore, project: Project, extra: Record<string, unknown> = {}) {
@@ -54,6 +54,58 @@ test("reorganizing confirmed material needs review and stale organization cannot
     const nextReview = project.organizationReviews.at(-1)!;
     project = store.note(project.id, project.revision, "A new constraint");
     assert.throws(() => store.reviewOrganization(project.id, project.revision, nextReview.id, true), /outdated/);
+  } finally { store.close(); }
+});
+
+test("organization rejects evidence sources, missing IDs, and undeclared or epic aliases without changing saved answers", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = round(store, fixture(store), { questions: [question("inbox")] });
+    project = store.answer(project.id, project.revision, project.questions[0]!.id, { kind: "answer", text: "Owner only" });
+    const cases: Array<[string, RegExp]> = [
+      [project.sources[0]!.id, /non-movable evidence source/],
+      [project.sources.at(-1)!.id, /non-movable evidence source/],
+      ["missing-record", /missing record/],
+      ["new:undeclared", /undeclared record alias/],
+      ["new:jobs", /epic alias/],
+      ["project", /epic ID/],
+    ];
+    for (const [recordID, diagnostic] of cases) {
+      for (const type of ["move", "split"] as const) {
+        const operation = type === "move" ? { type, recordID, epicID: "new:jobs" } : {
+          type, epicID: "inbox", destinations: [{ epicID: "new:jobs", recordIDs: [recordID] }, { epicID: "new:other", recordIDs: [] }], reason: "Separate areas",
+        };
+        assert.throws(() => round(store, project, {
+          organization: [epic("new:jobs"), epic("new:other", "Other"), operation],
+          questions: [{ ...question("new:jobs", "new:added"), text: "How are jobs archived?" }],
+        }), (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, diagnostic);
+          assert.ok(error.message.includes(`Organization ${type}`));
+          assert.ok(error.message.includes(JSON.stringify(recordID)));
+          assert.match(error.message, /No proposals were applied/);
+          return true;
+        });
+        assert.deepEqual(store.get(project.id), project);
+      }
+    }
+  } finally { store.close(); }
+});
+
+test("explicit moves resolve declared question and requirement aliases and retain note identity", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const initial = store.note(fixture(store).id, 1, "Keep exact note text");
+    const note = initial.sources.at(-1)!;
+    const project = round(store, initial, {
+      organization: [epic("new:jobs"), ...["new:q", "new:r", note.id].map((recordID) => ({ type: "move", recordID, epicID: "new:jobs" }))],
+      questions: [question("inbox")],
+      requirements: [{ localID: "new:r", statement: "Save jobs", rationale: "Track work", sourceIDs: [initial.sources[0]!.id], acceptance: ["Reload a saved job"] }],
+    });
+    const jobs = project.epics.find((item) => item.title === "Jobs")!;
+    assert.equal(project.questions[0]!.epicID, jobs.id);
+    assert.equal(project.requirements[0]!.epicID, jobs.id);
+    assert.deepEqual(project.sources.find((item) => item.id === note.id), { ...note, epicID: jobs.id });
   } finally { store.close(); }
 });
 
@@ -138,6 +190,11 @@ test("context contains exact human evidence and dependencies, records omissions,
     const pack = buildContext(project, jobs.id);
     assert.ok(JSON.stringify(pack.data).includes(other.id)); assert.ok(pack.manifest.includedIDs.includes(project.sources[0]!.id));
     assert.ok(pack.manifest.includedIDs.includes(noteID)); assert.ok(JSON.stringify(pack.data).includes("  Exact other-epic detail\\n"));
+    const data = pack.data as { movableRecordIDs: string[] };
+    assert.ok(data.movableRecordIDs.includes(noteID));
+    assert.ok(data.movableRecordIDs.includes(project.questions[0]!.id));
+    assert.ok(!data.movableRecordIDs.includes(project.sources[0]!.id));
+    assert.ok(!(buildContext(project, other.id).data as { movableRecordIDs: string[] }).movableRecordIDs.includes(project.questions[0]!.id));
     assert.equal(pack.manifest.revision, project.revision);
     assert.throws(() => buildContext(project, jobs.id, 100), /budget/);
     assert.throws(() => buildContext(project, "missing"), /does not exist/);
@@ -154,6 +211,79 @@ test("fabricated research citations and nonexistent assessment evidence are reje
   } finally { store.close(); }
 });
 
+test("automatic context narrows a detail-heavy small project while preserving required areas and dependencies", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = fixture(store);
+    project = store.organize(project.id, project.revision, ["area-a", "area-b"].map((epicID) => ({
+      type: "upsert" as const, epicID, title: epicID, purpose: "Separate area", dependencies: [],
+    })));
+    for (const epicID of ["area-a", "area-b"]) {
+      for (let i = 0; i < 3; i++) project = store.note(project.id, project.revision, `  ${"detail ".repeat(1300)}\n`, epicID);
+    }
+    const pack = buildContext(project);
+    assert.equal(pack.manifest.focusEpicID, "area-a");
+    assert.ok(pack.manifest.characters <= pack.manifest.budget);
+    assert.ok(pack.manifest.omittedIDs.length > 0);
+    const required = buildContext(project, undefined, 48000, ["area-b"]);
+    assert.equal(required.manifest.focusEpicID, "area-b");
+    for (const note of project.sources.filter((s) => s.epicID === "area-b")) {
+      assert.ok(required.manifest.includedIDs.includes(note.id));
+      assert.ok(JSON.stringify(required.data).includes(JSON.stringify(note.text).slice(1, -1)));
+    }
+    assert.throws(() => buildContext(project, undefined, 48000, ["area-a", "area-b"]), /budget/);
+    project = store.organize(project.id, project.revision, [{ type: "upsert", epicID: "area-a", title: "area-a", purpose: "Separate area", dependencies: ["area-b"] }]);
+    assert.throws(() => buildContext(project, "area-a"), /budget/);
+    assert.throws(() => buildContext(project), /budget/);
+  } finally { store.close(); }
+});
+
+test("oversized focused context compacts UI explanations and duplicate labels while retaining exact decision evidence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const initial = fixture(store);
+    let project = round(store, initial, { organization: [epic("new:jobs")],
+      questions: Array.from({ length: 3 }, (_, index) => ({ ...question("new:jobs", `new:q${index}`),
+        text: `Question ${index}: ${Array.from({ length: 8 }, (_, n) => `term${n}`).join(" ")}?`,
+        concepts: Array.from({ length: 8 }, (_, n) => ({ field: "text", phrase: `term${n}`, meaning: "m".repeat(800), impact: "i".repeat(800) })),
+      })),
+      requirements: [{ epicID: "new:jobs", statement: "Preserve exact saved work", rationale: "Retain human decisions", sourceIDs: [initial.sources[0]!.id], acceptance: ["Saved text survives restart"] }],
+      assessments: [{ epicID: "new:jobs", confidence: "low", explanation: "Current gaps", checks: [{ dimension: "data", status: "partial", importance: "important", evidenceIDs: [initial.sources[0]!.id], explanation: "Needs clarification" }] }],
+    });
+    const jobs = project.epics.find((item) => item.title === "Jobs")!;
+    project = store.note(project.id, project.revision, `  ${"exact note ".repeat(1050)}\n`, jobs.id);
+    project = store.answer(project.id, project.revision, project.questions[0]!.id, { kind: "answer", text: "  Exact human choice\n" });
+    project = store.review(project.id, project.revision, project.requirements[0]!.id, "accepted", "  Required for my workflow\n");
+    const original = structuredClone(project);
+    const full = buildContext(project, jobs.id, 1000000);
+    assert.ok(full.manifest.characters > 48000);
+    assert.equal(full.manifest.compaction, undefined, "fitting contexts preserve normal presentation");
+    const compact = buildContext(project, jobs.id);
+    assert.ok(compact.manifest.characters <= 48000);
+    assert.equal(compact.manifest.compaction!.originalCharacters, full.manifest.characters);
+    assert.equal(compact.manifest.compaction!.omittedQuestionConcepts, 24);
+    assert.equal(compact.manifest.compaction!.duplicateIndexEntries, 4);
+    assert.equal(compact.manifest.characters, JSON.stringify(compact.data).length);
+    assert.deepEqual(compact.manifest.includedIDs, full.manifest.includedIDs);
+    assert.deepEqual(compact.manifest.omittedIDs, full.manifest.omittedIDs);
+    const data = compact.data as Record<string, unknown>;
+    assert.deepEqual(data.questions, project.questions.map(({ concepts: _, ...item }) => item));
+    for (const key of ["sources", "requirements", "assessments", "focusedEpics", "pendingOrganization", "movableRecordIDs"]) {
+      assert.deepEqual(data[key], (full.data as Record<string, unknown>)[key], `${key} must remain exact`);
+    }
+    assert.deepEqual(data.recordIndex, []);
+    assert.ok(data.contextCompaction);
+    assert.deepEqual(project, original);
+    assert.deepEqual(store.get(project.id), original, "storage keeps every original tooltip and human source");
+    assert.throws(() => buildContext(project, jobs.id, 100), (error: unknown) => {
+      assert.ok(error instanceof ContextBudgetError);
+      assert.ok(error.manifest.compaction);
+      assert.ok(error.manifest.characters > error.manifest.budget);
+      return true;
+    });
+  } finally { store.close(); }
+});
+
 test("verified research is saved with retrieval provenance but cannot authorize a product preference", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -162,6 +292,7 @@ test("verified research is saved with retrieval provenance but cannot authorize 
     store.attachResearch(job.id, [{ url: "https://example.com/spec", excerpt: "A documented format rule", kind: "fetched-page", retrievedAt: "2026-10-15T00:00:00Z" }]);
     store.finishJob(job.id, analysisSchema.parse({ summary: "Job app", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
       researchFindings: [{ localID: "new:source", epicID: "project", url: "https://example.com/spec", title: "Specification", finding: "A format rule, not a preference" }],
+      organization: [{ type: "move", recordID: "new:source", epicID: "project" }],
       assessments: [{ epicID: "project", confidence: "low", explanation: "Research only", checks: [{ dimension: "rules", importance: "important", status: "defined", explanation: "Needs a product choice", evidenceIDs: ["new:source"] }] }],
     }));
     const project = store.get(initial.id);

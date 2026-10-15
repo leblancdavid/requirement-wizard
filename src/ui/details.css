@@ -44,3 +44,20 @@ a:hover { color: #264e34; }
 .requirement-card details { margin-top: 15px; }
 .requirement-card summary { font-size: 11px; color: #7d8b70; }
 .epic-form { margin-bottom: 15px; }
+
+.queue-panel {
+  background: #f5f7ef;
+  border: 1px solid #dde5d6;
+  border-radius: 9px;
+  padding: 16px;
+  margin: 0 0 20px;
+  overflow-wrap: anywhere;
+}
+.queue-panel summary { cursor: pointer; font-weight: 600; }
+.queue-panel > p { font-size: 12px; line-height: 1.7; }
+.queue-item { border-top: 1px solid #dde5d6; padding: 14px 0; }
+.queue-item strong { display: block; margin-top: 8px; }
+.queue-item p { font-size: 13px; line-height: 1.7; }
+.queue-item small { font-size: 11px; color: #63705e; }
+.queue-item .needs-attention { background: #fff0df; color: #81501f; }
+.queue-item .processing { background: #e3ecdc; color: #36572b; }

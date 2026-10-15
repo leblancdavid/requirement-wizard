@@ -12,7 +12,7 @@
     "wizard": "tsx src/terminal/cli.ts",
     "spike": "tsx src/spike/cli.ts",
     "check": "tsc --noEmit",
-    "test": "tsx --test src/spike/contract.test.ts src/storage/store.test.ts src/service/discovery.test.ts src/core/epics.test.ts src/runtime/http.test.ts src/runtime/research.test.ts src/web/server.test.ts",
+    "test": "tsx --test src/spike/contract.test.ts src/storage/store.test.ts src/service/discovery.test.ts src/service/question-help.test.ts src/core/epics.test.ts src/runtime/http.test.ts src/runtime/research.test.ts src/web/server.test.ts",
     "test:browser": "npm run build:ui && tsx src/web/browser-check.ts"
   },
   "dependencies": {

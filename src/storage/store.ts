@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 import { applyRound } from "../core/round.js";
 import { organize, type Organization } from "../core/epics.js";
 import { answerSchema, analysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
-  type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
+  submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
 
 export class ProjectStore {
   private readonly db: Database.Database;
@@ -27,11 +27,97 @@ export class ProjectStore {
       CREATE TABLE IF NOT EXISTS jobs (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), payload TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS submissions (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), payload TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS queue_state (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id), paused INTEGER NOT NULL
+      );
       PRAGMA user_version = 1;
     `);
   }
 
   close() { this.db.close(); }
+
+  submissions(id: string): Submission[] {
+    return (this.db.prepare("SELECT payload FROM submissions WHERE project_id = ? ORDER BY rowid").all(id) as Array<{ payload: string }>)
+      .map((row) => JSON.parse(row.payload) as Submission);
+  }
+
+  queuePaused(id: string): boolean {
+    return !!(this.db.prepare("SELECT paused FROM queue_state WHERE project_id = ?").get(id) as { paused: number } | undefined)?.paused;
+  }
+
+  pauseQueue(id: string, paused: boolean) {
+    this.db.prepare("INSERT INTO queue_state VALUES (?, ?) ON CONFLICT(project_id) DO UPDATE SET paused = excluded.paused").run(id, Number(paused));
+  }
+
+  saveSubmission(item: Submission) {
+    this.db.prepare("UPDATE submissions SET payload = ? WHERE id = ? AND project_id = ?").run(JSON.stringify(item), item.id, item.projectID);
+  }
+
+  enqueue(id: string, raw: unknown): Submission {
+    const input = submissionSchema.parse(raw);
+    return this.db.transaction(() => {
+      const existing = this.db.prepare("SELECT payload FROM submissions WHERE id = ?").get(input.id) as { payload: string } | undefined;
+      if (existing) {
+        const item = JSON.parse(existing.payload) as Submission;
+        if (item.projectID !== id || JSON.stringify(item.input) !== JSON.stringify(input.input) || item.auto !== input.auto || item.research !== input.research || item.replaces !== input.replaces) throw new Error("Submission ID already used for a different response.");
+        return item;
+      }
+      const project = this.get(id);
+      if (input.input.type === "answer") {
+        // Compare the exact question and previous answer, not an unrelated project revision.
+        const response = input.input;
+        const current = project.questions.find((q) => q.id === response.questionID);
+        if (!current || current.status === "retired" || current.text !== response.questionText || (current.sourceID ?? null) !== response.sourceID) throw new StaleRevisionError();
+      } else {
+        const note = input.input;
+        if (!project.epics.some((e) => e.id === note.epicID && !e.archived)) throw new Error("Note epic does not exist.");
+      }
+      if (input.replaces) {
+        const previous = this.submissions(id).find((item) => item.id === input.replaces);
+        if (!previous || previous.applied || previous.status !== "queued" || previous.input.type !== "answer" || input.input.type !== "answer" || previous.input.questionID !== input.input.questionID) {
+          throw new Error("That waiting answer has already changed or started processing. Refresh and edit the current answer.");
+        }
+        previous.status = "superseded"; previous.conflict = true;
+        previous.diagnostic = "Replaced by a corrected waiting answer. Retained for history; this response will not be processed.";
+        this.saveSubmission(previous);
+      }
+      const item: Submission = { ...input, projectID: id, status: "queued", applied: false, submittedAt: new Date().toISOString() };
+      this.db.prepare("INSERT INTO submissions VALUES (?, ?, ?)").run(item.id, id, JSON.stringify(item));
+      return item;
+    }).immediate();
+  }
+
+  applyQueued(id: string, submissionIDs?: string[]): Submission[] {
+    return this.db.transaction(() => {
+      const selected = (item: Submission) => !submissionIDs || submissionIDs.includes(item.id);
+      for (const item of this.submissions(id).filter((s) => s.status === "queued" && selected(s))) {
+        if (item.applied) { item.status = "saved"; this.saveSubmission(item); continue; }
+        const project = this.get(id);
+        const input = item.input;
+        if (input.type === "answer") {
+          const question = project.questions.find((q) => q.id === input.questionID);
+          if (!question || question.status === "retired" || question.text !== input.questionText || (question.sourceID ?? null) !== input.sourceID) {
+            item.status = "needs-attention"; item.diagnostic = "Question or previous answer changed. Review this response and resubmit against the current question.";
+            this.saveSubmission(item); continue;
+          }
+          const updated = this.answer(id, project.revision, input.questionID, input.answer);
+          item.appliedSourceID = updated.questions.find((q) => q.id === input.questionID)!.sourceID!;
+        } else {
+          if (!project.epics.some((e) => e.id === input.epicID && !e.archived)) {
+            item.status = "needs-attention"; item.diagnostic = "The note's project area changed. Review and resubmit the note.";
+            this.saveSubmission(item); continue;
+          }
+          const updated = this.note(id, project.revision, input.text, input.epicID);
+          item.appliedSourceID = updated.sources.at(-1)!.id;
+        }
+        item.applied = true; item.status = "saved"; this.saveSubmission(item);
+      }
+      return this.submissions(id).filter((s) => s.status === "saved" && selected(s));
+    }).immediate();
+  }
 
   create(name: string, idea: string, selection: ModelSelection): Project {
     if (!idea.trim() || idea.length > 12000) throw new Error("Idea must contain 1–12000 characters.");
@@ -169,12 +255,17 @@ export class ProjectStore {
     });
   }
 
-  beginJob(id: string, revision: number): { project: Project; job: Job } {
+  beginJob(id: string, revision: number, helpRequest?: QuestionHelpRequest): { project: Project; job: Job } {
     return this.db.transaction(() => {
       const project = this.get(id);
       if (project.revision !== revision) throw new StaleRevisionError();
+      if (helpRequest) {
+        helpRequest = questionHelpRequestSchema.parse(helpRequest);
+        if (!project.questions.some((q) => q.id === helpRequest!.questionID && q.status !== "retired")) throw new Error("Question is missing or retired.");
+        if (this.jobs(id).some((j) => j.helpRequest && (j.status === "pending" || (j.status === "running" && (j.leaseUntil ?? 0) > Date.now())))) throw new Error("This project already has an active question-help request.");
+      }
       const job: Job = { id: randomUUID(), projectID: id, expectedRevision: revision,
-        status: "pending", model: project.model, leaseUntil: null };
+        status: "pending", model: project.model, leaseUntil: null, ...(helpRequest ? { helpRequest } : {}) };
       this.db.prepare("INSERT INTO jobs VALUES (?, ?, ?)").run(job.id, id, JSON.stringify(job));
       return { project, job };
     }).immediate();
@@ -249,6 +340,7 @@ export class ProjectStore {
     const result = analysisSchema.parse(raw);
     return this.db.transaction(() => {
       const job = this.getJob(id);
+      if (job.helpRequest) throw new Error("Question help cannot apply discovery proposals.");
       if (job.status !== "running") throw new Error("Job is no longer running; result was not applied.");
       if ((job.leaseUntil ?? 0) <= Date.now()) {
         job.status = "interrupted";
@@ -283,6 +375,24 @@ export class ProjectStore {
       job.diagnostic = diagnostic;
       job.leaseUntil = null;
       this.saveJob(job);
+    }).immediate();
+  }
+
+  finishHelp(id: string, raw: unknown): Job {
+    const response = questionHelpResponseSchema.parse(raw);
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (!job.helpRequest || job.status !== "running") throw new Error("Question-help job is no longer running.");
+      if ((job.leaseUntil ?? 0) <= Date.now()) {
+        job.status = "interrupted"; job.diagnostic = "Worker lease expired; help was not saved.";
+      } else if (this.get(job.projectID).revision !== job.expectedRevision) {
+        job.status = "stale"; job.diagnostic = "Project changed while help was being generated. Request help again for current context.";
+      } else {
+        job.status = "completed"; job.helpResponse = response;
+      }
+      job.leaseUntil = null;
+      this.saveJob(job);
+      return job;
     }).immediate();
   }
 

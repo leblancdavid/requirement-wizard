@@ -14,6 +14,18 @@ A playable browser workspace is available. AI organizes your idea into epics, as
 clickable questions, researches relevant uncertainties, and estimates how well each
 area is defined. Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
+Keep answering while discovery works: responses are durably queued and waiting
+answers are batched into the next round. Expand **Processing & queue** to inspect
+the questions and submitted answers being processed, waiting, or completed in **Activity**.
+The default **Questions** view uses compact expandable rows with feature/category
+context. Use **Previous answers** or **Submitted** to edit responses, including
+waiting answers. **Project map** groups requirements under expandable features;
+definition progress and supporting evidence open on demand. Model/research and
+automatic-processing preferences live in **Settings**.
+Question cards offer **Help me with this question** for simpler wording, examples,
+tradeoffs, and follow-ups. Clarifications are saved without selecting an answer.
+Underlined concepts in newly generated questions explain meaning and impact on
+hover, keyboard focus, or tap.
 
 ChatGPT discovery has been exercised through `gpt-6.1-sol`. Copilot is outside the
 current release scope. The local browser API is implemented; a desktop wrapper and

@@ -1,12 +1,16 @@
 import React, { useEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import type { Job, Project } from "../core/model.js";
+import type { Job, Project, Submission } from "../core/model.js";
 import type { coverage } from "../core/coverage.js";
+import { dimensionLabels } from "../core/epics.js";
 import "./styles.css";
 import "./details.css";
+import "./workspace.css";
+import { AnnotatedText, QuestionHelp, type HelpControls } from "./question-help.js";
 
-type Snapshot = { project: Project; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; active: boolean; progress: string[] };
+type Snapshot = { project: Project; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; submissions: Submission[]; queuePaused: boolean };
 type Item = { id: string; name: string; revision: number };
+type Draft = { kind: "answer" | "delegation" | "deferral"; text: string };
 const token = document.querySelector<HTMLMetaElement>('meta[name="wizard-token"]')?.content ?? "";
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api/${path}`, { method: body === undefined ? "GET" : "POST",
@@ -29,6 +33,10 @@ function App() {
   const [epicID, setEpicID] = useState("all");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [sending, setSending] = useState<string[]>([]);
+  const requests = useRef(new Map<string, string>());
+  const inFlight = useRef(new Set<string>());
+  const drafts = useRef(new Map<string, Draft>());
   const [auto, setAuto] = useState(localStorage.getItem("wizard-auto") !== "false");
   const [research, setResearch] = useState(localStorage.getItem("wizard-research") !== "false");
   const [name, setName] = useState(""); const [idea, setIdea] = useState("");
@@ -38,9 +46,23 @@ function App() {
   const [editingEpic, setEditingEpic] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<{ revision: number; reason: string }>>([]);
   const [showContext, setShowContext] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [questionFilter, setQuestionFilter] = useState<"open" | "answered" | "later" | "submitted">("open");
+  const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
+  const [savedMessage, setSavedMessage] = useState<{ id: string; text: string } | null>(null);
   const project = data?.project;
   const summary = data?.coverage;
   const busy = pending || !!data?.active;
+  const help: HelpControls = {
+    jobs: data?.helpJobs ?? [], revision: project?.revision ?? 1,
+    busy: !!data?.helpJobs.some((j) => ["pending", "running"].includes(j.status)),
+    request: async (request) => {
+      if (!project) return;
+      await api(`projects/${project.id}/question-help`, { revision: project.revision, request });
+      await load(project.id);
+    },
+    cancel: async (jobID) => { if (project) { await api(`projects/${project.id}/cancel-help`, { jobID }); await load(project.id); } },
+  };
 
   async function list() {
     const items = await api<Item[]>("projects"); setProjects(items);
@@ -49,13 +71,13 @@ function App() {
   async function load(projectID = selected.current) {
     if (!projectID) return;
     const snapshot = await api<Snapshot>(`projects/${projectID}`);
-    if (selected.current === projectID) setData(snapshot);
+    if (selected.current === projectID) setData((previous) => previous && previous.project.id === projectID && previous.project.revision > snapshot.project.revision ? previous : snapshot);
   }
   useEffect(() => { void list().catch((error: Error) => setError(error.message)); }, []);
   useEffect(() => { localStorage.setItem("wizard-auto", String(auto)); }, [auto]);
   useEffect(() => { localStorage.setItem("wizard-research", String(research)); }, [research]);
   useEffect(() => {
-    setData(null); setEpicID("all"); setTab("discover"); setError("");
+    setData(null); setEpicID("all"); setTab("discover"); setQuestionFilter("open"); setExpandedQuestion(null); setSavedMessage(null); setError("");
     if (id) { localStorage.setItem("wizard-project", id); void load(id).catch((error: Error) => { setError(error.message); }); }
   }, [id]);
   useEffect(() => {
@@ -85,6 +107,19 @@ function App() {
   async function explore() {
     if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
+  async function submit(input: Submission["input"], key: string, replaces?: string): Promise<boolean> {
+    if (!project || inFlight.current.has(key)) return false;
+    const projectID = project.id;
+    const payload = JSON.stringify({ projectID, input, auto, research, replaces });
+    const submissionID = requests.current.get(payload) ?? crypto.randomUUID();
+    requests.current.set(payload, submissionID);
+    inFlight.current.add(key); setSending([...inFlight.current]); setError("");
+    try {
+      await api(`projects/${projectID}/submit`, { id: submissionID, input, auto, research, ...(replaces ? { replaces } : {}) });
+      await load(projectID); await list(); return true;
+    } catch (error) { setError(error instanceof Error ? error.message : "Could not submit response. Your draft is retained."); return false; }
+    finally { inFlight.current.delete(key); setSending([...inFlight.current]); }
+  }
   async function create(event: FormEvent) {
     event.preventDefault();
     await act(async () => {
@@ -96,10 +131,24 @@ function App() {
   const epics = project?.epics.filter((item) => !item.archived) ?? [];
   const selectedEpic = epics.find((item) => item.id === epicID);
   const epicScore = summary?.epics.find((item) => item.epicID === epicID);
-  const questions = project?.questions.filter((item) => item.status !== "retired" && (epicID === "all" || item.epicID === epicID)) ?? [];
+  const queuedQuestionIDs = new Set(data?.submissions.flatMap((item) => item.input.type === "answer" && ["queued", "processing"].includes(item.status) ? [item.input.questionID] : []) ?? []);
+  const questions = project?.questions.filter((item) => item.status !== "retired" && !queuedQuestionIDs.has(item.id) && (epicID === "all" || item.epicID === epicID)) ?? [];
   const openQuestions = questions.filter((item) => ["pending", "deferred", "delegated"].includes(item.status));
+  const scopedQuestions = project?.questions.filter((item) => item.status !== "retired" && (epicID === "all" || item.epicID === epicID)) ?? [];
+  const visibleQuestions = scopedQuestions.filter((item) => questionFilter === "submitted" ? queuedQuestionIDs.has(item.id) : !queuedQuestionIDs.has(item.id) && (questionFilter === "open" ? item.status === "pending" : questionFilter === "answered" ? item.status === "answered" : ["deferred", "delegated"].includes(item.status)));
+  const latestSubmission = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status));
   const requirements = project?.requirements.filter((item) => epicID === "all" || item.epicID === epicID) ?? [];
   const lastJob = data?.jobs.at(-1);
+  const waiting = data?.submissions.filter((item) => item.status === "queued") ?? [];
+  const processing = data?.submissions.filter((item) => item.status === "processing") ?? [];
+  const responseStatus = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status))?.status;
+  const saveAnswer = async (question: Project["questions"][number], kind: "answer" | "delegation" | "deferral", text: string) => {
+    const previous = latestSubmission(question.id);
+    if (await submit({ type: "answer", questionID: question.id, questionText: question.text, sourceID: question.sourceID ?? null, answer: { kind, text } }, question.id, previous?.status === "queued" ? previous.id : undefined)) {
+      if (drafts.current.get(question.id)?.text === text) drafts.current.delete(question.id);
+      setExpandedQuestion(null); setSavedMessage({ id: question.id, text: previous || question.sourceID ? "Correction saved. Related requirements may need review when it is applied." : "Answer saved." });
+    }
+  };
 
   return <div className="app">
     <aside className="sidebar">
@@ -110,8 +159,8 @@ function App() {
       <div className="sidebar-bottom"><span className="connection-dot" /> Local-first workspace<p>Project files are saved on this device.<br />Discovery sends context to ChatGPT.</p></div>
     </aside>
     <main>
-      <header className="topbar"><div><span className="eyebrow">FROM IDEA TO BUILD-READY</span><h1>{creating ? "Start with a spark." : project?.name ?? "Your next idea starts here."}</h1></div>
-        <div className="local-tag">◉ Local workspace{project && !creating && <span>Revision {project.revision}</span>}</div></header>
+      <header className="topbar"><div><h1>{creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>Local workspace</small></div>
+        {project && !creating && <button className="secondary" aria-expanded={showSettings} onClick={() => setShowSettings(!showSettings)}>Settings</button>}</header>
       {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
       {(creating || !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>
@@ -124,54 +173,94 @@ function App() {
           <button className="primary" disabled={pending}>{pending ? "Creating…" : "Create & explore →"}</button>
         </form>
       </section> : !project || !summary ? <div className="empty">Loading your workspace…</div> : <>
-        <section className="overview">
-          <div className="overview-copy"><span className="eyebrow">A LIVING PROJECT MAP</span><h2>Clarity, one decision at a time.</h2><p>{project.summary || "Your first discovery round will turn your idea into questions and logical areas of work."}</p>
-            {project.analysisRevision !== project.revision && project.summary && <span className="subtle-badge">New information · analysis needs refresh</span>}</div>
-          <div className="coverage-main"><div><span>Definition coverage</span><strong>{summary.percent}<small>%</small></strong></div><Meter value={summary.percent} stale={summary.stale} /><p>{summary.stale ? "Estimate needs review" : "Latest assessment"} · {summary.scopeConfidence} scope confidence</p>{data.previousCoverage !== null && <small>{summary.percent - data.previousCoverage >= 0 ? "+" : ""}{summary.percent - data.previousCoverage} points from before the last discovery round</small>}<small>Coverage of identified work, not proof of completeness.</small></div>
-        </section>
-        <div className="stats"><span><b>{epics.filter((item) => !["project", "inbox"].includes(item.id)).length}</b> epics taking shape</span><span><b>{summary.openQuestions}</b> decisions to explore</span><span><b>{summary.criticalGaps}</b> critical assessed gaps</span><span><b>{project.requirements.filter((item) => item.status === "accepted").length}</b> requirements confirmed</span></div>
+        {showSettings && <section className="settings-panel" aria-label="Project settings"><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p><label><input type="checkbox" checked={research} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label><label>ChatGPT model<input value={model} onChange={(event) => setModel(event.target.value)} /></label><button disabled={busy || model === project.model.modelID} className="secondary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model } }))}>Save model</button></section>}
+        <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Questions"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}</button>)}</div>
         <section className="workspace">
-          <div className="epic-column"><div className="section-heading"><h2>Project map</h2><button className="icon-button" aria-label="Add epic" onClick={() => setNewEpic(!newEpic)}>＋</button></div>
-            <button className={`map-all ${epicID === "all" ? "active" : ""}`} onClick={() => setEpicID("all")}>▦ All project areas<span>{epics.length}</span></button>
-            {epics.map((epic) => { const score = summary.epics.find((item) => item.epicID === epic.id)!; return <button key={epic.id} className={`epic-card ${epicID === epic.id ? "active" : ""}`} onClick={() => setEpicID(epic.id)}>
-              <div><span>{epic.id === "project" ? "◈" : epic.id === "inbox" ? "▱" : "◇"}</span><strong>{epic.title}</strong></div><p>{epic.purpose}</p><Meter value={score.percent} stale={score.stale} /><footer><span>{score.assessed ? `${score.percent}% defined` : "Not assessed"}</span><span>{score.openQuestions} open</span></footer></button>; })}
-            {newEpic && <EpicForm disabled={busy} onSave={(title, purpose) => act(async () => { await mutate("epic", { title, purpose }); setNewEpic(false); })} />}
-          </div>
           <div className="discovery-column">
-            <div className="work-heading"><div><span className="eyebrow">{selectedEpic ? "FOCUSED DISCOVERY" : "PROJECT DISCOVERY"}</span><h2>{selectedEpic?.title ?? "Shape your idea"}</h2>{selectedEpic && !["project", "inbox"].includes(selectedEpic.id) && <button className="quiet" onClick={() => setEditingEpic(editingEpic === selectedEpic.id ? null : selectedEpic.id)}>Edit epic</button>}</div><button className="primary" disabled={busy} onClick={() => void act(explore)}>{data.active ? "Discovering…" : "✦ Explore next gaps"}</button></div>
-            {selectedEpic && editingEpic === selectedEpic.id && <EpicForm key={selectedEpic.id} title={selectedEpic.title} purpose={selectedEpic.purpose} disabled={busy} onSave={(title, purpose) => act(async () => { await mutate("epic", { epicID: selectedEpic.id, title, purpose }); setEditingEpic(null); })} />}
+            <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div><button className="primary" disabled={busy} onClick={() => void act(explore)}>{data.active ? "Discovering…" : "Explore next gaps →"}</button></div>
             <div className="round-status" aria-live="polite">{data.active ? <><span className="pulse" />{data.progress.at(-1) ?? "Starting discovery…"}<button onClick={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); })}>Stop</button></> : lastJob?.status === "failed" || lastJob?.status === "stale" || lastJob?.status === "interrupted" ? <span className="job-error">Last round {lastJob.status}: {lastJob.diagnostic}</span> : <><span className="connection-dot" />{lastJob?.status === "completed" ? "Discovery saved. Your project map is ready to explore." : lastJob?.status === "cancelled" ? "Discovery stopped. Your saved answers are intact." : "Ready when you are. Start a round to explore your idea."}</>}</div>
-            <div className="tabs" role="tablist">{([ ["discover", "Questions"], ["requirements", "Requirements"], ["research", "Research"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}</button>)}</div>
+            {(tab === "history" || tab === "research") && <div className="filter-row"><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Revisions & processing</button><button className={tab === "research" ? "active" : ""} onClick={() => setTab("research")}>Research sources</button></div>}
+            {(tab === "history" || data.queuePaused || data.submissions.some((item) => item.status === "needs-attention" && !item.conflict)) && <details className="queue-panel">
+              <summary aria-live="polite">Processing &amp; queue · {processing.length} processing · {waiting.length} waiting{data.submissions.some((item) => item.status === "needs-attention") ? ` · ${data.submissions.filter((item) => item.status === "needs-attention").length} need attention` : ""}{data.queuePaused ? " · Paused" : ""}</summary>
+              <p>Answers in a batch are considered together. You can keep answering while discovery runs.</p>
+              {data.queuePaused && <p role="status">Processing is paused. Saved submissions are retained. {selectedEpic ? `Resume processes responses in ${areaTitle(selectedEpic)}; other areas remain pending.` : "Use the feature filter to resume one area's responses, or resume all areas together."} <button className="secondary" disabled={busy} onClick={() => void act(explore)}>Resume discovery</button></p>}
+              {!data.active && !data.queuePaused && waiting.length > 0 && <button className="secondary" disabled={pending} onClick={() => void act(explore)}>Process waiting answers</button>}
+              {data.active && !processing.length && <p>The active round is exploring existing project information; queued responses join the next round.</p>}
+              {data.submissions.length === 0 && <p>No responses submitted yet.</p>}
+              {([ ["processing", "Currently processing"], ["queued", "Waiting next · submission order"], ["needs-attention", "Needs attention"], ["saved", "Saved · awaiting discovery"], ["completed", "Completed batches"], ["superseded", "Replaced responses · history only"] ] as const).map(([status, label]) => {
+                const entries = data.submissions.filter((item) => item.status === status);
+                if (!entries.length) return null;
+                return <section key={status} aria-label={label}><h3>{label}</h3>{(status === "completed" ? entries.reverse() : entries).map((item) => <article className="queue-item" key={item.id}>
+                <span className={`badge ${item.status}`}>{item.status === "needs-attention" ? "Needs attention" : item.status === "saved" ? "Saved · awaiting discovery" : item.status}</span>
+                <strong>{item.input.type === "answer" ? item.input.questionText : "Idea, correction, or constraint"}</strong>
+                <p className="source-excerpt">{item.input.type === "answer" ? item.input.answer.text : item.input.text}</p>
+                <small>{new Date(item.submittedAt).toLocaleString()}{item.jobID ? ` · Batch ${item.jobID.slice(0, 8)}` : ""}{item.input.type === "answer" ? ` · ${item.input.answer.kind}` : ""}</small>
+                {item.diagnostic && <p className="job-error">{item.diagnostic}</p>}
+              </article>)}</section>;
+              })}
+            </details>}
             {tab === "discover" && <>
-              <div className="answer-preference"><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Reorganize and explore after each answer</label><small>Each round uses your model allowance.</small></div>
-              {openQuestions.length === 0 && <div className="empty-card"><span>✧</span><h3>{project.questions.length ? "A little more clarity." : "Let’s find the right questions."}</h3><p>Explore the next gaps or add more information below. No pending questions does not mean all requirements are defined.</p></div>}
-              {openQuestions.map((question, index) => <QuestionCard key={`${question.id}:${question.sourceID ?? "new"}`} question={question} initialText={project.sources.find((item) => item.id === question.sourceID)?.text} number={index + 1} disabled={busy} onSave={(kind, text) => act(() => mutate("answer", { questionID: question.id, answer: { kind, text } }, true))} />)}
-              <form className="note-card" onSubmit={(event) => { event.preventDefault(); void act(async () => { await mutate("note", { text: note, epicID: epicID === "all" ? "project" : epicID }, true); setNote(""); }); }}><label>Add an idea, correction, or constraint<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Something else the project should consider…" maxLength={12000} required /></label><button className="secondary" disabled={busy || !note.trim()}>Add to project →</button></form>
-              {questions.some((item) => item.status === "answered") && <details className="past-answers"><summary>Review or change previous answers</summary>{questions.filter((item) => item.status === "answered").map((question) => <QuestionCard key={`${question.id}:${question.sourceID}`} question={question} initialText={project.sources.find((item) => item.id === question.sourceID)?.text} number={0} disabled={busy} onSave={(kind, text) => act(() => mutate("answer", { questionID: question.id, answer: { kind, text } }, true))} />)}</details>}
+              <div className="filter-row" aria-label="Question filters">{([ ["open", "To answer"], ["answered", "Previous answers"], ["later", "Deferred / delegated"], ["submitted", "Submitted"] ] as const).map(([key, label]) => <button key={key} aria-pressed={questionFilter === key} className={questionFilter === key ? "active" : ""} onClick={() => { setQuestionFilter(key); setExpandedQuestion(null); }}>{label} <span>{scopedQuestions.filter((q) => key === "submitted" ? queuedQuestionIDs.has(q.id) : !queuedQuestionIDs.has(q.id) && (key === "open" ? q.status === "pending" : key === "answered" ? q.status === "answered" : ["deferred", "delegated"].includes(q.status))).length}</span></button>)}</div>
+              {savedMessage && <div className="save-notice" role="status">{savedMessage.text} <button className="quiet" onClick={() => { const q = project.questions.find((q) => q.id === savedMessage.id); setQuestionFilter(queuedQuestionIDs.has(savedMessage.id) ? "submitted" : q?.status === "answered" ? "answered" : "later"); setExpandedQuestion(savedMessage.id); }}>Edit answer</button><button className="quiet" aria-label="Dismiss saved message" onClick={() => setSavedMessage(null)}>×</button></div>}
+              {visibleQuestions.length === 0 && <div className="empty-card"><h3>{questionFilter !== "open" ? "No responses in this view yet." : queuedQuestionIDs.size ? "Your responses are in the queue." : "Ready for the next questions?"}</h3><p>{questionFilter === "open" ? "Explore the next gaps or add more information. Questions will adapt as you answer; no open questions does not mean the specification is complete." : "Use the filters above to answer questions or revisit a saved response."}</p></div>}
+              {(epics.some((epic) => !["project", "inbox"].includes(epic.id)) || project.organizationReviews.some((review) => review.status === "pending")) && <button className="map-prompt" onClick={() => setTab("requirements")}>Your project is taking shape · {epics.filter((epic) => !["project", "inbox"].includes(epic.id)).length} feature areas{project.organizationReviews.some((review) => review.status === "pending") ? " · Organization changes to review" : ""} <span>View project map →</span></button>}
+              {project.questions.filter((question) => question.status === "retired" && drafts.current.get(question.id)?.text.trim()).map((question) => <article className="question-card" key={question.id}><h3>Draft retained: {question.text}</h3><p>This question was retired during discovery. Your draft is still here; you can save it as a project note.</p><p className="source-excerpt">{drafts.current.get(question.id)!.text}</p><button className="secondary" disabled={sending.includes(question.id)} onClick={() => void submit({ type: "note", text: drafts.current.get(question.id)!.text, epicID: "project" }, question.id).then((saved) => { if (saved) { drafts.current.delete(question.id); void load(); } })}>Save draft as note</button></article>)}
+              {visibleQuestions.map((question, index) => {
+                const submission = latestSubmission(question.id);
+                const response = submission?.input.type === "answer" ? submission.input.answer : undefined;
+                const source = project.sources.find((item) => item.id === question.sourceID);
+                return <QuestionCard key={`${project.id}:${question.id}:${submission?.id ?? question.sourceID ?? "new"}`} question={question} area={areaTitle(epics.find((epic) => epic.id === question.epicID))} purpose={epics.find((epic) => epic.id === question.epicID)?.purpose} expanded={expandedQuestion === question.id} onToggle={() => setExpandedQuestion(expandedQuestion === question.id ? null : question.id)} onCancel={() => { drafts.current.delete(question.id); setExpandedQuestion(null); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={response?.text ?? source?.text} initialKind={response?.kind ?? (source && ["answer", "delegation", "deferral"].includes(source.kind) ? source.kind as Draft["kind"] : undefined)} number={index + 1} disabled={sending.includes(question.id)} status={sending.includes(question.id) ? "Saving…" : responseStatus(question.id)} onSave={(kind, text) => saveAnswer(question, kind, text)} />;
+              })}
+              <details className="add-information"><summary>Add information</summary><form className="note-card" onSubmit={(event) => { event.preventDefault(); const submitted = note; void submit({ type: "note", text: submitted, epicID: epicID === "all" ? "project" : epicID }, "note").then((saved) => { if (saved) setNote((current) => current === submitted ? "" : current); }); }}><label>Add an idea, correction, or constraint<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Something else the project should consider…" maxLength={12000} required /></label><button className="secondary" disabled={sending.includes("note") || !note.trim()}>{sending.includes("note") ? "Saving…" : "Add to project →"}</button></form></details>
             </>}
-            {tab === "requirements" && <>{!requirements.length && <div className="empty-card"><h3>Requirements will take shape here.</h3><p>Answer the discovery questions first. Suggestions remain proposals until you confirm them.</p></div>}{requirements.map((requirement) => <article className="requirement-card" key={requirement.id}><span className={`badge ${requirement.status}`}>{requirement.status.replace("-", " ")}</span><h3>{requirement.statement}</h3><p>{requirement.rationale}</p><ul>{requirement.acceptance.map((item) => <li key={item}>{item}</li>)}</ul><label>Organize into<select aria-label={`Epic for ${requirement.statement}`} disabled={busy} value={requirement.epicID} onChange={(event) => void act(() => mutate("organize", { operations: [{ type: "move", recordID: requirement.id, epicID: event.target.value }] }))}>{epics.map((epic) => <option key={epic.id} value={epic.id}>{epic.title}</option>)}</select></label><p className="review-note">{requirement.reviewNote}</p><ReviewForm disabled={busy} onReview={(action, note) => act(() => mutate("review", { requirementID: requirement.id, action, note }))} /></article>)}</>}
+            {tab === "requirements" && <>
+              <p className="view-intro">Features group related requirements and decisions. Open a feature to explore it; suggestions stay proposed until you confirm them.</p>
+              <details className="project-overview"><summary>Project overview</summary><p>{project.summary || "Your answers will help clarify the project scope."}</p>{project.analysisRevision !== project.revision && <small>New information has been saved since this overview was generated.</small>}</details>
+              <button className="secondary" onClick={() => setNewEpic(!newEpic)}>{newEpic ? "Cancel" : "+ Add feature"}</button>
+              {newEpic && <EpicForm disabled={busy} onSave={(title, purpose) => act(async () => { await mutate("epic", { title, purpose }); setNewEpic(false); })} />}
+              {!requirements.length && <div className="empty-card"><h3>Your specification will take shape here.</h3><p>Start with the questions. Features and requirements appear as the project becomes clearer.</p></div>}
+              {epics.filter((epic) => epicID === "all" || epic.id === epicID).map((epic) => {
+                const members = requirements.filter((r) => r.epicID === epic.id);
+                const related = project.questions.filter((q) => q.epicID === epic.id && q.status !== "retired");
+                if (["project", "inbox"].includes(epic.id) && !members.length && !related.length && !project.sources.some((s) => s.kind === "note" && s.epicID === epic.id)) return null;
+                return <details className="feature-group" key={epic.id}><summary><strong>{areaTitle(epic)}</strong><span>{members.filter((r) => r.status === "accepted").length} confirmed · {members.filter((r) => ["proposed", "needs-review"].includes(r.status)).length} to review · {related.filter((q) => ["pending", "deferred", "delegated"].includes(q.status)).length} open questions</span></summary><p>{epic.purpose}</p><div className="button-row"><button className="quiet" onClick={() => { setEpicID(epic.id); setTab("discover"); setQuestionFilter("open"); }}>Answer feature questions →</button><button className="quiet" onClick={() => setEpicID(epic.id)}>Focus progress details</button>{!["project", "inbox"].includes(epic.id) && <button className="quiet" onClick={() => setEditingEpic(editingEpic === epic.id ? null : epic.id)}>Edit feature</button>}</div>
+                {editingEpic === epic.id && <EpicForm title={epic.title} purpose={epic.purpose} disabled={busy} onSave={(title, purpose) => act(async () => { await mutate("epic", { epicID: epic.id, title, purpose }); setEditingEpic(null); })} />}
+                {!members.length && <p>No requirements recorded for this feature yet.</p>}
+                {members.map((requirement) => <details className="requirement-detail" key={requirement.id}><summary><span className={`badge ${requirement.status}`}>{requirement.status === "accepted" ? "Confirmed" : requirement.status === "needs-review" ? "Needs review" : requirement.status === "proposed" ? "Proposed" : "Rejected"}</span><strong>{requirement.statement}</strong></summary><article className="requirement-card"><p>{requirement.rationale}</p><h4>Acceptance scenarios</h4><ul>{requirement.acceptance.map((item) => <li key={item}>{item}</li>)}</ul><details><summary>Supporting decisions</summary>{requirement.sourceIDs.map((sourceID) => <Evidence key={sourceID} id={sourceID} project={project} />)}</details><label>Organize into<select aria-label={`Feature for ${requirement.statement}`} disabled={busy} value={requirement.epicID} onChange={(event) => void act(() => mutate("organize", { operations: [{ type: "move", recordID: requirement.id, epicID: event.target.value }] }))}>{epics.map((area) => <option key={area.id} value={area.id}>{areaTitle(area)}</option>)}</select></label><p className="review-note">{requirement.reviewNote}</p><ReviewForm disabled={busy} onReview={(action, note) => act(() => mutate("review", { requirementID: requirement.id, action, note }))} /></article></details>)}
+                <details className="feature-decisions"><summary>Saved answers & notes</summary>{related.filter((q) => q.sourceID).map((q) => <div key={q.id}><strong>{q.text}</strong><p className="source-excerpt">{project.sources.find((s) => s.id === q.sourceID)?.text}</p><button className="quiet" onClick={() => { setEpicID(epic.id); setTab("discover"); setQuestionFilter(queuedQuestionIDs.has(q.id) ? "submitted" : q.status === "answered" ? "answered" : "later"); setExpandedQuestion(q.id); }}>Edit answer</button></div>)}{project.sources.filter((s) => s.kind === "note" && s.epicID === epic.id).map((s) => <p className="source-excerpt" key={s.id}>{s.text}</p>)}</details>
+                </details>;
+              })}
+            </>}
             {tab === "history" && <div className="history-list">{history.map((entry) => <article key={entry.revision}><span className="history-dot" /><div><strong>Revision {entry.revision}</strong><p>{entry.reason}</p></div></article>)}</div>}
             {tab === "research" && <><div className="research-intro"><label><input type="checkbox" checked={research} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label><p>Search and page retrieval are limited to relevant uncertainties. Sources inform choices; they do not decide your preferences. The round stops if it exceeds the monitored tool budget.</p></div>{project.research.filter((item) => epicID === "all" || item.epicID === epicID).map((finding) => <article className="requirement-card" key={finding.id}><span className="badge">{finding.kind === "fetched-page" ? "Retrieved page" : "Search-result evidence"}</span><h3><a href={finding.url} target="_blank" rel="noreferrer">{finding.title} ↗</a></h3><p>{finding.finding}</p><small>{new URL(finding.url).hostname} · {new Date(finding.retrievedAt).toLocaleString()}</small><details><summary>Source excerpt</summary><p className="source-excerpt">{finding.excerpt}</p></details></article>)}{!project.research.length && <div className="empty-card"><h3>No sources collected yet.</h3><p>Enable research and explore a concrete area. Vague ideas may need clarification before external research is useful.</p></div>}</>}
           </div>
-          <aside className="insight-column">
-            <section className="insight-card"><span className="eyebrow">DEFINITION HEALTH</span><h3>{selectedEpic ? "What’s still missing?" : "How much do we know?"}</h3><p>{epicScore?.explanation ?? summary.scopeExplanation}</p>{epicScore ? <><div className="insight-percent">{epicScore.percent}% <span>{epicScore.stale ? "needs re-assessment" : `${epicScore.confidence} confidence`}</span></div>{epicScore.checks.map((check) => <details className="check-row" key={check.dimension}><summary><span className={`check-icon ${check.status}`}>{check.status === "defined" || check.status === "not-applicable" ? "✓" : check.status === "partial" ? "◐" : "○"}</span>{check.label}<span className="check-status">{check.status.replaceAll("-", " ")}</span></summary><p>{check.explanation}</p><small>{check.importance} · {check.evidenceIDs.length} evidence links</small>{check.evidenceIDs.map((evidenceID) => <Evidence key={evidenceID} id={evidenceID} project={project} />)}</details>)}</> : <><p className="muted">Select an epic to inspect its nine coverage areas and supporting evidence.</p><small>{summary.note}</small></>}</section>
+          {tab !== "discover" && <aside className="insight-column">
+            <details className="insight-card definition-details"><summary><strong>Definition progress</strong><span>{epicScore?.percent ?? summary.percent}% estimated coverage · {(epicScore?.stale ?? summary.stale) ? "Review needed" : "View details"}</span></summary><p>Coverage describes identified work, not completeness or build readiness.</p><Meter value={epicScore?.percent ?? summary.percent} stale={epicScore?.stale ?? summary.stale} /><p>{epicScore?.explanation ?? summary.scopeExplanation}</p>{epicScore ? <>{epicScore.checks.map((check) => <details className="check-row" key={check.dimension}><summary><span className={`check-icon ${check.status}`}>{check.status === "defined" || check.status === "not-applicable" ? "✓" : check.status === "partial" ? "◐" : "○"}</span>{check.label}<span className="check-status">{({ unknown: "Not explored yet", partial: "Needs more detail", defined: "Decision recorded", "needs-review": "Review needed", "not-applicable": "Not relevant" } as const)[check.status]}</span></summary><p>{check.explanation}</p><small>{check.importance} · {check.evidenceIDs.length} evidence links</small>{check.evidenceIDs.map((evidenceID) => <Evidence key={evidenceID} id={evidenceID} project={project} />)}</details>)}</> : <><p className="muted">Choose a feature using the filter to inspect its definition details and supporting decisions.</p><small>{summary.note}</small></>}</details>
             {!!selectedEpic?.dependencies.length && <section className="insight-card"><h3>Related dependencies</h3>{selectedEpic.dependencies.map((dependency) => <button className="quiet" key={dependency} onClick={() => setEpicID(dependency)}>{epics.find((item) => item.id === dependency)?.title ?? "Related area"} →</button>)}</section>}
-            <section className="insight-card changes"><span className="eyebrow">LAST DISCOVERY ROUND</span><h3>What moved forward</h3>{project.roundChanges.length ? <ul>{project.roundChanges.map((change, index) => <li key={index}>{change}</li>)}</ul> : <p>Your next round’s changes will appear here.</p>}<small>Estimates can fall when discovery reveals missing work. More complete scope is progress, too.</small>{lastJob?.status === "completed" && lastJob.expectedRevision < project.revision && <button className="quiet" disabled={busy} onClick={() => void act(() => mutate("undo-organization", { targetRevision: lastJob.expectedRevision }))}>Restore map before this round</button>}</section>
+            <details className="insight-card changes"><summary>Latest changes</summary>{project.roundChanges.length ? <ul>{project.roundChanges.map((change, index) => <li key={index}>{change}</li>)}</ul> : <p>Your next round’s changes will appear here.</p>}{lastJob?.status === "completed" && lastJob.expectedRevision < project.revision && <button className="quiet" disabled={busy} onClick={() => void act(() => mutate("undo-organization", { targetRevision: lastJob.expectedRevision }))}>Restore map before this round</button>}</details>
             {project.organizationReviews.filter((item) => item.status === "pending").map((review) => <section key={review.id} className="insight-card review-organization"><h3>Reorganization to review</h3><p>{review.reason}</p><details><summary>See proposed changes</summary><ul>{review.operations.map((op, index) => <li key={index}>{op.type === "upsert" ? `${op.type}: ${op.title} — ${op.purpose}` : op.type === "merge" || op.type === "split" ? `${op.type}: ${op.reason}` : `Move a record to ${project.epics.find((item) => item.id === op.epicID)?.title ?? "a proposed epic"}`}</li>)}</ul></details><div className="button-row"><button className="secondary" disabled={busy} onClick={() => void act(() => mutate("organization-review", { reviewID: review.id, accept: true }))}>Apply</button><button className="quiet" disabled={busy} onClick={() => void act(() => mutate("organization-review", { reviewID: review.id, accept: false }))}>Keep current</button></div></section>)}
             {!!project.assumptions.length && <details className="insight-card"><summary>Unconfirmed assumptions <span>{project.assumptions.length}</span></summary><ul>{project.assumptions.map((item) => <li key={item}>{item.replace(/^Unconfirmed:\s*/i, "")}</li>)}</ul></details>}
             <details className="insight-card"><summary>Your original idea & recent notes</summary>{[...project.sources.filter((item) => item.kind === "initial"), ...project.sources.filter((item) => item.kind === "note").slice(-9)].map((item) => <blockquote key={item.id}><small>{item.kind === "initial" ? "Original idea" : "Your note"}</small><p className="source-excerpt">{item.text}</p></blockquote>)}<small>Original idea and latest nine notes. All saved input remains in revision history.</small></details>
-            <section className="insight-card settings"><button className="quiet" onClick={() => setShowContext(!showContext)}>Context & model {showContext ? "−" : "+"}</button>{showContext && <><label>ChatGPT model<input value={model} onChange={(event) => setModel(event.target.value)} /></label><button disabled={busy || model === project.model.modelID} className="secondary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model } }))}>Save model</button>{lastJob?.context && <p>{lastJob.context.characters.toLocaleString()} / {lastJob.context.budget.toLocaleString()} context characters · {lastJob.context.includedIDs.length} full records · {lastJob.context.omittedIDs.length} omitted from detail</p>}<small>Fresh revision-bound context each round. AI summaries do not replace your decisions. The context budget is a conservative character bound, not an exact tokenizer count.</small></>}</section>
-          </aside>
+            {tab === "history" && <section className="insight-card settings"><button className="quiet" aria-expanded={showContext} onClick={() => setShowContext(!showContext)}>Technical details {showContext ? "−" : "+"}</button>{showContext && <><p>Project revision {project.revision} · Analysis revision {project.analysisRevision ?? "Not yet analyzed"}</p>{lastJob?.context && <p>{lastJob.context.characters.toLocaleString()} / {lastJob.context.budget.toLocaleString()} context characters · {lastJob.context.includedIDs.length} full records · {lastJob.context.omittedIDs.length} omitted from detail</p>}<small>Fresh revision-bound context each round. AI summaries do not replace your decisions. The context budget is a conservative character bound, not an exact tokenizer count.</small></>}</section>}
+          </aside>}
         </section>
       </>}
     </main>
   </div>;
 }
 
-function QuestionCard({ question, initialText, number, disabled, onSave }: { question: Project["questions"][number]; initialText?: string; number: number; disabled: boolean; onSave: (kind: "answer" | "delegation" | "deferral", text: string) => Promise<void> }) {
-  const [text, setText] = useState(initialText ?? ""); const [kind, setKind] = useState<"answer" | "delegation" | "deferral">(question.status === "delegated" ? "delegation" : question.status === "deferred" ? "deferral" : "answer");
-  return <article className="question-card"><div className="question-meta"><span>{number ? `QUESTION ${String(number).padStart(2, "0")}` : "PREVIOUS ANSWER"}</span><span>{question.status === "pending" ? "Your perspective matters" : question.status}</span></div><h3>{question.text}</h3><p>{question.whyItMatters}</p><div className="options">{question.options.map((option, index) => <button type="button" aria-pressed={kind === "answer" && text === option.label} disabled={disabled} className={`option ${kind === "answer" && text === option.label ? "chosen" : ""}`} key={index} onClick={() => { setKind("answer"); setText(option.label); }}><span className="option-circle">{String.fromCharCode(65 + index)}</span><div><strong>{option.label}</strong><small>{option.consequence}</small></div><span className="selected-mark">{kind === "answer" && text === option.label ? "✓" : ""}</span></button>)}</div>
-    <form onSubmit={(event) => { event.preventDefault(); void onSave(kind, text); }}><label className="sr-only">Your answer to {question.text}</label><textarea aria-label={`Your answer to ${question.text}`} value={text} onChange={(event) => setText(event.target.value)} rows={2} maxLength={12000} placeholder={kind === "delegation" ? "Describe exactly which choice the AI may make, and its limits…" : kind === "deferral" ? "What should remain open, and why?" : "Choose an option above, or write it in your own words…"} required /><div className="answer-actions"><select aria-label={`Response type for ${question.text}`} value={kind} disabled={disabled} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="answer">My answer</option><option value="deferral">Defer for now</option><option value="delegation">Delegate within limits</option></select><button className="primary" disabled={disabled || !text.trim()}>Save response →</button></div>{kind === "delegation" && <small className="delegation-note">Delegation records permission within your stated limits. It does not turn this text into a confirmed product preference.</small>}</form>
+function areaTitle(epic?: Project["epics"][number]) {
+  return epic?.id === "project" ? "Shared project decisions" : epic?.id === "inbox" ? "Items to organize" : epic?.title ?? "Items to organize";
+}
+
+function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, help, initialText, initialKind, draft, onDraft, number, disabled, status, onSave }: { question: Project["questions"][number]; area: string; purpose?: string; expanded: boolean; onToggle: () => void; onCancel: () => void; help: HelpControls; initialText?: string; initialKind?: Draft["kind"]; draft?: Draft; onDraft: (draft: Draft) => void; number: number; disabled: boolean; status?: string; onSave: (kind: "answer" | "delegation" | "deferral", text: string) => Promise<void> }) {
+  const [text, setText] = useState(draft?.text ?? initialText ?? ""); const [kind, setKind] = useState<Draft["kind"]>(draft?.kind ?? initialKind ?? (question.status === "delegated" ? "delegation" : question.status === "deferred" ? "deferral" : "answer"));
+  const updateText = (value: string) => { setText(value); onDraft({ kind, text: value }); };
+  const updateKind = (value: Draft["kind"]) => { setKind(value); onDraft({ kind: value, text }); };
+  const annotated = (text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => <AnnotatedText text={text} concepts={question.concepts?.filter((c) => c.field === field && c.optionIndex === optionIndex)} />;
+  return <article className={`question-card ${expanded ? "expanded" : "collapsed"}`}><div className="question-meta"><span>{area}{question.category ? ` · ${dimensionLabels[question.category]}` : ""}</span><span role="status">{status ?? (question.status === "pending" ? "To answer" : question.status === "answered" ? "Answered" : question.status)}</span></div><div className="question-title"><h3 aria-label={question.text}>{expanded ? annotated(question.text, "text") : <button aria-expanded={false} onClick={onToggle}>{question.text}</button>}</h3><button className="quiet" aria-expanded={expanded} onClick={onToggle}>{expanded ? "Collapse" : initialText ? "Edit answer" : "Answer"}</button></div>{!expanded && initialText && <p className="answer-preview">{initialText}</p>}{expanded && <div className="question-body"><p>{annotated(question.whyItMatters, "whyItMatters")}</p>{purpose && <details className="question-context"><summary>About this feature</summary><p>{purpose}</p></details>}{status === "processing" && <p className="correction-hint">This response is being reviewed. A correction will be saved for the next round.</p>}{status === "queued" && <p className="correction-hint">Saving changes replaces this waiting response. Its earlier version stays in history.</p>}<div className="options">{question.options.map((option, index) => <div className={`option ${kind === "answer" && text === option.label ? "chosen" : ""}`} key={index}><span className="option-circle">{String.fromCharCode(65 + index)}</span><div className="option-copy"><strong>{annotated(option.label, "label", index)}</strong><small>{annotated(option.consequence, "consequence", index)}</small></div><button type="button" className="option-choose" aria-label={`Choose ${option.label}. ${option.consequence}`} aria-pressed={kind === "answer" && text === option.label} disabled={disabled} onClick={() => { setKind("answer"); setText(option.label); onDraft({ kind: "answer", text: option.label }); }}>{kind === "answer" && text === option.label ? "✓ Selected" : "Choose"}</button></div>)}</div>
+    <QuestionHelp questionID={question.id} help={help} />
+    <form onSubmit={(event) => { event.preventDefault(); if (!disabled) void onSave(kind, text); }}><label className="sr-only">Your answer to {question.text}</label><textarea aria-label={`Your answer to ${question.text}`} value={text} onChange={(event) => updateText(event.target.value)} rows={2} maxLength={12000} placeholder={kind === "delegation" ? "Describe exactly which choice the AI may make, and its limits…" : kind === "deferral" ? "What should remain open, and why?" : "Choose an option above, or write it in your own words…"} required /><div className="answer-actions"><select aria-label={`Response type for ${question.text}`} value={kind} disabled={disabled} onChange={(event) => updateKind(event.target.value as typeof kind)}><option value="answer">My answer</option><option value="deferral">Defer for now</option><option value="delegation">Delegate within limits</option></select><button type="button" className="quiet" disabled={disabled} onClick={() => { setText(initialText ?? ""); setKind(initialKind ?? "answer"); onCancel(); }}>Cancel</button><button className="primary" disabled={disabled || !text.trim()}>{initialText ? "Save changes →" : "Save response →"}</button></div>{kind === "delegation" && <small className="delegation-note">Delegation records permission within your stated limits. It does not turn this text into a confirmed product preference.</small>}</form></div>}
   </article>;
 }
 function ReviewForm({ disabled, onReview }: { disabled: boolean; onReview: (action: "accepted" | "rejected", note: string) => Promise<void> }) {
@@ -180,7 +269,7 @@ function ReviewForm({ disabled, onReview }: { disabled: boolean; onReview: (acti
 }
 function EpicForm({ disabled, onSave, title: initialTitle = "", purpose: initialPurpose = "" }: { disabled: boolean; title?: string; purpose?: string; onSave: (title: string, purpose: string) => Promise<void> }) {
   const [title, setTitle] = useState(initialTitle); const [purpose, setPurpose] = useState(initialPurpose);
-  return <form className="epic-form" onSubmit={(event) => { event.preventDefault(); void onSave(title, purpose); }}><label>Epic name<input required value={title} onChange={(event) => setTitle(event.target.value)} maxLength={150} /></label><label>Purpose<textarea required value={purpose} onChange={(event) => setPurpose(event.target.value)} maxLength={4000} rows={3} /></label><button className="secondary" disabled={disabled}>{initialTitle ? "Save epic" : "Add epic"}</button></form>;
+  return <form className="epic-form" onSubmit={(event) => { event.preventDefault(); void onSave(title, purpose); }}><label>Feature name<input required value={title} onChange={(event) => setTitle(event.target.value)} maxLength={150} /></label><label>Purpose<textarea required value={purpose} onChange={(event) => setPurpose(event.target.value)} maxLength={4000} rows={3} /></label><button className="secondary" disabled={disabled}>{initialTitle ? "Save feature" : "Add feature"}</button></form>;
 }
 function Evidence({ id, project }: { id: string; project: Project }) {
   const source = project.sources.find((item) => item.id === id);

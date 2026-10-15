@@ -32,26 +32,110 @@ or revision history. New fields are saved on subsequent mutations; the SQLite
 table schema remains version 1.
 
 Use your existing OpenCode ChatGPT connection. If needed, run `opencode auth login`
-first. The UI defaults to `gpt-6.1-sol`; the context/model panel lets you select
+first. The UI defaults to `gpt-6.1-sol`; **Settings** lets you select
 another explicit model ID. There is no automatic provider/model fallback.
 
 ## Workflow
 
 1. Create a named project with an idea; **Create & explore** starts its first round.
-2. Open an epic card or explore the whole project map.
-3. Choose a question option or type an answer, then save. No IDs need to be entered.
-4. By default, each saved response triggers a new organization/discovery round.
-   Disable this option to save a batch and then choose **Explore next gaps**.
+2. Start in **Questions**. Use the feature filter to focus on an area if needed.
+3. Open a compact question row, choose an option or type an answer, then save.
+   Only one question is expanded at a time; unsaved answer drafts survive switching
+   questions and background polling within the current page. No IDs are needed.
+4. By default, submitted responses queue a follow-up organization/discovery round.
+   Keep answering while discovery runs; waiting answers are batched into the next round.
+   In **Settings**, disable **Automatically explore queued answers** to save without starting another
+   round, then choose **Explore next gaps** when ready.
    Research and automatic-follow-up preferences are retained in this browser.
-5. Add free-form ideas/corrections in the note box. Original text is retained.
-6. Confirm/reject requirements with a rationale. Review changes to confirmed
-   information before applying material reorganization proposals.
-7. Inspect research sources, coverage explanations/evidence, activity, and context
-   diagnostics. Previous answers can be reopened and changed.
+5. Expand **Add information** for free-form ideas/corrections. Original text is retained.
+6. Open **Project map**, expand a feature, then a requirement to review acceptance
+   scenarios, supporting decisions, and confirmation/rejection controls. Review
+   changes to confirmed information before applying reorganization proposals.
+7. Use **Activity** for processing history, revisions, research sources, and technical
+   context diagnostics. **Definition progress** is collapsed under the map/activity
+   views; selecting a feature exposes its detailed assessment categories and evidence.
+
+### Compact workspace and revising responses
+
+The main header contains the project name, local-workspace label, navigation, and
+Settings. The previous hero, statistics strip, permanent epic column, and permanent
+health column are replaced by a single content column with expandable details.
+User-facing feature groups correspond to the existing epic records. Reserved groups
+are labelled **Shared project decisions** and **Items to organize**.
+
+Question rows show their feature and, when available, a validated coverage category
+(for example **Permissions**). New discovery prompts request the category and a
+feature-specific rationale; older questions without a category remain valid and are
+not heuristically classified. Expand **About this feature** for its saved purpose.
+
+Use **Previous answers**, **Deferred / delegated**, or **Submitted**, then **Edit
+answer** to change a response. Save confirmations also offer an immediate editing
+shortcut. **Cancel** discards that question's draft and restores its saved response.
+Saved answers retain their supersession lineage; linked requirements are marked for
+review when a changed answer is applied. The map also provides answer-editing links.
+
+A waiting response can be replaced atomically through the submission's optional
+`replaces` ID. The replaced response stays in processing history as **superseded**
+and is never applied. Replacement rejects responses that have already been applied,
+started processing, or belong to another question/project. Retry uses the same
+submission ID. A response already processing remains editable: the correction queues
+against its current answer source for the next round, leaving the active snapshot
+intact. Races/conflicts retain the draft and report an error instead of overwriting
+newer information. Drafts are in-page state, not persisted across reloads.
+
+**Project map** is a grouped feature outline with confirmed/to-review/open-question
+counts. Requirement details, acceptance scenarios, supporting evidence, feature
+editing, notes, and organization controls open on demand. **Definition progress**
+uses the existing coverage calculation and plain-language assessment labels; it is
+an estimate of identified work, not completeness or build readiness.
 
 Each round is bounded and stops for the human. It does not autonomously run an
-unlimited sequence of calls. Model calls consume subscription allowance and can
+unlimited sequence of calls: automatic follow-ups run only for new saved submissions.
+Model calls consume subscription allowance and can
 take a minute or more for detailed assessments/research.
+
+### Processing and queue
+
+In **Activity → Revisions & processing**, expand **Processing & queue** to see
+(the panel also appears in other views when processing is paused or needs attention):
+
+- **Currently processing**: full question text, exact submitted response, response
+  type, submission time, and batch identifier for the active discovery round.
+- **Waiting next**: durably saved submissions in submission order. These do not
+  change the active round's revision; they are applied together at its boundary.
+- **Saved · awaiting discovery**: applied answers/notes awaiting a manual round when
+  automatic discovery was disabled.
+- **Completed batches**: submissions whose discovery result was successfully applied.
+- **Replaced responses**: superseded waiting answers retained only for history.
+- **Needs attention**: unsuccessful batches or responses whose question/previous
+  answer changed before application. Original submitted text remains available.
+
+Questions and notes remain usable while discovery runs. Submitted questions move out
+of the main question list and previous-answer forms while queued/processing; their
+full text and responses appear in **Submitted** and **Processing & queue**. The Questions tab counts
+the remaining questions to answer. Other question drafts survive polling and
+background round completion. Completed answers return to the previous-answer view;
+responses needing attention become available for review again. Submitted responses
+can be edited from the Submitted filter even while a round is active.
+The queue and active-batch view survive page reload. A batch is analyzed together;
+the view does not claim the model processes individual questions sequentially.
+
+Stop, a failed/stale round, or interruption pauses automatic processing. Expand the
+queue and choose **Resume discovery** (or **Explore next gaps**) to explicitly retry
+applied responses and include waiting inputs, without adding duplicate human sources.
+Conflicting unapplied responses need review and resubmission against the current
+question; a retired question's retained response can be copied into a note. Restart
+retains pending submissions and requires explicit resume rather than repeating model
+calls. Queuing does not bypass the context limit: an oversized batch fails before
+inference, preserves the responses, and reports needs-attention.
+
+If **Resume discovery** reports an oversized context, select one epic in the project
+map, then resume. A focused resume applies and analyzes only that area's queued/saved
+responses; other areas stay pending, and the queue pauses again if work remains.
+Previously applied responses are reused without duplicating their human sources.
+Select another epic and resume to continue, or select **All project areas** to retry
+the remaining responses together. Dependencies and project-wide evidence still join
+each focused context; a single oversized area may still need its work split.
 
 ## Epic organization
 
@@ -64,14 +148,22 @@ use temporary aliases in model output; application code assigns durable IDs and
 validates references. Splits must account for every source record. Merges preserve
 records and redirect dependencies. Dependency cycles are rejected atomically.
 
+Only questions, requirements, research findings, and notes are movable records.
+Original ideas and answer/review evidence remain provenance sources; organize the
+related question or requirement instead. Discovery context explicitly lists movable
+IDs. Invalid organization references reject the round atomically with a diagnostic
+identifying the operation and ID, including undeclared aliases and evidence sources
+mistaken for records. Saved human responses remain intact; use **Resume discovery**
+or **Explore next gaps** to explicitly retry a failed round.
+
 Routine organization of unconfirmed work is applied automatically. Changes moving
 answered/delegated questions or confirmed requirements, or changing their epic's
 definition, are queued for human review. Outdated proposals cannot be approved over
 newer edits; reject and rerun discovery to obtain a fresh proposal.
 
-Use **+** to add an epic, **Edit epic** to edit a selected epic's purpose/title,
-and the requirement's epic selector to move a requirement explicitly. **Restore map
-before this round** restores earlier membership/epic structure while retaining all
+Use **Add feature** in Project map, **Edit feature** inside a feature group,
+and the requirement's feature selector to move a requirement explicitly. **Restore map
+before this round** in **Latest changes** restores earlier membership/epic structure while retaining all
 current human answers, requirement decisions, and research. New records move to the
 inbox; coverage assessments are cleared for re-evaluation. It is a map undo, not a
 rollback of human input.
@@ -121,6 +213,40 @@ identified checks**, not proof that every feature is known or the release is bui
 Semantic evidence relevance and check importance are model judgments, not mechanically
 proven entailment. Open a coverage area to inspect the actual supporting records.
 
+## Question explanations and decision support
+
+Newly generated questions may include subtly underlined concepts in the question,
+its rationale, and suggested answer labels/consequences. Hover, focus with the
+keyboard, or tap to read **What it means** and **What it changes**. Escape, moving
+away, or tapping outside dismisses the tooltip. Tooltips use saved annotations and
+need no model call. Existing questions without annotations still work normally.
+Option selection has a separate **Choose** control so opening an explanation never
+selects an answer. Users' own answer text is preserved as entered.
+
+Expand **Help me with this question** on a question card to:
+
+- **Rephrase simply** while preserving the original question and options.
+- **Explain why it matters** for the project.
+- **Show an example** with hypothetical details labelled as examples.
+- **Help me decide** through contextual tradeoffs, conditional recommendations,
+  assumptions, and a small follow-up when relevant information is missing.
+- **Ask a follow-up** in your own words.
+
+Each request uses the selected model allowance with research disabled. The original
+question and current answer draft remain available. Responses, assumptions, follow-up
+prompts, and request messages are saved locally as advisory job history and survive
+reload/restart. Help never selects, saves, or delegates an answer and never confirms
+a requirement. Save product decisions explicitly through the answer controls.
+
+The panel shows loading, **Stop clarification**, and failed/cancelled/interrupted/
+stale requests. Retry using a help action. One help request per project may run at a
+time; discovery and answering remain available. Project changes during generation
+make the result stale rather than presenting it as current advice. Saved earlier
+exchanges show their context revision. Only the latest six completed exchanges join
+new focused context, with an explicit omitted-history count; all exchanges remain
+stored. Oversized context fails before inference. Like other jobs, interrupted work
+is recovered after its lease expires without automatically repeating model calls.
+
 ## Context management
 
 Every round creates a fresh, revision-bound working set instead of replaying an
@@ -134,13 +260,29 @@ ever-growing OpenCode chat. It includes:
 - A recent-record index (up to 100 labels, clearly marked as excerpts).
 - Relevant research excerpts, assessments, and pending organization proposals.
 
-Without an explicit focus, small projects include all active areas. Larger projects
-select a pending-question area and include its dependencies. Input detail is bounded
+Before rejecting an oversized working set, the engine compacts avoidable overhead:
+it omits AI-authored concept-tooltip annotations from question records and removes
+recent-index labels that duplicate records already included in detail. It preserves
+exact question wording, rationale, options, answer links, human sources, requirements,
+assessments, and dependency scope. Tooltips remain saved and available in the UI.
+The package explicitly describes these omissions; its manifest records the original
+character count and counts of omitted annotations/duplicate labels. Section sizes
+and the final budget check use the actual compacted JSON. This is deterministic
+metadata removal, not AI summarization or truncation of human decisions.
+
+Without an explicit focus, small projects initially include all active areas. If
+that context is too large, selection retries with a submitted-response area, a
+pending-question area, or the first ordinary epic. Larger projects start focused;
+submitted-response areas take precedence over unrelated pending questions. Every
+area required by the current batch and all selected dependencies remain included.
+Input detail is bounded
 to **48,000 characters**; if it does not fit, the round fails before inference and
 asks for a smaller focus/split. There is no silent truncation of human decisions.
 Omitted records and excerpted indexes are explicitly reported; references to evidence
 outside the working set are rejected. Each job records a versioned context manifest,
-revision, focus, included/omitted IDs, and character count.
+revision, focus, included/omitted IDs, character count, and section sizes. Oversized
+failures also retain their attempted manifest and report the actual size, budget,
+number of included areas, and largest sections before any model call.
 
 This is a conservative character budget, not an exact model tokenizer or dynamic
 provider context-window calculation. Persisted source records remain authoritative;
@@ -149,7 +291,7 @@ epic descriptions and AI interpretations do not replace them.
 ## Research
 
 Targeted research is enabled by default in the browser and can be disabled before
-creation or in the Research tab. The CLI remains opt-in:
+creation or in **Settings**. Sources appear under **Activity → Research sources**. The CLI remains opt-in:
 
 ```powershell
 npm run wizard -- analyze --project "project-id" --expected-revision 1 --research
@@ -184,11 +326,43 @@ daemon discovery and CLI-to-HTTP attachment are not implemented.
 
 October 15, 2026:
 
+- Compact-workspace checks passed type checking, deterministic tests, the UI build,
+  and Playwright browser checks. Browser coverage includes collapsed question rows,
+  feature/category context, editing/cancelling saved answers, waiting-answer
+  replacement with retained history, the grouped map and requirement confirmation,
+  explanation tools, draft preservation across question switching and round completion,
+  queue reload persistence, and mobile layout without horizontal overflow. API checks
+  exercise corrections during processing and the next round's authoritative answer.
+  These checks use deterministic adapters; no live model call was made for this UI change.
+
 - Deterministic core/API checks cover organization, evidence validation, scoring,
   backward compatibility, context bounds, CSRF/session checks, revisions, and jobs.
+- Resume-overflow regression checks cover failed-job size diagnostics, zero adapter
+  calls on overflow, focused recovery of answers/notes without duplicate sources,
+  retained submissions in other areas, and size-aware automatic context selection.
+  In this fix's verification run, the type check and relevant deterministic tests
+  passed and the UI built. The full browser check stopped at the existing mobile
+  concept-tooltip tap assertion (`src/web/browser-check.ts:79`), before queue checks;
+  this run does not establish a passing end-to-end browser result.
+- Follow-up compaction checks passed type checking and 34 relevant deterministic
+  core/service/API tests. They verify oversized focused contexts can fit by removing
+  explanatory metadata and duplicate labels, exact saved records remain intact, the
+  adapter receives the compacted JSON, and still-oversized inputs remain blocked.
+  No live project/model verification was performed for this follow-up.
+- Question-help checks cover exact concept references, advisory-only persistence,
+  history across SQLite reopen, malformed responses, cancellation, failures, stale
+  revisions, expired leases, concurrent-request guards, and input/context bounds.
+  Browser checks cover tooltip hover/focus/tap/Escape, separate answer selection,
+  rephrasing, follow-ups, cancellation, saved history, and draft preservation.
+  These checks use deterministic adapters; live model explanation quality and
+  semantic preservation of rephrasing have not yet been live-qualified.
 - Playwright exercised project creation, epic selection, option-based answering,
-  confirmation, reload persistence, and a 390px mobile layout without horizontal
-  overflow. This uses a synthetic adapter with no model calls.
+  confirmation, answering during deliberately held background rounds, processing/
+  waiting views, draft preservation across round completion, queue reload persistence,
+  and a 390px mobile layout without horizontal overflow. This uses a synthetic adapter
+  with no model calls. Deterministic storage/API tests also verify batched contexts
+  across epics, idempotent submissions, conflicting answers, failure pause/retry, and
+  explicit resume after service shutdown/restart.
 - A real ChatGPT `gpt-6.1-sol` round fetched the official RSS 2.0 specification and
   Atom RFC 4287 through two webfetch calls. It saved four source-backed findings,
   two functional epics, three questions, two proposals, and coverage assessments.

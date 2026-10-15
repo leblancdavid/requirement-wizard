@@ -18,6 +18,8 @@ every technical detail proposed in the planning documents.
 | DEC-009 | Organize ideas into evolving epics, continually evaluate their gaps, and support splitting/merging/refining them. | User described the discovery workflow |
 | DEC-010 | Automatically organize unconfirmed information; show changes and review changes affecting confirmed decisions. | User approved AI-driven organization |
 | DEC-011 | Show estimated completeness for epics and the project, with explanations and explicit uncertainty. Manage AI context as part of the engine. | User requested progress feedback and appropriate context management |
+| DEC-012 | Explain ambiguous concepts inline and offer question-level rephrasing, context, examples, and decision support without automatically answering the question. | User requested concept tooltips and clarification/help deciding, then approved the proposed behavior |
+| DEC-013 | Make the browser question-first with a compact expandable list, visible answer revision, feature/category context, a grouped feature map, and on-demand progress/details. | User selected the compact question list, requested broader map/health/header cleanup, and approved implementation |
 
 ## Proposed implementation defaults
 
@@ -33,7 +35,7 @@ every technical detail proposed in the planning documents.
 | TECH-008 | Use better-sqlite3 11.10.0 and a readline terminal prototype for the first vertical slice. | Native module verified on Node 20.11/Windows; keeps persistence usable before introducing the richer Ink interface. |
 | TECH-009 | Use Vite 6.4.4 and React for the browser build. | Compatible with Node 20.11; built assets served by the local Node API. |
 | TECH-010 | Nine fixed coverage dimensions with evidence-gated statuses and 3/2/1 importance weights. | Implemented deterministic estimate; calibration and model semantic judgment remain limitations. |
-| TECH-011 | Fresh revision-bound context with a 48,000-character detail budget. | Implemented dependency selection and manifests; exact tokenization/model-capacity adaptation remain future work. |
+| TECH-011 | Fresh revision-bound context with a 48,000-character detail budget. | Implemented dependency selection, manifests, and explicit compaction of explanatory question annotations/duplicate index labels on overflow; exact evidence is retained. Exact tokenization/model-capacity adaptation remain future work. |
 
 ## Open questions
 

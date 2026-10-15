@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DiscoveryService, type DiscoveryAdapter } from "./discovery.js";
 import { ProjectStore } from "../storage/store.js";
-import type { Analysis, Project } from "../core/model.js";
+import { analysisSchema, type Analysis, type Project } from "../core/model.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 
 function result(project: Project): Analysis {
@@ -90,5 +90,39 @@ test("model prompt includes current records, provenance, and structured output i
     assert.ok(prompt.includes(project.sources[0]!.id));
     assert.ok(prompt.includes("Delegation is permission within a scope"));
     assert.ok(prompt.includes('"additionalProperties":false'));
+  } finally { store.close(); }
+});
+
+test("discovery sends a compacted focused context and persists the savings without changing saved answers", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = store.create("Verbose questions", "  Exact original idea\n", { providerID: "openai", modelID: "fixture" });
+    const seed = store.beginJob(project.id, project.revision); store.claimJob(seed.job.id, Date.now() + 60000);
+    store.finishJob(seed.job.id, analysisSchema.parse({ summary: "Define work", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [],
+      questions: Array.from({ length: 3 }, (_, index) => ({ text: `Question ${index}: term0 term1 term2 term3 term4 term5 term6 term7?`,
+        whyItMatters: "Defines behavior", options: [{ label: "Yes", consequence: "Include it" }, { label: "No", consequence: "Exclude it" }],
+        concepts: Array.from({ length: 8 }, (_, n) => ({ field: "text", phrase: `term${n}`, meaning: "m".repeat(800), impact: "i".repeat(800) })),
+      })) }));
+    project = store.get(project.id);
+    project = store.note(project.id, project.revision, `  ${"human evidence ".repeat(780)}\n`);
+    project = store.answer(project.id, project.revision, project.questions[0]!.id, { kind: "answer", text: "  Keep this exactly\n" });
+    const progress: string[] = [];
+    let calls = 0;
+    const service = new DiscoveryService(store, { async analyze(snapshot, options) {
+      calls++;
+      assert.ok(options.context.manifest.compaction!.originalCharacters > 48000);
+      assert.ok(options.context.manifest.characters <= 48000);
+      const prompt = discoveryPrompt(snapshot, options.context);
+      assert.ok(prompt.includes("contextCompaction"));
+      assert.ok(prompt.includes(JSON.stringify("  Keep this exactly\n")));
+      return { summary: "Reviewed", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] };
+    } });
+    const job = await service.analyze(project.id, project.revision, { focusEpicID: "inbox", onProgress: (message) => progress.push(message) });
+    assert.equal(job.status, "completed");
+    assert.equal(calls, 1);
+    assert.ok(job.context!.compaction);
+    assert.match(progress[0]!, /overhead reduced/);
+    assert.deepEqual(store.get(project.id).sources, project.sources);
+    assert.deepEqual(store.get(project.id).questions, project.questions);
   } finally { store.close(); }
 });

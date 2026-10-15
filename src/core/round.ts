@@ -1,8 +1,20 @@
-import { affectsConfirmed, organize, type Organization } from "./epics.js";
+import { affectsConfirmed, organize, requireOrganizationRecord, type Organization } from "./epics.js";
 import { validateAnalysisReferences, type Project, type Analysis, type ResearchEvidence } from "./model.js";
 
 export function applyRound(project: Project, result: Analysis, newID: () => string, research: ResearchEvidence[] = []) {
   validateAnalysisReferences(project, result);
+  // Validate model-facing IDs before replacing aliases with durable IDs, so
+  // rejected references retain the names needed to diagnose the model output.
+  const newRecords = new Set([...result.questions, ...result.requirements, ...(result.researchFindings ?? [])].flatMap((item) => item.localID ? [item.localID] : []));
+  const newEpics = new Set((result.organization ?? []).flatMap((op) => op.type === "upsert" && !project.epics.some((item) => item.id === op.epicID) ? [op.epicID] : []));
+  for (const op of result.organization ?? []) {
+    const recordIDs = op.type === "move" ? [op.recordID] : op.type === "split" ? op.destinations.flatMap((item) => item.recordIDs) : [];
+    for (const id of recordIDs) {
+      if (newRecords.has(id)) continue;
+      if (newEpics.has(id)) throw new Error(`Organization ${op.type} uses epic alias ${JSON.stringify(id)} as a record ID. Use a question, requirement, research finding, or note ID. No proposals were applied.`);
+      requireOrganizationRecord(project, id, `Organization ${op.type}`);
+    }
+  }
   const before = structuredClone(project);
   const aliases = new Map<string, string>();
   const register = (alias: string | undefined) => {
