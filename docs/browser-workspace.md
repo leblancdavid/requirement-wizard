@@ -454,7 +454,11 @@ rounds beyond the queue. After compaction and queue grouping, a discovery task w
 mandatory evidence exceeds 48,000 characters can use a **96,000-character hard
 fallback bound**. This fallback retains exact human constraints and linked evidence,
 adds no optional detail, and records the expanded budget and selection reason in
-the job manifest with a visible progress message. Question help and scan planning
+the job manifest with a visible progress message. Before rejecting a package above
+that hard bound, discovery also removes task questions' AI-generated `whyItMatters`
+explanations. The package lists affected question IDs and the manifest records the
+omission; exact question wording, options, answers, and linked evidence remain.
+Saved question help remains available in the UI. Question help and scan planning
 keep their separate bounds. Mandatory evidence beyond 96,000 characters still fails
 before inference and may require a scope/dependency split.
 Omitted records and excerpted indexes are explicitly reported; references to evidence

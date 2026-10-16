@@ -85,12 +85,13 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   };
   closeEvidence(included);
 
-  const render = (ids: Set<string>) => {
+  const render = (ids: Set<string>, omitTaskExplanations = false) => {
     const questions = project.questions.filter((q) => ids.has(q.id)).map((q) => {
       // Exact question wording/options and answer links remain. Only generated
-      // help text is removed, unless this question is itself the current task.
+      // help text is removed; task explanations get a last-resort omission pass
+      // only when discovery would otherwise exceed its hard fallback bound.
       const { concepts: _, whyItMatters, ...evidence } = q;
-      return taskIDs.has(q.id) ? { ...evidence, whyItMatters } : evidence;
+      return taskIDs.has(q.id) && !omitTaskExplanations ? { ...evidence, whyItMatters } : evidence;
     });
     const index = [...project.questions, ...project.requirements].filter((r) => !ids.has(r.id)).slice(-60)
       .map((r) => ({ id: r.id, epicID: r.epicID, status: r.status,
@@ -101,6 +102,10 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       workspaceEvidence: project.scans.length ? { snapshotID: project.scans.at(-1)!.id, capturedAt: project.scans.at(-1)!.capturedAt, limitation: "Only detailed included source excerpts can support claims about existing behavior." } : null,
       retiredQuestionGuidance: project.questions.filter((q) => q.status === "retired").slice(-20).map((q) => ({ text: q.text, reason: q.retirementReason })),
       taskRecordIDs: [...taskIDs], partial: true,
+      ...(omitTaskExplanations ? { omittedTaskQuestionExplanations: {
+        questionIDs: questions.filter((q) => taskIDs.has(q.id)).map((q) => q.id),
+        explanation: "AI-generated whyItMatters explanations are omitted to fit the mandatory package. Exact question wording, options, answer links, and human evidence are retained.",
+      } } : {}),
       previousInterpretation: { summary: project.summary.slice(0, 1000), summaryIsExcerpt: project.summary.length > 1000,
         generatedAtRevision: project.analysisRevision, advisoryOnly: true },
       epicMap: active.map((e) => ({ id: e.id, title: e.title, dependencies: e.dependencies })),
@@ -111,8 +116,8 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       limitations: "Partial task pass. All current human evidence in selected discovery areas and exact linked evidence are retained; advisory help includes only task evidence and project guardrails. Question help text, previous assessments, and other AI detail may be omitted. Index labels are navigation only. Do not cite indexed-only records. Return empty organization and assessments; do not retire questions outside this package. This pass cannot replace global interpretation or scope confidence. Do not claim whole-area review or completeness.",
     };
   };
-  const pack = (ids: Set<string>): ContextPack => {
-    const data = render(ids);
+  const pack = (ids: Set<string>, omitTaskExplanations = false): ContextPack => {
+    const data = render(ids, omitTaskExplanations);
     // Navigation labels are optional, even for the initial mandatory package.
     // Prefer recent labels and reclaim their space for every candidate's exact
     // evidence closure before deciding that human constraints cannot fit.
@@ -131,8 +136,18 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
     // optional detail or dropping exact human guardrails. Help/scans stay bounded
     // by their own budgets. This is an application input cap, not a model claim.
     if (task.expandMandatory && !task.advisory && budget === 48000) {
+      // Even the task's rationale is generated UI help, not human evidence.
+      // Reclaim it as a last resort before declaring the hard bound exceeded.
+      // Advisory help retains it because explaining the question is its task.
+      if (result.manifest.characters > 96000) {
+        const compact = pack(included, true);
+        if (compact.manifest.characters < result.manifest.characters) result = compact;
+      }
       result.manifest.budget = 96000;
       result.manifest.selectionReason = "Expanded mandatory-evidence budget from 48,000 to 96,000 characters after task planning; exact human guardrails and linked evidence retained, optional detail not added.";
+      if ((result.data as ReturnType<typeof render>).omittedTaskQuestionExplanations) {
+        result.manifest.selectionReason += " Task question explanations omitted as AI-generated UI metadata.";
+      }
       if (result.manifest.characters <= result.manifest.budget) return result;
     }
     throw new ContextBudgetError(result.manifest);

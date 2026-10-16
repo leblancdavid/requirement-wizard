@@ -226,6 +226,61 @@ test("mandatory fallback does not add optional detail or expand advisory and exp
   } finally { store.close(); }
 });
 
+test("102,406-character task context reclaims generated explanations before rejecting exact human evidence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    for (let i = 0; i < 8; i++) project.sources.push({ id: `note-${i}`, kind: "note", text: "n".repeat(10000), epicID: "project" });
+    const task = { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id] };
+    let size = 0;
+    try { planContext(project, task); } catch (error) {
+      assert.ok(error instanceof ContextBudgetError); size = error.manifest.characters;
+    }
+    assert.ok(size > 0);
+    project.sources.at(-1)!.text += "n".repeat(102406 - size);
+    const before = structuredClone(project);
+    assert.throws(() => planContext(project, task), (error: unknown) => {
+      assert.ok(error instanceof ContextBudgetError); assert.equal(error.manifest.characters, 102406); return true;
+    });
+    const pack = planContext(project, { ...task, expandMandatory: true });
+    assert.equal(pack.manifest.budget, 96000);
+    assert.ok(pack.manifest.characters <= 96000);
+    assert.equal(pack.manifest.characters, JSON.stringify(pack.data).length);
+    const data = pack.data as { sources: Project["sources"]; questions: Project["questions"];
+      omittedTaskQuestionExplanations: { questionIDs: string[] }; recordIndex: unknown[] };
+    assert.deepEqual(data.sources, project.sources);
+    assert.deepEqual(data.recordIndex, []);
+    assert.deepEqual(data.omittedTaskQuestionExplanations.questionIDs, task.recordIDs);
+    assert.match(pack.manifest.selectionReason!, /Task question explanations omitted/);
+    for (const q of project.questions) {
+      const detail = data.questions.find((item) => item.id === q.id)!;
+      assert.equal(detail.text, q.text); assert.deepEqual(detail.options, q.options);
+      assert.equal(detail.sourceID, q.sourceID); assert.equal(detail.whyItMatters, undefined);
+    }
+    assert.deepEqual(project, before);
+  } finally { store.close(); }
+});
+
+test("discovery can run after last-resort explanation compaction without changing saved question help", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = seed(store);
+    for (let i = 0; i < 8; i++) project = store.note(project.id, project.revision, "n".repeat(11000), "project");
+    let calls = 0;
+    const job = await new DiscoveryService(store, { async analyze(_snapshot, options) {
+      calls++;
+      const data = options.context.data as { sources: Project["sources"]; omittedTaskQuestionExplanations: unknown };
+      assert.ok(data.omittedTaskQuestionExplanations);
+      assert.deepEqual(data.sources, project.sources);
+      assert.ok(options.context.manifest.characters <= options.context.manifest.budget);
+      return empty();
+    } }).analyze(project.id, project.revision, { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id] });
+    assert.equal(calls, 1); assert.equal(job.status, "completed");
+    assert.deepEqual(store.get(project.id).questions, project.questions);
+    assert.deepEqual(store.get(project.id).sources, project.sources);
+  } finally { store.close(); }
+});
+
 test("indivisible mandatory human constraints beyond the fallback fail before inference and retain the attempted manifest", async () => {
   const store = new ProjectStore(":memory:");
   try {

@@ -227,6 +227,10 @@ Queue grouping retains the normal 48,000-character target. Discovery can expand 
 mandatory-only task package to a hard 96,000-character bound after compaction and
 grouping; it adds no optional detail and reports the expanded budget/selection reason
 in the manifest and progress. Advisory help and scan planning retain their own bounds.
+Before rejecting a discovery package above 96,000 characters, a final compaction pass
+can omit task questions' generated `whyItMatters` explanations, with affected IDs in
+the package and an explicit manifest selection reason. It preserves exact sources,
+question wording/options/answer links, requirements, and stored UI explanations.
 Mandatory evidence beyond the hard bound fails before inference; evidence
 outside the detailed working set cannot justify generated requirements/assessments.
 The character bound is not an exact tokenizer/model-window estimate. See the browser
