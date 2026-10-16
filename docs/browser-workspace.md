@@ -13,7 +13,7 @@ npm run app
 Open **http://127.0.0.1:4317** (or the address printed by the app). Keep the terminal
 running; Ctrl+C stops the local service and cancels its active discovery work.
 
-On Windows, exit running wizard CLI/app sessions before `npm ci`: they can lock
+On Windows, exit running Reqwizit CLI/app sessions before `npm ci`: they can lock
 SQLite's native module. During this iteration, a clean reinstall encountered that
 lock in an existing interview process. `npm install` restored the dependency tree
 successfully without stopping the user's session; the final clean-install check
@@ -22,18 +22,27 @@ remains blocked until that session exits. Project data is separate from dependen
 Optional development store/port:
 
 ```powershell
-npm run app -- --data-dir .wizard-state --port 4318
+npm run app -- --data-dir .reqwizit-state --port 4318
 ```
 
-Default storage is the same user-local `requirement-wizard/projects.sqlite` used
-by the CLI, so existing projects appear in the project list. Old snapshots gain
+Default storage is the same user-local `reqwizit/projects.sqlite` used
+by the CLI, so existing projects appear in the project list. If the new data
+directory does not exist, an existing `requirement-wizard` directory is reused
+in place, including protected provider credentials. Browser preferences migrate
+to `reqwizit-` keys while preserving values already stored under the new name.
+Old snapshots gain
 project-wide and inbox areas on read without losing record IDs, original input,
 or revision history. New fields are saved on subsequent mutations; the SQLite
 table schema remains version 1.
 
 **Settings → AI connections** now supports in-app direct ChatGPT sign-in, saved
 accounts, account-specific model catalogs, explicit connection tests, reconnect,
-and disconnect. Settings is also available before creating your first project.
+and disconnect. Open Settings using the gear icon in the sidebar, also available
+before creating your first project. Settings has its own `#/settings` page with
+**Back to workspace** navigation and browser Back/Forward support. Opening the
+Settings URL directly or reloading it keeps Settings open; the back button also
+works when there is no previous workspace entry. Within the current page session,
+returning preserves your selected project, workspace tab, feature filter, and drafts.
 Choose a direct account/model and **Save model** to switch an existing project;
 new projects use the selected connection. Direct discovery/help need no OpenCode
 executable but remain live-unqualified. Direct web research is unavailable and
@@ -72,8 +81,11 @@ OpenCode model ID. There is no automatic provider/model/account fallback.
 
 ### Compact workspace and revising responses
 
-The main header contains the project name, local-workspace label, navigation, and
-Settings. The previous hero, statistics strip, permanent epic column, and permanent
+The main header contains the project name, active connection, and project-wide
+**Definition progress** percentage and bar across workspace views. The estimate
+stays project-wide when filtering by feature and flags stale coverage as **Review
+needed**. Settings opens from the sidebar gear icon, including on mobile.
+The previous hero, statistics strip, permanent epic column, and permanent
 health column are replaced by a single content column with expandable details.
 User-facing feature groups correspond to the existing epic records. Reserved groups
 are labelled **Shared project decisions** and **Items to organize**.
@@ -231,6 +243,8 @@ proven entailment. Open a coverage area to inspect the actual supporting records
 
 ## Question explanations and decision support
 
+Discovery proactively requests explanations of technical terms, acronyms, and
+context-dependent wording, with up to eight saved annotations per question.
 Newly generated questions may include subtly underlined concepts in the question,
 its rationale, and suggested answer labels/consequences. Hover, focus with the
 keyboard, or tap to read **What it means** and **What it changes**. Escape, moving
@@ -238,6 +252,15 @@ away, or tapping outside dismisses the tooltip. Tooltips use saved annotations a
 need no model call. Existing questions without annotations still work normally.
 Option selection has a separate **Choose** control so opening an explanation never
 selects an answer. Users' own answer text is preserved as entered.
+
+Click or keyboard-focus and activate any other word in an expanded question,
+rationale, or suggested answer, then choose **? What do you mean by this?**.
+This opens the question-help panel and asks the selected model to explain that
+word with its exact surrounding text and project context, including for older
+questions without annotations. A spinner appears immediately and while the job
+runs. Escape or a click outside dismisses the word shortcut; on mobile it appears
+at the bottom of the viewport. The shortcut uses the same saved advisory history,
+cancellation, and error handling as other follow-ups and never chooses an answer.
 
 Expand **Help me with this question** on a question card to:
 
@@ -336,7 +359,7 @@ Targeted research is enabled by default in the browser and can be disabled befor
 creation or in **Settings**. Sources appear under **Activity → Research sources**. The CLI remains opt-in:
 
 ```powershell
-npm run wizard -- analyze --project "project-id" --expected-revision 1 --research
+npm run reqwizit -- analyze --project "project-id" --expected-revision 1 --research
 ```
 
 The research profile exposes only `websearch` and `webfetch`. The prompt requests at
@@ -409,7 +432,7 @@ October 15, 2026:
   Atom RFC 4287 through two webfetch calls. It saved four source-backed findings,
   two functional epics, three questions, two proposals, and coverage assessments.
   The resulting project estimate was **27%**. Job:
-  `0a810ac4-d98f-4ea9-948d-5aca908c38a8`; local demo store: `.wizard-state/browser-live`.
+  `0a810ac4-d98f-4ea9-948d-5aca908c38a8`; pre-rename local demo store: `.wizard-state/browser-live`.
 - The preceding research attempt hit an unintended 90-second HTTP deadline and
   preserved revision 1. The shared HTTP wrapper was fixed to retain SDK Request
   cancellation and allow a five-minute prompt deadline; the retry completed.
@@ -433,10 +456,14 @@ provider auth onboarding, portable handoffs, and the eventual desktop wrapper.
 ### Browser check setup
 
 ```powershell
-$env:PLAYWRIGHT_BROWSERS_PATH = "$PWD/.wizard-state/browsers"
+$env:PLAYWRIGHT_BROWSERS_PATH = "$PWD/.reqwizit-state/browsers"
 npx playwright install chromium
 npm run test:browser
 ```
 
-Browser checks build the UI and write ignored screenshots under `.wizard-state/`.
+Browser checks build the UI and write ignored screenshots under `.reqwizit-state/`.
+The rename checks verify the Reqwizit page title and branding, migration of legacy
+browser preferences, and preservation of newer preference values. Existing
+Playwright installations can be reused by setting `PLAYWRIGHT_BROWSERS_PATH` to
+their installation directory.
 Routine checks: `npm run check`, `npm test`, `npm run build:ui`, `git diff --check`.

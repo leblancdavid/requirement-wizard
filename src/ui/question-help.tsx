@@ -19,18 +19,39 @@ function ConceptTip({ concept }: { concept: Concept }) {
   </span>;
 }
 
-export function AnnotatedText({ text, concepts = [] }: { text: string; concepts?: Concept[] }) {
+export function AnnotatedText({ text, concepts = [], onExplain, busy = false }: { text: string; concepts?: Concept[]; onExplain?: (phrase: string, context: string) => Promise<void>; busy?: boolean }) {
+  const [selected, setSelected] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const wrapper = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (selected === null) return;
+    const dismiss = (event: PointerEvent) => { if (!wrapper.current?.contains(event.target as Node)) setSelected(null); };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [selected]);
+  function words(value: string, offset: number): ReactNode {
+    if (!onExplain) return value;
+    let position = offset;
+    return value.split(/([\p{L}\p{N}]+(?:[’'\-][\p{L}\p{N}]+)*)/u).map((part, index) => {
+      const start = position; position += part.length;
+      if (index % 2 === 0) return part;
+      return <span className="explain-word" key={start}>
+        <button type="button" className="word-trigger" aria-label={`Explain word ${part}`} aria-expanded={selected === start} onClick={() => { setSelected(selected === start ? null : start); setError(""); }}>{part}</button>
+        {selected === start && <span className="word-help"><button type="button" className="word-help-action" disabled={busy} aria-label={`What do you mean by “${part}”?`} title="What do you mean by this?" onClick={() => { void onExplain(part, text).then(() => setSelected(null)).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not request help. Try again.")); }}><span aria-hidden="true">?</span> What do you mean by this?</button>{error && <span role="alert">{error}</span>}</span>}
+      </span>;
+    });
+  }
   const parts: ReactNode[] = [];
   let cursor = 0;
   for (const concept of [...concepts].sort((a, b) => text.indexOf(a.phrase) - text.indexOf(b.phrase))) {
     const start = text.indexOf(concept.phrase);
     // Defensive fallback for older/external data: never corrupt the original text.
     if (start < cursor || start < 0) continue;
-    parts.push(text.slice(cursor, start), <ConceptTip key={`${start}:${concept.phrase}`} concept={concept} />);
+    parts.push(words(text.slice(cursor, start), cursor), <ConceptTip key={`${start}:${concept.phrase}`} concept={concept} />);
     cursor = start + concept.phrase.length;
   }
-  parts.push(text.slice(cursor));
-  return <>{parts}</>;
+  parts.push(words(text.slice(cursor), cursor));
+  return <span ref={wrapper} onKeyDown={(event) => { if (event.key === "Escape") { setSelected(null); event.stopPropagation(); } }}>{parts}</span>;
 }
 
 const actions = [
@@ -45,13 +66,15 @@ export type HelpControls = {
   cancel: (jobID: string) => Promise<void>;
 };
 
-export function QuestionHelp({ questionID, help }: { questionID: string; help: HelpControls }) {
+export function QuestionHelp({ questionID, help, reveal = 0, requesting = false }: { questionID: string; help: HelpControls; reveal?: number; requesting?: boolean }) {
+  const panel = useRef<HTMLDetailsElement>(null);
+  useEffect(() => { if (reveal && panel.current) panel.current.open = true; }, [reveal]);
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const jobs = help.jobs.filter((j) => j.helpRequest?.questionID === questionID);
   const active = jobs.find((j) => ["pending", "running"].includes(j.status));
-  const disabled = sending || help.busy;
+  const disabled = sending || requesting || help.busy;
   async function request(action: QuestionHelpRequest["action"]) {
     const submitted = message;
     setSending(true); setError("");
@@ -61,17 +84,18 @@ export function QuestionHelp({ questionID, help }: { questionID: string; help: H
     } catch (error) { setError(error instanceof Error ? error.message : "Could not request help. Try again."); }
     finally { setSending(false); }
   }
-  return <details className="question-help">
+  return <details className="question-help" ref={panel}>
     <summary>Help me with this question</summary>
     <p>Get a simpler explanation or work through the tradeoffs. Your answer stays yours.</p>
     <div className="help-actions">{actions.map(([action, label]) => <button type="button" className="secondary" key={action} disabled={disabled} onClick={() => void request(action)}>{label}</button>)}</div>
     <small>Each help request uses your selected model allowance. Concept tooltips open instantly.</small>
+    {(sending || requesting) && !active && <p role="status" className="help-loading"><span className="help-spinner" aria-hidden="true" /> Asking for clarification…</p>}
     <div className="help-history" aria-live="polite">
       {jobs.map((job) => <section className="help-exchange" key={job.id} aria-label={actionLabel(job.helpRequest!.action)}>
         <strong>{actionLabel(job.helpRequest!.action)}</strong><small>Context revision {job.expectedRevision}{job.expectedRevision !== help.revision ? " · Earlier project context" : ""}</small>
         {job.helpRequest?.message && <blockquote className="source-excerpt">{job.helpRequest.message}</blockquote>}
         {job.helpResponse ? <><p className="source-excerpt">{job.helpResponse.explanation}</p>{job.helpResponse.assumptions.length > 0 && <><b>Assumptions to check</b><ul>{job.helpResponse.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></>}{job.helpResponse.followUp && <p><b>Something to consider:</b> {job.helpResponse.followUp}</p>}<small>AI guidance · No answer selected or requirement confirmed.</small></>
-          : <p role="status">{["pending", "running"].includes(job.status) ? "Preparing clarification…" : `${job.status}: ${job.diagnostic ?? "Request help again to retry."}`}</p>}
+          : <p role="status" className="help-loading">{["pending", "running"].includes(job.status) ? <><span className="help-spinner" aria-hidden="true" /> Preparing clarification…</> : `${job.status}: ${job.diagnostic ?? "Request help again to retry."}`}</p>}
       </section>)}
     </div>
     {active && <button type="button" className="quiet" onClick={() => void help.cancel(active.id).catch((error: Error) => setError(error.message))}>Stop clarification</button>}

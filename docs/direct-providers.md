@@ -59,8 +59,8 @@ an explicit selection of a connection on the new device. OpenCode SDK code remai
 installed for the legacy adapter; its executable is not launched for direct requests.
 
 The app/terminal store credentials in a `providers` directory beside `projects.sqlite`.
-With `npm run app -- --data-dir .wizard-state`, the equivalent spike argument is
-`--data-dir .wizard-state/providers`. Default paths match the independent spike.
+With `npm run app -- --data-dir .reqwizit-state`, the equivalent spike argument is
+`--data-dir .reqwizit-state/providers`. Default paths match the independent spike.
 
 ## Try the independent spike
 
@@ -93,8 +93,10 @@ against the fixed OpenAI JWKS with issuer/audience/expiry/nonce checks. Returnin
 login (`login --account ...`) must match the selected identity and issued client.
 Multiple registrations are separate even if their email addresses match.
 
-Credentials default to `%LOCALAPPDATA%\requirement-wizard\providers` on Windows,
-or `~/.local/share/requirement-wizard/providers` elsewhere. `--data-dir .provider-state`
+Credentials default to `%LOCALAPPDATA%\reqwizit\providers` on Windows,
+or `~/.local/share/reqwizit/providers` elsewhere. Existing `requirement-wizard`
+installations are reused when the new data directory does not exist.
+`--data-dir .provider-state`
 uses an ignored development directory; apply it consistently to each command.
 
 Windows uses DPAPI CurrentUser encryption via Windows PowerShell, with secrets
@@ -120,7 +122,7 @@ plan limits and disconnect the app at https://chatgpt.com/settings/usage.
 - `npm run test:browser`: passed with deterministic provider fixtures. Covers sign-in
   and cancellation, account/model selection, test/cancel/retry, project selection
   persistence, disconnect, existing discovery workflows, and mobile overflow.
-  Screenshots: `.wizard-state/browser-connections{,-mobile}.png`.
+  Pre-rename screenshots: `.wizard-state/browser-connections{,-mobile}.png`.
 - `npm run provider -- --help`: passed without runtime startup or provider calls.
 - Existing spike/terminal help commands and `npm run build:ui`: passed.
 - `git diff --check`: passed.

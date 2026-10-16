@@ -1,4 +1,4 @@
-# Requirement Wizard
+# Reqwizit
 
 A local-first application that helps people turn a software idea into a reviewed
 specification and an actionable AI build plan.
@@ -51,13 +51,18 @@ epic organization, scoring, context management, verification, and current limita
 The terminal client is also available:
 
 ```powershell
-npm run wizard -- new --name "My project" --idea "An app for managing renovation jobs" --provider openai --model gpt-6.1-sol
+npm run reqwizit -- new --name "My project" --idea "An app for managing renovation jobs" --provider openai --model gpt-6.1-sol
 # Copy the displayed ID, then:
-npm run wizard -- interview --project "your-project-id"
+npm run reqwizit -- interview --project "your-project-id"
 ```
 
 See the [terminal discovery guide](docs/terminal-discovery.md) for command-driven
 use, storage locations, revision checks, verification, and remaining M2 work.
+
+New installations store data under the user-local `reqwizit` directory. Existing
+`requirement-wizard` installations are reused in place when no `reqwizit` directory
+exists, retaining projects and protected credentials. Browser preferences are
+migrated to the new name automatically. Explicit `--data-dir` paths still work.
 
 The runtime compatibility runner is also available:
 

@@ -7,12 +7,13 @@ import { analysisSchema } from "../core/model.js";
 import type { Connections, LoginStatus } from "../providers/connections.js";
 
 // Deterministic UI exercise: no model inference, provider credentials, or billing.
-process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".wizard-state/browsers");
+process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
-await mkdir(resolve(".wizard-state"), { recursive: true });
+await mkdir(resolve(".reqwizit-state"), { recursive: true });
 const store = new ProjectStore(":memory:");
 const releases: Array<() => void> = [];
 let rounds = 0;
+let releaseWordHelp: (() => void) | undefined;
 let login: LoginStatus = { id: "10000000-0000-4000-8000-000000000001", status: "cancelled" };
 let loginComplete = false, connected = false, blockTest = true;
 let cancelTest: (() => void) | undefined;
@@ -43,6 +44,10 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
     ] }], scopeAssessment: { confidence: "low", explanation: "More workflows may still be missing." }, researchFindings: [],
   });
 }, async clarify(_project, request, options) {
+  if (request.message?.startsWith("What do you mean by")) {
+    await new Promise<void>((accept) => { releaseWordHelp = accept; options.signal.addEventListener("abort", () => accept(), { once: true }); });
+    return { explanation: "In this context, this word describes who can use your project's first version.", assumptions: [], followUp: null };
+  }
   if (request.action === "decide") await new Promise<void>((accept) => { options.signal.addEventListener("abort", () => accept(), { once: true }); });
   return { explanation: request.action === "follow-up" ? "A small team could share job records with separate access." : "Will just you use the app, or will other people use it too?", assumptions: ["Team size is not confirmed yet."], followUp: "Will anyone else need access?" };
 } } });
@@ -50,10 +55,36 @@ let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
   browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, hasTouch: true });
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("reqwizit-plan-confirmed:previous-account")) {
+      localStorage.setItem("wizard-plan-confirmed:previous-account", "true");
+      localStorage.setItem("wizard-auto", "false");
+      localStorage.setItem("reqwizit-auto", "true");
+    }
+  });
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.context().route("https://auth.openai.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<p>Deterministic sign-in fixture. No provider contacted.</p>" }));
   await page.goto(app.origin);
+  await expect(page).toHaveTitle("Reqwizit");
+  await expect(page.locator(".brand")).toContainText("Reqwizit");
+  assert.deepEqual(await page.evaluate(() => ({
+    migrated: localStorage.getItem("reqwizit-plan-confirmed:previous-account"),
+    current: localStorage.getItem("reqwizit-auto"),
+    legacy: localStorage.getItem("wizard-auto"),
+  })), { migrated: "true", current: "true", legacy: null });
+  await expect(page.locator(".sidebar").getByRole("button", { name: "Settings", exact: true })).toBeVisible();
+  await expect(page.locator(".topbar .header-progress")).toHaveCount(0);
+  const directSettings = await browser.newPage();
+  await directSettings.goto(`${app.origin}/#/settings`);
+  await directSettings.reload();
+  await expect(directSettings.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+  await directSettings.getByRole("button", { name: "Back to workspace" }).click();
+  await expect(directSettings.getByLabel("Project name")).toBeVisible();
+  await directSettings.close();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page).toHaveURL(/#\/settings$/);
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
+  await expect(page.getByLabel("Project name")).toBeHidden();
   const connectionPanel = page.getByRole("region", { name: "AI connections", exact: true });
   await expect(connectionPanel.getByRole("button", { name: "Continue with ChatGPT" })).toBeEnabled();
   const firstPopup = page.waitForEvent("popup");
@@ -78,16 +109,27 @@ try {
   blockTest = false;
   await connectionPanel.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(connectionPanel.getByText(/Connection test passed/)).toBeVisible();
-  await page.screenshot({ path: ".wizard-state/browser-connections.png", fullPage: true });
+  await page.screenshot({ path: ".reqwizit-state/browser-connections.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Connection settings must fit a mobile viewport");
-  await page.screenshot({ path: ".wizard-state/browser-connections-mobile.png", fullPage: true });
+  await page.screenshot({ path: ".reqwizit-state/browser-connections-mobile.png", fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByLabel("Project name").fill("Browser sample");
+  await page.getByRole("button", { name: "Choose AI connection" }).click();
+  await page.goBack();
+  await expect(page.getByLabel("Project name")).toHaveValue("Browser sample");
+  await page.goForward();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByLabel("Your idea", { exact: true }).fill("Track contractor jobs and save their information.");
   await page.getByRole("button", { name: "Create & explore" }).click();
   await expect(page.getByRole("heading", { name: "Who will use the first release?", exact: true })).toBeVisible();
+  const headerProgress = page.locator(".topbar .header-progress");
+  await expect(headerProgress).toContainText("Definition progress");
+  await expect(headerProgress).toContainText("Estimated coverage");
+  const projectCoverage = await headerProgress.getByRole("meter", { name: "Definition coverage" }).getAttribute("aria-valuenow");
+  await expect(headerProgress.locator("strong")).toHaveText(`${projectCoverage}%`);
   assert.equal(store.list().length, 1);
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -99,11 +141,11 @@ try {
   await expect(page.getByRole("button", { name: "Save model", exact: true })).toBeDisabled();
   await page.getByLabel("AI connection", { exact: true }).selectOption("fixture-account");
   await page.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-alt");
-  await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeDisabled();
-  await expect(page.getByText(/Connection changes are not saved/)).toContainText("OpenCode");
+  await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeHidden();
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, undefined);
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Back to workspace" }).click();
   await expect(page.locator(".topbar")).toContainText("Active connection: OpenCode");
+  await expect(page.getByText(/Connection changes are not saved/)).toContainText("OpenCode");
   await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeDisabled();
   assert.equal(rounds, 1, "An unsaved connection must not start another inference round");
   await page.getByRole("button", { name: "Review connection settings", exact: true }).click();
@@ -112,18 +154,24 @@ try {
   assert.equal(store.get(store.list()[0]!.id).model.modelID, "fixture-alt");
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   await expect(page.locator(".topbar")).toContainText("Active connection: Direct ChatGPT plan");
+  await page.getByRole("button", { name: "Back to workspace" }).click();
   await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeEnabled();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.locator(".insight-column")).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toBeVisible();
   await expect(page.locator(".question-card.expanded")).toHaveCount(1);
   await page.getByLabel("Filter by feature").selectOption({ label: "Job tracking" });
+  await expect(headerProgress.getByRole("meter")).toHaveAttribute("aria-valuenow", projectCoverage!);
   const card = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Who will use the first release?", exact: true }) });
   await expect(card.locator(".question-meta")).toContainText("Job tracking");
   await expect(card.locator(".question-meta")).toContainText("Permissions");
-  await page.screenshot({ path: ".wizard-state/browser-questions.png", fullPage: true });
+  await page.screenshot({ path: ".reqwizit-state/browser-questions.png", fullPage: true });
   const answer = card.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true });
   await answer.fill("My unfinished answer");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(answer).toBeHidden();
+  await page.goBack();
+  await expect(answer).toHaveValue("My unfinished answer");
+  await expect(page.getByLabel("Filter by feature").locator("option:checked")).toHaveText("Job tracking");
   const concept = card.getByRole("button", { name: "Explain permission", exact: true });
   await concept.hover();
   await expect(card.getByRole("tooltip")).toContainText("Who can see or change information.");
@@ -142,6 +190,29 @@ try {
   await expect(card.locator(".help-exchange")).toContainText("Will just you use the app");
   await expect(answer).toHaveValue("My unfinished answer");
   await expect(card.getByRole("heading", { name: "Who will use the first release?", exact: true })).toBeVisible();
+  await card.locator(".question-help summary").click();
+  await card.getByRole("button", { name: "Explain word release", exact: true }).click();
+  const wordHelp = card.getByRole("button", { name: "What do you mean by “release”?", exact: true });
+  await expect(wordHelp).toBeVisible();
+  await wordHelp.press("Escape");
+  await expect(wordHelp).toHaveCount(0);
+  await card.getByRole("button", { name: "Explain word release", exact: true }).press("Enter");
+  await wordHelp.click();
+  await expect(card.locator(".question-help")).toHaveAttribute("open", "");
+  await expect(card.locator(".help-spinner").last()).toBeVisible();
+  await expect.poll(() => !!releaseWordHelp).toBe(true);
+  await expect(answer).toHaveValue("My unfinished answer");
+  releaseWordHelp!(); releaseWordHelp = undefined;
+  await expect(card.locator(".help-exchange").last()).toContainText("this word describes who can use");
+  await expect(card.locator(".help-exchange").last()).toContainText("What do you mean by “release”");
+  await expect(card.locator(".help-spinner")).toHaveCount(0);
+  await card.getByRole("button", { name: "Explain word management", exact: true }).click();
+  await card.getByRole("button", { name: "What do you mean by “management”?", exact: true }).click();
+  await expect.poll(() => !!releaseWordHelp).toBe(true);
+  await expect(card.getByRole("button", { name: /Choose Owner only/ })).toHaveAttribute("aria-pressed", "false");
+  releaseWordHelp!(); releaseWordHelp = undefined;
+  await expect(card.locator(".help-exchange").last()).toContainText("Text: Keeps account management simple.");
+  await expect(card.locator(".help-spinner")).toHaveCount(0);
   await card.getByLabel("Ask a follow-up", { exact: true }).fill("What about a small team?");
   await card.getByRole("button", { name: "Ask for clarification" }).click();
   await expect(card.locator(".help-exchange").last()).toContainText("A small team could share job records");
@@ -151,17 +222,27 @@ try {
   await expect(card.locator(".help-exchange").last()).toContainText("cancelled");
   await expect(answer).toHaveValue("My unfinished answer");
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator(".sidebar").getByRole("button", { name: "Settings", exact: true }).tap();
+  await expect(page.getByRole("region", { name: "Settings", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Back to workspace" }).tap();
+  await expect(answer).toHaveValue("My unfinished answer");
+  await headerProgress.scrollIntoViewIfNeeded();
+  await expect(headerProgress).toBeVisible();
   await answer.tap();
   await card.getByRole("button", { name: "Explain roles", exact: true }).tap();
   await expect(card.getByRole("tooltip")).toBeVisible();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Help must fit the mobile viewport");
-  await page.screenshot({ path: ".wizard-state/browser-help-mobile.png", fullPage: true });
+  await page.screenshot({ path: ".reqwizit-state/browser-help-mobile.png", fullPage: true });
+  await page.keyboard.press("Escape");
+  await card.getByRole("button", { name: "Explain word release", exact: true }).tap();
+  await expect(card.getByRole("button", { name: "What do you mean by “release”?", exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Word help must fit the mobile viewport");
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.screenshot({ path: ".wizard-state/browser-desktop.png", fullPage: true });
+  await page.screenshot({ path: ".reqwizit-state/browser-desktop.png", fullPage: true });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByLabel("Automatically explore queued answers").uncheck();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /Owner only.*Keeps account/ }).click();
   await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Who will use the first release?", exact: true }) }).getByRole("button", { name: "Save response" }).click();
   await expect(page.locator(".question-card").first().getByRole("heading")).toHaveText("What job details should be saved?");
@@ -185,21 +266,22 @@ try {
   await page.getByLabel("Review rationale").fill("Saving jobs is essential.");
   await page.getByRole("button", { name: "Confirm requirement" }).click();
   await expect(page.locator(".badge.accepted")).toHaveText("Confirmed");
-  await page.screenshot({ path: ".wizard-state/browser-map.png", fullPage: true });
+  await page.screenshot({ path: ".reqwizit-state/browser-map.png", fullPage: true });
   await page.reload();
   await expect(page.getByRole("heading", { name: "Browser sample", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByLabel("Automatically explore queued answers")).not.toBeChecked();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await card.getByRole("button", { name: "Edit answer", exact: true }).click();
   await card.locator(".question-help summary").click();
-  await expect(card.locator(".help-exchange")).toHaveCount(3);
-  await expect(card.locator(".help-exchange").nth(1)).toContainText("What about a small team?");
+  await expect(card.locator(".help-exchange")).toHaveCount(5);
+  await expect(card.locator(".help-exchange").filter({ hasText: "What about a small team?" })).toHaveCount(1);
+  await expect(card.locator(".help-exchange").filter({ hasText: "What do you mean by “release”" })).toHaveCount(1);
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveValue("Owner and office team");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByLabel("Automatically explore queued answers").check();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /To answer/ }).click();
   await page.getByRole("button", { name: "Explore next gaps" }).click();
   await expect.poll(() => releases.length).toBe(1);
@@ -258,7 +340,7 @@ try {
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({ path: ".wizard-state/browser-mobile.png", fullPage: true });
+  await page.screenshot({ path: ".reqwizit-state/browser-mobile.png", fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile layout should not overflow horizontally");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByLabel("ChatGPT model", { exact: true })).toHaveValue("fixture-alt");
@@ -266,5 +348,5 @@ try {
   await expect(page.getByText(/Account disconnected\. Projects retain/)).toBeVisible();
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   assert.deepEqual(errors, []);
-  console.log("Browser checks passed: ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation, and mobile layout. Screenshots: .wizard-state/browser-{connections,connections-mobile,desktop,mobile,help-mobile}.png");
+  console.log("Browser checks passed: ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation, and mobile layout. Screenshots: .reqwizit-state/browser-{connections,connections-mobile,desktop,mobile,help-mobile}.png");
 } finally { await browser?.close(); await app.close(); store.close(); }

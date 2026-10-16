@@ -12,10 +12,18 @@ import { AIConnections } from "./connections.js";
 type Snapshot = { project: Project; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; submissions: Submission[]; queuePaused: boolean };
 type Item = { id: string; name: string; revision: number };
 type Draft = { kind: "answer" | "delegation" | "deferral"; text: string };
-const token = document.querySelector<HTMLMetaElement>('meta[name="wizard-token"]')?.content ?? "";
+// Carry pre-rename browser preferences forward once, without replacing newer values.
+for (const storage of [localStorage, sessionStorage]) {
+  for (const key of Object.keys(storage).filter((key) => key.startsWith("wizard-"))) {
+    const renamed = key.replace(/^wizard-/, "reqwizit-");
+    if (storage.getItem(renamed) === null) storage.setItem(renamed, storage.getItem(key)!);
+    storage.removeItem(key);
+  }
+}
+const token = document.querySelector<HTMLMetaElement>('meta[name="reqwizit-token"]')?.content ?? "";
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`/api/${path}`, { method: body === undefined ? "GET" : "POST",
-    headers: { "X-Wizard-Token": token, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    headers: { "X-Reqwizit-Token": token, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error ?? "Request failed.");
@@ -26,7 +34,7 @@ function Meter({ value, stale = false }: { value: number; stale?: boolean }) {
 }
 function App() {
   const [projects, setProjects] = useState<Item[]>([]);
-  const [id, setID] = useState<string | null>(localStorage.getItem("wizard-project"));
+  const [id, setID] = useState<string | null>(localStorage.getItem("reqwizit-project"));
   const selected = useRef(id); selected.current = id;
   const [data, setData] = useState<Snapshot | null>(null);
   const [creating, setCreating] = useState(false);
@@ -38,8 +46,8 @@ function App() {
   const requests = useRef(new Map<string, string>());
   const inFlight = useRef(new Set<string>());
   const drafts = useRef(new Map<string, Draft>());
-  const [auto, setAuto] = useState(localStorage.getItem("wizard-auto") !== "false");
-  const [research, setResearch] = useState(localStorage.getItem("wizard-research") !== "false");
+  const [auto, setAuto] = useState(localStorage.getItem("reqwizit-auto") !== "false");
+  const [research, setResearch] = useState(localStorage.getItem("reqwizit-research") !== "false");
   const [name, setName] = useState(""); const [idea, setIdea] = useState("");
   const [model, setModel] = useState("gpt-6.1-sol");
   const [connectionID, setConnectionID] = useState("");
@@ -48,7 +56,19 @@ function App() {
   const [editingEpic, setEditingEpic] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<{ revision: number; reason: string }>>([]);
   const [showContext, setShowContext] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(location.hash === "#/settings");
+  const pageHeading = useRef<HTMLHeadingElement>(null);
+  const workspaceScroll = useRef(0);
+  function navigate(page: "settings" | "workspace", replace = false) {
+    if ((page === "settings") === showSettings) return;
+    if (page === "settings") workspaceScroll.current = window.scrollY;
+    window.history[replace ? "replaceState" : "pushState"]({ reqwizitSettings: page === "settings" }, "", `#/${page}`);
+    setShowSettings(page === "settings");
+  }
+  function backToWorkspace() {
+    if (window.history.state?.reqwizitSettings) window.history.back();
+    else navigate("workspace", true);
+  }
   const [questionFilter, setQuestionFilter] = useState<"open" | "answered" | "later" | "submitted">("open");
   const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<{ id: string; text: string } | null>(null);
@@ -78,11 +98,22 @@ function App() {
     if (selected.current === projectID) setData((previous) => previous && previous.project.id === projectID && previous.project.revision > snapshot.project.revision ? previous : snapshot);
   }
   useEffect(() => { void list().catch((error: Error) => setError(error.message)); }, []);
-  useEffect(() => { localStorage.setItem("wizard-auto", String(auto)); }, [auto]);
-  useEffect(() => { localStorage.setItem("wizard-research", String(research)); }, [research]);
+  useEffect(() => {
+    const syncPage = () => setShowSettings(location.hash === "#/settings");
+    window.addEventListener("popstate", syncPage);
+    window.addEventListener("hashchange", syncPage);
+    return () => { window.removeEventListener("popstate", syncPage); window.removeEventListener("hashchange", syncPage); };
+  }, []);
+  useEffect(() => {
+    document.title = showSettings ? "Settings · Reqwizit" : "Reqwizit";
+    pageHeading.current?.focus({ preventScroll: true });
+    window.scrollTo(0, showSettings ? 0 : workspaceScroll.current);
+  }, [showSettings]);
+  useEffect(() => { localStorage.setItem("reqwizit-auto", String(auto)); }, [auto]);
+  useEffect(() => { localStorage.setItem("reqwizit-research", String(research)); }, [research]);
   useEffect(() => {
     setData(null); setEpicID("all"); setTab("discover"); setQuestionFilter("open"); setExpandedQuestion(null); setSavedMessage(null); setError("");
-    if (id) { localStorage.setItem("wizard-project", id); void load(id).catch((error: Error) => { setError(error.message); }); }
+    if (id) { localStorage.setItem("reqwizit-project", id); void load(id).catch((error: Error) => { setError(error.message); }); }
   }, [id]);
   useEffect(() => {
     if (!id) return;
@@ -162,30 +193,33 @@ function App() {
 
   return <div className="app">
     <aside className="sidebar">
-      <div className="brand"><span className="brand-mark">✦</span><div>Requirement<span>WIZARD</span></div></div>
+      <div className="brand"><span className="brand-mark">✦</span><div>Reqwizit</div></div>
       <div className="sidebar-label">YOUR WORKSPACE</div>
-      <button className="new-project" onClick={() => setCreating(true)}>＋ New project</button>
-      <nav aria-label="Projects">{projects.map((item) => <button key={item.id} className={`project-link ${id === item.id ? "selected" : ""}`} onClick={() => { setID(item.id); setCreating(false); }}><span>◇</span>{item.name}</button>)}</nav>
+      <button className="new-project" onClick={() => { setCreating(true); navigate("workspace"); }}>＋ New project</button>
+      <nav aria-label="Projects">{projects.map((item) => <button key={item.id} className={`project-link ${id === item.id && !showSettings ? "selected" : ""}`} onClick={() => { setID(item.id); setCreating(false); navigate("workspace"); }}><span>◇</span>{item.name}</button>)}</nav>
+      <div className="sidebar-tools"><button className={`settings-toggle ${showSettings ? "selected" : ""}`} aria-label="Settings" title="Settings" aria-current={showSettings ? "page" : undefined} onClick={() => navigate("settings")}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.2-1.7 1-2.2-.6L2.5 10l1.6 1.6v1.8L2.5 15 5 19.4l2.2-.6 1.7 1 .6 2.2h5l.6-2.2 1.7-1 2.2.6 2.5-4.4-1.6-1.6v-1.8l1.6-1.6L19 5.6l-2.2.6-1.7-1L14.5 3Z" /><circle cx="12" cy="12.5" r="3" /></svg></button></div>
       <div className="sidebar-bottom"><span className="connection-dot" /> Local-first workspace<p>Project files are saved on this device.<br />Discovery sends context to ChatGPT.</p></div>
     </aside>
     <main>
-      <header className="topbar"><div><h1>{creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small></div>
-        <button className="secondary" aria-expanded={showSettings} onClick={() => setShowSettings(!showSettings)}>Settings</button></header>
+      {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
+      <header className="topbar"><div><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small></div>
+        {!showSettings && project && summary && !creating && <div className="header-progress" title="Estimated coverage of identified work, not completeness or build readiness."><div className="header-progress-label"><span>Definition progress</span><strong>{summary.percent}%</strong></div><Meter value={summary.percent} stale={summary.stale} /><small>Estimated coverage{summary.stale ? " · Review needed" : ""}</small></div>}</header>
       {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
-      {showSettings && <section className="settings-panel" aria-label="Settings">
+      {showSettings && <section id="workspace-settings" className="settings-panel" aria-label="Settings">
         <AIConnections request={api} disabled={pending} accountID={connectionID} modelID={model} onSelect={(account, selectedModel) => { setConnectionID(account); setModel(selectedModel); }}>
           {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Explore next gaps and question help."}</p><button disabled={busy || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
         </AIConnections>
         {project && !creating ? <><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p></> : <p>Your selected connection and model will be used when you create a project.</p>}
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
       </section>}
-      {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => setShowSettings(true)}>Review connection settings</button></div>}
+      <div hidden={showSettings}>
+      {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => navigate("settings")}>Review connection settings</button></div>}
       {(creating || !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>
         <form onSubmit={(event) => void create(event)}>
           <label>Project name<input required maxLength={150} value={name} onChange={(event) => setName(event.target.value)} placeholder="Something worth building" /></label>
           <label>Your idea<textarea required maxLength={12000} value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="I want to build an app that…" rows={5} /></label>
-          <div className="connection-summary">{connectionID ? "Direct ChatGPT plan" : "OpenCode connection"} · {model || "Choose a model in Settings"} <button type="button" className="quiet" onClick={() => setShowSettings(true)}>Choose AI connection</button></div>
+          <div className="connection-summary">{connectionID ? "Direct ChatGPT plan" : "OpenCode connection"} · {model || "Choose a model in Settings"} <button type="button" className="quiet" onClick={() => navigate("settings")}>Choose AI connection</button></div>
           <label className="research-toggle"><input type="checkbox" checked={!connectionID && research} disabled={!!connectionID} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted web research</label>
           <button className="primary" disabled={pending || !model}>{pending ? "Creating…" : "Create & explore →"}</button>
         </form>
@@ -261,6 +295,7 @@ function App() {
           </aside>}
         </section>
       </>}
+      </div>
     </main>
   </div>;
 }
@@ -274,9 +309,19 @@ function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, h
   const updateText = (value: string) => { setText(value); onDraft({ kind, text: value }); };
   const updateKind = (value: Draft["kind"]) => { setKind(value); onDraft({ kind: value, text }); };
   const currentQuestion = number === 1 && question.status === "pending" && !status;
-  const annotated = (text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => <AnnotatedText text={text} concepts={question.concepts?.filter((c) => c.field === field && c.optionIndex === optionIndex)} />;
+  const [helpReveal, setHelpReveal] = useState(0);
+  const [explaining, setExplaining] = useState(false);
+  const explanationInFlight = useRef(false);
+  async function explain(phrase: string, context: string) {
+    if (explanationInFlight.current || help.busy) return;
+    explanationInFlight.current = true; setExplaining(true); setHelpReveal((value) => value + 1);
+    try { await help.request({ questionID: question.id, action: "follow-up", message: `What do you mean by “${phrase}” in this context?\n\nText: ${context}\n\nExplain it simply and what it changes for this project's choice.` }); }
+    finally { explanationInFlight.current = false; setExplaining(false); }
+  }
+  const annotated = (text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => <AnnotatedText text={text} concepts={question.concepts?.filter((c) => c.field === field && c.optionIndex === optionIndex)} onExplain={explain} busy={explaining || help.busy} />;
   return <article className={`question-card ${expanded ? "expanded" : "collapsed"}`}><div className="question-meta"><span>{area}{question.category ? ` · ${dimensionLabels[question.category]}` : ""}</span><span role="status">{status ?? (question.status === "pending" ? "To answer" : question.status === "answered" ? "Answered" : question.status)}</span></div><div className="question-title"><h3 aria-label={question.text}>{expanded ? annotated(question.text, "text") : <button aria-expanded={false} onClick={onToggle}>{question.text}</button>}</h3>{expanded && currentQuestion ? <span className="quiet">Current question</span> : <button className="quiet" aria-expanded={expanded} onClick={onToggle}>{expanded ? "Collapse" : initialText ? "Edit answer" : "Answer"}</button>}</div>{!expanded && initialText && <p className="answer-preview">{initialText}</p>}{expanded && <div className="question-body"><p>{annotated(question.whyItMatters, "whyItMatters")}</p>{purpose && <details className="question-context"><summary>About this feature</summary><p>{purpose}</p></details>}{status === "processing" && <p className="correction-hint">This response is being reviewed. A correction will be saved for the next round.</p>}{status === "queued" && <p className="correction-hint">Saving changes replaces this waiting response. Its earlier version stays in history.</p>}<div className="options">{question.options.map((option, index) => <div className={`option ${kind === "answer" && text === option.label ? "chosen" : ""}`} key={index}><span className="option-circle">{String.fromCharCode(65 + index)}</span><div className="option-copy"><strong>{annotated(option.label, "label", index)}</strong><small>{annotated(option.consequence, "consequence", index)}</small></div><button type="button" className="option-choose" aria-label={`Choose ${option.label}. ${option.consequence}`} aria-pressed={kind === "answer" && text === option.label} disabled={disabled} onClick={() => { setKind("answer"); setText(option.label); onDraft({ kind: "answer", text: option.label }); }}>{kind === "answer" && text === option.label ? "✓ Selected" : "Choose"}</button></div>)}</div>
-    <QuestionHelp questionID={question.id} help={help} />
+    <p className="word-help-hint">Unclear wording? Click any word, then ? to ask what it means. Underlined concepts explain instantly.</p>
+    <QuestionHelp questionID={question.id} help={help} reveal={helpReveal} requesting={explaining} />
     <form onSubmit={(event) => { event.preventDefault(); if (!disabled) void onSave(kind, text); }}><label className="sr-only">Your answer to {question.text}</label><textarea aria-label={`Your answer to ${question.text}`} value={text} onChange={(event) => updateText(event.target.value)} rows={2} maxLength={12000} placeholder={kind === "delegation" ? "Describe exactly which choice the AI may make, and its limits…" : kind === "deferral" ? "What should remain open, and why?" : "Choose an option above, or write it in your own words…"} required /><div className="answer-actions"><select aria-label={`Response type for ${question.text}`} value={kind} disabled={disabled} onChange={(event) => updateKind(event.target.value as typeof kind)}><option value="answer">My answer</option><option value="deferral">Defer for now</option><option value="delegation">Delegate within limits</option></select><button type="button" className="quiet" disabled={disabled} onClick={() => { setText(initialText ?? ""); setKind(initialKind ?? "answer"); onCancel(); }}>Cancel</button><button className="primary" disabled={disabled || !text.trim()}>{initialText ? "Save changes →" : "Save response →"}</button></div>{kind === "delegation" && <small className="delegation-note">Delegation records permission within your stated limits. It does not turn this text into a confirmed product preference.</small>}</form></div>}
   </article>;
 }

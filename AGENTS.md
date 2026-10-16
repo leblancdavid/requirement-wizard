@@ -1,8 +1,8 @@
-# Agent guidance for Requirement Wizard
+# Agent guidance for Reqwizit
 
 ## Project purpose
 
-Requirement Wizard is a local-first application that turns a rough software idea
+Reqwizit is a local-first application that turns a rough software idea
 into a reviewed specification and phased AI build packages through adaptive
 questions, targeted research, and scenario walkthroughs.
 
@@ -137,7 +137,7 @@ npm ci
 npm run check
 npm test
 npm run spike -- --help
-npm run wizard -- --help
+npm run reqwizit -- --help
 npm run build:ui
 git diff --check
 ```
@@ -165,8 +165,9 @@ work, with an explicit provider/model and bounded timeout. Use the commands in
 `docs/runtime-spike.md`; do not repeat paid probes without a concrete verification
 need. Deterministic fixtures do not establish live subscription compatibility.
 
-Application data defaults to the user's local `requirement-wizard` directory. Use
-`--data-dir .wizard-state` for repository-local development; it is ignored by Git.
+Application data defaults to the user's local `reqwizit` directory, reusing an existing
+`requirement-wizard` directory when the new directory does not exist. Use
+`--data-dir .reqwizit-state` for repository-local development; it is ignored by Git.
 Keep demonstration projects and model-call outputs out of committed fixtures unless
 they are deliberately curated and free of credentials. Expired-job recovery must
 preserve other workers' live leases and must not automatically repeat model calls.

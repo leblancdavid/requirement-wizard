@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve, sep, join } from "node:path";
-import { homedir } from "node:os";
+import { defaultDataDirectory } from "../storage/paths.js";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
@@ -60,14 +60,14 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         if (!path.startsWith(root + sep)) { json(res, 403, { error: "Invalid asset path." }); return; }
         try {
           let content = await readFile(path);
-          if (extname(path) === ".html") content = Buffer.from(content.toString().replace("__WIZARD_TOKEN__", token));
+          if (extname(path) === ".html") content = Buffer.from(content.toString().replace("__REQWIZIT_TOKEN__", token));
           res.setHeader("Cache-Control", "no-store");
           res.setHeader("Content-Type", ({ ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" } as Record<string, string>)[extname(path)] ?? "application/octet-stream");
           res.end(content);
         } catch { json(res, 404, { error: "UI asset not found. Run npm run build:ui first." }); }
         return;
       }
-      if (req.headers["x-wizard-token"] !== token || (req.headers.origin && req.headers.origin !== origin)) {
+      if (req.headers["x-reqwizit-token"] !== token || (req.headers.origin && req.headers.origin !== origin)) {
         json(res, 403, { error: "Invalid local app session. Reload this app's page." }); return;
       }
       if (req.method !== "GET" && req.headers.origin !== origin) { json(res, 403, { error: "Same-origin request required." }); return; }
@@ -224,9 +224,9 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const { values } = parseArgs({ options: { "data-dir": { type: "string" }, port: { type: "string" }, help: { type: "boolean" } } });
-  if (values.help) console.log("npm run app -- --data-dir .wizard-state --port 4317\nOpen the printed loopback URL in your browser. Defaults to the same store as the CLI.");
+  if (values.help) console.log("npm run app -- --data-dir .reqwizit-state --port 4317\nOpen the printed loopback URL in your browser. Defaults to the same store as the CLI.");
   else {
-    const directory = resolve(values["data-dir"] ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local/share"), "requirement-wizard"));
+    const directory = resolve(values["data-dir"] ?? defaultDataDirectory());
     const port = Number(values.port ?? "4317");
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid port.");
     const store = new ProjectStore(join(directory, "projects.sqlite"));
@@ -234,7 +234,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     try {
       const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
       const app = await startApp({ store, connections, adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), port });
-      console.log(`\nRequirement Wizard is ready: ${app.origin}\nOpen this address in your browser. Existing CLI projects are available. Ctrl+C stops the app.\n`);
+      console.log(`\nReqwizit is ready: ${app.origin}\nOpen this address in your browser. Existing CLI projects are available. Ctrl+C stops the app.\n`);
       let closing = false;
       const close = () => { if (closing) return; closing = true; void app.close().finally(() => store.close()); };
       process.once("SIGINT", close); process.once("SIGTERM", close);

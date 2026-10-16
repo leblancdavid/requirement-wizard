@@ -9,7 +9,7 @@ import { CredentialStore, type Protection } from "./credentials.js";
 const protection: Protection = { seal: async (text) => Buffer.from(text).toString("base64"), open: async (text) => Buffer.from(text, "base64").toString() };
 
 test("credential transactions serialize across instances, persist host identity, and preserve failed writes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "wizard-credentials-"));
+  const directory = await mkdtemp(join(tmpdir(), "reqwizit-credentials-"));
   try {
     const first = new CredentialStore(directory, protection), second = new CredentialStore(directory, protection);
     const signal = AbortSignal.timeout(10000);
@@ -32,7 +32,7 @@ test("credential transactions serialize across instances, persist host identity,
 });
 
 test("native credential protection round trips on the current OS", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "wizard-native-credentials-"));
+  const directory = await mkdtemp(join(tmpdir(), "reqwizit-native-credentials-"));
   try {
     const store = new CredentialStore(directory);
     const hostID = await store.transaction(async (state) => state.hostID, AbortSignal.timeout(20000));

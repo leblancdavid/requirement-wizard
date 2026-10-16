@@ -1,4 +1,14 @@
 .concept{position:relative;display:inline;font:inherit}
+.explain-word{position:relative;display:inline;font:inherit}
+.word-trigger{display:inline;padding:0;border:0;border-radius:2px;background:none;color:inherit;font:inherit;letter-spacing:inherit;line-height:inherit;text-align:inherit}
+.word-trigger:hover,.word-trigger:focus-visible{background:#e5eee4;text-decoration:underline dotted;text-underline-offset:3px}
+.word-help{position:absolute;z-index:21;top:100%;left:0;width:240px;max-width:75vw;padding:8px;background:#fff;border:1px solid #a9bbae;border-radius:8px;box-shadow:0 6px 20px #142d2833;font-size:12px;font-weight:400;letter-spacing:normal;line-height:1.5;color:#183b30}
+.word-help-action{padding:6px;text-align:left;color:#27634e;font:inherit}.word-help-action>span{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#27634e;color:#fff;font-weight:700;margin-right:4px}
+.word-help-hint{font-size:12px;color:#52665b;margin:14px 0}
+.help-loading{display:flex;align-items:center;gap:8px}.help-spinner{display:inline-block;flex-shrink:0;width:14px;height:14px;border:2px solid #b7cabc;border-top-color:#27634e;border-radius:50%;animation:help-spin .8s linear infinite}
+@keyframes help-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.help-spinner{animation:none;border-style:dotted}}
+@media(max-width:540px){.word-help{position:fixed;left:20px;right:20px;top:auto;bottom:20px;width:auto;max-width:none}}
 .concept-trigger{padding:0;border-radius:2px;color:#27634e;text-decoration:underline dotted;text-underline-offset:4px;font:inherit;text-align:inherit}
 .concept-tip{position:absolute;z-index:20;left:0;top:100%;width:260px;max-width:75vw;padding:13px 15px;background:#183b30;color:#fff;border:1px solid #557364;border-radius:8px;box-shadow:0 6px 20px #142d2833;font-size:12px;font-weight:400;letter-spacing:normal;line-height:1.6;text-align:left;overflow-wrap:anywhere}
 .concept-tip>span{display:block}.concept-tip>span+span{margin-top:9px}.concept-tip b{display:block;color:#e4d6a7;font-size:11px}

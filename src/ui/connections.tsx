@@ -39,7 +39,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
   useEffect(() => {
     mounted.current = true;
     void reload().catch((error: Error) => setError(error.message));
-    const pending = sessionStorage.getItem("wizard-login");
+    const pending = sessionStorage.getItem("reqwizit-login");
     if (pending) setLogin({ id: pending, status: "waiting" });
     return () => { mounted.current = false; catalogSequence.current++; };
   }, []);
@@ -58,11 +58,11 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
         const result = await request<LoginStatus>(`connections/login?id=${encodeURIComponent(login.id)}`);
         if (stopped) return;
         if (!["waiting", "validating"].includes(result.status)) {
-          sessionStorage.removeItem("wizard-login"); setAuthURL("");
+          sessionStorage.removeItem("reqwizit-login"); setAuthURL("");
           if (result.status === "connected") {
             await reload();
             if (stopped) return;
-            if (!localStorage.getItem(`wizard-plan-confirmed:${result.accountID}`)) setWelcome(result.accountID!);
+            if (!localStorage.getItem(`reqwizit-plan-confirmed:${result.accountID}`)) setWelcome(result.accountID!);
             setMessage("ChatGPT account connected. Choose a model below, then save the selection for this project or use it when creating a project.");
             onSelect(result.accountID!, "");
             // Reconnecting the same account also refreshes its catalog.
@@ -71,7 +71,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
         }
         if (!stopped) setLogin(result);
       } catch (error) {
-        if (!stopped) { sessionStorage.removeItem("wizard-login"); setLogin(null); setAuthURL(""); setError((error as Error).message); }
+        if (!stopped) { sessionStorage.removeItem("reqwizit-login"); setLogin(null); setAuthURL(""); setError((error as Error).message); }
       } finally { polling = false; }
     };
     void poll(); const timer = setInterval(() => void poll(), 1500);
@@ -91,7 +91,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
         const result = await request<{ id: string; url: string }>("connections/login", existing ? { accountID: existing } : {});
         const url = new URL(result.url);
         if (url.origin !== "https://auth.openai.com") throw new Error("Unexpected sign-in destination.");
-        sessionStorage.setItem("wizard-login", result.id);
+        sessionStorage.setItem("reqwizit-login", result.id);
         if (mounted.current) { setLogin({ id: result.id, status: "waiting" }); setAuthURL(result.url); }
         if (popup) popup.location.href = result.url;
       } catch (error) { popup?.close(); throw error; }
@@ -102,11 +102,11 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
     <div className="connection-heading"><div><h2>AI connections</h2><p>Connect your ChatGPT plan and choose which account and model this project uses.</p></div><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
     {error && <p role="alert" className="connection-error">{error}</p>}
     {message && <p role="status" className="connection-notice">{message}</p>}
-    {welcome && <div className="connection-notice" role="status"><strong>Your ChatGPT plan is connected</strong><p>Connecting an account does not change this project’s active connection. Choose a model and save the selection, or use it when creating a project. Eligible requests use your plan or credits.</p><button className="secondary" onClick={() => { localStorage.setItem(`wizard-plan-confirmed:${welcome}`, "true"); setWelcome(null); }}>Got it</button></div>}
+    {welcome && <div className="connection-notice" role="status"><strong>Your ChatGPT plan is connected</strong><p>Connecting an account does not change this project’s active connection. Choose a model and save the selection, or use it when creating a project. Eligible requests use your plan or credits.</p><button className="secondary" onClick={() => { localStorage.setItem(`reqwizit-plan-confirmed:${welcome}`, "true"); setWelcome(null); }}>Got it</button></div>}
     <div className="connection-card"><div><strong>ChatGPT</strong><p>Sign in in a separate browser tab. Your credentials stay with the local service.</p></div><button className="primary" disabled={!available || busy || activeLogin || testing} onClick={() => signIn()}>Continue with ChatGPT</button></div>
     {loaded && !available && <p>Connection management is unavailable in this server configuration.</p>}
     {!loaded && <p role="status">Loading saved connections…</p>}
-    {activeLogin && <div className="connection-notice" role="status"><strong>{login.status === "validating" ? "Validating your account…" : "Waiting for ChatGPT sign-in…"}</strong><p>Complete authorization in the other tab, then return here. This attempt expires after three minutes.</p>{authURL && <a href={authURL} target="_blank" rel="noreferrer">Open sign-in tab ↗</a>}<button className="quiet" disabled={busy} onClick={() => void act(async () => { await request("connections/cancel-login", { id: login.id }); setLogin({ ...login, status: "cancelled" }); sessionStorage.removeItem("wizard-login"); setAuthURL(""); })}>Cancel sign-in</button></div>}
+    {activeLogin && <div className="connection-notice" role="status"><strong>{login.status === "validating" ? "Validating your account…" : "Waiting for ChatGPT sign-in…"}</strong><p>Complete authorization in the other tab, then return here. This attempt expires after three minutes.</p>{authURL && <a href={authURL} target="_blank" rel="noreferrer">Open sign-in tab ↗</a>}<button className="quiet" disabled={busy} onClick={() => void act(async () => { await request("connections/cancel-login", { id: login.id }); setLogin({ ...login, status: "cancelled" }); sessionStorage.removeItem("reqwizit-login"); setAuthURL(""); })}>Cancel sign-in</button></div>}
     <label>AI connection<select aria-label="AI connection" value={accountID} disabled={busy || testing || activeLogin} onChange={(event) => { onSelect(event.target.value, event.target.value ? "" : "gpt-6.1-sol"); }}>
       <option value="">OpenCode · existing connection</option>
       {accountID && !account && <option value={accountID}>Disconnected account · reconnect or choose another</option>}

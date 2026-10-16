@@ -49,7 +49,7 @@ test("concept references reject missing, ambiguous, overlapping, and misplaced p
 });
 
 test("help is durable, revision-linked advisory history and never changes decisions or coverage", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "wizard-help-"));
+  const directory = mkdtempSync(join(tmpdir(), "reqwizit-help-"));
   const path = join(directory, "projects.sqlite");
   let store = new ProjectStore(path);
   try {

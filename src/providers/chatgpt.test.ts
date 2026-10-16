@@ -25,7 +25,7 @@ test("authorization uses dynamic registration, fresh PKCE and state, and binds r
   const second = authorize("urn:uuid:host", first.redirectURI, saved);
   const url = new URL(first.url);
   assert.equal(url.searchParams.get("client_id"), "dynamic_agent_client");
-  assert.equal(url.searchParams.get("agent_name_hint"), "Requirement Wizard");
+  assert.equal(url.searchParams.get("agent_name_hint"), "Reqwizit");
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");
   assert.notEqual(first.state, second.state);
   assert.notEqual(first.verifier, second.verifier);

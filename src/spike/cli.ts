@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { interpretation, interpretationSchema, positiveMilliseconds, safeMessage, selectModel } from "./contract.js";
 import { startRuntime } from "./runtime.js";
 
-const help = `Requirement Wizard — OpenCode compatibility spike
+const help = `Reqwizit — OpenCode compatibility spike
 
 npm run spike -- providers
 npm run spike -- profile
@@ -86,7 +86,7 @@ async function main() {
     }
     const model = selectModel(catalog, values.provider!, values.model!);
     const session = (await runtime.client.session.create({
-      title: "Requirement Wizard compatibility probe", permission: [{ permission: "*", pattern: "*", action: "deny" }],
+      title: "Reqwizit compatibility probe", permission: [{ permission: "*", pattern: "*", action: "deny" }],
     })).data;
     if (!session) throw new Error("Runtime returned no session.");
     const sessionID = session.id;

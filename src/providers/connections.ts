@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { defaultDataDirectory } from "../storage/paths.js";
 import { join } from "node:path";
 import { CredentialStore } from "./credentials.js";
 import { AuthorizationDeclined, ProviderError, authorize, callback, exchange, listModels, probe, refresh, revoke, type Registration } from "./chatgpt.js";
@@ -19,7 +19,7 @@ export interface Connections {
   disconnect(accountID: string): Promise<void>;
   close(): Promise<void>;
 }
-export const defaultCredentialDirectory = () => join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "requirement-wizard", "providers");
+export const defaultCredentialDirectory = () => join(defaultDataDirectory(), "providers");
 export function connectionError(error: unknown): string {
   return error instanceof ProviderError ? error.message : "ChatGPT connection could not complete. Retry sign-in or check your connection and ChatGPT usage settings.";
 }
@@ -123,10 +123,10 @@ export class ConnectionManager implements Connections {
           try {
             const value = callback(attempt, url);
             state.status = "validating";
-            res.end("Authorization received. Return to Requirement Wizard to see the result. You may close this tab.");
+            res.end("Authorization received. Return to Reqwizit to see the result. You may close this tab.");
             accept(value);
           } catch (error) {
-            res.writeHead(400).end("Authorization was rejected. Return to Requirement Wizard.");
+            res.writeHead(400).end("Authorization was rejected. Return to Reqwizit.");
             // Invalid state cannot terminate someone else's pending sign-in.
             if (error instanceof AuthorizationDeclined) reject(error);
           }

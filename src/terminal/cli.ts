@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { homedir } from "node:os";
+import { defaultDataDirectory } from "../storage/paths.js";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
@@ -13,18 +13,18 @@ import { ConnectionManager } from "../providers/connections.js";
 import { CredentialStore } from "../providers/credentials.js";
 import { ConnectedDiscovery } from "../providers/discovery.js";
 
-const help = `Requirement Wizard — persistent terminal discovery
+const help = `Reqwizit — persistent terminal discovery
 
-npm run wizard -- new --name "My app" --idea "Describe the idea" --provider openai --model gpt-6.1-sol
-npm run wizard -- list
-npm run wizard -- show --project <id> [--revision <n>] [--json]
-npm run wizard -- interview --project <id>
-npm run wizard -- analyze --project <id> --expected-revision <n>
-npm run wizard -- answer --project <id> --expected-revision <n> --question <id> --text "Answer"
-npm run wizard -- review --project <id> --expected-revision <n> --requirement <id> --decision accept --text "Rationale"
-npm run wizard -- model --project <id> --expected-revision <n> --provider openai --model gpt-6.1-sol
-npm run wizard -- jobs --project <id>
-npm run wizard -- recover
+npm run reqwizit -- new --name "My app" --idea "Describe the idea" --provider openai --model gpt-6.1-sol
+npm run reqwizit -- list
+npm run reqwizit -- show --project <id> [--revision <n>] [--json]
+npm run reqwizit -- interview --project <id>
+npm run reqwizit -- analyze --project <id> --expected-revision <n>
+npm run reqwizit -- answer --project <id> --expected-revision <n> --question <id> --text "Answer"
+npm run reqwizit -- review --project <id> --expected-revision <n> --requirement <id> --decision accept --text "Rationale"
+npm run reqwizit -- model --project <id> --expected-revision <n> --provider openai --model gpt-6.1-sol
+npm run reqwizit -- jobs --project <id>
+npm run reqwizit -- recover
 
 answer supports --kind answer|delegation|deferral. Delegation text must describe its scope.
 review supports accept|reject. Historical revisions are read-only snapshots.
@@ -97,7 +97,7 @@ async function main() {
     throw new Error("Unknown command. See --help.");
   }
   if (command === "interview" && (!stdin.isTTY || !stdout.isTTY)) throw new Error("interview requires an interactive terminal; use analyze/answer/review for scripting.");
-  const directory = resolve(values["data-dir"] ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local/share"), "requirement-wizard"));
+  const directory = resolve(values["data-dir"] ?? defaultDataDirectory());
   const store = new ProjectStore(join(directory, "projects.sqlite"));
   const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
   const service = new DiscoveryService(store, new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))));

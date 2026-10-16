@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { ProjectStore } from "./store.js";
 import { StaleRevisionError, type Analysis, type Project } from "../core/model.js";
 
-const testDirectory = join(process.cwd(), ".wizard-state", "tests");
+const testDirectory = join(process.cwd(), ".reqwizit-state", "tests");
 mkdirSync(testDirectory, { recursive: true });
 
 export function proposal(project: Project): Analysis {

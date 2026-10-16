@@ -21,7 +21,7 @@ on the development machine. Provider connection instructions are in
 
 ```powershell
 npm ci
-npm run wizard -- new --name "My project" --idea "An app for tracking home renovation jobs" --provider openai --model gpt-6.1-sol
+npm run reqwizit -- new --name "My project" --idea "An app for tracking home renovation jobs" --provider openai --model gpt-6.1-sol
 ```
 
 Copy the displayed project ID. Creation saves the original idea and model choice;
@@ -30,7 +30,7 @@ you analyze. List current models with `npm run spike -- providers`.
 
 ```powershell
 $projectID = "paste-the-project-id-here"
-npm run wizard -- interview --project $projectID
+npm run reqwizit -- interview --project $projectID
 ```
 
 The interview offers explicit actions:
@@ -55,22 +55,22 @@ All noninteractive mutations require the revision you inspected. A stale revisio
 fails instead of overwriting another process's work.
 
 ```powershell
-npm run wizard -- list
-npm run wizard -- show --project $projectID
-npm run wizard -- analyze --project $projectID --expected-revision 1
-npm run wizard -- show --project $projectID --json
+npm run reqwizit -- list
+npm run reqwizit -- show --project $projectID
+npm run reqwizit -- analyze --project $projectID --expected-revision 1
+npm run reqwizit -- show --project $projectID --json
 
 # Use IDs and the current revision printed by show.
-npm run wizard -- answer --project $projectID --expected-revision 2 --question "question-id" --text "Owner only on one computer"
-npm run wizard -- review --project $projectID --expected-revision 3 --requirement "requirement-id" --decision accept --text "Essential to the first release"
+npm run reqwizit -- answer --project $projectID --expected-revision 2 --question "question-id" --text "Owner only on one computer"
+npm run reqwizit -- review --project $projectID --expected-revision 3 --requirement "requirement-id" --decision accept --text "Essential to the first release"
 
 # Switch the saved model explicitly for subsequent analysis.
-npm run wizard -- model --project $projectID --expected-revision 4 --provider openai --model gpt-6.1-sol
+npm run reqwizit -- model --project $projectID --expected-revision 4 --provider openai --model gpt-6.1-sol
 
 # Inspect immutable snapshots and job state without model calls.
-npm run wizard -- show --project $projectID --revision 1 --json
-npm run wizard -- jobs --project $projectID
-npm run wizard -- recover
+npm run reqwizit -- show --project $projectID --revision 1 --json
+npm run reqwizit -- jobs --project $projectID
+npm run reqwizit -- recover
 ```
 
 Examples illustrate revision increments; inspect the current project rather than
@@ -89,10 +89,12 @@ node --import tsx src/terminal/cli.ts list
 
 ## Storage and job behavior
 
-Default storage is `%LOCALAPPDATA%\requirement-wizard\projects.sqlite` on Windows,
-or `~/.local/share/requirement-wizard/projects.sqlite` without LOCALAPPDATA. Use
+Default storage is `%LOCALAPPDATA%\reqwizit\projects.sqlite` on Windows,
+or `~/.local/share/reqwizit/projects.sqlite` without LOCALAPPDATA. Existing
+`requirement-wizard` installations are reused in place when the new data directory
+does not exist, preserving both project state and protected credentials. Use
 `--data-dir <directory>` on every command to select an alternative store. For
-repository-local experiments, `.wizard-state/` is ignored by Git.
+repository-local experiments, `.reqwizit-state/` is ignored by Git.
 
 SQLite transactions save a project revision and its snapshot together. Independent
 processes can read/write using SQLite locking and expected-revision checks. The
@@ -128,14 +130,14 @@ October 15, 2026, Windows, Node 20.11.0, OpenCode/SDK 1.18.32:
   A second live analysis respected the answer and accepted requirement, preserved
   unanswered questions, and proposed an additional owner-only requirement.
 - The project reached revision 5; a fresh process could still read revision 1.
-  Local demonstration state is ignored under `.wizard-state/`.
+  Pre-rename local demonstration state is ignored under `.wizard-state/`.
 - Jobs `c245dc6e-0e5c-4e33-85d6-3a747e2bed2d` and
   `4d76b4a0-7bc2-469f-9ecf-e85319d2fde0` completed with reported usage of
   2193 input/1034 output and 3352 input/984 output tokens respectively. The second
   call also reported 98 reasoning tokens. Both reported runtime cost 0.
 
-These sample answers are demonstration data, not product decisions for Requirement
-Wizard. The interactive TTY menu has not been manually exercised in this tool
+These sample answers are demonstration data, not product decisions for Reqwizit.
+The interactive TTY menu has not been manually exercised in this tool
 environment; live verification used the same application's scriptable commands.
 
 ## Remaining M2 work

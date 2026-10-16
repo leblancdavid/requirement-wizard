@@ -73,6 +73,9 @@ technical detail, tradeoffs, and recommendations per question.
 - Unfamiliar concepts in question text, rationale, and suggested answers can carry
   subtle inline explanations of meaning and practical impact. Explanations open on
   hover, keyboard focus, or tap and can be dismissed without selecting an answer.
+- Proactively explain technical and context-dependent terms. Any other word in a
+  question, rationale, or suggested answer offers a **? What do you mean by this?**
+  shortcut to contextual clarification, with visible loading feedback.
 - Each question offers simpler rephrasing, explanation of why it matters, concrete
   examples, contextual decision support, and free-text clarification follow-ups.
 - Rephrasing preserves the original decision, constraints, and options. Recommendations

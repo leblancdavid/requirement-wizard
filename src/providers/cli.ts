@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { homedir } from "node:os";
+import { defaultDataDirectory } from "../storage/paths.js";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { CredentialStore } from "./credentials.js";
@@ -33,7 +33,7 @@ async function main() {
   if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 300_000) throw new ProviderError("Timeout must be 1000..300000 milliseconds.");
   const cancelAfter = values["cancel-after-ms"] === undefined ? undefined : Number(values["cancel-after-ms"]);
   if (cancelAfter !== undefined && (command !== "probe" || !Number.isInteger(cancelAfter) || cancelAfter < 1 || cancelAfter > timeout)) throw new ProviderError("Cancellation must be a positive probe delay within the timeout.");
-  const store = new CredentialStore(values["data-dir"] ? resolve(values["data-dir"]) : join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "requirement-wizard", "providers"));
+  const store = new CredentialStore(values["data-dir"] ? resolve(values["data-dir"]) : join(defaultDataDirectory(), "providers"));
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.once("SIGINT", stop);
@@ -74,11 +74,11 @@ async function main() {
             try {
               const result = callback(attempt, url);
               signal.removeEventListener("abort", abort);
-              response.end("Authorization received. Return to Requirement Wizard to check the result."); accept(result);
+              response.end("Authorization received. Return to Reqwizit to check the result."); accept(result);
             } catch (error) {
               if (error instanceof AuthorizationDeclined) {
                 signal.removeEventListener("abort", abort);
-                response.writeHead(400).end("Authorization declined. Return to Requirement Wizard.");
+                response.writeHead(400).end("Authorization declined. Return to Reqwizit.");
                 reject(error); return;
               }
               // Untrusted callbacks cannot cancel the real pending attempt.

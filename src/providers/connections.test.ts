@@ -19,7 +19,7 @@ const account = { id: "registered-client", clientID: "registered-client", subjec
   refreshToken: "private-refresh", idToken: "private-id", expiresAt: Date.now() + 3600000, scopes: ["chatgpt.tokens.use.direct"] };
 
 test("browser OAuth validates a real signed fixture callback, exposes no credentials, and closes pending sign-in", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "wizard-browser-auth-"));
+  const directory = await mkdtemp(join(tmpdir(), "reqwizit-browser-auth-"));
   const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const key = { ...pair.publicKey.export({ format: "jwk" }), kid: "fixture", alg: "RS256" };
   let nonce = "", revoked = false;
@@ -59,7 +59,7 @@ test("browser OAuth validates a real signed fixture callback, exposes no credent
 });
 
 test("direct discovery uses the selected account, schema/revision validation, and never falls back", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "wizard-direct-discovery-"));
+  const directory = await mkdtemp(join(tmpdir(), "reqwizit-direct-discovery-"));
   const credentials = new CredentialStore(directory, codec);
   await credentials.transaction(async (state) => { state.accounts.push(account); }, AbortSignal.timeout(5000));
   const store = new ProjectStore(":memory:");
@@ -104,7 +104,7 @@ test("direct discovery uses the selected account, schema/revision validation, an
 });
 
 test("connection tests cancel without accepting partial output and can run again", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "wizard-test-cancel-"));
+  const directory = await mkdtemp(join(tmpdir(), "reqwizit-test-cancel-"));
   const credentials = new CredentialStore(directory, codec);
   await credentials.transaction(async (state) => { state.accounts.push(account); }, AbortSignal.timeout(5000));
   let started = false, block = true;

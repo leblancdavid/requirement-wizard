@@ -28,7 +28,7 @@ export function authorize(hostID: string, redirectURI: string, saved?: Registrat
   const verifier = randomBytes(32).toString("base64url");
   const url = new URL(`${issuer}/api/accounts/authorize`);
   url.search = new URLSearchParams({ client_id: saved?.clientID ?? "dynamic_agent_client",
-    ...(!saved ? { agent_name_hint: "Requirement Wizard" } : {}), ext_agent_host_id: hostID,
+    ...(!saved ? { agent_name_hint: "Reqwizit" } : {}), ext_agent_host_id: hostID,
     response_type: "code", redirect_uri: redirectURI,
     scope: "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct", resource,
     state, nonce, code_challenge_method: "S256", code_challenge: createHash("sha256").update(verifier).digest("base64url") }).toString();
@@ -155,7 +155,7 @@ export async function consumeResponse(body: ReadableStream<Uint8Array>, signal: 
 }
 
 export async function probe(saved: Registration, model: string, signal: AbortSignal, request: Fetch = fetch) {
-  const result = await generate(saved, model, 'Return only valid JSON with exactly one field: {"ok":true}. Do not use tools.', "Run the Requirement Wizard connection check.", signal, request);
+  const result = await generate(saved, model, 'Return only valid JSON with exactly one field: {"ok":true}. Do not use tools.', "Run the Reqwizit connection check.", signal, request);
   z.object({ ok: z.literal(true) }).strict().parse(JSON.parse(result.text));
   return { model: result.response.model, requestID: result.response.id, usage: result.response.usage };
 }

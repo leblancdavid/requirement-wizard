@@ -25,7 +25,7 @@ test("connection API requires local authentication, validates selection, and red
     async test() { tested++; }, cancelTest() { cancelled++; }, async disconnect() { disconnected++; }, async close() { closed = true; },
   };
   const app = await startApp({ store, connections, adapter: { async analyze() { throw new Error("Unexpected inference"); } }, port: 0 });
-  const headers = { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
   const post = (path: string, value: unknown) => fetch(`${app.origin}/api/${path}`, { method: "POST", headers, body: JSON.stringify(value) });
   try {
     assert.equal((await fetch(`${app.origin}/api/connections`)).status, 403);
@@ -72,7 +72,7 @@ test("question help runs independently, survives page requests, and supports aut
       return { explanation: "Keep working without connectivity.", assumptions: [], followUp: null };
     },
   } });
-  const headers = { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
   const post = (action: string, body: unknown) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers, body: JSON.stringify(body) });
   const get = async () => await (await fetch(`${app.origin}/api/projects/${project.id}`, { headers })).json() as { helpJobs: Job[]; jobs: Job[]; active: boolean };
   const input = { revision: project.revision, request: { questionID: project.questions[0]!.id, action: "rephrase" } };
@@ -101,7 +101,7 @@ test("local API requires session authentication and same origin; stale writes re
   const store = new ProjectStore(":memory:");
   const adapter: DiscoveryAdapter = { async analyze() { throw new Error("No inference in API contract test"); } };
   const app = await startApp({ store, adapter, port: 0 });
-  const headers = { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
   try {
     assert.equal((await fetch(`${app.origin}/api/projects`)).status, 403);
     // Undici normalizes Host to the URL; use a raw HTTP request to exercise rebinding protection.
@@ -132,7 +132,7 @@ test("browser job survives request completion, exposes progress, and applies a f
     return analysisSchema.parse({ summary: "Job tracker", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
   } };
   const app = await startApp({ store, adapter, port: 0 });
-  const headers = { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
   try {
     const request = () => fetch(`${app.origin}/api/projects/${project.id}/analyze`, { method: "POST", headers, body: JSON.stringify({ revision: 1 }) });
     assert.equal((await request()).status, 202); assert.equal((await request()).status, 409);
@@ -160,7 +160,7 @@ test("queued responses preserve the active revision, batch across epics, survive
     await new Promise<void>((accept) => { releases.push(accept); options.signal.addEventListener("abort", () => accept(), { once: true }); });
     return analysisSchema.parse({ summary: "Updated", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
   } } });
-  const headers = { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
   const post = (action: string, body: unknown) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers, body: JSON.stringify(body) });
   const get = async () => (await (await fetch(`${app.origin}/api/projects/${project.id}`, { headers })).json()) as { active: boolean; submissions: Submission[] };
   const response = (index: number) => ({ id: crypto.randomUUID(), auto: true, research: false, input: { type: "answer", questionID: project.questions[index]!.id, questionText: project.questions[index]!.text, sourceID: null, answer: { kind: "answer", text: `Response ${index}` } } });
@@ -206,7 +206,7 @@ test("a correction during processing waits for the next round and preserves the 
     await new Promise<void>((accept) => { releases.push(accept); options.signal.addEventListener("abort", () => accept(), { once: true }); });
     return analysisSchema.parse({ summary: "Reviewed", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
   } } });
-  const post = (body: unknown) => fetch(`${app.origin}/api/projects/${project.id}/submit`, { method: "POST", headers: { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin }, body: JSON.stringify(body) });
+  const post = (body: unknown) => fetch(`${app.origin}/api/projects/${project.id}/submit`, { method: "POST", headers: { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin }, body: JSON.stringify(body) });
   const question = project.questions[0]!;
   const response = (text: string, sourceID: string | null) => ({ id: crypto.randomUUID(), auto: true, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID, answer: { kind: "answer", text } } });
   try {
@@ -235,7 +235,7 @@ test("failure pauses waiting answers; explicit resume retries applied answers wi
     if (fail) throw new Error("Fixture failure");
     return analysisSchema.parse({ summary: "Recovered", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
   } } });
-  const headers = { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
   const post = (action: string, body: unknown) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers, body: JSON.stringify(body) });
   try {
     await post("submit", { id: crypto.randomUUID(), auto: true, research: false, input: { type: "note", text: "  Keep original\n", epicID: "project" } });
@@ -261,7 +261,7 @@ test("shutdown preserves the active batch and waiting queue; restart waits for e
     return analysisSchema.parse({ summary: "Recovered", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
   } };
   let app = await startApp({ store, port: 0, adapter });
-  const post = (action: string, body: unknown) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers: { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin }, body: JSON.stringify(body) });
+  const post = (action: string, body: unknown) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers: { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin }, body: JSON.stringify(body) });
   const note = (text: string) => ({ id: crypto.randomUUID(), auto: true, research: false, input: { type: "note", text, epicID: "project" } });
   try {
     await post("submit", note("First"));
@@ -305,11 +305,11 @@ test("oversized batches automatically process smaller revision-linked groups wit
     return analysisSchema.parse({ summary: "Recovered area", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
   } } });
   const post = (focusEpicID?: string) => fetch(`${app.origin}/api/projects/${project.id}/analyze`, { method: "POST",
-    headers: { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin },
+    headers: { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin },
     body: JSON.stringify({ revision: store.get(project.id).revision, ...(focusEpicID ? { focusEpicID } : {}) }) });
   const idle = async () => {
     for (let i = 0; i < 100; i++) {
-      const response = await fetch(`${app.origin}/api/projects/${project.id}`, { headers: { "X-Wizard-Token": app.token } });
+      const response = await fetch(`${app.origin}/api/projects/${project.id}`, { headers: { "X-Reqwizit-Token": app.token } });
       if (!(await response.json() as { active: boolean }).active) return;
       await new Promise((accept) => setTimeout(accept, 10));
     }
