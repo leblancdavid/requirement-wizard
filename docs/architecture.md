@@ -274,6 +274,13 @@ Local source folder → Bounded evidence snapshot → Proposed project understan
 
 `src/storage/scan.ts` owns bounded read-only capture. `DiscoveryService.scan` runs
 sequential batches using the selected adapter with tools/research disabled.
+`src/service/scan-batches.ts` plans bounded evidence tasks and subdivides unfinished
+work. Jobs retain the captured snapshot, versioned batch plan, attempt counts and
+validated responses in SQLite. Explicit resume creates a new job, reuses those
+checkpoints and rejects changed project revisions/models/folder connection IDs.
+Five-minute batch deadlines run within a fifteen-minute execution window; expired
+leases and app restart retain saved work without automatically repeating inference.
+The browser API returns checkpoint counts rather than unpublished batch responses.
 `ProjectStore.finishScan` applies all validated batches in one expected-revision/binding
 transaction, recording scan manifests and distinct `workspace` evidence sources.
 The queue pauses for review; API `POST /api/projects/:id/scan` and terminal `scan`

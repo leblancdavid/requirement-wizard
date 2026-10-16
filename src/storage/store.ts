@@ -8,7 +8,29 @@ import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
 import { organize, type Organization } from "../core/epics.js";
 import { answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
-  submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
+  submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type ScanWork, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
+
+/** Also used on a disposable project copy before accepting a batch checkpoint. */
+function applyScanResults(project: Project, scan: NonNullable<Job["scan"]>, outputs: unknown[]) {
+  for (const source of scan.sources) if (!project.sources.some((s) => s.id === source.id)) project.sources.push(source);
+  for (const raw of outputs) {
+    const result = scanAnalysisSchema.parse(raw);
+    if (result.questions.length || result.retireQuestions.length || result.assessments?.length || result.researchFindings?.length || result.organization?.some((op) => op.type !== "upsert" || !op.epicID.startsWith("new:"))) throw new Error("Scans may only add feature and requirement proposals; review precedes gap discovery.");
+    const evidence = new Set(scan.sources.map((s) => s.id));
+    if (result.requirements.some((r) => !r.sourceIDs.length || r.sourceIDs.some((s) => !evidence.has(s)))) throw new Error("Each scanned requirement needs captured file evidence.");
+    const aliases = new Map<string, string>();
+    result.organization = result.organization?.filter((op) => {
+      if (op.type !== "upsert") return false;
+      const existing = project.epics.find((e) => !e.archived && e.title.toLowerCase() === op.title.toLowerCase());
+      if (existing) { aliases.set(op.epicID, existing.id); return false; }
+      return true;
+    });
+    for (const r of result.requirements) if (r.epicID) r.epicID = aliases.get(r.epicID) ?? r.epicID;
+    for (const op of result.organization ?? []) if (op.type === "upsert") op.dependencies = op.dependencies.map((id) => aliases.get(id) ?? id);
+    result.requirements = result.requirements.filter((r) => !project.requirements.some((old) => old.statement.trim().toLowerCase() === r.statement.trim().toLowerCase()));
+    applyRound(project, result, randomUUID);
+  }
+}
 
 export class ProjectStore {
   private readonly db: Database.Database;
@@ -43,6 +65,13 @@ export class ProjectStore {
       );
       PRAGMA user_version = 1;
     `);
+    for (const row of this.db.prepare("SELECT project_id, payload FROM workspaces").all() as { project_id: string; payload: string }[]) {
+      const binding = JSON.parse(row.payload) as Workspace;
+      if (!binding.bindingID) {
+        binding.bindingID = randomUUID();
+        this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ?").run(JSON.stringify(binding), row.project_id);
+      }
+    }
     this.syncWorkspaces();
   }
 
@@ -78,6 +107,7 @@ export class ProjectStore {
       const old = this.workspace(id);
       // Retain the durable journal when reconnecting the same location after interruption.
       const payload = old && directoryKey(old.path) === directoryKey(canonical) ? old : binding;
+      payload.bindingID = randomUUID();
       const existing = this.db.prepare("SELECT project_id FROM workspaces WHERE path_key = ? AND project_id != ?").get(directoryKey(canonical), id);
       if (existing) throw new Error("Workspace conflict: this directory is already connected to another project.");
       this.db.prepare(`INSERT INTO workspaces(project_id, path_key, payload, dirty) VALUES (?, ?, ?, 1)
@@ -478,6 +508,48 @@ export class ProjectStore {
     job.scan = scan; this.saveJob(job);
   }
 
+  assertResumableScan(projectID: string, revision: number, previousID: string) {
+    const previous = this.getJob(previousID);
+    const latest = this.jobs(projectID).filter((job) => job.kind === "scan").at(-1);
+    const project = this.get(projectID);
+    const binding = this.workspace(projectID);
+    if (previous.projectID !== projectID || latest?.id !== previousID || !["failed", "cancelled", "interrupted"].includes(previous.status) || !previous.scan || previous.scanWork?.version !== 1) throw new Error("This scan cannot be resumed. Start a new scan.");
+    if (project.revision !== revision || previous.expectedRevision !== revision || JSON.stringify(project.model) !== JSON.stringify(previous.model)
+      || !binding || binding.bindingID !== previous.scanWork.bindingID || workspaceScanKey(binding.path) !== previous.scan.workspaceKey) throw new Error("Project, model or folder connection changed. Start a new scan; saved batches were not applied.");
+    return previous;
+  }
+
+  resumeScan(projectID: string, revision: number, previousID: string): { project: Project; job: Job } {
+    return this.db.transaction(() => {
+      const previous = this.assertResumableScan(projectID, revision, previousID);
+      const next = this.beginJob(projectID, revision, undefined, true);
+      next.job.scan = previous.scan;
+      next.job.scanWork = { ...previous.scanWork!, resumedFrom: previousID };
+      this.saveJob(next.job);
+      return next;
+    }).immediate();
+  }
+
+  /** Atomic checkpoint, guarded by the same revision, binding and lease as publication. */
+  checkpointScan(id: string, work: ScanWork): boolean {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running" || !job.scan) throw new Error("Scan is no longer running.");
+      const binding = this.workspace(job.projectID);
+      if ((job.leaseUntil ?? 0) <= Date.now()) {
+        job.status = "interrupted"; job.diagnostic = "Scan lease expired. Resume explicitly.";
+      } else if (this.get(job.projectID).revision !== job.expectedRevision || !binding || binding.bindingID !== work.bindingID || workspaceScanKey(binding.path) !== job.scan.workspaceKey) {
+        job.status = "stale"; job.diagnostic = "Project or connected folder changed. Scan was not applied. Start a new scan.";
+      } else {
+        const completed = work.batches.flatMap((batch) => batch.output ? [batch.output] : []);
+        const saved = job.scanWork?.batches.flatMap((batch) => batch.output ? [batch.output] : []) ?? [];
+        if (JSON.stringify(completed) !== JSON.stringify(saved)) applyScanResults(this.get(job.projectID), job.scan, completed);
+        job.scanWork = work; this.saveJob(job); return true;
+      }
+      job.leaseUntil = null; this.saveJob(job); return false;
+    }).immediate();
+  }
+
   finishScan(id: string, outputs: unknown[]): Job {
     const results = outputs.map((output) => scanAnalysisSchema.parse(output));
     return this.db.transaction(() => {
@@ -485,31 +557,16 @@ export class ProjectStore {
       if (!job.scan || job.status !== "running") throw new Error("Scan is no longer running.");
       const binding = this.workspace(job.projectID);
       if ((job.leaseUntil ?? 0) <= Date.now()) { job.status = "interrupted"; job.diagnostic = "Scan lease expired. Retry explicitly."; }
-      else if (this.get(job.projectID).revision !== job.expectedRevision || !binding || workspaceScanKey(binding.path) !== job.scan.workspaceKey) {
+      else if (this.get(job.projectID).revision !== job.expectedRevision || !binding || workspaceScanKey(binding.path) !== job.scan.workspaceKey || (job.scanWork && binding.bindingID !== job.scanWork.bindingID)) {
         job.status = "stale"; job.diagnostic = "Project or connected folder changed. Scan was not applied.";
       } else {
+        if (job.scanWork && (job.scanWork.batches.some((batch) => !batch.output) || JSON.stringify(outputs) !== JSON.stringify(job.scanWork.batches.map((batch) => batch.output)))) throw new Error("Scan has unfinished batches or mismatched checkpoint results.");
         this.mutate(job.projectID, job.expectedRevision, `Workspace scan ${job.scan.snapshot.id}`, (project) => {
           const scan = job.scan!;
           const history = this.jobs(job.projectID).filter((j) => j.status === "completed" && j.scan?.workspaceKey === scan.workspaceKey).flatMap((j) => j.scan!.snapshot.files);
           const oldSources = new Set(history.filter((old) => !scan.snapshot.files.some((current) => current.path === old.path && current.hash === old.hash)).map((file) => file.sourceID));
           scan.snapshot.affectedRequirementIDs = project.requirements.filter((r) => r.sourceIDs.some((s) => oldSources.has(s))).map((r) => r.id);
-          for (const source of scan.sources) if (!project.sources.some((s) => s.id === source.id)) project.sources.push(source);
-          for (const result of results) {
-            if (result.questions.length || result.retireQuestions.length || result.assessments?.length || result.researchFindings?.length || result.organization?.some((op) => op.type !== "upsert" || !op.epicID.startsWith("new:"))) throw new Error("Scans may only add feature and requirement proposals; review precedes gap discovery.");
-            const evidence = new Set(scan.sources.map((s) => s.id));
-            if (result.requirements.some((r) => !r.sourceIDs.some((s) => evidence.has(s)))) throw new Error("Each scanned requirement needs captured file evidence.");
-            const aliases = new Map<string, string>();
-            result.organization = result.organization?.filter((op) => {
-              if (op.type !== "upsert") return false;
-              const existing = project.epics.find((e) => !e.archived && e.title.toLowerCase() === op.title.toLowerCase());
-              if (existing) { aliases.set(op.epicID, existing.id); return false; }
-              return true;
-            });
-            for (const r of result.requirements) if (r.epicID) r.epicID = aliases.get(r.epicID) ?? r.epicID;
-            for (const op of result.organization ?? []) if (op.type === "upsert") op.dependencies = op.dependencies.map((id) => aliases.get(id) ?? id);
-            result.requirements = result.requirements.filter((r) => !project.requirements.some((old) => old.statement.trim().toLowerCase() === r.statement.trim().toLowerCase()));
-            applyRound(project, result, randomUUID);
-          }
+          applyScanResults(project, scan, results);
           project.scans.push(scan.snapshot);
           project.roundChanges.push(`Scanned ${scan.snapshot.files.length} files; ${scan.snapshot.omitted.length} excluded/omitted paths. Review inferred requirements before exploring gaps.`, `${scan.snapshot.affectedRequirementIDs.length} existing requirements have changed or unavailable file evidence; their decisions were retained.`);
         });

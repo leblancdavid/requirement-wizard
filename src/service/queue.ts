@@ -44,13 +44,13 @@ export class DiscoveryQueue {
 
   isActive(id: string) { return this.active.has(id) || this.service.store.jobs(id).some((j) => !j.helpRequest && j.status === "running" && (j.leaseUntil ?? 0) > Date.now()); }
   progress(id: string) { return this.messages.get(id) ?? []; }
-  scan(id: string, revision: number) {
+  scan(id: string, revision: number, resumeJobID?: string) {
     if (this.closing || this.isActive(id)) throw new Error("This project already has active work or is closing.");
     this.service.store.pauseQueue(id, true);
     const controller = new AbortController();
     const progress: string[] = []; this.messages.set(id, progress);
     const promise = Promise.resolve().then(async () => {
-      await this.service.scan(id, revision, { signal: controller.signal, onProgress: (message) => { progress.push(message); if (progress.length > 20) progress.shift(); } });
+      await this.service.scan(id, revision, { resumeJobID, signal: controller.signal, onProgress: (message) => { progress.push(message); if (progress.length > 20) progress.shift(); } });
     }).catch((error) => { progress.push(safeMessage(error instanceof Error ? error.message : error)); }).finally(() => this.active.delete(id));
     this.active.set(id, { controller, promise });
   }

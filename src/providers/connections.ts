@@ -34,17 +34,18 @@ export class ConnectionManager implements Connections {
   private disconnecting = new Set<string>();
   constructor(private readonly store = new CredentialStore(defaultCredentialDirectory()), private readonly request: typeof fetch = fetch) {}
 
-  private async run<T>(operation: (signal: AbortSignal) => Promise<T>, accountID?: string, external?: AbortSignal): Promise<T> {
+  private async run<T>(operation: (signal: AbortSignal) => Promise<T>, accountID?: string, external?: AbortSignal, timeoutMs = 120_000): Promise<T> {
     if (this.closed) throw new ProviderError("Connection service is shutting down.");
     const controller = new AbortController();
     const abort = () => controller.abort();
     external?.addEventListener("abort", abort, { once: true });
     if (external?.aborted) abort();
-    const timer = setTimeout(abort, 120_000);
+    const timer = setTimeout(() => controller.abort(new ProviderError(`ChatGPT request timed out after ${timeoutMs / 60_000} minutes.`)), timeoutMs);
     const entry = { controller, accountID, done: Promise.resolve() as Promise<unknown> };
     this.work.add(entry);
     entry.done = (async () => { controller.signal.throwIfAborted(); return operation(controller.signal); })();
     try { return await entry.done as T; }
+    catch (error) { throw controller.signal.aborted ? controller.signal.reason : error; }
     finally { clearTimeout(timer); external?.removeEventListener("abort", abort); this.work.delete(entry); }
   }
 
@@ -67,9 +68,10 @@ export class ConnectionManager implements Connections {
     }, signal);
   }
   /** Keeps disconnect/shutdown cancellation attached throughout inference. */
-  withAccount<T>(id: string, operation: (account: Registration, signal: AbortSignal) => Promise<T>, external?: AbortSignal) {
+  withAccount<T>(id: string, operation: (account: Registration, signal: AbortSignal) => Promise<T>, external?: AbortSignal, timeoutMs = 120_000) {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 900_000) throw new ProviderError("Request timeout must be between 1 and 900000 milliseconds.");
     if (this.disconnecting.has(id)) throw new ProviderError("This account is disconnecting. Wait before starting another request.");
-    return this.run(async (signal) => operation(await this.credential(id, signal), signal), id, external);
+    return this.run(async (signal) => operation(await this.credential(id, signal), signal), id, external, timeoutMs);
   }
   models(id: string) { return this.withAccount(id, (account, signal) => listModels(account, signal, this.request)); }
   async test(id: string, model: string) {

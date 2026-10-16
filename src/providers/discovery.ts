@@ -33,7 +33,7 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
           usage: usage.success ? { input: usage.data.input_tokens, output: usage.data.output_tokens, reasoning: usage.data.output_tokens_details?.reasoning_tokens ?? 0 } : null });
         options.onResearch([]);
         return JSON.parse(result.text) as unknown;
-      }, options.signal);
+      }, options.signal, options.scan ? 900_000 : 300_000);
     } catch (error) { throw new ProviderError(connectionError(error)); }
   }
 }

@@ -103,6 +103,41 @@ test("direct discovery uses the selected account, schema/revision validation, an
   } finally { await manager.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("scan inference survives short connection deadlines, stays bounded and remains cancellable", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "reqwizit-scan-timeout-"));
+  const credentials = new CredentialStore(directory, codec);
+  await credentials.transaction(async (state) => { state.accounts.push(account); }, AbortSignal.timeout(5000));
+  const manager = new ConnectionManager(credentials);
+  try {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let ready!: () => void;
+    let started = new Promise<void>((resolve) => { ready = resolve; });
+    const waitForAbort = async (_account: unknown, signal: AbortSignal) => {
+      ready();
+      return new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    };
+    const pending = manager.withAccount(account.id, waitForAbort, undefined, 900_000);
+    const rejected = assert.rejects(pending, /timed out after 15 minutes/);
+    await started;
+    t.mock.timers.tick(300_000);
+    // A five-minute transport deadline must not terminate a scan.
+    let settled = false;
+    void pending.catch(() => { settled = true; });
+    await Promise.resolve();
+    assert.equal(settled, false);
+    t.mock.timers.tick(600_000);
+    await rejected;
+
+    started = new Promise<void>((resolve) => { ready = resolve; });
+    const controller = new AbortController();
+    const cancelled = manager.withAccount(account.id, waitForAbort, controller.signal, 900_000);
+    const cancellation = assert.rejects(cancelled, { name: "AbortError" });
+    await started;
+    controller.abort();
+    await cancellation;
+  } finally { t.mock.timers.reset(); await manager.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test("connection tests cancel without accepting partial output and can run again", async () => {
   const directory = await mkdtemp(join(tmpdir(), "reqwizit-test-cancel-"));
   const credentials = new CredentialStore(directory, codec);

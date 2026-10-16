@@ -10,6 +10,7 @@ export { requirementFingerprint } from "../core/implementation.js";
 export const workspaceFolder = ".requirement-wizard";
 const artifacts = ["requirements.md", "requirements.json", "progress.md", "progress.json", "manifest.json"] as const;
 export type Workspace = {
+  bindingID?: string;
   path: string; status: "saved" | "pending" | "conflict" | "unavailable";
   savedRevision: number | null; diagnostic: string | null;
   hashes: Record<string, string>; pendingHashes: Record<string, string[]>;

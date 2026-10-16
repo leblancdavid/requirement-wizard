@@ -63,6 +63,10 @@ Use the actual inspected revision. This sends eligible source files to the saved
 AI connection, reports progress, and stops for proposal review before `analyze`.
 It uses read-only bounded capture with retained file evidence and atomic application;
 see [initialization and rescanning](project-workspaces.md#initialize-definitions-and-rescan).
+Completed batches are checkpointed. Resume an interrupted/failed scan with
+`npm run reqwizit -- scan --project "project-id" --expected-revision 3 --resume-job "scan-job-id"`.
+Resume reuses captured files and skips saved batches; omit `--resume-job` to capture
+current files. Project/model/folder-connection changes require a new scan.
 
 All noninteractive mutations require the revision you inspected. A stale revision
 fails instead of overwriting another process's work.

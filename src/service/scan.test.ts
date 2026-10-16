@@ -11,6 +11,7 @@ import { captureWorkspace } from "../storage/scan.js";
 import { startApp } from "../web/server.js";
 import { analysisSchema } from "../core/model.js";
 import { planContext } from "../core/working-set.js";
+import { scanPrompt } from "../runtime/discovery.js";
 
 function proposal(options: DiscoveryOptions): Analysis {
   assert.equal(options.scan, true); assert.equal(options.research, false);
@@ -21,10 +22,10 @@ function proposal(options: DiscoveryOptions): Analysis {
     organization: [{ type: "upsert", epicID: "new:jobs", title: "Job tracking", purpose: "Manage jobs", dependencies: [] }],
     requirements: [{ epicID: "new:jobs", statement: "List saved jobs", rationale: "Observed in README.md lines 1–2; desired intent needs review", sourceIDs: [capturedFiles[0]!.id], acceptance: ["Saved jobs appear in the list"] }] };
 }
-function fixture() {
+function fixture(persistent = false) {
   const path = mkdtempSync(join(tmpdir(), "reqwizit-scan-"));
   writeFileSync(join(path, "README.md"), "# Jobs\nList saved jobs.");
-  const store = new ProjectStore(":memory:");
+  const store = new ProjectStore(persistent ? join(path, "state.sqlite") : ":memory:");
   const project = store.create("Existing app", "Preserve my original intention", { providerID: "openai", modelID: "fixture" });
   store.connectWorkspace(project.id, project.revision, path);
   return { path, store, project, close() { store.close(); rmSync(path, { recursive: true, force: true }); } };
@@ -106,6 +107,249 @@ test("invalid references, cancellation, stale revisions and rebinding cannot par
   }
 });
 
+test("scan prompt restricts citations to nonempty exact current-batch IDs", () => {
+  const f = fixture();
+  try {
+    const context = planContext(f.project);
+    context.data = { project: context.data, capturedFiles: [{ ...f.project.sources[0]!, id: "current-file-id" }] };
+    const prompt = scanPrompt(f.project, context);
+    const schema = JSON.parse(prompt.split("Schema: ")[1]!.split("\nProject revision")[0]!) as {
+      properties: { requirements: { items: { properties: { sourceIDs: { minItems: number; items: { enum: string[] } } } } } };
+    };
+    assert.equal(schema.properties.requirements.items.properties.sourceIDs.minItems, 1);
+    assert.deepEqual(schema.properties.requirements.items.properties.sourceIDs.items.enum, ["current-file-id"]);
+    assert.ok(prompt.includes('Allowed sourceIDs for this batch: ["current-file-id"]'));
+    assert.ok(prompt.includes("earlier batches"));
+  } finally { f.close(); }
+});
+
+test("scan citation failures identify the batch and requirement without applying proposals", async () => {
+  for (const mode of ["missing", "invented", "path", "cross-batch"] as const) {
+    const f = fixture();
+    try {
+      writeFileSync(join(f.path, "first.ts"), "// source\n".repeat(2100));
+      writeFileSync(join(f.path, "second.ts"), "// source\n".repeat(2100));
+      let firstID = "";
+      let calls = 0;
+      const service = new DiscoveryService(f.store, { async analyze(_project, options) {
+        calls++;
+        const result = proposal(options);
+        if (calls === 1) firstID = result.requirements[0]!.sourceIDs[0]!;
+        if (mode !== "cross-batch" || calls === 2) {
+          // Put the invalid citation after a valid requirement to check its index.
+          result.requirements.push({ ...result.requirements[0]!, statement: "Another feature",
+            sourceIDs: mode === "missing" ? [] : mode === "path" ? ["README.md"] : mode === "cross-batch" ? [firstID] : ["invented-file"] });
+        }
+        return result;
+      } });
+      const job = await service.scan(f.project.id, 1);
+      assert.equal(job.status, "failed", job.diagnostic);
+      assert.equal(calls, mode === "cross-batch" ? 2 : 1);
+      assert.match(job.diagnostic!, new RegExp(`Scan batch ${calls}/\\d+, requirement 2:`));
+      assert.ok(job.diagnostic!.includes(mode === "missing" ? "missing sourceIDs" : mode === "path" ? "README.md" : mode === "cross-batch" ? firstID : "invented-file"));
+      assert.match(job.diagnostic!, /No scan proposals applied/);
+      assert.deepEqual(f.store.get(f.project.id), f.project);
+    } finally { f.close(); }
+  }
+});
+
+test("transport timeout identifies the failing batch and preserves the project for explicit retry", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// source\n".repeat(2100));
+    writeFileSync(join(f.path, "second.ts"), "// source\n".repeat(2100));
+    let calls = 0;
+    const service = new DiscoveryService(f.store, { async analyze(_project, options) {
+      if (++calls === 2) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      return proposal(options);
+    } });
+    const job = await service.scan(f.project.id, 1);
+    assert.equal(job.status, "failed");
+    assert.equal(calls, 2);
+    assert.match(job.diagnostic!, /Scan batch 2\/\d+: the AI request timed out/);
+    assert.match(job.diagnostic!, /No scan proposals applied\. Completed batches are saved; resume explicitly/);
+    assert.deepEqual(f.store.get(f.project.id), f.project);
+    assert.equal(service.requiresInitialization(f.project.id), true);
+  } finally { f.close(); }
+});
+
+test("valid multi-batch initialization retains each batch's exact file evidence", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// source\n".repeat(2100));
+    writeFileSync(join(f.path, "second.ts"), "// source\n".repeat(2100));
+    const citations: string[] = [];
+    const service = new DiscoveryService(f.store, { async analyze(_project, options) {
+      const result = proposal(options);
+      citations.push(result.requirements[0]!.sourceIDs[0]!);
+      result.requirements[0]!.statement = `Feature from batch ${citations.length}`;
+      return result;
+    } });
+    const job = await service.scan(f.project.id, 1);
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.ok(citations.length > 1);
+    assert.equal(new Set(citations).size, citations.length);
+    const saved = f.store.get(f.project.id);
+    assert.equal(saved.revision, f.project.revision + 1);
+    assert.deepEqual(saved.requirements.map((r) => r.sourceIDs), citations.map((id) => [id]));
+    assert.ok(citations.every((id) => saved.sources.some((s) => s.id === id && s.kind === "workspace")));
+  } finally { f.close(); }
+});
+
+test("durable scan resume skips saved batches after restart and uses the captured snapshot", async () => {
+  const f = fixture(true);
+  let reopened: ProjectStore | undefined;
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
+    let calls = 0;
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+      if (++calls === 2) throw new Error("Provider disconnected");
+      const result = proposal(options); result.requirements[0]!.statement = "First saved batch"; return result;
+    } });
+    const failed = await service.scan(f.project.id, 1);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.scanWork!.batches.filter((batch) => batch.output).length, 1);
+    assert.deepEqual(f.store.get(f.project.id), f.project);
+    const snapshotID = failed.scan!.snapshot.id;
+    writeFileSync(join(f.path, "README.md"), "CHANGED AFTER CAPTURE: do not silently recapture");
+    f.store.close();
+    reopened = new ProjectStore(join(f.path, "state.sqlite"));
+    let resumedCalls = 0;
+    const retry = new DiscoveryService(reopened, { async analyze(_p, options) {
+      resumedCalls++;
+      assert.ok(!JSON.stringify(options.context.data).includes("CHANGED AFTER CAPTURE"));
+      const sources = (options.context.data as { capturedFiles: Project["sources"] }).capturedFiles;
+      assert.ok(sources.length <= 3);
+      assert.ok(JSON.stringify(sources).length <= 12000);
+      const result = proposal(options); result.requirements[0]!.statement = `Resumed batch ${resumedCalls}`; return result;
+    } });
+    const resumed = await retry.scan(f.project.id, 1, { resumeJobID: failed.id });
+    assert.equal(resumed.status, "completed", resumed.diagnostic);
+    assert.equal(resumedCalls, failed.scanWork!.batches.length - 1);
+    assert.equal(resumed.scan!.snapshot.id, snapshotID);
+    const saved = reopened.get(f.project.id);
+    assert.equal(saved.revision, 2); assert.equal(saved.scans.length, 1);
+    assert.equal(saved.requirements[0]!.statement, "First saved batch");
+    await assert.rejects(retry.scan(f.project.id, 2, { resumeJobID: failed.id }), /cannot be resumed/);
+  } finally {
+    if (reopened) reopened.close(); else f.store.close();
+    rmSync(f.path, { recursive: true, force: true });
+  }
+});
+
+test("resume rejects stale revisions, models, folder reconnections and cross-project checkpoints without inference", async () => {
+  for (const mode of ["revision", "model", "reconnect", "disconnect", "foreign"] as const) {
+    const f = fixture();
+    try {
+      const service = new DiscoveryService(f.store, { async analyze() { throw new Error("Disconnected"); } });
+      const failed = await service.scan(f.project.id, 1);
+      let project = f.store.get(f.project.id);
+      if (mode === "revision") project = f.store.note(project.id, project.revision, "New decision");
+      if (mode === "model") project = f.store.setModel(project.id, project.revision, { providerID: "openai", modelID: "different" });
+      if (mode === "reconnect") f.store.connectWorkspace(project.id, project.revision, f.path);
+      if (mode === "disconnect") f.store.disconnectWorkspace(project.id, project.revision);
+      if (mode === "foreign") {
+        project = f.store.create("Other", "Unrelated", project.model);
+        mkdirSync(join(f.path, "other")); f.store.connectWorkspace(project.id, 1, join(f.path, "other"));
+      }
+      let calls = 0;
+      const retry = new DiscoveryService(f.store, { async analyze() { calls++; throw new Error("Must not infer"); } });
+      await assert.rejects(retry.scan(project.id, project.revision, { resumeJobID: failed.id }), /changed|cannot be resumed|Connect a local workspace/);
+      assert.equal(calls, 0);
+      assert.deepEqual(f.store.get(project.id), project);
+    } finally { f.close(); }
+  }
+});
+
+test("timed-out batches split only on explicit resume and preserve original evidence IDs", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "README.md"), "# Jobs\n" + "Documented feature behavior.\n".repeat(160));
+    let calls = 0;
+    const service = new DiscoveryService(f.store, { async analyze() {
+      calls++; throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    } });
+    const failed = await service.scan(f.project.id, 1);
+    assert.equal(calls, 1); assert.equal(failed.scanWork!.batches[0]!.timedOut, true);
+    const original = failed.scanWork!.batches[0]!.excerpts[0]!;
+    const slices: string[] = [];
+    const retry = new DiscoveryService(f.store, { async analyze(_p, options) {
+      const sources = (options.context.data as { capturedFiles: Project["sources"] }).capturedFiles;
+      assert.equal(sources[0]!.id, original.sourceID);
+      assert.match(sources[0]!.text, /Further bounded subexcerpt/);
+      slices.push(sources[0]!.text);
+      const result = proposal(options); result.requirements[0]!.statement = `Split feature ${slices.length}`; return result;
+    } });
+    const resumed = await retry.scan(f.project.id, 1, { resumeJobID: failed.id });
+    assert.equal(resumed.status, "completed", resumed.diagnostic);
+    assert.equal(slices.length, 2);
+    const [left, right] = resumed.scanWork!.batches.map((batch) => batch.excerpts[0]!);
+    assert.equal(left!.start, original.start); assert.equal(left!.end, right!.start); assert.equal(right!.end, original.end);
+    assert.ok(f.store.get(f.project.id).requirements.every((r) => r.sourceIDs[0] === original.sourceID));
+  } finally { f.close(); }
+});
+
+test("output-heavy batches split with bounded depth and never publish an incomplete response", async () => {
+  for (const saturated of [false, true]) {
+    const f = fixture();
+    try {
+      writeFileSync(join(f.path, "README.md"), "# Jobs\n" + "Documented feature behavior.\n".repeat(160));
+      let calls = 0;
+      const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+        calls++;
+        const result = proposal(options);
+        result.requirements[0]!.statement = calls === 1 ? "Discard incomplete result" : `Complete task ${calls}`;
+        if (saturated && calls === 1) result.requirements = Array.from({ length: 20 }, (_, i) => ({ ...result.requirements[0]!, statement: `Discard ${i}` }));
+        return { ...result, moreWork: !saturated && calls === 1 };
+      } });
+      const job = await service.scan(f.project.id, 1);
+      assert.equal(job.status, "completed", job.diagnostic); assert.equal(calls, 3);
+      assert.equal(job.scanWork!.batches.length, 2);
+      assert.ok(f.store.get(f.project.id).requirements.every((r) => !r.statement.startsWith("Discard")));
+    } finally { f.close(); }
+  }
+  const f = fixture();
+  try {
+    let calls = 0;
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) { calls++; return { ...proposal(options), moreWork: true }; } });
+    const job = await service.scan(f.project.id, 1);
+    assert.equal(job.status, "failed"); assert.equal(calls, 1);
+    assert.match(job.diagnostic!, /minimum-size.*output budget/);
+    assert.deepEqual(f.store.get(f.project.id), f.project);
+  } finally { f.close(); }
+});
+
+test("five-minute batch deadline retains completed work and cancellation can resume", async (t) => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    let calls = 0;
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+      if (++calls === 1) return proposal(options);
+      ready();
+      return new Promise<never>((_resolve, reject) => options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true }));
+    } });
+    const pending = service.scan(f.project.id, 1);
+    await started;
+    t.mock.timers.tick(300000);
+    const failed = await pending;
+    assert.equal(failed.status, "failed"); assert.match(failed.diagnostic!, /AI request timed out/);
+    assert.equal(failed.scanWork!.batches.filter((batch) => batch.output).length, 1);
+    assert.equal(calls, 2); assert.deepEqual(f.store.get(f.project.id), f.project);
+    t.mock.timers.reset();
+    const controller = new AbortController();
+    const retry = new DiscoveryService(f.store, { async analyze(_p, options) { controller.abort(); return proposal(options); } });
+    const cancelled = await retry.scan(f.project.id, 1, { resumeJobID: failed.id, signal: controller.signal });
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.scanWork!.batches.filter((batch) => batch.output).length, 1);
+    const complete = new DiscoveryService(f.store, { async analyze(_p, options) { return proposal(options); } });
+    assert.equal((await complete.scan(f.project.id, 1, { resumeJobID: cancelled.id })).status, "completed");
+  } finally { t.mock.timers.reset(); f.close(); }
+});
+
 test("late batch failure is atomic and captured evidence survives interrupted job recovery", async () => {
   const f = fixture();
   try {
@@ -124,6 +368,68 @@ test("late batch failure is atomic and captured evidence survives interrupted jo
     assert.equal(f.store.getJob(pending.id).status, "interrupted");
     assert.equal(f.store.getJob(pending.id).scan!.sources.length, job.scan!.sources.length);
   } finally { f.close(); }
+});
+
+test("invalid epic references are not checkpointed and resume retries only the rejected batch", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
+    let calls = 0;
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+      const result = proposal(options);
+      if (++calls === 2) {
+        result.requirements[0]!.statement = "Distinct feature with invalid epic";
+        result.requirements[0]!.epicID = "missing-epic";
+      }
+      return result;
+    } });
+    const failed = await service.scan(f.project.id, 1);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.scanWork!.batches.filter((batch) => batch.output).length, 1);
+    assert.equal(failed.scanWork!.batches[1]!.output, undefined);
+    assert.deepEqual(f.store.get(f.project.id), f.project);
+    const retry = new DiscoveryService(f.store, { async analyze(_p, options) { calls++; return proposal(options); } });
+    const completed = await retry.scan(f.project.id, 1, { resumeJobID: failed.id });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(calls, failed.scanWork!.batches.length + 1);
+  } finally { f.close(); }
+});
+
+test("indivisible timeouts have bounded explicit attempts and never retry automatically", async () => {
+  const f = fixture();
+  try {
+    let calls = 0;
+    const service = new DiscoveryService(f.store, { async analyze() { calls++; throw new DOMException("Request timed out", "TimeoutError"); } });
+    let job = await service.scan(f.project.id, 1);
+    for (let i = 0; i < 3; i++) job = await service.scan(f.project.id, 1, { resumeJobID: job.id });
+    assert.equal(calls, 3);
+    assert.equal(job.status, "failed");
+    assert.match(job.diagnostic!, /failed three attempts/);
+    assert.deepEqual(f.store.get(f.project.id), f.project);
+  } finally { f.close(); }
+});
+
+test("the overall execution window preserves checkpoints for explicit resume", async (t) => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    let calls = 0;
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+      if (++calls === 1) return proposal(options);
+      ready();
+      return new Promise<never>((_resolve, reject) => options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true }));
+    } });
+    const pending = service.scan(f.project.id, 1);
+    await started; t.mock.timers.tick(900000);
+    const job = await pending;
+    assert.equal(job.status, "cancelled");
+    assert.match(job.diagnostic!, /15-minute execution window/);
+    assert.equal(job.scanWork!.batches.filter((batch) => batch.output).length, 1);
+    assert.equal(calls, 2); assert.deepEqual(f.store.get(f.project.id), f.project);
+  } finally { t.mock.timers.reset(); f.close(); }
 });
 
 test("scan API checks auth, revision, serial work and exposes progress without starting gap discovery", async () => {
@@ -159,6 +465,60 @@ test("failed initialization blocks generic discovery until an explicit successfu
     const retry = new DiscoveryService(f.store, { async analyze(_p, options) { return proposal(options); } });
     assert.equal((await retry.scan(f.project.id, 1)).status, "completed");
     assert.equal(retry.requiresInitialization(f.project.id), false);
+  } finally { f.close(); }
+});
+
+test("scan API exposes safe checkpoints and explicitly resumes without repeating completed calls", async () => {
+  const f = fixture();
+  writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
+  let calls = 0;
+  const app = await startApp({ store: f.store, port: 0, adapter: { async analyze(_p, options) {
+    if (++calls === 2) throw new Error("Temporary provider failure");
+    const result = proposal(options); result.requirements[0]!.statement = `API batch ${calls}`; return result;
+  } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const route = `${app.origin}/api/projects/${f.project.id}`;
+  const waitForIdle = async () => {
+    for (let i = 0; i < 100; i++) {
+      const data = await (await fetch(route, { headers })).json() as { active: boolean; jobs: import("../core/model.js").Job[] };
+      if (!data.active) return data;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail("Scan remained active");
+  };
+  try {
+    assert.equal((await fetch(`${route}/scan`, { method: "POST", headers, body: '{"revision":1}' })).status, 202);
+    const failed = (await waitForIdle()).jobs.at(-1)!;
+    assert.equal(failed.scanProgress?.completed, 1); assert.equal(failed.scanProgress?.resumable, true);
+    assert.equal(failed.scanWork, undefined); assert.deepEqual(failed.scan!.sources, []);
+    assert.equal(calls, 2);
+    assert.equal((await fetch(`${route}/scan`, { method: "POST", headers, body: JSON.stringify({ revision: 1, resumeJobID: failed.id }) })).status, 202);
+    const resumed = (await waitForIdle()).jobs.at(-1)!;
+    assert.equal(resumed.status, "completed", resumed.diagnostic);
+    assert.equal(resumed.scanProgress?.completed, resumed.scanProgress?.total);
+    assert.equal(calls, failed.scanProgress!.total + 1);
+    assert.equal(f.store.get(f.project.id).revision, 2);
+    assert.equal((await fetch(`${route}/scan`, { method: "POST", headers, body: JSON.stringify({ revision: 2, resumeJobID: failed.id }) })).status, 400);
+  } finally { await app.close(); f.close(); }
+});
+
+test("expired scan workers retain checkpoints, preserve live leases and require explicit resume", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
+    let calls = 0;
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) { if (++calls === 2) throw new Error("Disconnected"); return proposal(options); } });
+    const failed = await service.scan(f.project.id, 1);
+    const restarted = f.store.resumeScan(f.project.id, 1, failed.id).job;
+    f.store.claimJob(restarted.id, Date.now() + 1000);
+    await assert.rejects(service.scan(f.project.id, 1, { resumeJobID: restarted.id }), /cannot be resumed/);
+    assert.equal(calls, 2);
+    assert.equal(f.store.recoverExpiredJobs(Date.now() + 2000), 1);
+    assert.equal(f.store.getJob(restarted.id).scanWork!.batches.filter((batch) => batch.output).length, 1);
+    const retry = new DiscoveryService(f.store, { async analyze(_p, options) { calls++; return proposal(options); } });
+    const completed = await retry.scan(f.project.id, 1, { resumeJobID: restarted.id });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(calls, failed.scanWork!.batches.length + 1);
   } finally { f.close(); }
 });
 

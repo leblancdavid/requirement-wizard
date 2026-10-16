@@ -515,7 +515,10 @@ try {
   await page.getByRole("button", { name: "Create & initialize" }).click();
   await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("Initialization incomplete");
   await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeDisabled();
-  await page.getByRole("button", { name: "Retry initialization", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Start new scan", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("batches saved");
+  await page.reload();
+  await page.getByRole("button", { name: "Resume scan", exact: true }).click();
   await expect(page.getByRole("button", { name: "Rescan folder", exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Project map" })).toHaveAttribute("aria-selected", "true");
   const scanned = store.list().find((item) => item.name === "Scanned application")!;
@@ -544,9 +547,14 @@ try {
   const evidenceID = baseline.sources.find((s) => s.kind === "workspace" && contextPack.manifest.includedIDs.includes(s.id))!.id;
   store.finishJob(seed.id, { summary: baseline.summary, goals: baseline.goals, actors: baseline.actors, assumptions: [], retireQuestions: [], requirements: [], questions: ["Generic unrelated one?", "Generic unrelated two?"].map((text) => ({ text, whyItMatters: "Old generic question", evidenceIDs: [evidenceID], options: [{ label: "A", consequence: "One" }, { label: "B", consequence: "Two" }] })) });
   await page.reload();
-  await page.getByText("Unrelated questions / cleanup", { exact: true }).click();
-  await page.getByRole("button", { name: "Dismiss unrelated question: Generic unrelated one?", exact: true }).click();
+  const unrelatedCard = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Generic unrelated one?", exact: true }) });
+  const unrelatedActions = unrelatedCard.locator(".answer-actions");
+  await expect(unrelatedActions.getByRole("button", { name: "Save response" })).toBeVisible();
+  await expect(unrelatedActions.getByRole("button", { name: "Dismiss unrelated question: Generic unrelated one?", exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Inline question actions should fit mobile width");
+  await unrelatedActions.getByRole("button", { name: "Dismiss unrelated question: Generic unrelated one?", exact: true }).click();
   await expect.poll(() => store.get(scanned.id).questions.filter((q) => q.status === "retired").length).toBe(1);
+  await page.getByText("Bulk question actions & history", { exact: true }).click();
   await page.getByRole("button", { name: "Replace unanswered questions from project evidence", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Should the existing saved-job recovery preserve progress after failure?", exact: true })).toBeVisible();
   baseline = store.get(scanned.id);

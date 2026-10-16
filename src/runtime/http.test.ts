@@ -4,7 +4,9 @@ import { createServer } from "node:http";
 import { runtimeFetch, runtimeRequestTimeout } from "./http.js";
 
 test("SDK Request signals cancel fetch and prompt deadlines differ from metadata", async () => {
-  assert.equal(runtimeRequestTimeout(new Request("http://127.0.0.1/session/example/message", { method: "POST" })), 300000);
+  assert.equal(runtimeRequestTimeout(new Request("http://127.0.0.1/session/example/message", { method: "POST" })), 900000);
+  assert.equal(runtimeRequestTimeout("http://127.0.0.1/session/example/message?directory=test", { method: "POST" }), 900000);
+  assert.equal(runtimeRequestTimeout("http://127.0.0.1/session/example/message"), 90000);
   assert.equal(runtimeRequestTimeout(new Request("http://127.0.0.1/provider")), 90000);
   const server = createServer((_req, res) => { res.writeHead(200); });
   await new Promise<void>((accept) => server.listen(0, "127.0.0.1", accept));

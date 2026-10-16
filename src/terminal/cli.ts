@@ -21,7 +21,7 @@ npm run reqwizit -- list
 npm run reqwizit -- show --project <id> [--revision <n>] [--json]
 npm run reqwizit -- interview --project <id>
 npm run reqwizit -- analyze --project <id> --expected-revision <n>
-npm run reqwizit -- scan --project <id> --expected-revision <n>
+npm run reqwizit -- scan --project <id> --expected-revision <n> [--resume-job <scan-job-id>]
 npm run reqwizit -- answer --project <id> --expected-revision <n> --question <id> --text "Answer"
 npm run reqwizit -- review --project <id> --expected-revision <n> --requirement <id> --decision accept --text "Rationale"
 npm run reqwizit -- model --project <id> --expected-revision <n> --provider openai --model gpt-6.1-sol
@@ -105,6 +105,7 @@ async function main() {
     research: { type: "boolean" }, "focus-epic": { type: "string" },
     operation: { type: "string" }, path: { type: "string" }, "create-directory": { type: "boolean" },
     status: { type: "string" }, evidence: { type: "string" },
+    "resume-job": { type: "string" },
   } });
   if (values.help || !positionals.length) { console.log(help); return; }
   const command = positionals[0];
@@ -148,7 +149,7 @@ async function main() {
       else if (command === "scan") {
         console.error("Scanning sends eligible source files to the saved AI connection and consumes allowance. Ctrl+C cancels.");
         store.pauseQueue(id, true);
-        const job = await service.scan(id, revision(values["expected-revision"]), { signal: controller.signal, onProgress: (message) => console.error(message) });
+        const job = await service.scan(id, revision(values["expected-revision"]), { resumeJobID: values["resume-job"], signal: controller.signal, onProgress: (message) => console.error(message) });
         console.error(`Scan ${job.id}: ${job.status}${job.diagnostic ? ` — ${job.diagnostic}` : " — Review proposals before running analyze."}`);
         if (job.status !== "completed") process.exitCode = 1;
         print(store.get(id));

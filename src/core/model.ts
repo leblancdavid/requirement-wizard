@@ -101,6 +101,15 @@ export const analysisSchema = z.object({
 }).strict();
 export type Analysis = z.infer<typeof analysisSchema>;
 export const scanAnalysisSchema = analysisSchema.extend({ requirements: analysisSchema.shape.requirements.max(100) });
+export const scanBatchAnalysisSchema = scanAnalysisSchema.extend({
+  requirements: scanAnalysisSchema.shape.requirements.max(20),
+  moreWork: z.boolean().default(false),
+});
+export type ScanBatch = {
+  excerpts: { sourceID: string; start: number; end: number }[];
+  depth: number; attempts: number; timedOut?: boolean; output?: Analysis;
+};
+export type ScanWork = { version: 1; bindingID: string; batches: ScanBatch[]; resumedFrom?: string };
 
 export const answerSchema = z.object({
   kind: z.enum(["answer", "delegation", "deferral"]),
@@ -145,6 +154,9 @@ export type Job = {
   helpRequest?: QuestionHelpRequest;
   helpResponse?: QuestionHelpResponse;
   scan?: { workspaceKey: string; snapshot: Project["scans"][number]; sources: Project["sources"] };
+  scanWork?: ScanWork;
+  /** Browser-safe checkpoint summary; batch outputs remain in the local store. */
+  scanProgress?: { completed: number; total: number; capturedAt: string; resumable: boolean };
 };
 
 export class StaleRevisionError extends Error {

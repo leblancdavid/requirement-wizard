@@ -67,12 +67,14 @@ manual naming/description and optional folder creation. Existing projects offer
 on the workspace and in **Settings → Project workspace**. Review inferred requirements
 using the normal accept/reject controls on the **Project map**, then explicitly start
 **Explore next gaps**. Scanning pauses automatic discovery and creates no new questions.
-Failed/cancelled initialization shows **Initialization incomplete → Retry initialization**;
+Failed/cancelled initialization shows **Initialization incomplete**, with **Resume scan**
+and **Start new scan** for checkpointed work or **Retry initialization** for older failures;
 discovery and automatic answer processing remain paused until a source scan completes.
 This also applies to legacy projects with unsuccessful scan attempts and generic questions.
 
-Use **Questions → Unrelated questions / cleanup** to dismiss an individual question or
-all unanswered questions. **Replace unanswered questions from project evidence** retires
+Use **Unrelated / dismiss** beside **Save response** in an expanded question to dismiss
+it individually. **Questions → Bulk question actions & history** can dismiss all eligible
+unanswered questions. **Replace unanswered questions from project evidence** retires
 that batch and starts a new evidence-grounded round after successful initialization.
 Answered questions, saved/queued responses and decisions are protected. Retirement
 reasons remain in history and future context to discourage reintroducing unrelated choices.
@@ -103,14 +105,43 @@ unsupported/binary files and common secret-content patterns are excluded. These 
 conservative heuristics, not a guarantee arbitrary code contains no secrets. User file
 selection and Git ignore integration remain future work. Unenumerated scope is flagged.
 
-File batches are capped at 36,000 characters; input context at 90,000 characters with
-a fifteen-minute scan timeout and sixteen-minute lease. Cancellation diagnostics
-distinguish timeout from explicit stop/app closure. Existing context uses the normal bounded planner and exact
-mandatory evidence; oversized contexts fail explicitly. All validated scan batches
-apply together in one revision or none apply. Cancellation, stale revision/folder
-checks and expired-job recovery preserve decisions; restart does not repeat inference.
+Scan tasks run sequentially, with at most three captured excerpts and 12,000 serialized
+file-evidence characters per batch. Full input context is capped at 90,000 characters.
+Each AI response is capped at 20 concise requirements. A `moreWork` response or a full
+20-requirement response is replaced with smaller tasks rather than accepted as complete.
+Splits preserve the original evidence IDs and captured text; single excerpts can be
+subdivided by explicit character ranges. Split depth is limited to four and a single
+excerpt can split only when both halves contain at least 1,000 characters. Indivisible
+output-heavy tasks fail explicitly instead of silently omitting supported requirements.
+
+Each model call has a five-minute deadline within a fifteen-minute execution window
+and sixteen-minute worker lease. The batch plan, attempt counts and completed validated
+responses are checkpointed in SQLite; progress shows the saved/total batch count.
+Timeouts, cancellation and app closure retain those checkpoints without publishing
+partial project proposals. **Resume scan** creates a new worker job using the saved
+file snapshot and skips completed calls. The UI displays the capture date: resuming
+does not read newer file edits. **Start new scan** captures current files and repeats
+inference. Timed-out tasks split on explicit resume where possible, with at most three
+attempts on an indivisible task. No retry or resume is triggered automatically.
+
+Resume is available only for the most recent failed/cancelled/interrupted scan with
+checkpoints, the same project revision/model and the same folder connection identity.
+Reconnecting even the same folder invalidates prior checkpoints. Older failed scans
+without checkpoints require a new scan. Expired-worker recovery retains checkpoints
+and respects other workers' live leases. Existing context uses the normal bounded
+planner and exact mandatory evidence; oversized contexts fail explicitly. All validated
+scan batches apply together in one revision or none apply. Cancellation and stale
+revision/folder checks preserve decisions; restart does not repeat inference.
 Files can be captured at different instants, so this is not a filesystem-wide atomic
 snapshot. Connected workspace artifacts continue publishing normally after application.
+
+Each batch's scan prompt lists its allowed file-evidence IDs and constrains requirement
+citations to a nonempty selection of those exact IDs in the supplied JSON schema.
+The service independently rejects missing, invented, path-based or cross-batch
+citations. Citation failures identify the batch, requirement number and invalid IDs
+without quoting file contents; no scan proposals apply. Use **Retry initialization**
+to explicitly rerun an older scan without checkpoints. For checkpointed scans, choose
+**Resume scan** to reuse validated batches or **Start new scan** to recapture files.
 
 Captured evidence uses the separate `workspace` source kind, retained with contents
 after local files change. Portable requirements JSON includes scan metadata/evidence.
@@ -126,6 +157,8 @@ Terminal initialization and rescanning share one command:
 
 ```powershell
 npm run reqwizit -- scan --project "project-id" --expected-revision 3
+# Resume a failed/interrupted checkpointed scan using its displayed job ID:
+npm run reqwizit -- scan --project "project-id" --expected-revision 3 --resume-job "scan-job-id"
 ```
 
 Inspect the actual revision first. This command sends files to the saved AI connection
@@ -207,8 +240,15 @@ overflow with a deterministic adapter and no model inference.
 Initialization/rescan is the first M7 slice, implemented under DEC-018. Deterministic
 checks cover exclusions, retained evidence, rescan changes/identity, accepted-decision
 preservation, malformed references, stale revisions/folder bindings, cancellation,
-multi-batch rollback, interrupted leases, authenticated API access and review-first queue
-pausing. Playwright covers creation without an idea, initialization, manual rescan,
-reload and mobile width. No live model scan or real-project reconstruction-quality
+multi-batch rollback, durable checkpoints across database reopen, explicit resume,
+saved-snapshot reuse, timeout/output-budget splitting, bounded batch deadlines,
+interrupted leases, authenticated API access and review-first queue
+pausing. Playwright covers creation without an idea, initialization failure, checkpoint
+progress, reload and explicit resume, manual rescan and mobile width.
+No live model scan or real-project reconstruction-quality
 evaluation has been run. Integrated build execution remains M6; full M7 change planning
 and handoff evaluation remain future work.
+
+October 16, 2026 batching verification: `npm run check`, all 115 `npm test` checks,
+`npm run test:browser` (including the UI build), terminal `--help`, and
+`git diff --check` passed. These checks use deterministic adapters, not live inference.

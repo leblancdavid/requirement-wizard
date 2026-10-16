@@ -148,7 +148,9 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       const project = options.store.get(id);
       const action = route[2];
       if (req.method === "GET" && !action) {
-        const jobs = options.store.jobs(id).filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, ...job }) => ({ ...job, ...(scan ? { scan: { ...scan, sources: [] } } : {}) }));
+        const jobs = options.store.jobs(id).filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, scanWork, ...job }) => ({ ...job, ...(scan ? { scan: { ...scan, sources: [] } } : {}),
+          ...(scan && scanWork ? { scanProgress: { completed: scanWork.batches.filter((batch) => batch.output).length, total: scanWork.batches.length, capturedAt: scan.snapshot.capturedAt,
+            resumable: ["failed", "cancelled", "interrupted"].includes(job.status) && job.expectedRevision === project.revision && scanWork.bindingID === options.store.workspace(id)?.bindingID } } : {}) }));
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? coverage(options.store.get(id, lastRound.expectedRevision)).percent : null;
         const helpJobs = options.store.jobs(id).filter((j) => j.helpRequest).map(({ result: _, researchEvidence: __, ...job }) => job);
@@ -209,10 +211,11 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 202, { started: true }); return;
       }
       if (action === "scan") {
-        const input = z.object({ revision }).strict().parse(raw);
+        const input = z.object({ revision, resumeJobID: z.string().uuid().optional() }).strict().parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();
         if (!options.store.workspace(id)) throw new Error("Connect a local workspace before initializing.");
-        queue.scan(id, input.revision);
+        if (input.resumeJobID) options.store.assertResumableScan(id, input.revision, input.resumeJobID);
+        queue.scan(id, input.revision, input.resumeJobID);
         json(res, 202, { started: true }); return;
       }
       if (action === "cancel") { z.object({}).strict().parse(raw); queue.stop(id); json(res, 200, { cancelled: queue.isActive(id) }); return; }

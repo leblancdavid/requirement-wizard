@@ -17,6 +17,8 @@ area is defined. Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 Connect a local folder for each project to automatically save versionable requirements
 and progress files. Choose it during creation or use **Settings → Project workspace**.
+Folder scans process small sequential batches and save checkpoints; **Resume scan**
+continues interrupted work using the saved file snapshot without repeating completed batches.
 Track manual implementation status and verification evidence under **Project map →
 Implementation progress**. See [local project workspaces](docs/project-workspaces.md).
 Keep answering while discovery works: responses are durably queued and waiting
@@ -149,7 +151,8 @@ Scans propose feature definitions and requirements from bounded source/documenta
 evidence, then stop for review before gap discovery. Rescans report file changes and
 preserve accepted decisions. Eligible files are sent to the saved AI connection;
 inspected scope and omissions remain visible. See [workspace scanning](docs/project-workspaces.md#initialize-definitions-and-rescan).
-Failed initialization offers an explicit retry before gap discovery. **Questions →
-Unrelated questions / cleanup** can dismiss unanswered questions or replace them with
+Failed initialization offers an explicit retry before gap discovery. **Unrelated /
+dismiss** sits beside **Save response** in each eligible expanded question. **Questions →
+Bulk question actions & history** can dismiss unanswered questions or replace them with
 questions grounded in the scanned baseline, preserving answers and history.
 Broader change planning/handoffs remain [M7 follow-on work](docs/milestones.md#m7--existing-project-discovery-and-feature-planning-follow-on).

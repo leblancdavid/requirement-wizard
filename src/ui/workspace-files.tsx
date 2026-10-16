@@ -49,19 +49,21 @@ export function WorkspaceConnection({ project, workspace, request, disabled, run
     <WorkspacePicker path={path} create={create} onChange={(value, make) => { setPath(value); setCreate(make); }} request={request} disabled={disabled} />
     <div className="button-row"><button className="secondary" disabled={disabled || !path.trim()} onClick={() => void action({ operation: "connect", revision: project.revision, path, create })}>{workspace ? "Reconnect workspace" : "Connect workspace"}</button>
       {workspace && <><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "sync" })}>Retry sync</button><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "disconnect", revision: project.revision })}>Disconnect folder</button></>}</div>
-    {workspace && <WorkspaceScan project={project} scanJob={scanJob} disabled={disabled} scan={() => run(async () => { await request(`projects/${project.id}/scan`, { revision: project.revision }); })} />}
+    {workspace && <WorkspaceScan project={project} scanJob={scanJob} disabled={disabled} scan={(resumeJobID) => run(async () => { await request(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); })} />}
     <small>Disconnecting keeps the generated files and all app data. To resolve a conflict, preserve external edits and restore the generated files, or choose a new folder.</small>
   </section>;
 }
 
-export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: Project; disabled: boolean; scan: () => Promise<void>; scanJob?: Job }) {
+export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: Project; disabled: boolean; scan: (resumeJobID?: string) => Promise<void>; scanJob?: Job }) {
   const latest = project.scans.at(-1);
   const incomplete = !latest && (project.origin || scanJob) && !["running", "pending"].includes(scanJob?.status ?? "");
   return <section aria-label="Source initialization" className="insight-card workspace-scan">
     <h3>{latest ? "Folder scan" : "Initialize from existing project"}</h3>
     {incomplete && <p role="status"><strong>Initialization incomplete.</strong> {scanJob?.diagnostic ?? "Complete the source scan before exploring gaps."} Existing questions are not a reconstructed baseline.</p>}
     <p>Scan documentation, source, configuration and tests to propose feature definitions and requirements. Review the proposals before continuing missing-requirement discovery.</p>
-    <button type="button" className="secondary" disabled={disabled} onClick={() => void scan()}>{latest ? "Rescan folder" : incomplete ? "Retry initialization" : "Initialize from folder"}</button>
+    {scanJob?.scanProgress && <p role="status">{scanJob.scanProgress.completed} of {scanJob.scanProgress.total} batches saved · File snapshot: {new Date(scanJob.scanProgress.capturedAt).toLocaleString()}. Resume uses these captured files; start a new scan to read current files.</p>}
+    {scanJob?.scanProgress?.resumable && <button type="button" disabled={disabled} onClick={() => void scan(scanJob.id)}>Resume scan</button>}
+    <button type="button" className="secondary" disabled={disabled} onClick={() => void scan()}>{scanJob?.scanProgress?.resumable ? "Start new scan" : latest ? "Rescan folder" : incomplete ? "Retry initialization" : "Initialize from folder"}</button>
     <small>Read-only static inspection. Dependencies, generated files, hidden paths and potentially sensitive files are excluded. Files are sent to the selected AI connection. Scanning does not run tests or confirm requirements.</small>
     {latest && <details><summary>Last scan: {new Date(latest.capturedAt).toLocaleString()} · {new Set(latest.files.map((file) => file.path)).size} files / {latest.files.length} excerpts · {latest.changes.length} changes · {latest.omitted.length} omitted paths</summary>
       <p>Snapshot {latest.id}. {latest.traversalLimited ? "Traversal limit reached; additional paths were not enumerated." : "Inspected scope is listed below; excluded directories are not traversed."}</p>

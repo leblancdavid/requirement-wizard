@@ -11,9 +11,12 @@ Settings. Review inferred requirements before explicitly starting **Explore next
 Last-scan details expose inspected files/evidence, changes and omissions. See
 [initialization and rescanning](project-workspaces.md#initialize-definitions-and-rescan)
 for source transmission, limits, exclusions and verification status.
-Incomplete initialization offers **Retry initialization** and blocks ordinary discovery
-until a scan succeeds. **Questions → Unrelated questions / cleanup** provides individual
-and batch dismissal plus evidence-grounded replacement, retaining answered/queued input
+Scans save validated results in small sequential batches. Interrupted scans offer
+**Resume scan** to reuse saved batches and the displayed file snapshot, or **Start new
+scan** to read current files. Older failures without checkpoints offer **Retry initialization**.
+Ordinary discovery stays blocked until initialization succeeds. Expanded questions include **Unrelated / dismiss** beside
+**Save response**. **Questions → Bulk question actions & history** provides batch dismissal
+and evidence-grounded replacement, retaining answered/queued input
 and retirement history. Godot project/configuration/scenes and larger source excerpts
 are supported with explicit inspected ranges and omissions.
 
