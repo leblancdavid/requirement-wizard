@@ -257,8 +257,14 @@ Click or keyboard-focus and activate any other word in an expanded question,
 rationale, or suggested answer, then choose **? What do you mean by this?**.
 This opens the question-help panel and asks the selected model to explain that
 word with its exact surrounding text and project context, including for older
-questions without annotations. A spinner appears immediately and while the job
-runs. Escape or a click outside dismisses the word shortcut; on mobile it appears
+questions without annotations. The word tooltip stays open with a spinner while
+the job runs, then shows a brief summary from the explanation's opening paragraph.
+New requests ask for a one- or two-sentence opening summary; long openings are
+excerpted to 420 characters. The full explanation remains in the help history below.
+Reopening the word reuses its saved explanation without another model request,
+including after reload. Earlier-revision summaries are labelled as earlier project
+context, and any assumptions are flagged for review in the full explanation.
+Escape or a click outside dismisses the word shortcut; on mobile it appears
 at the bottom of the viewport. The shortcut uses the same saved advisory history,
 cancellation, and error handling as other follow-ups and never chooses an answer.
 
@@ -390,6 +396,22 @@ daemon discovery and CLI-to-HTTP attachment are not implemented.
 ## Verification and known limits
 
 October 15, 2026:
+
+- Inline summary follow-up: type checking, all 76 deterministic tests, production
+  UI build, and Playwright checks passed. Browser coverage verifies the word
+  tooltip stays open through loading and completion, shows only the opening
+  summary while retaining the full response below, dismisses with Escape even
+  after its request button is replaced, and reopens saved summaries on mobile
+  and after reload. Earlier project context is labelled. No live model calls
+  were made for this follow-up.
+
+- Proactive concept/word-help update: type checking, all 76 deterministic tests,
+  the production UI build, and Playwright browser checks passed. New browser
+  coverage exercises question and suggested-answer word shortcuts, keyboard
+  activation/Escape, immediate and running-job spinners, preserved drafts and
+  option choices, persisted clarification history after reload, and mobile layout.
+  No live model calls were made; the more proactive annotation prompt's live
+  explanation frequency and quality remain unqualified.
 
 - Compact-workspace checks passed type checking, deterministic tests, the UI build,
   and Playwright browser checks. Browser coverage includes collapsed question rows,

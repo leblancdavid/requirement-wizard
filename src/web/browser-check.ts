@@ -46,7 +46,7 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
 }, async clarify(_project, request, options) {
   if (request.message?.startsWith("What do you mean by")) {
     await new Promise<void>((accept) => { releaseWordHelp = accept; options.signal.addEventListener("abort", () => accept(), { once: true }); });
-    return { explanation: "In this context, this word describes who can use your project's first version.", assumptions: [], followUp: null };
+    return { explanation: "In this context, this word describes who can use your project's first version.\n\nMore detail: the full explanation and tradeoffs stay in the saved history below.", assumptions: [], followUp: null };
   }
   if (request.action === "decide") await new Promise<void>((accept) => { options.signal.addEventListener("abort", () => accept(), { once: true }); });
   return { explanation: request.action === "follow-up" ? "A small team could share job records with separate access." : "Will just you use the app, or will other people use it too?", assumptions: ["Team size is not confirmed yet."], followUp: "Will anyone else need access?" };
@@ -201,11 +201,24 @@ try {
   await expect(card.locator(".question-help")).toHaveAttribute("open", "");
   await expect(card.locator(".help-spinner").last()).toBeVisible();
   await expect.poll(() => !!releaseWordHelp).toBe(true);
+  await expect(card.locator(".word-help").getByRole("tooltip")).toContainText("Explaining “release”…");
+  await expect(card.locator(".word-help .help-spinner")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(card.locator(".word-help")).toHaveCount(0);
+  await card.getByRole("button", { name: "Explain word release", exact: true }).click();
+  await expect(card.locator(".word-help .help-spinner")).toBeVisible();
   await expect(answer).toHaveValue("My unfinished answer");
   releaseWordHelp!(); releaseWordHelp = undefined;
   await expect(card.locator(".help-exchange").last()).toContainText("this word describes who can use");
   await expect(card.locator(".help-exchange").last()).toContainText("What do you mean by “release”");
   await expect(card.locator(".help-spinner")).toHaveCount(0);
+  await expect(card.locator(".word-help").getByRole("tooltip")).toContainText("this word describes who can use");
+  await expect(card.locator(".word-help").getByRole("tooltip")).not.toContainText("More detail:");
+  await expect(card.locator(".help-exchange").last()).toContainText("More detail:");
+  await page.keyboard.press("Escape");
+  await card.getByRole("button", { name: "Explain word release", exact: true }).click();
+  await expect(card.locator(".word-help").getByRole("tooltip")).toContainText("this word describes who can use");
+  assert.equal(releaseWordHelp, undefined, "Reopening a completed tooltip must not request more inference");
   await card.getByRole("button", { name: "Explain word management", exact: true }).click();
   await card.getByRole("button", { name: "What do you mean by “management”?", exact: true }).click();
   await expect.poll(() => !!releaseWordHelp).toBe(true);
@@ -235,7 +248,7 @@ try {
   await page.screenshot({ path: ".reqwizit-state/browser-help-mobile.png", fullPage: true });
   await page.keyboard.press("Escape");
   await card.getByRole("button", { name: "Explain word release", exact: true }).tap();
-  await expect(card.getByRole("button", { name: "What do you mean by “release”?", exact: true })).toBeVisible();
+  await expect(card.locator(".word-help").getByRole("tooltip")).toContainText("this word describes who can use");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Word help must fit the mobile viewport");
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -278,6 +291,10 @@ try {
   await expect(card.locator(".help-exchange")).toHaveCount(5);
   await expect(card.locator(".help-exchange").filter({ hasText: "What about a small team?" })).toHaveCount(1);
   await expect(card.locator(".help-exchange").filter({ hasText: "What do you mean by “release”" })).toHaveCount(1);
+  await card.getByRole("button", { name: "Explain word release", exact: true }).click();
+  await expect(card.locator(".word-help").getByRole("tooltip")).toContainText("this word describes who can use");
+  await expect(card.locator(".word-help").getByRole("tooltip")).toContainText("Earlier project context");
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveValue("Owner and office team");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByLabel("Automatically explore queued answers").check();

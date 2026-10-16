@@ -4,6 +4,7 @@
 .word-trigger:hover,.word-trigger:focus-visible{background:#e5eee4;text-decoration:underline dotted;text-underline-offset:3px}
 .word-help{position:absolute;z-index:21;top:100%;left:0;width:240px;max-width:75vw;padding:8px;background:#fff;border:1px solid #a9bbae;border-radius:8px;box-shadow:0 6px 20px #142d2833;font-size:12px;font-weight:400;letter-spacing:normal;line-height:1.5;color:#183b30}
 .word-help-action{padding:6px;text-align:left;color:#27634e;font:inherit}.word-help-action>span{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#27634e;color:#fff;font-weight:700;margin-right:4px}
+.word-help{overflow-wrap:anywhere;text-align:left;max-height:60vh;overflow-y:auto}.word-help-summary,.word-help-summary>b,.word-help-summary>span,.word-help small{display:block}.word-help-summary>b{margin-bottom:6px}.word-help small{margin-top:8px;font-size:11px;font-weight:400;color:#52665b}.option .word-help-summary{color:#183b30}
 .word-help-hint{font-size:12px;color:#52665b;margin:14px 0}
 .help-loading{display:flex;align-items:center;gap:8px}.help-spinner{display:inline-block;flex-shrink:0;width:14px;height:14px;border:2px solid #b7cabc;border-top-color:#27634e;border-radius:50%;animation:help-spin .8s linear infinite}
 @keyframes help-spin{to{transform:rotate(360deg)}}

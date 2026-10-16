@@ -19,15 +19,30 @@ function ConceptTip({ concept }: { concept: Concept }) {
   </span>;
 }
 
-export function AnnotatedText({ text, concepts = [], onExplain, busy = false }: { text: string; concepts?: Concept[]; onExplain?: (phrase: string, context: string) => Promise<void>; busy?: boolean }) {
+export function wordHelpContext(phrase: string, text: string) {
+  return `What do you mean by “${phrase}” in this context?\n\nText: ${text}\n\n`;
+}
+
+function tooltipSummary(explanation: string) {
+  const opening = explanation.trim().split(/\n\s*\n/)[0]!.replace(/\s+/g, " ");
+  if (opening.length <= 420) return opening;
+  const excerpt = opening.slice(0, 419);
+  return `${excerpt.slice(0, excerpt.lastIndexOf(" ") > 300 ? excerpt.lastIndexOf(" ") : excerpt.length)}…`;
+}
+
+export function AnnotatedText({ text, concepts = [], onExplain, busy = false, jobs = [], revision }: { text: string; concepts?: Concept[]; onExplain?: (phrase: string, context: string) => Promise<void>; busy?: boolean; jobs?: Job[]; revision?: number }) {
   const [selected, setSelected] = useState<number | null>(null);
+  const [requesting, setRequesting] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const tooltipID = useId();
   const wrapper = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     if (selected === null) return;
     const dismiss = (event: PointerEvent) => { if (!wrapper.current?.contains(event.target as Node)) setSelected(null); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setSelected(null); };
     document.addEventListener("pointerdown", dismiss);
-    return () => document.removeEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
   }, [selected]);
   function words(value: string, offset: number): ReactNode {
     if (!onExplain) return value;
@@ -35,9 +50,17 @@ export function AnnotatedText({ text, concepts = [], onExplain, busy = false }: 
     return value.split(/([\p{L}\p{N}]+(?:[’'\-][\p{L}\p{N}]+)*)/u).map((part, index) => {
       const start = position; position += part.length;
       if (index % 2 === 0) return part;
+      const job = jobs.filter((job) => job.helpRequest?.action === "follow-up" && job.helpRequest.message?.startsWith(wordHelpContext(part, text))).at(-1);
+      const loading = requesting === start || !!job && ["pending", "running"].includes(job.status);
+      const response = job?.status === "completed" ? job.helpResponse : undefined;
       return <span className="explain-word" key={start}>
-        <button type="button" className="word-trigger" aria-label={`Explain word ${part}`} aria-expanded={selected === start} onClick={() => { setSelected(selected === start ? null : start); setError(""); }}>{part}</button>
-        {selected === start && <span className="word-help"><button type="button" className="word-help-action" disabled={busy} aria-label={`What do you mean by “${part}”?`} title="What do you mean by this?" onClick={() => { void onExplain(part, text).then(() => setSelected(null)).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not request help. Try again.")); }}><span aria-hidden="true">?</span> What do you mean by this?</button>{error && <span role="alert">{error}</span>}</span>}
+        <button type="button" className="word-trigger" aria-label={`Explain word ${part}`} aria-expanded={selected === start} aria-describedby={selected === start && (loading || response) ? tooltipID : undefined} onClick={() => { setSelected(selected === start ? null : start); setError(""); }}>{part}</button>
+        {selected === start && <span className="word-help" aria-live="polite">
+          {loading ? <span id={tooltipID} role="tooltip" className="help-loading"><span className="help-spinner" aria-hidden="true" /> Explaining “{part}”…</span>
+            : response ? <><span id={tooltipID} role="tooltip" className="word-help-summary"><b>“{part}” in this context</b><span>{tooltipSummary(response.explanation)}</span>{response.assumptions.length > 0 && <small>Assumptions to check — see the full explanation below.</small>}{job && job.expectedRevision !== revision && <small>Earlier project context · revision {job.expectedRevision}</small>}</span><small>Full explanation saved in the help panel below.</small></>
+            : <>{job && <span role="status">{job.status}: {job.diagnostic ?? "Request an explanation again to retry."}</span>}<button type="button" className="word-help-action" disabled={busy} aria-label={`What do you mean by “${part}”?`} title="What do you mean by this?" onClick={() => { setRequesting(start); setError(""); void onExplain(part, text).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not request help. Try again.")).finally(() => setRequesting(null)); }}><span aria-hidden="true">?</span> What do you mean by this?</button></>}
+          {error && <span role="alert">{error}</span>}
+        </span>}
       </span>;
     });
   }
