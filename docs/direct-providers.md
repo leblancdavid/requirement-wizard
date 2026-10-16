@@ -34,6 +34,10 @@ Settings is available before creating a project as well as inside a project.
 4. In an existing project choose **Save model**; for a new project, the selection is
    used by **Create & explore**. Project connection references are revisioned and
    contain no tokens. Saving does not automatically start inference.
+   Signing in only connects the account; it does not switch an existing project's
+   saved execution route. The header shows the active route/model, Settings labels
+   unsaved selections, and **Explore next gaps** is disabled until pending changes
+   are saved. The save action sits beside the connection controls.
 5. **Reconnect** reauthorizes the selected identity. **Disconnect** revokes the saved
    renewable session before removing the connection and stops this service's active
    requests for it. Projects retain the missing selection and do not fall back.

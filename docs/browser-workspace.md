@@ -39,6 +39,11 @@ new projects use the selected connection. Direct discovery/help need no OpenCode
 executable but remain live-unqualified. Direct web research is unavailable and
 disabled in the UI. See [direct-providers.md](direct-providers.md) for details.
 
+Connecting an account and applying it to a project are separate actions. The header
+shows the project's **Active connection** and model. Unsaved connection/model changes
+show a notice and disable **Explore next gaps** until **Save model** applies them.
+Sign-in success describes an account connection, not a completed project switch.
+
 Existing projects retain their OpenCode selection until explicitly changed. For
 that route, use `opencode auth login` if needed; Settings still accepts an explicit
 OpenCode model ID. There is no automatic provider/model/account fallback.

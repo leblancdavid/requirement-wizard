@@ -3,8 +3,8 @@ import type { Account, LoginStatus, Model } from "../providers/connections.js";
 import "./connections.css";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
-export function AIConnections({ request, accountID, modelID, onSelect }: {
-  request: Request; accountID: string; modelID: string; onSelect: (accountID: string, modelID: string) => void;
+export function AIConnections({ request, accountID, modelID, onSelect, children, disabled = false }: {
+  request: Request; accountID: string; modelID: string; onSelect: (accountID: string, modelID: string) => void; children?: React.ReactNode; disabled?: boolean;
 }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [available, setAvailable] = useState(false);
@@ -13,7 +13,8 @@ export function AIConnections({ request, accountID, modelID, onSelect }: {
   const [loadingModels, setLoadingModels] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [working, setBusy] = useState(false);
+  const busy = working || disabled;
   const [testing, setTesting] = useState(false);
   const [login, setLogin] = useState<LoginStatus | null>(null);
   const [authURL, setAuthURL] = useState("");
@@ -62,7 +63,7 @@ export function AIConnections({ request, accountID, modelID, onSelect }: {
             await reload();
             if (stopped) return;
             if (!localStorage.getItem(`wizard-plan-confirmed:${result.accountID}`)) setWelcome(result.accountID!);
-            setMessage("ChatGPT connected. Choose a model below.");
+            setMessage("ChatGPT account connected. Choose a model below, then save the selection for this project or use it when creating a project.");
             onSelect(result.accountID!, "");
             // Reconnecting the same account also refreshes its catalog.
             if (selection.current === result.accountID) void catalog(result.accountID);
@@ -101,7 +102,7 @@ export function AIConnections({ request, accountID, modelID, onSelect }: {
     <div className="connection-heading"><div><h2>AI connections</h2><p>Connect your ChatGPT plan and choose which account and model this project uses.</p></div><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
     {error && <p role="alert" className="connection-error">{error}</p>}
     {message && <p role="status" className="connection-notice">{message}</p>}
-    {welcome && <div className="connection-notice" role="status"><strong>You’re using your ChatGPT plan</strong><p>Eligible requests use your plan or credits. You can manage this app’s usage in ChatGPT settings.</p><button className="secondary" onClick={() => { localStorage.setItem(`wizard-plan-confirmed:${welcome}`, "true"); setWelcome(null); }}>Got it</button></div>}
+    {welcome && <div className="connection-notice" role="status"><strong>Your ChatGPT plan is connected</strong><p>Connecting an account does not change this project’s active connection. Choose a model and save the selection, or use it when creating a project. Eligible requests use your plan or credits.</p><button className="secondary" onClick={() => { localStorage.setItem(`wizard-plan-confirmed:${welcome}`, "true"); setWelcome(null); }}>Got it</button></div>}
     <div className="connection-card"><div><strong>ChatGPT</strong><p>Sign in in a separate browser tab. Your credentials stay with the local service.</p></div><button className="primary" disabled={!available || busy || activeLogin || testing} onClick={() => signIn()}>Continue with ChatGPT</button></div>
     {loaded && !available && <p>Connection management is unavailable in this server configuration.</p>}
     {!loaded && <p role="status">Loading saved connections…</p>}
@@ -117,13 +118,14 @@ export function AIConnections({ request, accountID, modelID, onSelect }: {
         {modelID && !models.some((item) => item.id === modelID) && <option value={modelID}>{modelID} · not in current catalog</option>}
         {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
       </select></label>
-      <p className="plan-label">Using ChatGPT plan · Direct connection · Web research is not available yet.</p>
+      <p className="plan-label">Selected: ChatGPT plan · Direct connection · Web research is not available yet.</p>
       <div className="button-row">
         <button className="secondary" disabled={busy || testing || activeLogin || loadingModels || !account} onClick={() => void catalog(accountID)}>Refresh models</button>
         <button className="secondary" disabled={busy || testing || activeLogin || !account || !models.some((model) => model.id === modelID)} onClick={() => { setTesting(true); void act(async () => { await request("connections/test", { accountID, modelID }); setMessage("Connection test passed. The selected model returned a valid response."); }).finally(() => { if (mounted.current) setTesting(false); }); }}>Test connection</button>
         {testing && <button className="secondary" onClick={() => { void request("connections/cancel-test", {}).catch((error: Error) => setError(error.message)); }}>Stop test</button>}
         {account && <><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => signIn(accountID)}>Reconnect</button><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => void act(async () => { await request("connections/disconnect", { accountID }); await reload(); setModels([]); setMessage("Account disconnected. Projects retain their selection until you change it."); })}>Disconnect</button></>}
       </div><small>Testing makes one small inference request and uses your plan allowance. Browsing models does not run inference.</small>
-    </> : <><label>OpenCode model ID<input value={modelID} onChange={(event) => onSelect("", event.target.value)} /></label><p>Uses the existing OpenCode connection. Direct ChatGPT sign-in above does not change OpenCode credentials.</p></>}
+    </> : <><label>OpenCode model ID<input disabled={busy} value={modelID} onChange={(event) => onSelect("", event.target.value)} /></label><p>Uses the existing OpenCode connection. Direct ChatGPT sign-in above does not change OpenCode credentials.</p></>}
+    {children}
   </section>;
 }

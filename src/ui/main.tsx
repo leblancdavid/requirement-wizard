@@ -55,6 +55,8 @@ function App() {
   const project = data?.project;
   const summary = data?.coverage;
   const busy = pending || !!data?.active;
+  const connectionChanged = !!project && (model !== project.model.modelID || connectionID !== (project.model.connectionID ?? ""));
+  const activeConnection = project ? `${project.model.connectionID ? "Direct ChatGPT plan" : "OpenCode"} · ${project.model.modelID}` : "";
   const help: HelpControls = {
     jobs: data?.helpJobs ?? [], revision: project?.revision ?? 1,
     busy: !!data?.helpJobs.some((j) => ["pending", "running"].includes(j.status)),
@@ -98,7 +100,7 @@ function App() {
   async function act(action: () => Promise<void>) {
     setError(""); setPending(true);
     try { await action(); } catch (error) { setError(error instanceof Error ? error.message : "Action failed."); }
-    finally { setPending(false); await load().catch(() => {}); }
+    finally { await load().catch(() => {}); setPending(false); }
   }
   async function mutate(action: string, body: Record<string, unknown>, analyze = false) {
     if (!project) return;
@@ -107,6 +109,7 @@ function App() {
     await list();
   }
   async function explore() {
+    if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before exploring.");
     if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
   async function submit(input: Submission["input"], key: string, replaces?: string): Promise<boolean> {
@@ -166,14 +169,17 @@ function App() {
       <div className="sidebar-bottom"><span className="connection-dot" /> Local-first workspace<p>Project files are saved on this device.<br />Discovery sends context to ChatGPT.</p></div>
     </aside>
     <main>
-      <header className="topbar"><div><h1>{creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{project?.model.connectionID && !creating ? "Local workspace · Using ChatGPT plan" : "Local workspace"}</small></div>
+      <header className="topbar"><div><h1>{creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small></div>
         <button className="secondary" aria-expanded={showSettings} onClick={() => setShowSettings(!showSettings)}>Settings</button></header>
       {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
       {showSettings && <section className="settings-panel" aria-label="Settings">
-        <AIConnections request={api} accountID={connectionID} modelID={model} onSelect={(account, selectedModel) => { setConnectionID(account); setModel(selectedModel); }} />
-        {project && !creating ? <><h2>Project settings</h2><button disabled={busy || !model || (model === project.model.modelID && connectionID === (project.model.connectionID ?? ""))} className="secondary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button><p>Saving changes the connection for future project requests.</p><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p></> : <p>Your selected connection and model will be used when you create a project.</p>}
+        <AIConnections request={api} disabled={pending} accountID={connectionID} modelID={model} onSelect={(account, selectedModel) => { setConnectionID(account); setModel(selectedModel); }}>
+          {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Explore next gaps and question help."}</p><button disabled={busy || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
+        </AIConnections>
+        {project && !creating ? <><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p></> : <p>Your selected connection and model will be used when you create a project.</p>}
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
       </section>}
+      {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => setShowSettings(true)}>Review connection settings</button></div>}
       {(creating || !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>
         <form onSubmit={(event) => void create(event)}>
@@ -187,7 +193,7 @@ function App() {
         <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Questions"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}</button>)}</div>
         <section className="workspace">
           <div className="discovery-column">
-            <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div><button className="primary" disabled={busy} onClick={() => void act(explore)}>{data.active ? "Discovering…" : "Explore next gaps →"}</button></div>
+            <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div><button className="primary" disabled={busy || connectionChanged} onClick={() => void act(explore)}>{data.active ? "Discovering…" : "Explore next gaps →"}</button></div>
             <div className="round-status" aria-live="polite">{data.active ? <><span className="pulse" />{data.progress.at(-1) ?? "Starting discovery…"}<button onClick={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); })}>Stop</button></> : lastJob?.status === "failed" || lastJob?.status === "stale" || lastJob?.status === "interrupted" ? <span className="job-error">Last round {lastJob.status}: {lastJob.diagnostic}</span> : <><span className="connection-dot" />{lastJob?.status === "completed" ? "Discovery saved. Your project map is ready to explore." : lastJob?.status === "cancelled" ? "Discovery stopped. Your saved answers are intact." : "Ready when you are. Start a round to explore your idea."}</>}</div>
             {(tab === "history" || tab === "research") && <div className="filter-row"><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Revisions & processing</button><button className={tab === "research" ? "active" : ""} onClick={() => setTab("research")}>Research sources</button></div>}
             {(tab === "history" || data.queuePaused || data.submissions.some((item) => item.status === "needs-attention" && !item.conflict)) && <details className="queue-panel">

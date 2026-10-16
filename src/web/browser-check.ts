@@ -66,7 +66,7 @@ try {
   await connectionPanel.getByRole("button", { name: "Continue with ChatGPT" }).click();
   const signedInPopup = await secondPopup;
   loginComplete = true;
-  await expect(connectionPanel.getByText("You’re using your ChatGPT plan", { exact: true })).toBeVisible();
+  await expect(connectionPanel.getByText("Your ChatGPT plan is connected", { exact: true })).toBeVisible();
   await signedInPopup.close();
   await connectionPanel.getByRole("button", { name: "Got it", exact: true }).click();
   await expect(connectionPanel.getByLabel("ChatGPT model", { exact: true })).toBeEnabled();
@@ -91,10 +91,28 @@ try {
   assert.equal(store.list().length, 1);
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  // Reproduce an existing legacy project after connecting a direct account:
+  // the account/model draft must not be mistaken for the saved execution route.
+  await page.getByLabel("AI connection", { exact: true }).selectOption("");
+  await page.getByRole("button", { name: "Save model", exact: true }).click();
+  await expect(page.locator(".topbar")).toContainText("Active connection: OpenCode");
+  await expect(page.getByRole("button", { name: "Save model", exact: true })).toBeDisabled();
+  await page.getByLabel("AI connection", { exact: true }).selectOption("fixture-account");
   await page.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-alt");
+  await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeDisabled();
+  await expect(page.getByText(/Connection changes are not saved/)).toContainText("OpenCode");
+  assert.equal(store.get(store.list()[0]!.id).model.connectionID, undefined);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.locator(".topbar")).toContainText("Active connection: OpenCode");
+  await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeDisabled();
+  assert.equal(rounds, 1, "An unsaved connection must not start another inference round");
+  await page.getByRole("button", { name: "Review connection settings", exact: true }).click();
   await page.getByRole("button", { name: "Save model", exact: true }).click();
   await expect(page.getByRole("button", { name: "Save model", exact: true })).toBeDisabled();
   assert.equal(store.get(store.list()[0]!.id).model.modelID, "fixture-alt");
+  assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
+  await expect(page.locator(".topbar")).toContainText("Active connection: Direct ChatGPT plan");
+  await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeEnabled();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.locator(".insight-column")).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toBeVisible();
