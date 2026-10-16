@@ -114,15 +114,25 @@ subdivided by explicit character ranges. Split depth is limited to four and a si
 excerpt can split only when both halves contain at least 1,000 characters. Indivisible
 output-heavy tasks fail explicitly instead of silently omitting supported requirements.
 
-Each model call has a five-minute deadline within a fifteen-minute execution window
-and sixteen-minute worker lease. The batch plan, attempt counts and completed validated
+Each model call has a five-minute deadline. An active scan automatically continues
+across fifteen-minute execution windows at batch boundaries: before starting a batch,
+it reserves a full five-minute call plus one minute of cleanup. When less time remains,
+it atomically validates/checkpoints the work and extends its live worker lease to
+sixteen minutes from now, then opens a fresh execution window. Progress reports
+**Continuing scan automatically** with the saved/total count. This continues the finite
+batch plan in the same worker without repeating completed calls; no manual Resume
+click is needed just because a healthy scan takes more than fifteen minutes.
+The batch plan, attempt counts and completed validated
 responses are checkpointed in SQLite; progress shows the saved/total batch count.
 Timeouts, cancellation and app closure retain those checkpoints without publishing
 partial project proposals. **Resume scan** creates a new worker job using the saved
 file snapshot and skips completed calls. The UI displays the capture date: resuming
 does not read newer file edits. **Start new scan** captures current files and repeats
 inference. Timed-out tasks split on explicit resume where possible, with at most three
-attempts on an indivisible task. No retry or resume is triggered automatically.
+attempts on an indivisible task. Failed/timed-out model calls, explicit Stop and app
+closure still require explicit resume. A stalled worker that cannot reach a safe
+continuation boundary retains its execution-window timeout. Renewal rejects expired
+leases and changed project/folder state rather than reviving stopped or stale work.
 
 Resume is available only for the most recent failed/cancelled/interrupted scan with
 checkpoints, the same project revision/model and the same folder connection identity.
@@ -137,11 +147,25 @@ snapshot. Connected workspace artifacts continue publishing normally after appli
 
 Each batch's scan prompt lists its allowed file-evidence IDs and constrains requirement
 citations to a nonempty selection of those exact IDs in the supplied JSON schema.
+Model-facing IDs are short snapshot-numbered handles such as `file:19`, so models
+do not need to reproduce long hashes. Only the current batch's handles are accepted;
+the service resolves them to original captured evidence IDs before checkpointing.
+Saved snapshots, proposals and exports retain the original hash-based IDs. Resuming
+an older checkpoint also uses short handles for its unfinished batches.
 The service independently rejects missing, invented, path-based or cross-batch
 citations. Citation failures identify the batch, requirement number and invalid IDs
 without quoting file contents; no scan proposals apply. Use **Retry initialization**
 to explicitly rerun an older scan without checkpoints. For checkpointed scans, choose
 **Resume scan** to reuse validated batches or **Start new scan** to recapture files.
+
+Scan requirement IDs are application-assigned: the model-facing scan schema omits
+requirement `localID`, and older responses' optional local aliases are discarded before
+checkpoint/application validation. Scan organization can only declare epics, so no
+organization operation can depend on those requirement-local aliases. Exactly repeated
+epic declarations are coalesced. Reusing one epic alias for conflicting definitions is
+rejected before title-based epic reuse, with the batch and offending alias identified;
+resume regenerates that batch while retaining completed work. Aliases may repeat across
+independent batches. Ordinary discovery retains its strict shared alias validation.
 
 Captured evidence uses the separate `workspace` source kind, retained with contents
 after local files change. Portable requirements JSON includes scan metadata/evidence.
@@ -252,3 +276,8 @@ and handoff evaluation remain future work.
 October 16, 2026 batching verification: `npm run check`, all 115 `npm test` checks,
 `npm run test:browser` (including the UI build), terminal `--help`, and
 `git diff --check` passed. These checks use deterministic adapters, not live inference.
+
+Automatic-window continuation is covered by simulated scans exceeding thirty minutes,
+single-worker/one-call-per-batch checks, cancellation at renewal, stale project/folder
+checks and expired-lease rejection. These are deterministic clock/adapter checks;
+live long-running subscription scans remain unverified.

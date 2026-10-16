@@ -6,6 +6,7 @@ import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, rea
 import { dirname } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
+import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
 import { answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
   submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type ScanWork, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
@@ -14,8 +15,7 @@ import { answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, proje
 function applyScanResults(project: Project, scan: NonNullable<Job["scan"]>, outputs: unknown[]) {
   for (const source of scan.sources) if (!project.sources.some((s) => s.id === source.id)) project.sources.push(source);
   for (const raw of outputs) {
-    const result = scanAnalysisSchema.parse(raw);
-    if (result.questions.length || result.retireQuestions.length || result.assessments?.length || result.researchFindings?.length || result.organization?.some((op) => op.type !== "upsert" || !op.epicID.startsWith("new:"))) throw new Error("Scans may only add feature and requirement proposals; review precedes gap discovery.");
+    const result = prepareScanAnalysis(scanAnalysisSchema.parse(raw));
     const evidence = new Set(scan.sources.map((s) => s.id));
     if (result.requirements.some((r) => !r.sourceIDs.length || r.sourceIDs.some((s) => !evidence.has(s)))) throw new Error("Each scanned requirement needs captured file evidence.");
     const aliases = new Map<string, string>();
@@ -530,8 +530,8 @@ export class ProjectStore {
     }).immediate();
   }
 
-  /** Atomic checkpoint, guarded by the same revision, binding and lease as publication. */
-  checkpointScan(id: string, work: ScanWork): boolean {
+  /** Atomic checkpoint and optional live-worker renewal, guarded like publication. */
+  checkpointScan(id: string, work: ScanWork, options: { leaseUntil?: number } = {}): boolean {
     return this.db.transaction(() => {
       const job = this.getJob(id);
       if (job.status !== "running" || !job.scan) throw new Error("Scan is no longer running.");
@@ -541,6 +541,10 @@ export class ProjectStore {
       } else if (this.get(job.projectID).revision !== job.expectedRevision || !binding || binding.bindingID !== work.bindingID || workspaceScanKey(binding.path) !== job.scan.workspaceKey) {
         job.status = "stale"; job.diagnostic = "Project or connected folder changed. Scan was not applied. Start a new scan.";
       } else {
+        if (options.leaseUntil !== undefined) {
+          if (!Number.isSafeInteger(options.leaseUntil) || options.leaseUntil <= Date.now()) throw new Error("Scan lease renewal must have a future deadline.");
+          job.leaseUntil = Math.max(job.leaseUntil!, options.leaseUntil);
+        }
         const completed = work.batches.flatMap((batch) => batch.output ? [batch.output] : []);
         const saved = job.scanWork?.batches.flatMap((batch) => batch.output ? [batch.output] : []) ?? [];
         if (JSON.stringify(completed) !== JSON.stringify(saved)) applyScanResults(this.get(job.projectID), job.scan, completed);

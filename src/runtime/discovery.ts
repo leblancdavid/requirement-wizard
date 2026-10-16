@@ -135,7 +135,7 @@ export function scanPrompt(project: Project, context: ContextPack): string {
   const sourceIDs = capturedFiles.map((source) => source.id);
   if (!sourceIDs.length) throw new Error("Scan batch has no captured file evidence.");
   const batchSchema = scanBatchAnalysisSchema.extend({
-    requirements: scanBatchAnalysisSchema.shape.requirements.element.extend({
+    requirements: scanBatchAnalysisSchema.shape.requirements.element.omit({ localID: true }).extend({
       sourceIDs: z.array(z.enum(sourceIDs as [string, ...string[]])).min(1),
     }).array().max(20),
   });
@@ -143,6 +143,7 @@ export function scanPrompt(project: Project, context: ContextPack): string {
 Propose initial definitions: summary, candidate goals, actors, assumptions, feature epics and concrete requirements with acceptance scenarios. Distinguish observed source behavior, documented intent, test definitions and inferred requirements in each rationale. Static files do not prove execution or human intent. Never claim exhaustive coverage; explicitly describe omissions and unknowns. Summary/goals/actors should describe the project across available batches, not only the last file.
 Review comes first: questions, retireQuestions, assessments and researchFindings must all be empty arrays. scopeAssessment must have low confidence and explain static-analysis limits. organization may only create feature epics with upsert, unique new: epicID, title, purpose and dependencies (prefer empty dependencies). Reuse existing epic IDs where appropriate; do not edit existing epics. Each new requirement must cite ONLY sourceIDs from capturedFiles in THIS batch, with its rationale naming the supporting paths and line ranges. Generate at most 20 concise requirements with concise acceptance scenarios. Always include moreWork: true if additional supported requirements cannot fit this response, false otherwise. The app will split unfinished work into smaller tasks; never silently omit it to fit the limit. Analyze only the supplied subexcerpt when one is labelled, not other portions of its original file or source. Avoid identical or semantically duplicate existing requirements or previouslyProposedStatements. Preserve accepted and rejected decisions. On rescan, describe conflicting/changed behavior as a reviewable proposal with rationale linking any affected existing requirement ID. Missing files do not prove removed product intent. No implementation status is verified by scanning.
 Allowed sourceIDs for this batch: ${JSON.stringify(sourceIDs)}. Copy these exact IDs into each requirement's nonempty sourceIDs array. Paths, line ranges, IDs from project records or earlier batches, and invented IDs are not valid citations. If this batch does not support a requirement, omit that requirement.
+Do not include localID on requirements; the application assigns their IDs. Each new epic must have its own distinct alias such as new:epic-jobs. Declare each epic alias exactly once, and use that exact alias in requirement epicID and epic dependencies. Never use one epic alias for different features. Aliases are local to this response and may be reused in a later batch.
 Schema: ${JSON.stringify(zodToJsonSchema(batchSchema, { $refStrategy: "none" }))}
 Project revision ${project.revision}. Bounded context: ${JSON.stringify(context.data)}`;
 }

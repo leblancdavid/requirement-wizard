@@ -11,7 +11,9 @@ Settings. Review inferred requirements before explicitly starting **Explore next
 Last-scan details expose inspected files/evidence, changes and omissions. See
 [initialization and rescanning](project-workspaces.md#initialize-definitions-and-rescan)
 for source transmission, limits, exclusions and verification status.
-Scans save validated results in small sequential batches. Interrupted scans offer
+Scans save validated results in small sequential batches and automatically continue
+across execution windows while running; progress reports the continuation and saved
+batch count. **Stop** retains checkpoints for explicit resume. Interrupted scans offer
 **Resume scan** to reuse saved batches and the displayed file snapshot, or **Start new
 scan** to read current files. Older failures without checkpoints offer **Retry initialization**.
 Ordinary discovery stays blocked until initialization succeeds. Expanded questions include **Unrelated / dismiss** beside

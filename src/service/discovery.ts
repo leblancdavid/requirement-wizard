@@ -5,7 +5,8 @@ import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext } from "../core/working-set.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
-import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanRunTimeout } from "./scan-batches.js";
+import { prepareScanAnalysis } from "../core/scan.js";
+import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanWindowTimeout, scanLeaseDuration } from "./scan-batches.js";
 
 export interface DiscoveryAdapter {
   clarify?(project: Project, request: QuestionHelpRequest, options: DiscoveryOptions): Promise<unknown>;
@@ -42,13 +43,16 @@ export class DiscoveryService {
     const { job, project } = options.resumeJobID
       ? this.store.resumeScan(projectID, expectedRevision, options.resumeJobID)
       : this.store.beginJob(projectID, expectedRevision, undefined, true);
-    this.store.claimJob(job.id, Date.now() + 960000);
+    this.store.claimJob(job.id, Date.now() + scanLeaseDuration);
     const controller = new AbortController();
     const abort = () => controller.abort();
     options.signal?.addEventListener("abort", abort, { once: true });
     let timedOut = false;
     let activeBatch: string | undefined;
-    const timer = setTimeout(() => { timedOut = true; abort(); }, scanRunTimeout);
+    let windowNumber = 1;
+    let windowEndsAt = Date.now() + scanWindowTimeout;
+    const expireWindow = () => { timedOut = true; abort(); };
+    let timer = setTimeout(expireWindow, scanWindowTimeout);
     try {
       let scan = job.scan;
       if (!scan) {
@@ -76,17 +80,31 @@ export class DiscoveryService {
         }
         if (batch.attempts >= 3) throw new Error("This minimum-size scan batch failed three attempts. Start a new scan or review the AI connection before retrying.");
         const sources = scanBatchSources(scan, batch);
+        // Snapshot-wide numbering keeps handles short and prevents a handle from
+        // another batch resolving to an unrelated file. Only this batch is mapped.
+        const capturedFiles = sources.map((source) => ({ ...source, id: `file:${scan.sources.findIndex((item) => item.id === source.id) + 1}` }));
+        const citationIDs = new Map(capturedFiles.map((source, index) => [source.id, sources[index]!.id]));
         activeBatch = `${index + 1}/${work.batches.length}`;
         const completed = work.batches.flatMap((item) => item.output ? [item.output] : []);
         const previousGeneratedDefinition = completed.length ? (({ summary, goals, actors, assumptions }) => ({ summary, goals, actors, assumptions }))(completed.at(-1)!) : null;
         const priorStatements = completed.flatMap((output) => output.requirements.map((r) => r.statement));
         options.onProgress?.(`${completed.length} of ${work.batches.length} batches saved; processing batch ${index + 1}. Proposals publish together after completion…`);
-        const data = { project: base.data, capturedFiles: sources, previouslyProposedStatements: priorStatements, previousGeneratedDefinition,
+        const data = { project: base.data, capturedFiles, previouslyProposedStatements: priorStatements, previousGeneratedDefinition,
           scanScope: { snapshotID: scan.snapshot.id, batch: index + 1, batches: work.batches.length, inspectedFiles: scan.snapshot.files.length, omittedPaths: scan.snapshot.omitted.length, traversalLimited: scan.snapshot.traversalLimited, changes: scan.snapshot.changes } };
         const characters = JSON.stringify(data).length;
         const context: ContextPack = { data, manifest: { ...base.manifest, version: "workspace-scan-v2", characters, budget: 90000, includedIDs: [...base.manifest.includedIDs, ...sources.map((s) => s.id)] } };
         this.store.attachContext(job.id, context.manifest);
         if (characters > 90000) throw new Error("Scan context exceeds 90,000 characters. Existing decisions were retained; no scan proposals applied.");
+        controller.signal.throwIfAborted();
+        // Continue the finite plan at a task boundary. Reserve a complete model
+        // call plus cleanup time instead of aborting healthy work at minute 15.
+        if (Date.now() + scanBatchTimeout + 60_000 >= windowEndsAt) {
+          if (!this.store.checkpointScan(job.id, work, { leaseUntil: Date.now() + scanLeaseDuration })) return this.store.getJob(job.id);
+          clearTimeout(timer);
+          windowEndsAt = Date.now() + scanWindowTimeout;
+          timer = setTimeout(expireWindow, scanWindowTimeout);
+          options.onProgress?.(`Continuing scan automatically in execution window ${++windowNumber}; ${completed.length} of ${work.batches.length} batches saved.`);
+        }
         batch.attempts++;
         if (!this.store.checkpointScan(job.id, work)) return this.store.getJob(job.id);
         const batchController = new AbortController();
@@ -94,6 +112,7 @@ export class DiscoveryService {
         let raw: unknown;
         try {
           const signal = AbortSignal.any([controller.signal, batchController.signal]);
+          signal.throwIfAborted();
           raw = await this.adapter.analyze(project, {
             context, scan: true, research: false, signal,
             onProgress: options.onProgress ?? (() => {}), onSession: (id) => this.store.attachSession(job.id, id),
@@ -114,7 +133,10 @@ export class DiscoveryService {
           if (missingCitation) throw new Error(`Scan batch ${activeBatch}, requirement ${Number(missingCitation.path[1]) + 1}: missing sourceIDs. Cite only exact captured-file IDs from this batch. No scan proposals applied; resume or start a new scan explicitly.`);
           throw parsed.error;
         }
-        const { moreWork, ...output } = parsed.data;
+        const { moreWork, ...proposal } = parsed.data;
+        const output = prepareScanAnalysis(proposal);
+        validateScanBatch(output, [...citationIDs.keys()], activeBatch);
+        for (const requirement of output.requirements) requirement.sourceIDs = requirement.sourceIDs.map((id) => citationIDs.get(id)!);
         validateScanBatch(output, sources.map((s) => s.id), activeBatch);
         if (moreWork || output.requirements.length === 20) {
           const smaller = splitScanBatch(batch);
@@ -133,7 +155,9 @@ export class DiscoveryService {
     } catch (error) {
       const requestTimedOut = error instanceof Error && (error.name === "TimeoutError" || /request timed out/i.test(error.message));
       const retained = " No scan proposals applied. Completed batches are saved; resume explicitly using the captured snapshot or start a new scan.";
-      this.store.failJob(job.id, controller.signal.aborted ? "cancelled" : "failed", timedOut ? `Scan paused after its 15-minute execution window.${retained}` : controller.signal.aborted ? `Initialization stopped or the app closed.${retained}` : requestTimedOut ? `Scan${activeBatch ? ` batch ${activeBatch}` : ""}: the AI request timed out.${retained}` : safeMessage(error instanceof Error ? error.message : error));
+      const diagnostic = safeMessage(error instanceof Error ? error.message : error);
+      const batchDiagnostic = activeBatch && !diagnostic.startsWith("Scan batch ") ? `Scan batch ${activeBatch}: ${diagnostic}` : diagnostic;
+      this.store.failJob(job.id, controller.signal.aborted ? "cancelled" : "failed", timedOut ? `Scan could not reach a safe continuation point within its 15-minute execution window.${retained}` : controller.signal.aborted ? `Initialization stopped or the app closed.${retained}` : requestTimedOut ? `Scan${activeBatch ? ` batch ${activeBatch}` : ""}: the AI request timed out.${retained}` : batchDiagnostic);
       return this.store.getJob(job.id);
     } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
   }

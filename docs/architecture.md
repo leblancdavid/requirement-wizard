@@ -278,8 +278,12 @@ sequential batches using the selected adapter with tools/research disabled.
 work. Jobs retain the captured snapshot, versioned batch plan, attempt counts and
 validated responses in SQLite. Explicit resume creates a new job, reuses those
 checkpoints and rejects changed project revisions/models/folder connection IDs.
-Five-minute batch deadlines run within a fifteen-minute execution window; expired
-leases and app restart retain saved work without automatically repeating inference.
+Five-minute batch deadlines run within automatically renewed fifteen-minute execution
+windows. Before launching a batch with less than six minutes left, an atomic checkpoint
+validates current revision/binding and the unexpired lease, extends the lease sixteen
+minutes, and resets the window. The same worker continues the finite plan; completed
+calls are not replayed. Expired leases, explicit stop and app restart retain saved work
+for explicit resume rather than automatically repeating inference.
 The browser API returns checkpoint counts rather than unpublished batch responses.
 `ProjectStore.finishScan` applies all validated batches in one expected-revision/binding
 transaction, recording scan manifests and distinct `workspace` evidence sources.

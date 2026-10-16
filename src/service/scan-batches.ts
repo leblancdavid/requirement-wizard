@@ -1,7 +1,8 @@
 import type { Analysis, Job, ScanBatch } from "../core/model.js";
 
 export const scanBatchTimeout = 300_000;
-export const scanRunTimeout = 900_000;
+export const scanWindowTimeout = 900_000;
+export const scanLeaseDuration = scanWindowTimeout + 60_000;
 const maxDepth = 4;
 const minExcerpt = 1000;
 
@@ -51,7 +52,6 @@ export function scanBatchSources(scan: NonNullable<Job["scan"]>, batch: ScanBatc
 }
 
 export function validateScanBatch(output: Analysis, sourceIDs: string[], label: string) {
-  if (output.questions.length || output.retireQuestions.length || output.assessments?.length || output.researchFindings?.length || output.organization?.some((op) => op.type !== "upsert" || !op.epicID.startsWith("new:"))) throw new Error("Scans may only add feature and requirement proposals; review precedes gap discovery.");
   const current = new Set(sourceIDs);
   for (const [index, requirement] of output.requirements.entries()) {
     const invalid = requirement.sourceIDs.filter((id) => !current.has(id));

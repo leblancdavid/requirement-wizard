@@ -118,6 +118,7 @@ test("scan prompt restricts citations to nonempty exact current-batch IDs", () =
     };
     assert.equal(schema.properties.requirements.items.properties.sourceIDs.minItems, 1);
     assert.deepEqual(schema.properties.requirements.items.properties.sourceIDs.items.enum, ["current-file-id"]);
+    assert.equal("localID" in schema.properties.requirements.items.properties, false);
     assert.ok(prompt.includes('Allowed sourceIDs for this batch: ["current-file-id"]'));
     assert.ok(prompt.includes("earlier batches"));
   } finally { f.close(); }
@@ -151,6 +152,122 @@ test("scan citation failures identify the batch and requirement without applying
       assert.deepEqual(f.store.get(f.project.id), f.project);
     } finally { f.close(); }
   }
+});
+
+test("citation failure resume preserves saved evidence and resolves only current snapshot handles", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
+    let calls = 0;
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+      const result = proposal(options);
+      if (++calls === 2) result.requirements[0]!.sourceIDs = ["file:999"];
+      return result;
+    } });
+    const failed = await service.scan(f.project.id, 1);
+    assert.equal(failed.status, "failed");
+    assert.match(failed.diagnostic!, /invalid sourceIDs \["file:999"\]/);
+    const savedBatch = failed.scanWork!.batches[0]!.output!;
+    assert.ok(savedBatch.requirements[0]!.sourceIDs[0]!.startsWith("workspace:"));
+    assert.equal(f.store.get(f.project.id).requirements.length, 0);
+    let resumedCalls = 0;
+    const retry = new DiscoveryService(f.store, { async analyze(_p, options) {
+      resumedCalls++;
+      const sources = (options.context.data as { capturedFiles: Project["sources"] }).capturedFiles;
+      assert.ok(sources.every((source) => /^file:\d+$/.test(source.id)));
+      const result = proposal(options);
+      result.requirements[0]!.sourceIDs = sources.map((source) => source.id);
+      result.requirements[0]!.statement = `Resumed feature ${resumedCalls}`;
+      return result;
+    } });
+    const completed = await retry.scan(f.project.id, 1, { resumeJobID: failed.id });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(resumedCalls, failed.scanWork!.batches.length - 1);
+    assert.deepEqual(completed.scanWork!.batches[0]!.output, savedBatch);
+    for (const batch of completed.scanWork!.batches.slice(1)) {
+      assert.deepEqual(batch.output!.requirements[0]!.sourceIDs, batch.excerpts.map((excerpt) => excerpt.sourceID));
+    }
+  } finally { f.close(); }
+});
+
+test("scan-local requirement aliases cannot collide with epics or each other across batches", async () => {
+  for (const mode of ["epic-collision", "repeated-requirement", "non-new-requirement", "repeated-epic"] as const) {
+    const f = fixture();
+    try {
+      writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
+      let calls = 0;
+      const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+        calls++;
+        const result = proposal(options);
+        result.requirements[0]!.statement = `List jobs from batch ${calls}`;
+        result.requirements[0]!.localID = mode === "epic-collision" ? "new:jobs" : mode === "non-new-requirement" ? "requirement-1" : "new:requirement";
+        result.requirements.push({ ...result.requirements[0]!, statement: `Archive jobs from batch ${calls}` });
+        if (mode === "repeated-epic") result.organization!.push(structuredClone(result.organization![0]!));
+        return result;
+      } });
+      const completed = await service.scan(f.project.id, 1);
+      assert.equal(completed.status, "completed", `${mode}: ${completed.diagnostic}`);
+      assert.ok(calls > 1);
+      const project = f.store.get(f.project.id);
+      assert.equal(project.requirements.length, calls * 2);
+      assert.equal(new Set(project.requirements.map((r) => r.id)).size, calls * 2);
+      const epic = project.epics.find((item) => item.title === "Job tracking")!;
+      assert.equal(project.epics.filter((item) => item.title === "Job tracking").length, 1);
+      assert.ok(project.requirements.every((r) => r.epicID === epic.id));
+      assert.ok(completed.scanWork!.batches.every((batch) => batch.output!.requirements.every((r) => r.localID === undefined)));
+      assert.ok(completed.scanWork!.batches.every((batch) => batch.output!.organization!.length === 1));
+    } finally { f.close(); }
+  }
+});
+
+test("conflicting epic aliases identify the batch and resume preserves prior validated work", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
+    let calls = 0;
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+      const result = proposal(options);
+      if (++calls === 2) result.organization!.push({ type: "upsert", epicID: "new:jobs", title: "A different feature", purpose: "Conflicting meaning", dependencies: [] });
+      return result;
+    } });
+    const failed = await service.scan(f.project.id, 1);
+    assert.equal(failed.status, "failed"); assert.equal(calls, 2);
+    assert.match(failed.diagnostic!, /Scan batch 2\/\d+: Epic alias "new:jobs" has conflicting definitions/);
+    assert.match(failed.diagnostic!, /resume to regenerate this batch/);
+    assert.equal(failed.scanWork!.batches.filter((batch) => batch.output).length, 1);
+    assert.equal(failed.scanWork!.batches[1]!.output, undefined);
+    assert.deepEqual(f.store.get(f.project.id), f.project);
+    const retry = new DiscoveryService(f.store, { async analyze(_p, options) { calls++; return proposal(options); } });
+    const completed = await retry.scan(f.project.id, 1, { resumeJobID: failed.id });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(calls, failed.scanWork!.batches.length + 1);
+  } finally { f.close(); }
+});
+
+test("stored scan results with legacy local aliases can publish on resume without another model call", async () => {
+  const f = fixture();
+  try {
+    const scan = await captureWorkspace(f.path, undefined, new AbortController().signal);
+    const context = planContext(f.project); context.data = { capturedFiles: scan.sources };
+    const output = proposal({ scan: true, research: false, context, signal: new AbortController().signal,
+      onProgress() {}, onSession() {}, onTelemetry() {}, onResearch() {} });
+    output.requirements[0]!.localID = "new:jobs";
+    output.requirements.push({ ...output.requirements[0]!, statement: "Archive saved jobs" });
+    output.organization!.push(structuredClone(output.organization![0]!));
+    const { job } = f.store.beginJob(f.project.id, 1, undefined, true);
+    f.store.claimJob(job.id, Date.now() + 60000);
+    f.store.attachScan(job.id, scan);
+    assert.equal(f.store.checkpointScan(job.id, { version: 1, bindingID: f.store.workspace(f.project.id)!.bindingID!,
+      batches: [{ depth: 0, attempts: 1, excerpts: scan.sources.map((s) => ({ sourceID: s.id, start: 0, end: s.text.length })), output }] }), true);
+    f.store.failJob(job.id, "failed", "Interrupted before publication");
+    const service = new DiscoveryService(f.store, { async analyze() { assert.fail("Saved results must not repeat model calls"); } });
+    const completed = await service.scan(f.project.id, 1, { resumeJobID: job.id });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    const project = f.store.get(f.project.id);
+    assert.equal(project.requirements.length, 2);
+    assert.notEqual(project.requirements[0]!.id, project.requirements[1]!.id);
+    assert.ok(project.requirements.every((r) => r.epicID === project.epics.find((e) => e.title === "Job tracking")!.id));
+  } finally { f.close(); }
 });
 
 test("transport timeout identifies the failing batch and preserves the project for explicit retry", async () => {
@@ -191,8 +308,11 @@ test("valid multi-batch initialization retains each batch's exact file evidence"
     assert.equal(new Set(citations).size, citations.length);
     const saved = f.store.get(f.project.id);
     assert.equal(saved.revision, f.project.revision + 1);
-    assert.deepEqual(saved.requirements.map((r) => r.sourceIDs), citations.map((id) => [id]));
-    assert.ok(citations.every((id) => saved.sources.some((s) => s.id === id && s.kind === "workspace")));
+    assert.ok(citations.every((id) => /^file:\d+$/.test(id)));
+    const originalIDs = citations.map((id) => job.scan!.sources[Number(id.split(":")[1]) - 1]!.id);
+    assert.deepEqual(saved.requirements.map((r) => r.sourceIDs), originalIDs.map((id) => [id]));
+    assert.ok(originalIDs.every((id) => saved.sources.some((s) => s.id === id && s.kind === "workspace")));
+    assert.deepEqual(job.scanWork!.batches.flatMap((batch) => batch.output!.requirements.map((r) => r.sourceIDs)), originalIDs.map((id) => [id]));
   } finally { f.close(); }
 });
 
@@ -275,7 +395,7 @@ test("timed-out batches split only on explicit resume and preserve original evid
     const slices: string[] = [];
     const retry = new DiscoveryService(f.store, { async analyze(_p, options) {
       const sources = (options.context.data as { capturedFiles: Project["sources"] }).capturedFiles;
-      assert.equal(sources[0]!.id, original.sourceID);
+      assert.equal(sources[0]!.id, "file:1");
       assert.match(sources[0]!.text, /Further bounded subexcerpt/);
       slices.push(sources[0]!.text);
       const result = proposal(options); result.requirements[0]!.statement = `Split feature ${slices.length}`; return result;
@@ -409,7 +529,95 @@ test("indivisible timeouts have bounded explicit attempts and never retry automa
   } finally { f.close(); }
 });
 
-test("the overall execution window preserves checkpoints for explicit resume", async (t) => {
+test("healthy scans automatically continue across execution windows without replaying batches", async (t) => {
+  const f = fixture();
+  try {
+    for (const name of ["first.ts", "second.ts"]) writeFileSync(join(f.path, name), "// feature evidence\n".repeat(1400));
+    const start = Date.now();
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: start });
+    let calls = 0;
+    const progress: string[] = [];
+    const leases: number[] = [];
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+      calls++;
+      const job = f.store.jobs(f.project.id).at(-1)!;
+      assert.equal(job.status, "running");
+      assert.equal(job.scanWork!.batches.filter((batch) => batch.output).length, calls - 1);
+      leases.push(job.leaseUntil!);
+      assert.equal(f.store.recoverExpiredJobs(), 0, "The active worker must retain a live lease");
+      t.mock.timers.tick(240000);
+      assert.equal(options.signal.aborted, false);
+      const result = proposal(options); result.requirements[0]!.statement = `Feature from task ${calls}`; return result;
+    } });
+    const job = await service.scan(f.project.id, 1, { onProgress: (message) => progress.push(message) });
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.ok(Date.now() - start > 1800000, "The scan should span more than two original windows");
+    assert.ok(progress.filter((message) => message.startsWith("Continuing scan automatically")).length >= 2);
+    assert.ok(Math.max(...leases) > leases[0]!);
+    assert.equal(calls, job.scanWork!.batches.length);
+    assert.ok(job.scanWork!.batches.every((batch) => batch.attempts === 1 && batch.output));
+    assert.equal(f.store.jobs(f.project.id).length, 1, "Window continuation must keep one worker job");
+    assert.equal(f.store.get(f.project.id).revision, 2);
+    assert.equal(f.store.get(f.project.id).requirements.length, calls);
+  } finally { t.mock.timers.reset(); f.close(); }
+});
+
+test("stop at an automatic window boundary keeps saved work and waits for explicit resume", async (t) => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1400));
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
+    let calls = 0;
+    const controller = new AbortController();
+    const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+      calls++; t.mock.timers.tick(240000); return proposal(options);
+    } });
+    const stopped = await service.scan(f.project.id, 1, { signal: controller.signal,
+      onProgress: (message) => { if (message.startsWith("Continuing scan automatically")) controller.abort(); } });
+    assert.equal(stopped.status, "cancelled");
+    assert.equal(calls, 3);
+    assert.equal(stopped.scanWork!.batches.filter((batch) => batch.output).length, 3);
+    assert.deepEqual(f.store.get(f.project.id), f.project);
+    t.mock.timers.tick(1800000);
+    assert.equal(calls, 3, "Stop must not schedule an automatic retry");
+    const retry = new DiscoveryService(f.store, { async analyze(_p, options) { calls++; return proposal(options); } });
+    const completed = await retry.scan(f.project.id, 1, { resumeJobID: stopped.id });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(calls, stopped.scanWork!.batches.length);
+  } finally { t.mock.timers.reset(); f.close(); }
+});
+
+test("window continuation rejects changed state or expired leases before starting another model call", async (t) => {
+  for (const mode of ["revision", "rebind", "expired"] as const) {
+    const f = fixture();
+    try {
+      writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1400));
+      const start = Date.now();
+      t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: start });
+      let calls = 0;
+      let originalLease = 0;
+      const service = new DiscoveryService(f.store, { async analyze(_p, options) {
+        calls++; originalLease ||= f.store.jobs(f.project.id).at(-1)!.leaseUntil!;
+        t.mock.timers.tick(240000); return proposal(options);
+      } });
+      const job = await service.scan(f.project.id, 1, { onProgress: (message) => {
+        if (!/^3 of \d+ batches saved\.$/.test(message)) return;
+        if (mode === "revision") f.store.note(f.project.id, 1, "A newer human decision wins");
+        if (mode === "rebind") f.store.connectWorkspace(f.project.id, 1, f.path);
+        // Move wall time without running timers to exercise the store's independent
+        // expiry check, even if the in-process timeout has not fired yet.
+        if (mode === "expired") t.mock.timers.setTime(originalLease + 1);
+      } });
+      assert.equal(calls, 3, mode);
+      assert.equal(job.status, mode === "expired" ? "interrupted" : "stale", job.diagnostic);
+      assert.ok(job.leaseUntil === null);
+      assert.equal(job.scanWork!.batches.filter((batch) => batch.output).length, 3);
+      assert.equal(f.store.get(f.project.id).requirements.length, 0);
+    } finally { t.mock.timers.reset(); f.close(); }
+  }
+});
+
+test("a stalled execution window preserves checkpoints for explicit resume", async (t) => {
   const f = fixture();
   try {
     writeFileSync(join(f.path, "first.ts"), "// feature evidence\n".repeat(1200));
