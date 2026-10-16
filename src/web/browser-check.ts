@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { startApp } from "./server.js";
 import { ProjectStore } from "../storage/store.js";
@@ -10,6 +10,7 @@ import type { Connections, LoginStatus } from "../providers/connections.js";
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
 await mkdir(resolve(".reqwizit-state"), { recursive: true });
+const workspaceDirectory = await mkdtemp(resolve(".reqwizit-state/browser-workspace-"));
 const store = new ProjectStore(":memory:");
 const releases: Array<() => void> = [];
 let rounds = 0;
@@ -123,6 +124,10 @@ try {
   await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByLabel("Your idea", { exact: true }).fill("Track contractor jobs and save their information.");
+  await page.getByLabel("Local workspace directory", { exact: true }).fill(workspaceDirectory);
+  await page.getByRole("button", { name: "Browse folders", exact: true }).click();
+  await expect(page.locator(".folder-browser")).toContainText(workspaceDirectory);
+  await page.getByRole("button", { name: "Use this folder", exact: true }).click();
   await page.getByRole("button", { name: "Create & explore" }).click();
   await expect(page.getByRole("heading", { name: "Who will use the first release?", exact: true })).toBeVisible();
   const headerProgress = page.locator(".topbar .header-progress");
@@ -131,6 +136,8 @@ try {
   const projectCoverage = await headerProgress.getByRole("meter", { name: "Definition coverage" }).getAttribute("aria-valuenow");
   await expect(headerProgress.locator("strong")).toHaveText(`${projectCoverage}%`);
   assert.equal(store.list().length, 1);
+  await expect(page.locator(".workspace-status")).toContainText("Saved");
+  assert.equal(store.workspace(store.list()[0]!.id)?.path, workspaceDirectory);
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   // Reproduce an existing legacy project after connecting a direct account:
@@ -279,7 +286,32 @@ try {
   await page.getByLabel("Review rationale").fill("Saving jobs is essential.");
   await page.getByRole("button", { name: "Confirm requirement" }).click();
   await expect(page.locator(".badge.accepted")).toHaveText("Confirmed");
+  await page.locator(".implementation-progress > summary").click();
+  await page.locator(".implementation-item > summary").click();
+  await page.getByLabel("Implementation status", { exact: true }).selectOption("verified");
+  await page.getByLabel("Implementation notes", { exact: true }).fill("Local persistence implemented");
+  await page.getByLabel("Verification evidence", { exact: true }).fill("Restart test passed");
+  await page.getByRole("button", { name: "Save implementation progress", exact: true }).click();
+  await expect(page.locator(".implementation-progress > summary")).toContainText("1 verified");
+  const progressFile = resolve(workspaceDirectory, ".requirement-wizard/progress.json");
+  await expect.poll(async () => JSON.parse(await readFile(progressFile, "utf8")).implementation[0].status).toBe("verified");
   await page.screenshot({ path: ".reqwizit-state/browser-map.png", fullPage: true });
+  const requirementsFile = resolve(workspaceDirectory, ".requirement-wizard/requirements.md");
+  const generatedRequirements = await readFile(requirementsFile, "utf8");
+  await writeFile(requirementsFile, "External editor changes");
+  await expect(page.locator(".workspace-status")).toContainText("Conflict");
+  await page.getByRole("button", { name: "Workspace settings", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Project workspace", exact: true })).toContainText("changed outside the app");
+  await writeFile(requirementsFile, generatedRequirements);
+  await page.getByRole("button", { name: "Retry sync", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Project workspace", exact: true })).toContainText("Saved");
+  await page.getByRole("button", { name: "Disconnect folder", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Connect workspace", exact: true })).toBeVisible();
+  assert.equal(await readFile(requirementsFile, "utf8"), generatedRequirements);
+  await page.getByLabel("Local workspace directory", { exact: true }).fill(workspaceDirectory);
+  await page.getByRole("button", { name: "Connect workspace", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Project workspace", exact: true })).toContainText("Saved");
+  await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Browser sample", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -365,5 +397,5 @@ try {
   await expect(page.getByText(/Account disconnected\. Projects retain/)).toBeVisible();
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   assert.deepEqual(errors, []);
-  console.log("Browser checks passed: ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation, and mobile layout. Screenshots: .reqwizit-state/browser-{connections,connections-mobile,desktop,mobile,help-mobile}.png");
-} finally { await browser?.close(); await app.close(); store.close(); }
+  console.log("Browser checks passed: local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation, and mobile layout. Screenshots: .reqwizit-state/browser-{connections,connections-mobile,desktop,mobile,help-mobile,map}.png");
+} finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); }

@@ -23,7 +23,10 @@ source-backed research, specification review, readiness assessment, and portable
 OpenCode handoffs.
 
 GitHub Copilot support is deferred and is not an initial-release acceptance gate.
-A desktop wrapper remains a follow-on delivery target.
+An Electron desktop wrapper is implemented under DEC-017, reusing the browser UI
+and local engine. Closing its window cancels owned active work and quits; saved
+state remains available and interrupted work requires explicit resume. See
+[desktop.md](desktop.md) for packaging and verified versus outstanding release checks.
 Existing-project discovery is a follow-on after review and portable handoffs (M7),
 starting with a local source folder and a one-time, read-only analysis. Repository
 refresh and automatic change detection are later extensions.
@@ -277,6 +280,30 @@ project understanding to discover and plan new or revised behavior.
   Impact analysis remains an estimate, not a claim of exhaustive dependency coverage.
 - Keep the initial imported baseline tied to its captured snapshot; do not imply that
   a one-time analysis stays synchronized with subsequent source changes.
+
+### Local project workspaces and implementation tracking
+
+**RW-023 — Persistent local workspace.** Connect each project to a local directory
+and automatically save revision-linked requirements and progress Markdown/JSON.
+
+- Support selection/creation at project creation and connection/reconnection for
+  existing projects in both clients; show path, sync status, and saved revision.
+- Keep portable artifacts separate from machine-local bindings and provider credentials.
+- Retain saved app changes when a directory becomes unavailable. Recover interrupted
+  saves without repeating model calls; serialize app/CLI publishers sharing storage.
+- Detect external edits and ownership collisions before replacement. Disconnecting
+  retains files and project data. Initial files are app-generated outputs.
+
+**RW-024 — Manual implementation progress.** Track not-started, in-progress, blocked,
+implemented, and verified states per requirement independently of requirements review
+and discovery coverage.
+
+- Record notes and verification evidence; verified requires nonblank evidence and
+  represents a human assessment rather than an automatically executed check.
+- Preserve previous assessments/evidence and flag them for review when a requirement's
+  statement, acceptance criteria, or requirements-review status changes.
+- Apply expected-revision checks, retain history, and save progress into the connected
+  workspace. Current progress counts must exclude stale implementation assessments.
 
 ## 5. Quality expectations
 

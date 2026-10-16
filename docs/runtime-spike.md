@@ -12,7 +12,8 @@ are retained as observations, not outstanding release gates.
 
 ## Run locally
 
-Prerequisites: Node.js 20.11 or newer, npm, and OpenCode. Install dependencies with
+Prerequisites: Node.js 22.12 or newer for the current development toolchain, npm,
+and OpenCode. Earlier verification below used Node 20.11. Install dependencies with
 `npm ci`. On Windows the runner detects the native executable in the standard npm
 installation location. For another installation, set `OPENCODE_BIN` to its executable.
 

@@ -70,6 +70,11 @@ export const projectSchema = z.object({
   roundChanges: z.array(z.string()).default([]),
   scopeAssessment: z.object({ confidence: z.enum(["low", "medium", "high"]), explanation: text }).nullable().default(null),
   research: z.array(researchEvidenceSchema.extend({ id: z.string(), title: text, finding: text, epicID: z.string() })).default([]),
+  implementation: z.array(z.object({
+    requirementID: z.string(), status: z.enum(["not-started", "in-progress", "blocked", "implemented", "verified"]),
+    notes: z.string().max(12000), evidence: z.string().max(12000),
+    requirementFingerprint: z.string(), updatedAt: z.string(),
+  })).default([]),
 });
 export type Project = z.infer<typeof projectSchema>;
 

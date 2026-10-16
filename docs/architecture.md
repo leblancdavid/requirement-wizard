@@ -22,15 +22,20 @@ implemented under `src/`. See [decisions.md](decisions.md),
 - `src/spike/`: compatibility runner using the shared runtime implementation.
 - `src/web/server.ts`: authenticated loopback browser API and built-asset hosting.
 - `src/ui/`: React workspace and responsive styles, built with Vite 6.4.4.
+- `src/desktop/`: Electron main process, sandboxed preload, and desktop smoke check.
+  The main process owns the existing local service; the renderer reuses the React UI.
 
-Storage uses `better-sqlite3` 11.10.0, compatible with the current Node 20.11 baseline.
+Browser/terminal storage uses `better-sqlite3` 11.10.0; the independently staged
+desktop uses 13.0.3 with bundled Node-API prebuilds. Development now requires Node
+22.12+ for Electron tooling. See [desktop.md](desktop.md) for verification and packaging.
 SQLite has a versioned schema and WAL mode. Initial records use versioned JSON
 snapshots; dedicated relation tables can be introduced as richer models require them.
 
 The service core remains an in-process facade; the browser API wraps it and hosts
 background jobs inside a foreground Node server. CLI processes share SQLite using
 transactional expected-revision checks. Automatic daemon discovery, CLI-to-HTTP
-attachment, and the proposed Ink/Electron wrappers remain future work.
+attachment and the proposed Ink interface remain future work. Electron owns an
+in-process backend and cancels active work when its window closes (DEC-017).
 
 ## Components
 
@@ -211,6 +216,18 @@ The character bound is not an exact tokenizer/model-window estimate. See the bro
 guide for the implemented rubric and limitations.
 
 ## Storage and revisions
+
+The shared `ProjectStore` also owns local workspace bindings and dirty-save journals;
+`src/storage/workspace.ts` renders and publishes revision-linked Markdown/JSON artifacts.
+Bindings and writer leases are stored separately from portable project snapshots.
+Every committed specification/progress revision marks the binding dirty in the same
+transaction. Publication runs after commit, with intended hashes committed before
+per-file atomic renames and manifest-last publication. Hash checking preserves external
+edits and a cross-process lease serializes writers sharing the store. Implementation
+assessments are manual requirement-linked records; a content/review fingerprint flags
+changed requirements without discarding prior evidence. See
+[project-workspaces.md](project-workspaces.md) for the implemented file format,
+recovery semantics, UI/CLI controls, and limitations.
 
 Initial record families:
 

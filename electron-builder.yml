@@ -1,0 +1,24 @@
+appId: app.reqwizit.desktop
+productName: Reqwizit
+directories:
+  app: dist/desktop-app
+  output: dist/installers
+files:
+  - app/**/*
+  - web/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - "**/*.node"
+npmRebuild: false
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+artifactName: Reqwizit-${version}-${arch}-setup.${ext}

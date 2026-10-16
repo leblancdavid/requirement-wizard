@@ -1,0 +1,12 @@
+.workspace-picker, .workspace-connection { display: grid; gap: 14px; min-width: 0; }
+.workspace-connection { border-top: 1px solid var(--border, #ddd); margin-top: 24px; padding-top: 20px; }
+.workspace-connection p, .folder-browser strong, .workspace-status { overflow-wrap: anywhere; }
+.workspace-picker input[type="checkbox"] { width: auto; }
+.folder-browser { border: 1px solid var(--border, #ddd); border-radius: 8px; padding: 14px; display: grid; gap: 12px; }
+.folder-list { display: grid; max-height: 240px; overflow: auto; gap: 4px; }
+.folder-list button { text-align: left; overflow-wrap: anywhere; }
+.workspace-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; font-size: .85rem; }
+.implementation-progress { margin: 16px 0; padding: 16px; border: 1px solid var(--border, #ddd); border-radius: 10px; }
+.implementation-progress summary span, .implementation-item summary span { display: block; font-size: .85rem; font-weight: normal; margin-top: 6px; }
+.implementation-item { padding: 12px 0; border-top: 1px solid var(--border, #ddd); }
+.implementation-item form { display: grid; gap: 12px; margin-top: 12px; }

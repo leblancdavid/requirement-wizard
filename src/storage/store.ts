@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { z } from "zod";
+import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace } from "./workspace.js";
 import { dirname } from "node:path";
 import { applyRound } from "../core/round.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -33,11 +35,122 @@ export class ProjectStore {
       CREATE TABLE IF NOT EXISTS queue_state (
         project_id TEXT PRIMARY KEY REFERENCES projects(id), paused INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS workspaces (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id), path_key TEXT UNIQUE NOT NULL,
+        payload TEXT NOT NULL, dirty INTEGER NOT NULL DEFAULT 1,
+        owner TEXT, lease_until INTEGER
+      );
       PRAGMA user_version = 1;
     `);
+    this.syncWorkspaces();
   }
 
-  close() { this.db.close(); }
+  close() { this.syncWorkspaces(); this.db.close(); }
+
+  workspace(id: string): Workspace | null {
+    const row = this.db.prepare("SELECT payload, dirty FROM workspaces WHERE project_id = ?").get(id) as { payload: string; dirty: number } | undefined;
+    if (!row) return null;
+    const binding = JSON.parse(row.payload) as Workspace;
+    if (row.dirty && binding.status === "saved") binding.status = "pending";
+    return binding;
+  }
+
+  connectWorkspace(id: string, expectedRevision: number, path: string, create = false): Workspace {
+    if (this.get(id).revision !== expectedRevision) throw new StaleRevisionError();
+    const canonical = canonicalDirectory(path, create);
+    const previous = this.workspace(id);
+    const binding: Workspace = previous && directoryKey(previous.path) === directoryKey(canonical) ? previous
+      : { path: canonical, status: "pending", savedRevision: null, diagnostic: null, hashes: {}, pendingHashes: {} };
+    const directory = managedDirectory(canonical);
+    const manifest = readArtifact(directory, "manifest.json");
+    if (manifest !== null && !Object.keys(binding.hashes).length && !Object.keys(binding.pendingHashes).length) {
+      let parsed: { revision: number; hashes: Record<string, string> };
+      try { parsed = z.object({ formatVersion: z.literal(1), projectID: z.literal(id), revision: z.number().int().positive(), hashes: z.record(z.string().regex(/^[a-f0-9]{64}$/)) }).parse(JSON.parse(manifest)); }
+      catch { throw new Error("Workspace conflict: existing manifest belongs to another project or has an unsupported format. Choose a different folder."); }
+      binding.hashes = { ...parsed.hashes, "manifest.json": hash(manifest) };
+      binding.savedRevision = parsed.revision;
+    }
+    checkWorkspace(binding);
+    this.db.transaction(() => {
+      if (this.get(id).revision !== expectedRevision) throw new StaleRevisionError();
+      this.assertWorkspaceIdle(id);
+      const old = this.workspace(id);
+      // Retain the durable journal when reconnecting the same location after interruption.
+      const payload = old && directoryKey(old.path) === directoryKey(canonical) ? old : binding;
+      const existing = this.db.prepare("SELECT project_id FROM workspaces WHERE path_key = ? AND project_id != ?").get(directoryKey(canonical), id);
+      if (existing) throw new Error("Workspace conflict: this directory is already connected to another project.");
+      this.db.prepare(`INSERT INTO workspaces(project_id, path_key, payload, dirty) VALUES (?, ?, ?, 1)
+        ON CONFLICT(project_id) DO UPDATE SET path_key = excluded.path_key, payload = excluded.payload, dirty = 1`).run(id, directoryKey(canonical), JSON.stringify(payload));
+    }).immediate();
+    return this.syncWorkspace(id)!;
+  }
+
+  private assertWorkspaceIdle(id: string) {
+    const row = this.db.prepare("SELECT lease_until FROM workspaces WHERE project_id = ?").get(id) as { lease_until: number | null } | undefined;
+    if ((row?.lease_until ?? 0) > Date.now()) throw new Error("Workspace is saving. Retry shortly.");
+  }
+
+  disconnectWorkspace(id: string, expectedRevision: number) {
+    this.db.transaction(() => {
+      if (this.get(id).revision !== expectedRevision) throw new StaleRevisionError();
+      this.assertWorkspaceIdle(id);
+      this.db.prepare("DELETE FROM workspaces WHERE project_id = ?").run(id);
+    }).immediate();
+  }
+
+  syncWorkspace(id: string): Workspace | null {
+    if (this.db.inTransaction) return this.workspace(id);
+    const owner = randomUUID();
+    const acquired = this.db.prepare("UPDATE workspaces SET owner = ?, lease_until = ? WHERE project_id = ? AND (owner IS NULL OR lease_until <= ?)")
+      .run(owner, Date.now() + 300_000, id, Date.now()).changes;
+    if (!acquired) return this.workspace(id);
+    const binding = this.workspace(id)!;
+    try {
+      const directory = checkWorkspace(binding);
+      const project = this.get(id);
+      if (binding.status === "saved" && binding.savedRevision === project.revision) return binding;
+      const files = renderWorkspace(project);
+      // Retain every recognized intermediate write until the whole publication succeeds.
+      binding.pendingHashes = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, [...new Set([...(binding.pendingHashes[name] ?? []), hash(content)])]]));
+      binding.status = "pending"; binding.diagnostic = null;
+      // Commit the intended hashes before touching files: partial writes can be recovered.
+      this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ? AND owner = ?").run(JSON.stringify(binding), id, owner);
+      publishWorkspace(directory, files);
+      binding.hashes = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])); binding.pendingHashes = {};
+      binding.savedRevision = project.revision; binding.status = "saved";
+      this.db.prepare("UPDATE workspaces SET payload = ?, dirty = CASE WHEN (SELECT revision FROM projects WHERE id = ?) = ? THEN 0 ELSE 1 END WHERE project_id = ? AND owner = ?")
+        .run(JSON.stringify(binding), id, project.revision, id, owner);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Workspace save failed.";
+      binding.status = message.includes("Workspace conflict:") ? "conflict" : "unavailable";
+      binding.diagnostic = message;
+      this.db.prepare("UPDATE workspaces SET payload = ?, dirty = 1 WHERE project_id = ? AND owner = ?").run(JSON.stringify(binding), id, owner);
+    } finally {
+      this.db.prepare("UPDATE workspaces SET owner = NULL, lease_until = NULL WHERE project_id = ? AND owner = ?").run(id, owner);
+      if (binding.status === "saved" && this.workspace(id)?.status === "pending") {
+        // Another process may have committed a newer revision during publication.
+        queueMicrotask(() => { if (this.db.open) this.syncWorkspaces(); });
+      }
+    }
+    return this.workspace(id);
+  }
+
+  syncWorkspaces() {
+    if (this.db.inTransaction) return;
+    for (const row of this.db.prepare("SELECT project_id FROM workspaces WHERE dirty = 1").all() as Array<{ project_id: string }>) this.syncWorkspace(row.project_id);
+  }
+
+  setImplementation(id: string, revision: number, requirementID: string, raw: unknown) {
+    const input = z.object({ status: z.enum(["not-started", "in-progress", "blocked", "implemented", "verified"]), notes: z.string().max(12000), evidence: z.string().max(12000) }).strict().parse(raw);
+    if (input.status === "verified" && !input.evidence.trim()) throw new Error("Record verification evidence before marking a requirement verified.");
+    return this.mutate(id, revision, "Human updated implementation progress", (project) => {
+      const requirement = project.requirements.find((r) => r.id === requirementID);
+      if (!requirement) throw new Error("Requirement not found.");
+      const item = { requirementID, ...input, requirementFingerprint: requirementFingerprint(requirement), updatedAt: new Date().toISOString() };
+      const index = project.implementation.findIndex((r) => r.requirementID === requirementID);
+      if (index < 0) project.implementation.push(item); else project.implementation[index] = item;
+    });
+  }
 
   submissions(id: string): Submission[] {
     return (this.db.prepare("SELECT payload FROM submissions WHERE project_id = ? ORDER BY rowid").all(id) as Array<{ payload: string }>)
@@ -148,6 +261,9 @@ export class ProjectStore {
 
   private record(project: Project, reason: string) {
     this.db.prepare("INSERT INTO revisions VALUES (?, ?, ?, ?)").run(project.id, project.revision, reason, JSON.stringify(project));
+    this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(project.id);
+    // Nested queue/job transactions must commit before filesystem publication.
+    queueMicrotask(() => { if (this.db.open) this.syncWorkspaces(); });
   }
 
   history(id: string) {

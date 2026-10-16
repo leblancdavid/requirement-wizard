@@ -90,7 +90,11 @@ Exit checks:
 
 ## M3 — Browser workspace and cross-client continuity
 
-Priority changed by DEC-008: browser first; desktop packaging is deferred.
+Priority changed by DEC-008: browser first. DEC-017 subsequently authorizes the
+Electron shell and Windows packaging; see [desktop.md](desktop.md). The shell,
+close/cancel lifecycle, native folder picker, installer generation, and staged/packaged
+launch checks are implemented. Installer installation/upgrades, signing, and live
+provider qualification remain unverified.
 Implemented: React browser shell, same-store project selection, clickable answers,
 requirement confirmation/rejection, epic map, discovery progress/cancellation, and
 responsive layout. Playwright checks creation, answering without IDs, review, reload
@@ -107,8 +111,8 @@ Work:
   presentation and live qualification of explanation quality remain outstanding.
 - M3.3 Add proposed-change review and visible pending/interrupted work states.
 - M3.4 Verify cross-client continuity, stale-edit handling, and keyboard access.
-- M3.5 Document the Windows browser run path. Desktop packaging follows after the
-  browser discovery experience is validated with users.
+- M3.5 Document the Windows browser and Electron run paths; verify desktop packaging
+  and close/cancel behavior. Broader installation/release qualification remains open.
 
 Exit checks:
 
@@ -147,6 +151,14 @@ Exit checks:
 - Deferred or delegated choices retain scope and remain visible in the baseline.
 
 ## M5 — Implementation plans and portable handoffs
+
+Workspace foundation (DEC-016, RW-023–024) implemented ahead of full planning:
+per-project folder bindings, automatic requirements/progress artifacts, conflict/retry
+and interruption recovery, browser/CLI controls, and manual requirement-linked build
+tracking. Deterministic storage/API and browser flows are verified; see
+[project-workspaces.md](project-workspaces.md). This provides local outputs and
+destination handling, but does not complete baseline-bound phase packages or M5 exit
+criteria. Integrated OpenCode execution remains M6.
 
 Dependencies: M4. Covers RW-015–016. Completes initial release functionality.
 

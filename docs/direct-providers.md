@@ -64,7 +64,7 @@ With `npm run app -- --data-dir .reqwizit-state`, the equivalent spike argument 
 
 ## Try the independent spike
 
-Use Node 20.11+ and installed npm dependencies. These commands do not require
+Use Node 22.12+ for the current development toolchain and installed npm dependencies. These commands do not require
 OpenCode. The login command prints a one-time authorization link; open it in your
 system browser and return to the terminal for the validated result.
 

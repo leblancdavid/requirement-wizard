@@ -84,7 +84,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
   }
   function signIn(existing?: string) {
     // Open synchronously with the click so browser popup blocking has a fallback link.
-    const popup = window.open("about:blank", "_blank");
+    const popup = window.reqwizitDesktop ? null : window.open("about:blank", "_blank");
     if (popup) popup.opener = null;
     void act(async () => {
       try {
@@ -94,6 +94,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
         sessionStorage.setItem("reqwizit-login", result.id);
         if (mounted.current) { setLogin({ id: result.id, status: "waiting" }); setAuthURL(result.url); }
         if (popup) popup.location.href = result.url;
+        else if (window.reqwizitDesktop) await window.reqwizitDesktop.openExternal(result.url);
       } catch (error) { popup?.close(); throw error; }
     });
   }

@@ -7,11 +7,90 @@ import type { DiscoveryAdapter } from "../service/discovery.js";
 import { analysisSchema } from "../core/model.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+test("workspace API authenticates folder access, creates directories, syncs progress, and rejects stale writes", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "workspace-api-"));
+  const store = new ProjectStore(":memory:");
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { throw new Error("No inference expected"); } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const post = (path: string, value: unknown) => fetch(`${app.origin}/api/${path}`, { method: "POST", headers, body: JSON.stringify(value) });
+  try {
+    assert.equal((await fetch(`${app.origin}/api/directories`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 403);
+    assert.equal((await fetch(`${app.origin}/api/directories`, { method: "POST", headers: { ...headers, Origin: "https://elsewhere.example" }, body: "{}" })).status, 403);
+    assert.equal((await post("directories", { path: directory })).status, 200);
+    assert.equal((await post("directories", { path: "relative" })).status, 400);
+    const path = join(directory, "new-repo");
+    const response = await post("projects", { name: "Local repo", idea: "Save work", model: { providerID: "openai", modelID: "fixture" }, workspace: { path, create: true } });
+    assert.equal(response.status, 201); const project = await response.json() as Project;
+    const route = `projects/${project.id}`;
+    assert.equal(store.workspace(project.id)?.status, "saved");
+    assert.equal((await post(`${route}/workspace`, { operation: "connect", revision: 99, path })).status, 409);
+    const { job } = store.beginJob(project.id, project.revision); store.claimJob(job.id, Date.now() + 60000);
+    store.finishJob(job.id, { summary: "Local", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [
+      { statement: "Save work", rationale: "Keep it", sourceIDs: [project.sources[0]!.id], acceptance: ["Survives restart"] },
+    ] });
+    const updated = store.get(project.id); const requirementID = updated.requirements[0]!.id;
+    assert.equal((await post(`${route}/implementation`, { revision: updated.revision, requirementID, status: "verified", notes: "", evidence: "" })).status, 400);
+    const input = { revision: updated.revision, requirementID, status: "in-progress", notes: "Building", evidence: "" };
+    assert.equal((await post(`${route}/implementation`, input)).status, 200);
+    assert.equal((await post(`${route}/implementation`, input)).status, 409);
+    const snapshot = await (await fetch(`${app.origin}/api/${route}`, { headers })).json() as { workspace: { status: string; savedRevision: number }; project: Project };
+    assert.equal(snapshot.workspace.status, "saved"); assert.equal(snapshot.workspace.savedRevision, snapshot.project.revision);
+    assert.equal(JSON.parse(readFileSync(join(path, ".requirement-wizard", "progress.json"), "utf8")).implementation[0].status, "in-progress");
+    assert.equal((await post(`${route}/workspace`, { operation: "disconnect", revision: snapshot.project.revision })).status, 200);
+    assert.equal(store.workspace(project.id), null);
+    const failed = await post("projects", { name: "Retained", idea: "Retained idea", model: { providerID: "openai", modelID: "fixture" }, workspace: { path: join(directory, "missing") } });
+    const retained = await failed.json() as Project & { workspaceError: string };
+    assert.equal(failed.status, 201); assert.ok(retained.workspaceError); assert.equal(store.get(retained.id).sources[0]!.text, "Retained idea");
+  } finally { await app.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 100; i++) { if (check()) return; await new Promise((accept) => setTimeout(accept, 10)); }
   assert.fail("Timed out waiting for background work");
 }
+
+test("shutdown cancels discovery, help, and connections together, rejects new work, and is idempotent", async () => {
+  const store = new ProjectStore(":memory:");
+  let project = store.create("Quit", "Preserve answers", { providerID: "openai", modelID: "fixture" });
+  const seed = store.beginJob(project.id, project.revision); store.claimJob(seed.job.id, Date.now() + 60000);
+  store.finishJob(seed.job.id, analysisSchema.parse({ summary: "Quit", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [],
+    questions: [{ text: "Work offline?", whyItMatters: "Persistence", options: [{ label: "Yes", consequence: "Local" }, { label: "No", consequence: "Online" }] }] }));
+  project = store.get(project.id);
+  let discoveryAborted = false, helpAborted = false, connectionsClosed = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((accept) => { release = accept; });
+  const wait = (signal: AbortSignal, aborted: () => void) => new Promise<never>((_accept, reject) => {
+    signal.addEventListener("abort", () => { aborted(); void gate.then(() => reject(new Error("Cancelled"))); }, { once: true });
+  });
+  const connections: Connections = {
+    async accounts() { return []; }, async beginLogin() { throw new Error("Unused"); }, loginStatus() { throw new Error("Unused"); },
+    cancelLogin() {}, async models() { return []; }, async test() {}, cancelTest() {}, async disconnect() {},
+    async close() { connectionsClosed++; await gate; },
+  };
+  const app = await startApp({ store, connections, port: 0, adapter: {
+    analyze: async (_project, options) => wait(options.signal, () => { discoveryAborted = true; }),
+    clarify: async (_project, _request, options) => wait(options.signal, () => { helpAborted = true; }),
+  } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const post = (action: string, body: unknown) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers, body: JSON.stringify(body) });
+  try {
+    assert.equal((await post("analyze", { revision: project.revision })).status, 202);
+    assert.equal((await post("question-help", { revision: project.revision, request: { questionID: project.questions[0]!.id, action: "rephrase" } })).status, 202);
+    const closing = app.close();
+    assert.equal(app.close(), closing);
+    assert.equal(discoveryAborted, true); assert.equal(helpAborted, true); assert.equal(connectionsClosed, 1);
+    assert.equal((await post("analyze", { revision: project.revision })).status, 503);
+    release(); await closing;
+    assert.equal(store.jobs(project.id).filter((job) => job.status === "running").length, 0);
+    assert.equal(store.queuePaused(project.id), true);
+    assert.equal(store.get(project.id).revision, project.revision);
+    await assert.rejects(fetch(app.origin));
+  } finally { release(); await app.close(); store.close(); }
+});
 
 test("connection API requires local authentication, validates selection, and redacts provider errors", async () => {
   const store = new ProjectStore(":memory:");

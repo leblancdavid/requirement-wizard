@@ -59,6 +59,13 @@ OpenCode model ID. There is no automatic provider/model/account fallback.
 
 ## Workflow
 
+Projects can connect to a local folder during creation or through **Settings → Project
+workspace**. Generated requirements/progress files update after app and CLI changes;
+the header shows their saved revision or sync conflict. **Project map → Implementation
+progress** records manual build status and verification evidence independently of
+requirements review. See [local project workspaces](project-workspaces.md) for file
+layout, folder browsing, reconnect/retry, conflict resolution, and recovery behavior.
+
 1. Create a named project with an idea; **Create & explore** starts its first round.
 2. Start in **Questions**. Use the feature filter to focus on an area if needed.
 3. The first unanswered question opens automatically. Choose an option or type an
@@ -473,7 +480,8 @@ quality has not been qualified by this change.
 Remaining work includes deeper scenario/conflict review, readiness baselines, richer
 requirement editing, tokenizer/model-capacity calibration and live qualification of
 large-context task passes,
-provider auth onboarding, portable handoffs, and the eventual desktop wrapper.
+provider auth onboarding and portable handoffs. The [Electron desktop wrapper](desktop.md)
+now reuses this workspace and adds native folder selection and quit/cancel lifecycle.
 
 ### Browser check setup
 

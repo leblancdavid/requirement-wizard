@@ -9,6 +9,7 @@ import { DiscoveryService } from "../service/discovery.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
 import { safeMessage } from "../runtime/contract.js";
 import { coverage } from "../core/coverage.js";
+import { implementationNeedsReview } from "../core/implementation.js";
 import { ConnectionManager } from "../providers/connections.js";
 import { CredentialStore } from "../providers/credentials.js";
 import { ConnectedDiscovery } from "../providers/discovery.js";
@@ -25,11 +26,17 @@ npm run reqwizit -- review --project <id> --expected-revision <n> --requirement 
 npm run reqwizit -- model --project <id> --expected-revision <n> --provider openai --model gpt-6.1-sol
 npm run reqwizit -- jobs --project <id>
 npm run reqwizit -- recover
+npm run reqwizit -- workspace --project <id> --operation connect --path "D:\\Projects\\my-app" --expected-revision <n> [--create-directory]
+npm run reqwizit -- workspace --project <id> --operation status|sync|disconnect [--expected-revision <n>]
+npm run reqwizit -- implementation --project <id> --expected-revision <n> --requirement <id> --status in-progress --text "Notes" [--evidence "Verification results"]
 
 answer supports --kind answer|delegation|deferral. Delegation text must describe its scope.
 review supports accept|reject. Historical revisions are read-only snapshots.
 Optional --data-dir <directory> overrides the user-local data location.
 Optional --connection <saved-account-id|opencode> selects the route for new/model.
+new supports --path <absolute-directory> [--create-directory] to connect a workspace.
+Implementation statuses: not-started, in-progress, blocked, implemented, verified.
+Verified requires --evidence. Disconnect retains workspace files and app data.
 Model changes retain the existing connection unless explicitly changed.
 Only analyze/interview make model calls (using the saved explicit provider/model).
 analyze supports --focus-epic <epic-id> and opt-in --research for bounded web retrieval.
@@ -79,6 +86,10 @@ function printProject(project: Project) {
     for (const scenario of requirement.acceptance) console.log(`    Acceptance: ${scenario}`);
     console.log(`    Sources: ${requirement.sourceIDs.join(", ")}`);
     if (requirement.reviewNote) console.log(`    Review: ${requirement.reviewNote}`);
+    const implementation = project.implementation.find((item) => item.requirementID === requirement.id);
+    console.log(`    Implementation: ${implementation?.status ?? "not-started"}${implementation && implementationNeedsReview(project, implementation) ? " (needs review)" : ""}`);
+    if (implementation?.notes) console.log(`    Implementation notes: ${implementation.notes}`);
+    if (implementation?.evidence) console.log(`    Verification evidence (human-recorded): ${implementation.evidence}`);
   }
 }
 
@@ -90,10 +101,12 @@ async function main() {
     question: { type: "string" }, text: { type: "string" }, kind: { type: "string" },
     requirement: { type: "string" }, decision: { type: "string" },
     research: { type: "boolean" }, "focus-epic": { type: "string" },
+    operation: { type: "string" }, path: { type: "string" }, "create-directory": { type: "boolean" },
+    status: { type: "string" }, evidence: { type: "string" },
   } });
   if (values.help || !positionals.length) { console.log(help); return; }
   const command = positionals[0];
-  if (positionals.length !== 1 || !["new", "list", "show", "model", "answer", "review", "analyze", "interview", "jobs", "recover"].includes(command!)) {
+  if (positionals.length !== 1 || !["new", "list", "show", "model", "answer", "review", "analyze", "interview", "jobs", "recover", "workspace", "implementation"].includes(command!)) {
     throw new Error("Unknown command. See --help.");
   }
   if (command === "interview" && (!stdin.isTTY || !stdout.isTTY)) throw new Error("interview requires an interactive terminal; use analyze/answer/review for scripting.");
@@ -120,7 +133,9 @@ async function main() {
       return job;
     };
     if (command === "new") {
-      print(store.create(required(values.name, "name"), required(values.idea, "idea"), selectModel()));
+      const created = store.create(required(values.name, "name"), required(values.idea, "idea"), selectModel());
+      print(created);
+      if (values.path) console.log(JSON.stringify(store.connectWorkspace(created.id, created.revision, resolve(values.path), values["create-directory"]), null, 2));
     } else if (command === "list") {
       console.log(JSON.stringify(store.list(), null, 2));
     } else if (command === "recover") {
@@ -128,6 +143,20 @@ async function main() {
     } else {
       const id = required(values.project, "project");
       if (command === "show") print(store.get(id, values.revision ? revision(values.revision) : undefined));
+      else if (command === "workspace") {
+        store.get(id);
+        const operation = required(values.operation, "operation");
+        if (operation === "connect") console.log(JSON.stringify(store.connectWorkspace(id, revision(values["expected-revision"]), resolve(required(values.path, "path")), values["create-directory"]), null, 2));
+        else if (operation === "disconnect") { store.disconnectWorkspace(id, revision(values["expected-revision"])); console.log("Workspace disconnected; files retained."); }
+        else if (operation === "sync" || operation === "status") {
+          const workspace = store.syncWorkspace(id);
+          console.log(JSON.stringify(workspace, null, 2));
+          if (workspace && ["conflict", "unavailable"].includes(workspace.status)) process.exitCode = 1;
+        } else throw new Error("operation must be connect, status, sync, or disconnect.");
+      }
+      else if (command === "implementation") print(store.setImplementation(id, revision(values["expected-revision"]), required(values.requirement, "requirement"), {
+        status: required(values.status, "status"), notes: values.text ?? "", evidence: values.evidence ?? "",
+      }));
       else if (command === "jobs") console.log(JSON.stringify(store.jobs(id), null, 2));
       else if (command === "model") print(store.setModel(id, revision(values["expected-revision"]), selectModel(store.get(id).model)));
       else if (command === "answer") {

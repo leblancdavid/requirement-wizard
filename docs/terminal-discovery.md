@@ -7,7 +7,7 @@ workflow and an authenticated local API. See [browser-workspace.md](browser-work
 
 ## Start a project
 
-Requires Node.js 20.11+ and npm. Legacy selections require OpenCode for model calls;
+Development now requires Node.js 22.12+ and npm for the Electron toolchain. Legacy selections require OpenCode for model calls;
 projects switched to a direct connection in browser Settings use that same protected
 account from the terminal, without launching OpenCode. Custom data directories use
 their own `providers` subdirectory. Direct research is currently unsupported, and
@@ -15,8 +15,8 @@ direct live access remains unqualified; see [direct-providers.md](direct-provide
 The `new` and `model` commands accept `--connection <account-id|opencode>`.
 Model changes retain the project's existing connection unless explicitly changed.
 `better-sqlite3` 11.10.0
-is pinned for this Node baseline; its Windows native module installed successfully
-on the development machine. Provider connection instructions are in
+remains pinned for browser/terminal storage; its Windows native module was originally
+verified on Node 20.11. Provider connection instructions are in
 [runtime-spike.md](runtime-spike.md).
 
 ```powershell
@@ -50,6 +50,12 @@ become accepted requirements. The screen marks an interpretation as needing
 re-analysis after a project mutation.
 
 ## Command-driven use
+
+The CLI also connects local workspace folders and records manual implementation
+progress using the `workspace` and `implementation` commands. `new` accepts `--path`
+and `--create-directory`. Files update through the shared store for browser and
+terminal changes. See [local project workspaces](project-workspaces.md#terminal) for
+commands, generated artifacts, conflict handling, and verification evidence.
 
 All noninteractive mutations require the revision you inspected. A stale revision
 fails instead of overwriting another process's work.
@@ -148,7 +154,8 @@ environment; live verification used the same application's scriptable commands.
 - Dedicated decision records and richer workflow modeling as the engine expands.
 
 Browser API lifecycle is implemented; automatic CLI attachment remains future work.
-Scenario review, release readiness, exports, and the desktop client remain later work.
+Scenario review, release readiness, and portable build-package exports remain later
+work. The [Electron desktop client](desktop.md) now shares the same project store.
 The CLI now supports `analyze --research` for opt-in source-backed retrieval and
 `--focus-epic <id>` for a bounded working set. Ordinary CLI analysis keeps tools disabled.
 Adversarial enforcement/inherited-instruction verification remains an outstanding M1 check.

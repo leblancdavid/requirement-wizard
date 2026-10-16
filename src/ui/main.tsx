@@ -8,8 +8,10 @@ import "./details.css";
 import "./workspace.css";
 import { AnnotatedText, QuestionHelp, wordHelpContext, type HelpControls } from "./question-help.js";
 import { AIConnections } from "./connections.js";
+import { WorkspacePicker, WorkspaceConnection, ImplementationProgress } from "./workspace-files.js";
+import type { Workspace } from "../storage/workspace.js";
 
-type Snapshot = { project: Project; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; submissions: Submission[]; queuePaused: boolean };
+type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; submissions: Submission[]; queuePaused: boolean };
 type Item = { id: string; name: string; revision: number };
 type Draft = { kind: "answer" | "delegation" | "deferral"; text: string };
 // Carry pre-rename browser preferences forward once, without replacing newer values.
@@ -49,6 +51,7 @@ function App() {
   const [auto, setAuto] = useState(localStorage.getItem("reqwizit-auto") !== "false");
   const [research, setResearch] = useState(localStorage.getItem("reqwizit-research") !== "false");
   const [name, setName] = useState(""); const [idea, setIdea] = useState("");
+  const [workspacePath, setWorkspacePath] = useState(""); const [createDirectory, setCreateDirectory] = useState(false);
   const [model, setModel] = useState("gpt-6.1-sol");
   const [connectionID, setConnectionID] = useState("");
   const [note, setNote] = useState("");
@@ -160,9 +163,11 @@ function App() {
   async function create(event: FormEvent) {
     event.preventDefault();
     await act(async () => {
-      const created = await api<Project>("projects", { name, idea, model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } });
+      const created = await api<Project & { workspaceError?: string }>("projects", { name, idea, model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) }, ...(workspacePath.trim() ? { workspace: { path: workspacePath, create: createDirectory } } : {}) });
       setID(created.id); selected.current = created.id; setCreating(false); setName(""); setIdea("");
+      setWorkspacePath(""); setCreateDirectory(false);
       await list(); await api(`projects/${created.id}/analyze`, { revision: created.revision, research: connectionID ? false : research });
+      if (created.workspaceError) setError(`Project created, but workspace connection failed: ${created.workspaceError}. Connect it in Settings.`);
     });
   }
   const epics = project?.epics.filter((item) => !item.archived) ?? [];
@@ -211,6 +216,7 @@ function App() {
         </AIConnections>
         {project && !creating ? <><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p></> : <p>Your selected connection and model will be used when you create a project.</p>}
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
+        {project && !creating && <WorkspaceConnection project={project} workspace={data?.workspace ?? null} request={api} disabled={pending} run={act} />}
       </section>}
       <div hidden={showSettings}>
       {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => navigate("settings")}>Review connection settings</button></div>}
@@ -219,11 +225,13 @@ function App() {
         <form onSubmit={(event) => void create(event)}>
           <label>Project name<input required maxLength={150} value={name} onChange={(event) => setName(event.target.value)} placeholder="Something worth building" /></label>
           <label>Your idea<textarea required maxLength={12000} value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="I want to build an app that…" rows={5} /></label>
+          <WorkspacePicker path={workspacePath} create={createDirectory} onChange={(path, make) => { setWorkspacePath(path); setCreateDirectory(make); }} request={api} disabled={pending} />
           <div className="connection-summary">{connectionID ? "Direct ChatGPT plan" : "OpenCode connection"} · {model || "Choose a model in Settings"} <button type="button" className="quiet" onClick={() => navigate("settings")}>Choose AI connection</button></div>
           <label className="research-toggle"><input type="checkbox" checked={!connectionID && research} disabled={!!connectionID} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted web research</label>
           <button className="primary" disabled={pending || !model}>{pending ? "Creating…" : "Create & explore →"}</button>
         </form>
       </section> : !project || !summary ? <div className="empty">Loading your workspace…</div> : <>
+        <div className="workspace-status" role="status"><span>{data.workspace ? `${data.workspace.status === "saved" ? "Saved" : data.workspace.status === "pending" ? "Saving" : data.workspace.status === "conflict" ? "Conflict" : "Unavailable"} · ${data.workspace.path}${data.workspace.savedRevision ? ` · r${data.workspace.savedRevision}` : ""}` : "No local folder connected"}</span><button className="quiet" onClick={() => navigate("settings")}>{data.workspace ? "Workspace settings" : "Connect workspace"}</button>{data.workspace?.diagnostic && <span>{data.workspace.diagnostic}</span>}</div>
         <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Questions"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}</button>)}</div>
         <section className="workspace">
           <div className="discovery-column">
@@ -265,6 +273,7 @@ function App() {
             </>}
             {tab === "requirements" && <>
               <p className="view-intro">Features group related requirements and decisions. Open a feature to explore it; suggestions stay proposed until you confirm them.</p>
+              <ImplementationProgress project={project} requirements={requirements} disabled={pending} save={(requirementID, value) => act(() => mutate("implementation", { requirementID, ...value }))} />
               <details className="project-overview"><summary>Project overview</summary><p>{project.summary || "Your answers will help clarify the project scope."}</p>{project.analysisRevision !== project.revision && <small>New information has been saved since this overview was generated.</small>}</details>
               <button className="secondary" onClick={() => setNewEpic(!newEpic)}>{newEpic ? "Cancel" : "+ Add feature"}</button>
               {newEpic && <EpicForm disabled={busy} onSave={(title, purpose) => act(async () => { await mutate("epic", { title, purpose }); setNewEpic(false); })} />}

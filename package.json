@@ -4,16 +4,20 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20.11"
+    "node": ">=22.12"
   },
   "scripts": {
+    "desktop": "npm run build:desktop && electron dist/desktop-app",
+    "build:desktop": "npm run build:ui && tsc -p tsconfig.desktop.json && node scripts/build-desktop.mjs",
+    "package:desktop": "npm run build:desktop && electron-builder --config electron-builder.yml --win --x64",
+    "test:desktop": "npm run build:desktop && tsx src/desktop/desktop-check.ts",
     "app": "npm run build:ui && tsx src/web/server.ts",
     "build:ui": "vite build",
     "reqwizit": "tsx src/terminal/cli.ts",
     "spike": "tsx src/spike/cli.ts",
     "provider": "tsx src/providers/cli.ts",
     "check": "tsc --noEmit",
-    "test": "tsx --test src/spike/contract.test.ts src/storage/store.test.ts src/storage/paths.test.ts src/service/discovery.test.ts src/service/question-help.test.ts src/core/epics.test.ts src/core/working-set.test.ts src/runtime/http.test.ts src/runtime/research.test.ts src/web/server.test.ts src/providers/chatgpt.test.ts src/providers/credentials.test.ts src/providers/connections.test.ts",
+    "test": "tsx --test src/spike/contract.test.ts src/storage/store.test.ts src/storage/workspace.test.ts src/storage/paths.test.ts src/service/discovery.test.ts src/service/question-help.test.ts src/core/epics.test.ts src/core/working-set.test.ts src/runtime/http.test.ts src/runtime/research.test.ts src/web/server.test.ts src/providers/chatgpt.test.ts src/providers/credentials.test.ts src/providers/connections.test.ts",
     "test:browser": "npm run build:ui && tsx src/web/browser-check.ts"
   },
   "dependencies": {
@@ -30,6 +34,8 @@
     "@types/node": "20.17.30",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "electron": "44.8.0",
+    "electron-builder": "26.15.3",
     "tsx": "4.23.15",
     "typescript": "5.8.3",
     "vite": "6.4.4"

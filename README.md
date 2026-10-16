@@ -15,6 +15,10 @@ A playable browser workspace is available. AI organizes your idea into epics, as
 clickable questions, researches relevant uncertainties, and estimates how well each
 area is defined. Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
+Connect a local folder for each project to automatically save versionable requirements
+and progress files. Choose it during creation or use **Settings → Project workspace**.
+Track manual implementation status and verification evidence under **Project map →
+Implementation progress**. See [local project workspaces](docs/project-workspaces.md).
 Keep answering while discovery works: responses are durably queued and waiting
 answers are batched into the next round. Oversized batches are automatically divided
 into smaller revision-linked working groups, with exact human evidence retained and
@@ -31,8 +35,25 @@ Underlined concepts in newly generated questions explain meaning and impact on
 hover, keyboard focus, or tap.
 
 ChatGPT discovery has been exercised through `gpt-6.1-sol`. Copilot is outside the
-current release scope. The local browser API is implemented; a desktop wrapper and
-automatic background-service discovery remain later work.
+current release scope. The local browser API and Electron desktop wrapper are
+implemented; automatic background-service discovery remains later work.
+
+### Desktop app
+
+Use **Node.js 22.12+** for development. Launch the Electron workspace with:
+
+```powershell
+npm ci
+npm run desktop
+```
+
+The app opens its own window, uses native folder selection, and shares existing
+projects with the browser/terminal. Closing the window cancels active work and quits.
+Build a Windows installer with `npm run package:desktop`; output is under
+`dist/installers`. See [desktop setup and packaging](docs/desktop.md) for isolated
+data directories, runtime requirements, verification, and release limitations.
+
+### Browser app
 
 ```powershell
 npm ci
@@ -94,6 +115,8 @@ access is not yet verified; direct research remains follow-on work.
 - [Runtime spike](docs/runtime-spike.md): executable compatibility checks and live results.
 - [Terminal discovery](docs/terminal-discovery.md): persistent interview prototype and commands.
 - [Browser workspace](docs/browser-workspace.md): interactive epic map, research, coverage, and context.
+- [Local project workspaces](docs/project-workspaces.md): connected folders, automatic repo files, and implementation tracking.
+- [Desktop application](docs/desktop.md): Electron startup, close/cancel behavior, Windows installer, and verification.
 
 ## Planned experience
 
@@ -107,7 +130,7 @@ Idea → Adaptive interview ↔ Research
        Phased OpenCode handoff
 ```
 
-Browser and terminal clients share project state; a desktop wrapper is planned. Requirements retain their
+Desktop, browser, and terminal clients share project state. Requirements retain their
 sources, decisions retain their rationale, and build packages reference the exact
 specification revision used to generate them.
 

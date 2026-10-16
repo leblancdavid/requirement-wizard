@@ -39,6 +39,7 @@ Executable application code now includes:
 - `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts` — organization operations,
   material review, deterministic completeness estimates, and bounded context.
 - `src/storage/store.ts` — SQLite revisions, expected-revision writes, and durable jobs.
+- `src/storage/workspace.ts` — local folder bindings/artifacts, conflict checking, and revision-linked progress files; see `docs/project-workspaces.md`.
 - `src/service/discovery.ts` — in-process orchestration and adapter contract.
 - `src/runtime/` — owned OpenCode server, provider validation, and JSON-text discovery.
 - `src/providers/` — app-owned ChatGPT OAuth/credentials, browser connection management,
@@ -54,8 +55,8 @@ The compatibility spike remains under `src/spike/`:
 - `contract.ts` — spike output schema and re-exports of shared runtime validation.
 - `contract.test.ts` — deterministic contract checks.
 
-SQLite, terminal commands, the browser workspace/API, and epic/coverage/context
-loops are implemented. Desktop, richer Ink UI, daemon discovery/CLI attachment,
+SQLite, terminal commands, the browser workspace/API, Electron desktop shell, and epic/coverage/context
+loops are implemented. See `docs/desktop.md` for packaging. Richer Ink UI, daemon discovery/CLI attachment,
 readiness baselines, and handoffs remain future work. Milestones remain partially
 complete where their exit criteria are unverified. The repository is not a monorepo.
 
@@ -68,7 +69,8 @@ dependency on its compiler or experimental runtime.
 - Use strict TypeScript, ESM, and the existing NodeNext configuration. Relative
   TypeScript imports use `.js` extensions.
 - Use npm and keep `package-lock.json` consistent with dependency changes.
-- Node.js 20.11+ is the current baseline; verify before depending on newer Node APIs.
+- Node.js 22.12+ is the development baseline (current Electron tooling requires it).
+  The shared engine was previously verified on Node 20.11; the desktop bundles Node.
 - Windows is the first verified platform. Keep commands and process handling
   compatible with Windows and preserve portability where practical.
 - Keep requirements logic, storage, and runtime integration outside UI components.

@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ProjectStore } from "../storage/store.js";
+import { browseDirectories } from "../storage/workspace.js";
 import { DiscoveryService, type DiscoveryAdapter } from "../service/discovery.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
@@ -37,6 +38,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
     } catch (error) { throw new ProviderError(connectionError(error)); }
   };
   let origin = "";
+  let closing = false;
+  let closePromise: Promise<void> | undefined;
   const json = (res: ServerResponse, status: number, data: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
     res.end(JSON.stringify(data));
@@ -52,6 +55,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Referrer-Policy", "no-referrer");
       res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'");
+      if (closing) { json(res, 503, { error: "Reqwizit is shutting down." }); return; }
       if (req.headers.host !== new URL(origin).host) { json(res, 403, { error: "Invalid local host." }); return; }
       const url = new URL(req.url ?? "/", origin);
       if (!url.pathname.startsWith("/api/")) {
@@ -112,12 +116,21 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
           json(res, 400, { error: error instanceof z.ZodError ? "Invalid connection request fields." : connectionError(error) }); return;
         }
       }
+      if (url.pathname === "/api/directories" && req.method === "POST") {
+        const input = z.object({ path: z.string().min(1).max(4096).optional() }).strict().parse(await body(req));
+        json(res, 200, browseDirectories(input.path)); return;
+      }
       if (url.pathname === "/api/projects") {
         if (req.method === "GET") { json(res, 200, options.store.list()); return; }
         if (req.method === "POST") {
-          const input = z.object({ name: text, idea: text, model: modelSelection }).strict().parse(await body(req));
+          const input = z.object({ name: text, idea: text, model: modelSelection, workspace: z.object({ path: z.string().min(1).max(4096), create: z.boolean().optional() }).strict().optional() }).strict().parse(await body(req));
           await validateConnection(input.model);
-          json(res, 201, options.store.create(input.name, input.idea, input.model)); return;
+          const created = options.store.create(input.name, input.idea, input.model);
+          // Project creation is retained even when a folder cannot be connected.
+          let workspaceError: string | undefined;
+          if (input.workspace) try { options.store.connectWorkspace(created.id, created.revision, input.workspace.path, input.workspace.create); }
+          catch (error) { workspaceError = error instanceof Error ? error.message : "Workspace connection failed."; }
+          json(res, 201, { ...created, ...(workspaceError ? { workspaceError } : {}) }); return;
         }
       }
       const route = /^\/api\/projects\/([^/]+)(?:\/([a-z-]+))?$/.exec(url.pathname);
@@ -130,11 +143,26 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? coverage(options.store.get(id, lastRound.expectedRevision)).percent : null;
         const helpJobs = options.store.jobs(id).filter((j) => j.helpRequest).map(({ result: _, researchEvidence: __, ...job }) => job);
-        json(res, 200, { project, coverage: coverage(project), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id) }); return;
+        json(res, 200, { project, workspace: options.store.syncWorkspace(id), coverage: coverage(project), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id) }); return;
       }
       if (req.method === "GET" && action === "history") { json(res, 200, options.store.history(id)); return; }
       if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
       const raw = await body(req);
+      if (action === "workspace") {
+        const input = z.discriminatedUnion("operation", [
+          z.object({ operation: z.literal("connect"), revision, path: z.string().min(1).max(4096), create: z.boolean().optional() }).strict(),
+          z.object({ operation: z.literal("disconnect"), revision }).strict(),
+          z.object({ operation: z.literal("sync") }).strict(),
+        ]).parse(raw);
+        if (input.operation === "connect") json(res, 200, options.store.connectWorkspace(id, input.revision, input.path, input.create));
+        else if (input.operation === "disconnect") { options.store.disconnectWorkspace(id, input.revision); json(res, 200, null); }
+        else json(res, 200, options.store.syncWorkspace(id));
+        return;
+      }
+      if (action === "implementation") {
+        const input = z.object({ revision, requirementID: z.string().min(1), status: z.enum(["not-started", "in-progress", "blocked", "implemented", "verified"]), notes: z.string().max(12000), evidence: z.string().max(12000) }).strict().parse(raw);
+        json(res, 200, options.store.setImplementation(id, input.revision, input.requirementID, { status: input.status, notes: input.notes, evidence: input.evidence })); return;
+      }
       if (action === "question-help") {
         const input = z.object({ revision, request: questionHelpRequestSchema }).strict().parse(raw);
         const controller = new AbortController();
@@ -212,13 +240,21 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Local app did not bind a TCP port.");
   origin = `http://127.0.0.1:${address.port}`;
-  return { origin, token, close: async () => {
+  return { origin, token, close: () => {
+    if (closePromise) return closePromise;
+    closing = true;
     for (const work of helpWork.values()) work.controller.abort();
-    await Promise.allSettled([...helpWork.values()].map((work) => work.promise));
-    await queue.close();
-    await options.connections?.close();
-    server.closeAllConnections();
-    await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
+    closePromise = (async () => {
+      const cleanup = await Promise.allSettled([
+        ...[...helpWork.values()].map((work) => work.promise),
+        queue.close(), options.connections?.close(),
+      ]);
+      server.closeAllConnections();
+      await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
+      // Help failures are already persisted by the service; teardown failures are actionable.
+      for (const result of cleanup.slice(-2)) if (result.status === "rejected") throw result.reason;
+    })();
+    return closePromise;
   } };
 }
 

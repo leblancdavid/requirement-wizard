@@ -22,13 +22,15 @@ every technical detail proposed in the planning documents.
 | DEC-013 | Make the browser question-first with a compact expandable list, visible answer revision, feature/category context, a grouped feature map, and on-demand progress/details. | User selected the compact question list, requested broader map/health/header cleanup, and approved implementation |
 | DEC-014 | Add existing-project discovery as a follow-on after core review and portable handoffs: reconstruct evidence-backed requirements from a local source folder, review them with the user, and use them as the starting point for feature work. | User proposed importing existing projects and approved the recommended follow-on scope |
 | DEC-015 | Move toward app-owned AI connections, authentication, and model selection without requiring OpenCode for discovery; start with a direct ChatGPT-plan compatibility spike. | User requested independence and approved the staged recommendation; distribution/license and live direct access remain unresolved |
+| DEC-016 | Give each project a persistent local workspace connection with automatically generated requirements/progress files. Start with app-generated outputs and track both discovery and manual implementation progress, retaining external-edit conflicts for review. | User requested per-project local repos/workspaces, chose app-generated files and discovery plus implementation tracking, then approved implementation |
+| DEC-017 | Build the desktop application with Electron. Closing the window quits and cancels active work, without tray/background mode or confirmation; retained work requires explicit resume. | User approved Electron implementation and specified quitting active work on close |
 
 ## Proposed implementation defaults
 
 | ID | Proposal | Rationale / validation |
 | --- | --- | --- |
 | TECH-001 | Local-first TypeScript service with SQLite. | SQLite/in-process service and authenticated loopback browser API implemented. CLI still attaches to storage in process; daemon discovery remains planned. |
-| TECH-002 | React browser first; Electron wrapper and Ink terminal remain later options. | Browser delivery follows DEC-008; retain shared engine boundaries. |
+| TECH-002 | React browser first; add an Electron shell using the same service and UI. Ink remains a later option. | Browser delivery follows DEC-008; Electron implemented under DEC-017. See desktop.md for packaging and verified checks. |
 | TECH-003 | Use OpenCode as the initial model/tool runtime, migrating toward direct providers under DEC-015. | Legacy selections retain OpenCode with partial live verification on 1.18.32. App-owned ChatGPT auth/catalog Settings UI and direct discovery/help dispatch are implemented and fixture-verified, but not live-qualified. Direct research is unsupported. See runtime-spike.md and direct-providers.md. |
 | TECH-004 | Use ChatGPT subscription sign-in for the initial release. | Current provider scope follows DEC-007; verify actual account/model availability. |
 | TECH-005 | Export build packages before embedding build execution. | Test specification quality with a fresh coding session before adding orchestration. |
