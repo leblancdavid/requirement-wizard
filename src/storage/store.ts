@@ -8,7 +8,7 @@ import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
-import { answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
+import { reviewFingerprint, answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
   submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type ScanWork, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
 
 /** Also used on a disposable project copy before accepting a batch checkpoint. */
@@ -215,6 +215,11 @@ export class ProjectStore {
         const response = input.input;
         const current = project.questions.find((q) => q.id === response.questionID);
         if (!current || current.status === "retired" || current.text !== response.questionText || (current.sourceID ?? null) !== response.sourceID) throw new StaleRevisionError();
+      } else if (input.input.type === "review") {
+        const response = input.input;
+        const current = project.requirements.find((r) => r.id === response.requirementID);
+        if (!current || reviewFingerprint(current) !== response.fingerprint || current.statement !== response.requirementText) throw new StaleRevisionError();
+        if (this.submissions(id).some((s) => s.input.type === "review" && s.input.requirementID === current.id && ["queued", "saved", "processing"].includes(s.status))) throw new Error("This requirement already has a pending review.");
       } else {
         const note = input.input;
         if (!project.epics.some((e) => e.id === note.epicID && !e.archived)) throw new Error("Note epic does not exist.");
@@ -249,6 +254,14 @@ export class ProjectStore {
           }
           const updated = this.answer(id, project.revision, input.questionID, input.answer);
           item.appliedSourceID = updated.questions.find((q) => q.id === input.questionID)!.sourceID!;
+        } else if (input.type === "review") {
+          const current = project.requirements.find((r) => r.id === input.requirementID);
+          if (!current || reviewFingerprint(current) !== input.fingerprint) {
+            item.status = "needs-attention"; item.conflict = true; item.diagnostic = "Requirement changed. Review the current wording and resubmit; your original decision and note are retained.";
+            this.saveSubmission(item); continue;
+          }
+          const updated = this.review(id, project.revision, input.requirementID, input.action, input.note);
+          item.appliedSourceID = updated.sources.at(-1)!.id;
         } else {
           if (!project.epics.some((e) => e.id === input.epicID && !e.archived)) {
             item.status = "needs-attention"; item.diagnostic = "The note's project area changed. Review and resubmit the note.";
@@ -397,16 +410,16 @@ export class ProjectStore {
   }
 
   review(id: string, revision: number, requirementID: string, action: "accepted" | "rejected", note: string) {
-    if (!note.trim() || note.length > 12000) throw new Error("Review needs a rationale of 1–12000 characters.");
+    if (note.length > 12000) throw new Error("Review note must be at most 12000 characters.");
     if (action !== "accepted" && action !== "rejected") throw new Error("Choose accepted or rejected.");
     return this.mutate(id, revision, "Human requirement review", (project) => {
       const requirement = project.requirements.find((item) => item.id === requirementID);
       if (!requirement) throw new Error("Requirement not found.");
       const previous = project.sources.filter((source) => source.requirementID === requirementID ||
-        (source.kind === "confirmation" && requirement.sourceIDs.includes(source.id))).at(-1);
+        (!source.requirementID && source.kind === "confirmation" && requirement.sourceIDs.includes(source.id))).at(-1);
       const sourceID = randomUUID();
       project.sources.push({ id: sourceID, kind: action === "accepted" ? "confirmation" : "rejection", requirementID, epicID: requirement.epicID,
-        text: `Requirement ${requirementID}: ${requirement.statement}\nHuman ${action} rationale: ${note}`,
+        text: `Requirement ${requirementID}: ${requirement.statement}\nAcceptance scenarios: ${JSON.stringify(requirement.acceptance)}\nHuman decision: ${action}\nAddendum: ${note}`,
         ...(previous ? { supersedes: previous.id } : {}) });
       if (action === "accepted") {
         // Reconfirmation is new human evidence, not revival of a superseded answer.
@@ -594,6 +607,21 @@ export class ProjectStore {
         job.diagnostic = "Project changed while analysis was running; result was not applied.";
       } else {
         this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
+          const reviews = this.submissions(project.id).filter((s) => s.applied && s.input.type === "review" && job.context?.submissionIDs?.includes(s.id));
+          const authorized = (sourceID: string, changes = false) => reviews.some((s) => s.appliedSourceID === sourceID && s.input.type === "review" && (!changes || !!s.input.note.trim()) &&
+            !project.sources.some((source) => source.supersedes === sourceID));
+          for (const response of result.reviewResponses ?? []) if (!authorized(response.sourceID)) throw new Error("Review response must reference a current review in this batch.");
+          for (const review of reviews.filter((s) => authorized(s.appliedSourceID!))) {
+            if (result.reviewResponses?.filter((r) => r.sourceID === review.appliedSourceID).length !== 1) throw new Error("Each review needs one AI response describing its follow-up.");
+          }
+          for (const change of result.reviewChanges ?? []) {
+            if (!authorized(change.sourceID, true)) throw new Error("Wider changes need a current review addendum in this batch.");
+            if (change.type === "archive-feature") {
+              if (this.submissions(project.id).some((s) => !s.applied && s.status === "queued" && s.input.type === "answer" && project.questions.some((q) => q.id === (s.input.type === "answer" ? s.input.questionID : "") && q.epicID === change.epicID))) throw new Error("Feature has waiting human answers. Process those responses before retiring it.");
+              if (job.context?.partial || !job.context?.epicIDs?.includes(change.epicID) ||
+                [...project.requirements, ...project.questions.filter((q) => q.status !== "retired")].some((r) => r.epicID === change.epicID && !job.context!.includedIDs.includes(r.id))) throw new Error("Feature retirement needs its full detailed context.");
+            } else if (!job.context?.includedIDs.includes(change.requirementID)) throw new Error("Cannot change a requirement outside detailed context.");
+          }
           if (project.scans.length && result.questions.some((q) => !q.evidenceIDs?.length || q.evidenceIDs.some((evidenceID) => !job.context?.includedIDs.includes(evidenceID)))) throw new Error("Existing-project questions must cite evidence in the current detailed working context. No proposals applied.");
           if (job.context && result.requirements.some((item) => item.sourceIDs.some((id) => !job.context!.includedIDs.includes(id)))) throw new Error("Requirement cites evidence outside this round's context.");
           if (job.context && result.assessments?.some((item) =>

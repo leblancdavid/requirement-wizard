@@ -122,7 +122,10 @@ Exit checks:
 
 ## M4 — Research, scenario review, and readiness
 
-Progress: opt-in source-backed webfetch was verified live; nine-area epic assessments,
+Progress: the dedicated requirement Review queue, optional addenda, durable AI responses,
+stable-ID revisions and source-linked explicit scope removal are implemented (DEC-020).
+Deterministic/browser checks pass; live review-note interpretation remains unqualified.
+Opt-in source-backed webfetch was verified live; nine-area epic assessments,
 deterministic coverage scoring, split/merge/move operations, confirmed-organization
 review, map undo, bounded revision-aware task context, and automatic saved-response
 grouping on overflow are implemented. Partial passes preserve global interpretation

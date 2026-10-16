@@ -8,6 +8,7 @@ type Work = { controller: AbortController; promise: Promise<void> };
 
 function submissionEpic(project: Project, item: Submission) {
   const input = item.input;
+  if (input.type === "review") return project.requirements.find((r) => r.id === input.requirementID)?.epicID;
   return input.type === "note"
     ? project.sources.find((s) => s.id === item.appliedSourceID)?.epicID ?? input.epicID
     : project.questions.find((q) => q.id === input.questionID)?.epicID;
@@ -34,6 +35,7 @@ export class DiscoveryQueue {
       const job = item.jobID ? this.service.store.getJob(item.jobID) : undefined;
       if (job?.status === "running" && (job.leaseUntil ?? 0) > Date.now()) continue;
       item.status = job?.status === "completed" ? "completed" : "needs-attention";
+      if (job?.status === "completed") item.response = job.result?.reviewResponses?.find((r) => r.sourceID === item.appliedSourceID)?.text;
       if (item.status === "needs-attention") {
         item.diagnostic = job?.diagnostic ?? "Processing was interrupted. Resume explicitly to retry discovery.";
         this.service.store.pauseQueue(id, true);
@@ -98,6 +100,10 @@ export class DiscoveryQueue {
         const current = this.service.store.get(id);
         const saved = applied.filter((item) => {
           const input = item.input;
+          if (input.type === "review" && current.sources.some((s) => s.supersedes === item.appliedSourceID)) {
+            item.status = "needs-attention"; item.conflict = true; item.diagnostic = "A newer review superseded this decision. Its original input is retained; submit against the current requirement.";
+            this.service.store.saveSubmission(item); return false;
+          }
           if (input.type !== "answer" || current.questions.some((q) => q.id === input.questionID && q.sourceID === item.appliedSourceID && q.status !== "retired")) return true;
           item.status = "needs-attention"; item.conflict = true;
           item.diagnostic = "This saved response was superseded by a newer answer. The newer answer is authoritative; this submission is retained for reference.";
@@ -114,7 +120,7 @@ export class DiscoveryQueue {
             if (!epicID) throw new Error("A submitted question is no longer available. Review the retained response.");
             return epicID;
           }))],
-          recordIDs: items.flatMap((s) => [s.appliedSourceID!, ...(s.input.type === "answer" ? [s.input.questionID] : [])]),
+          recordIDs: items.flatMap((s) => [s.appliedSourceID!, ...(s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : [])]),
         });
         // Greedy deterministic grouping, with no model call during planning.
         // An indivisible first task still goes through the service so its failed
@@ -140,6 +146,7 @@ export class DiscoveryQueue {
         });
         for (const item of batch) {
           item.status = job.status === "completed" ? "completed" : "needs-attention";
+          if (job.status === "completed") item.response = job.result?.reviewResponses?.find((r) => r.sourceID === item.appliedSourceID)?.text;
           if (job.status !== "completed") item.diagnostic = job.diagnostic ?? `Discovery ${job.status}.`;
           this.service.store.saveSubmission(item);
         }

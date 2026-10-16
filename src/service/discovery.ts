@@ -185,9 +185,10 @@ export class DiscoveryService {
       const question = options.helpRequest ? project.questions.find((q) => q.id === options.helpRequest!.questionID)! : undefined;
       const context = planContext(project, { focusEpicID: question?.epicID ?? options.focusEpicID,
         requiredEpicIDs: options.requiredEpicIDs, recordIDs: question ? [question.id] : options.recordIDs,
-        budget: options.helpRequest ? 36000 : 48000, advisory: !!options.helpRequest });
+        budget: options.helpRequest ? 36000 : 48000, advisory: !!options.helpRequest, expandMandatory: !options.helpRequest });
       context.manifest.submissionIDs = options.submissionIDs;
       if (context.manifest.partial) options.onProgress?.(`Using a smaller task working set (${context.manifest.characters.toLocaleString("en-US")} characters); exact human guardrails retained. Whole-area assessments are deferred.`);
+      if (context.manifest.budget > 48000) options.onProgress?.(`Mandatory evidence requires ${context.manifest.characters.toLocaleString("en-US")} characters; using the bounded 96,000-character fallback after task planning. Exact human evidence is retained; no optional detail was added.`);
       if (context.manifest.compaction) options.onProgress?.(`Context overhead reduced from ${context.manifest.compaction.originalCharacters.toLocaleString("en-US")} to ${context.manifest.characters.toLocaleString("en-US")} characters; exact decisions and evidence retained.`);
       if (options.helpRequest) {
         // Full exchanges are retained; a bounded recent window is explicitly labelled.

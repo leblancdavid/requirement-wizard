@@ -120,8 +120,11 @@ to fit is explicitly counted as omitted). The base package is bounded to 36,000
 characters, reserving room for the request/history within 48,000 characters. User
 help messages and model explanations remain advisory, outside normative evidence.
 The original question/options are not replaced. Concept annotations reference exact,
-unique phrases in specified question/option fields; missing, ambiguous, overlapping,
-or invalid option references reject the discovery round atomically.
+unique phrases in specified question/option fields. Round application omits annotations
+with missing, ambiguous, overlapping, or invalid option references, retaining valid
+annotations in response order and recording the omission count in round changes.
+Question wording is preserved; substantive reference validation still rejects invalid
+discovery proposals atomically.
 
 Question selection combines applicable coverage templates, model gap analysis, and
 research findings. Start with a simple impact/uncertainty/dependency rubric. Store
@@ -184,6 +187,16 @@ validates temporary model aliases, IDs, dependencies, splits/merges, and assessm
 evidence before a transaction can commit. Confirmed material is protected by a queued
 organization review. Manual map restoration retains current source/decision records.
 
+Requirement reviews also travel through the durable submission queue. Exact snapshot
+fingerprints guard the reviewed requirement, while expected-revision publication guards
+AI follow-up. Optional `reviewResponses` are persisted with job results. Source-linked
+`reviewChanges` can revise requirements back to needs-review, reject related requirements,
+or archive explicitly removed features. Store validation requires a nonempty current
+review addendum from the job's own submission batch and detailed target records; feature
+retirement requires a complete area and preserves history. Scans cannot invoke these
+operations. This is an explicit-request path under DEC-020; ordinary confirmed-material
+organization changes still require their separate review.
+
 The model provides evidence-backed statuses, never an authoritative percentage.
 `coverage.ts` computes a fixed-nine-dimension weighted estimate, caps unresolved
 proposals, keeps unknowns in the denominator, and invalidates superseded evidence.
@@ -210,7 +223,11 @@ All rounds reject retirement/organization of unseen records and proposals target
 areas outside their working scope. Exact source records remain authoritative.
 Question help reserves room for its request/history and can fall back to question
 evidence plus project guardrails; omitted help exchanges are explicitly counted.
-Mandatory evidence that still exceeds the budget fails before inference; evidence
+Queue grouping retains the normal 48,000-character target. Discovery can expand a
+mandatory-only task package to a hard 96,000-character bound after compaction and
+grouping; it adds no optional detail and reports the expanded budget/selection reason
+in the manifest and progress. Advisory help and scan planning retain their own bounds.
+Mandatory evidence beyond the hard bound fails before inference; evidence
 outside the detailed working set cannot justify generated requirements/assessments.
 The character bound is not an exact tokenizer/model-window estimate. See the browser
 guide for the implemented rubric and limitations.

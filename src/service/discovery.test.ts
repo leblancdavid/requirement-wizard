@@ -4,6 +4,7 @@ import { DiscoveryService, type DiscoveryAdapter } from "./discovery.js";
 import { ProjectStore } from "../storage/store.js";
 import { analysisSchema, type Analysis, type Project } from "../core/model.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
+import { buildContext } from "../core/context.js";
 
 function result(project: Project): Analysis {
   return { summary: "A simple job tracker", goals: ["Track work"], actors: ["Owner"], assumptions: [], retireQuestions: [],
@@ -90,6 +91,34 @@ test("model prompt includes current records, provenance, and structured output i
     assert.ok(prompt.includes(project.sources[0]!.id));
     assert.ok(prompt.includes("Delegation is permission within a scope"));
     assert.ok(prompt.includes('"additionalProperties":false'));
+  } finally { store.close(); }
+});
+
+test("focused discovery budgets hidden pending questions and only detailed pending retirements", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = store.create("Jobs", "Track work", { providerID: "openai", modelID: "fixture" });
+    const question = result(project).questions[0]!;
+    project.questions = Array.from({ length: 5 }, (_, index) => ({ ...question,
+      id: `q${index}`, text: `Decision ${index}?`, epicID: "inbox", status: "pending" as const }));
+    project.questions.push({ ...question, id: "deferred", epicID: "project", status: "deferred" });
+    let prompt = discoveryPrompt(project, buildContext(project, "project"));
+    assert.match(prompt, /5 pending across the ENTIRE project, including 5 outside/);
+    assert.match(prompt, /0 slots available without retirements/);
+    assert.match(prompt, /Only these detailed pending IDs can free slots: \[\]/);
+    const schema = (text: string) => JSON.parse(text.split("Schema: ")[1]!.split("\nWorking context revision")[0]!) as { properties: { questions: { maxItems: number } } };
+    assert.equal(schema(prompt).properties.questions.maxItems, 0);
+
+    project.questions[0]!.epicID = "project";
+    prompt = discoveryPrompt(project, buildContext(project, "project"));
+    assert.match(prompt, /including 4 outside/);
+    assert.match(prompt, /Only these detailed pending IDs can free slots: \["q0"\]/);
+    assert.equal(schema(prompt).properties.questions.maxItems, 1);
+
+    project.questions[1]!.status = "answered";
+    prompt = discoveryPrompt(project, buildContext(project, "project"));
+    assert.match(prompt, /1 slots available without retirements/);
+    assert.equal(schema(prompt).properties.questions.maxItems, 2);
   } finally { store.close(); }
 });
 

@@ -1,7 +1,14 @@
 import { affectsConfirmed, organize, requireOrganizationRecord, type Organization } from "./epics.js";
-import { validateAnalysisReferences, type Project, type Analysis, type ResearchEvidence } from "./model.js";
+import { validConcepts, validateAnalysisReferences, type Project, type Analysis, type ResearchEvidence } from "./model.js";
 
 export function applyRound(project: Project, result: Analysis, newID: () => string, research: ResearchEvidence[] = []) {
+  let omittedConcepts = 0;
+  result = { ...result, questions: result.questions.map((question) => {
+    if (!question.concepts) return question;
+    const concepts = validConcepts(question);
+    omittedConcepts += question.concepts.length - concepts.length;
+    return { ...question, concepts };
+  }) };
   validateAnalysisReferences(project, result);
   // Validate model-facing IDs before replacing aliases with durable IDs, so
   // rejected references retain the names needed to diagnose the model output.
@@ -37,6 +44,7 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
   project.analysisRevision = project.revision + 1;
   project.goals = result.goals; project.actors = result.actors; project.assumptions = result.assumptions;
   project.roundChanges = [];
+  if (omittedConcepts) project.roundChanges.push(`Omitted ${omittedConcepts} invalid concept annotations; question wording was preserved.`);
   const newFindings = findings.map((finding) => {
     const evidence = research.find((item) => item.url === finding.url);
     if (!evidence) throw new Error("Research citation was not observed in retrieved tool evidence.");
@@ -81,6 +89,40 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
     if (ops.some((op) => op.type === "move")) project.roundChanges.push("Organized questions and requirements into epics.");
   }
   project.roundChanges.push(`Added ${questions.length} questions and ${requirements.length} requirement proposals.`);
+  const changed = new Set<string>();
+  for (const change of result.reviewChanges ?? []) {
+    const source = project.sources.find((s) => s.id === change.sourceID);
+    if (!source || !["confirmation", "rejection"].includes(source.kind) || !source.requirementID || project.sources.some((s) => s.supersedes === source.id)) throw new Error("Review changes require current human review evidence.");
+    const key = change.type === "archive-feature" ? change.epicID : change.requirementID;
+    if (changed.has(key)) throw new Error("Review changes repeat a target.");
+    changed.add(key);
+    if (change.type === "archive-feature") {
+      const epic = project.epics.find((e) => e.id === change.epicID && !e.archived);
+      if (!epic || ["project", "inbox"].includes(epic.id)) throw new Error("Cannot retire this feature.");
+      epic.archived = true;
+      for (const area of project.epics) area.dependencies = area.dependencies.filter((id) => id !== epic.id);
+      for (const requirement of project.requirements.filter((r) => r.epicID === epic.id)) {
+        requirement.status = "rejected"; requirement.reviewNote = change.reason;
+        if (!requirement.sourceIDs.includes(source.id)) requirement.sourceIDs.push(source.id);
+      }
+      for (const question of project.questions.filter((q) => q.epicID === epic.id && ["pending", "deferred", "delegated"].includes(q.status))) {
+        question.status = "retired"; question.retirementReason = change.reason;
+      }
+      project.assessments = project.assessments.filter((a) => a.epicID !== epic.id);
+      project.roundChanges.push(`Archived feature ${epic.title}: ${change.reason}`);
+    } else {
+      const requirement = project.requirements.find((r) => r.id === change.requirementID);
+      if (!requirement || !project.epics.some((e) => e.id === requirement.epicID && !e.archived)) throw new Error("Review change targets a missing or archived requirement.");
+      if (change.type === "revise") {
+        requirement.statement = change.statement; requirement.rationale = change.rationale; requirement.acceptance = change.acceptance;
+        requirement.status = "needs-review";
+      } else requirement.status = "rejected";
+      requirement.reviewNote = change.reason;
+      if (!requirement.sourceIDs.includes(source.id)) requirement.sourceIDs.push(source.id);
+      project.roundChanges.push(`${change.type === "revise" ? "Revised for review" : "Rejected"}: ${requirement.statement} — ${change.reason}`);
+    }
+  }
+  for (const response of result.reviewResponses ?? []) project.roundChanges.push(response.text);
   if (newFindings.length) project.roundChanges.push(`Saved ${newFindings.length} source-backed research findings.`);
   const evidence = new Set([...project.sources, ...project.questions, ...project.requirements, ...project.research].map((item) => item.id));
   const seen = new Set<string>();

@@ -20,6 +20,7 @@ await mkdir(resolve(scanDirectory, "docs"));
 await writeFile(resolve(scanDirectory, "docs/GAME_VISION.md"), "# Tracker vision\n\nAn existing Godot game with persistent job tracking.");
 const store = new ProjectStore(":memory:");
 const releases: Array<() => void> = [];
+const reviewReleases: Array<() => void> = [];
 let rounds = 0;
 let failNextScan = false;
 let releaseWordHelp: (() => void) | undefined;
@@ -36,6 +37,14 @@ const connections: Connections = {
   cancelTest() { cancelTest?.(); }, async disconnect() { connected = false; }, async close() { cancelTest?.(); },
 };
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(project, options) {
+  if (project.name === "Review workflow fixture") {
+    await new Promise<void>((accept) => { reviewReleases.push(accept); options.signal.addEventListener("abort", () => accept(), { once: true }); });
+    const sources = project.sources.filter((s) => options.context.manifest.taskRecordIDs?.includes(s.id) && ["confirmation", "rejection"].includes(s.kind));
+    const extra = sources.find((s) => s.text.includes("Also export jobs"));
+    return analysisSchema.parse({ summary: "Reviewed tracker", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [],
+      requirements: extra ? [{ statement: "Export jobs as CSV", rationale: "Requested in review", sourceIDs: [extra.id], acceptance: ["Jobs download as CSV"] }] : [],
+      reviewResponses: sources.map((s) => ({ sourceID: s.id, text: extra?.id === s.id ? "Approved persistence and proposed CSV export for review." : "Rejected the requirement; its history is retained." })) });
+  }
   if (options.scan) {
     if (failNextScan) { failNextScan = false; throw new Error("Fixture initialization interrupted before completion"); }
     const data = options.context.data as { capturedFiles: { id: string }[] };
@@ -50,7 +59,7 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
   options.onProgress("Organizing sample project");
   if (rounds++ > 0) {
     await new Promise<void>((accept) => { releases.push(accept); options.signal.addEventListener("abort", () => accept(), { once: true }); });
-    return analysisSchema.parse({ summary: "Updated job tracker", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
+     return analysisSchema.parse({ summary: "Updated job tracker", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [], reviewResponses: project.sources.filter((s) => options.context.manifest.taskRecordIDs?.includes(s.id) && ["confirmation", "rejection"].includes(s.kind)).map((s) => ({ sourceID: s.id, text: "Review recorded; related definition gaps remain open." })) });
   }
   return analysisSchema.parse({ summary: "A small, owner-operated job tracking application.", goals: ["Keep work organized"], actors: ["Owner"], assumptions: ["No customer portal in the first release"], retireQuestions: [],
     organization: [{ type: "upsert", epicID: "new:jobs", title: "Job tracking", purpose: "Create and manage contractor jobs.", dependencies: [] }],
@@ -454,7 +463,7 @@ try {
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
   await page.locator(".queue-panel > summary").click();
-  await expect(page.locator(".queue-panel summary")).toContainText("1 processing · 1 waiting");
+   await expect(page.locator(".queue-panel summary")).toContainText("2 processing · 1 waiting");
   await expect(page.locator(".queue-panel")).toContainText("Corrected job details");
   await expect(page.locator(".queue-item .badge.superseded")).toHaveCount(1);
   await expect(details).toHaveCount(0);
@@ -483,7 +492,7 @@ try {
   releases[1]!();
   await expect.poll(() => releases.length).toBe(3);
   releases[2]!();
-  await expect(page.locator(".queue-item .badge.completed")).toHaveCount(3);
+   await expect(page.locator(".queue-item .badge.completed")).toHaveCount(4);
   await page.getByRole("tab", { name: /^Questions/ }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
@@ -560,6 +569,45 @@ try {
   baseline = store.get(scanned.id);
   assert.equal(baseline.questions.filter((q) => q.status === "retired").length, 2);
   assert.ok(baseline.questions.at(-1)!.evidenceIDs?.length);
-  assert.deepEqual(errors, []);
+   let reviewProject = store.create("Review workflow fixture", "Track work", { providerID: "openai", modelID: "fixture" });
+   const reviewSeed = store.beginJob(reviewProject.id, reviewProject.revision).job; store.claimJob(reviewSeed.id, Date.now() + 60000);
+   store.finishJob(reviewSeed.id, { summary: "Review tracker", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Persist job records", "Send job notifications"].map((statement) => ({ statement, rationale: "Core workflow", sourceIDs: [reviewProject.sources[0]!.id], acceptance: ["Behavior works after restart"] })) });
+   await page.reload();
+   await page.locator(".sidebar").getByRole("button", { name: /Review workflow fixture/ }).click();
+   await page.getByRole("tab", { name: /Review/ }).click();
+   await expect(page.getByRole("tab", { name: /Review/ })).toContainText("2");
+   const reviewPanel = page.getByRole("region", { name: "Requirement review", exact: true });
+   const addendum = reviewPanel.getByLabel("Anything to add? (optional)");
+   await addendum.fill("Also export jobs");
+   await page.getByRole("tab", { name: "Questions" }).click();
+   await page.getByRole("tab", { name: /Review/ }).click();
+   await expect(addendum).toHaveValue("Also export jobs");
+   await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
+   await expect.poll(() => reviewReleases.length).toBe(1);
+   await expect(reviewPanel.locator(".review-card").first()).toContainText("Send job notifications");
+   await expect(addendum).toHaveValue("");
+   await reviewPanel.getByRole("button", { name: "Reject", exact: true }).click();
+   await expect.poll(() => store.submissions(reviewProject.id).filter((s) => s.status === "queued").length).toBe(1);
+   await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
+   await expect(reviewPanel).toContainText("Also export jobs");
+   await page.reload();
+   await page.getByRole("tab", { name: /Review/ }).click();
+   await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
+   await expect(reviewPanel).toContainText("Also export jobs");
+   reviewReleases.shift()!();
+   await expect.poll(() => reviewReleases.length).toBe(1);
+   reviewReleases.shift()!();
+   await expect.poll(() => store.submissions(reviewProject.id).every((s) => s.status === "completed")).toBe(true);
+   await reviewPanel.getByRole("button", { name: /Reviewed/ }).click();
+   await expect(reviewPanel).toContainText("Approved persistence and proposed CSV export for review.");
+   await expect(reviewPanel).toContainText("Rejected the requirement; its history is retained.");
+   reviewProject = store.get(reviewProject.id);
+   assert.equal(reviewProject.requirements[0]!.status, "accepted");
+   assert.equal(reviewProject.requirements[1]!.status, "rejected");
+   await reviewPanel.getByRole("button", { name: /To review/ }).click();
+   await expect(reviewPanel).toContainText("Export jobs as CSV");
+   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Review must fit mobile width");
+   await page.screenshot({ path: ".reqwizit-state/browser-review.png", fullPage: true });
+   assert.deepEqual(errors, []);
   console.log("Browser checks passed: appearance presets, custom colors, fonts/text size, persistence, cross-tab sync, reset, contrast hints, keyboard dropdowns and mobile sizing; local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation; explicit existing-project entry, local identity autofill, preserved manual edits across folders, initialization failure/retry, review-first project map, manual rescan, retained IDs, question dismissal and evidence-grounded replacements, reload and mobile width. Screenshots: .reqwizit-state/appearance-{dark,mobile,dropdown}.png and browser-{connections,connections-mobile,desktop,mobile,help-mobile,map,scan}.png");
 } finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); await rm(scanDirectory, { recursive: true, force: true }); }

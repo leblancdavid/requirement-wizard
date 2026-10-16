@@ -167,6 +167,11 @@ and allow editing, accepting, or rejecting proposed requirements.
 - Preserve previous revisions and the rationale for superseded decisions.
 - Revising a decision identifies dependent records for review; do not silently
   rewrite previously confirmed intent.
+- Provide a dedicated requirement Review queue beside Questions, with optional
+  addenda, approve/reject actions, automatic advance, and durable AI follow-up.
+- Apply clearly requested wider changes from review addenda with linked provenance;
+  ask targeted questions when scope is ambiguous. Revised wording returns to review,
+  and removed features retain their records/history (DEC-020).
 
 **RW-013 — Coverage and conflicts.** Review applicable areas such as goals, workflows,
 data lifecycle, permissions, integrations, quality constraints, and operations.

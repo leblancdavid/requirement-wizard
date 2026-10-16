@@ -3,7 +3,10 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { ProjectStore } from "./store.js";
-import { StaleRevisionError, type Analysis, type Project } from "../core/model.js";
+import { reviewFingerprint, StaleRevisionError, type Analysis, type Project } from "../core/model.js";
+import { planContext } from "../core/working-set.js";
+import { DiscoveryQueue } from "../service/queue.js";
+import { DiscoveryService } from "../service/discovery.js";
 
 const testDirectory = join(process.cwd(), ".reqwizit-state", "tests");
 mkdirSync(testDirectory, { recursive: true });
@@ -26,6 +29,121 @@ function complete(store: ProjectStore, project: Project, result = proposal(proje
 }
 
 const selection = { providerID: "openai", modelID: "example" } as const;
+
+test("queued reviews allow no addendum, are idempotent, and reject changed requirement snapshots", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = complete(store, store.create("Reviews", "Track jobs", selection));
+    const r = project.requirements[0]!;
+    const request = { id: crypto.randomUUID(), auto: false, research: false, input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "" } };
+    const queued = store.enqueue(project.id, request);
+    assert.deepEqual(store.enqueue(project.id, request), queued);
+    assert.throws(() => store.enqueue(project.id, { ...request, id: crypto.randomUUID() }), /pending review/);
+    project = store.note(project.id, project.revision, "An unrelated detail");
+    store.applyQueued(project.id);
+    project = store.get(project.id);
+    assert.equal(project.requirements[0]!.status, "accepted");
+    assert.equal(project.requirements[0]!.reviewNote, "");
+    assert.equal(store.submissions(project.id)[0]!.status, "saved");
+    const previous = store.submissions(project.id)[0]!; previous.status = "completed"; store.saveSubmission(previous);
+    const next = { ...request, id: crypto.randomUUID(), input: { ...request.input, fingerprint: reviewFingerprint(project.requirements[0]!), note: "  Also consider offline access\n" } };
+    store.enqueue(project.id, next);
+    store.review(project.id, project.revision, r.id, "rejected", "Scope changed elsewhere");
+    store.applyQueued(project.id);
+    const conflict = store.submissions(project.id)[1]!;
+    assert.equal(conflict.status, "needs-attention"); assert.equal(conflict.conflict, true); assert.equal(conflict.applied, false);
+    assert.deepEqual(conflict.input, next.input);
+    assert.equal(store.get(project.id).requirements[0]!.status, "rejected");
+    assert.throws(() => store.enqueue(project.id, { ...request, id: crypto.randomUUID() }), StaleRevisionError);
+  } finally { store.close(); }
+});
+
+test("failed review follow-up resumes without duplicating approval and retains its AI response", async () => {
+  const store = new ProjectStore(":memory:");
+  let calls = 0;
+  const service = new DiscoveryService(store, { async analyze(project, options) {
+    if (++calls === 1) throw new Error("Fixture provider unavailable");
+    const source = project.sources.find((s) => s.kind === "confirmation")!;
+    assert.ok(options.context.manifest.includedIDs.includes(source.id));
+    return { summary: "Reviewed", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [], reviewResponses: [{ sourceID: source.id, text: "Approved the requirement; no additional changes requested." }] };
+  } });
+  const queue = new DiscoveryQueue(service);
+  const idle = async (id: string) => {
+    const deadline = Date.now() + 3000;
+    while (queue.isActive(id)) { if (Date.now() > deadline) throw new Error("Queue did not finish"); await new Promise((resolve) => setTimeout(resolve, 5)); }
+  };
+  try {
+    const project = complete(store, store.create("Review retry", "Track jobs", selection)); const r = project.requirements[0]!;
+    queue.submit(project.id, { id: crypto.randomUUID(), auto: true, research: false, input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "" } });
+    await idle(project.id);
+    assert.equal(store.get(project.id).requirements[0]!.status, "accepted");
+    assert.equal(store.submissions(project.id)[0]!.applied, true);
+    assert.equal(store.submissions(project.id)[0]!.status, "needs-attention");
+    assert.equal(store.queuePaused(project.id), true);
+    queue.resume(project.id); await idle(project.id);
+    assert.equal(calls, 2); assert.equal(store.get(project.id).sources.filter((s) => s.kind === "confirmation").length, 1);
+    assert.equal(store.submissions(project.id)[0]!.status, "completed");
+    assert.equal(store.submissions(project.id)[0]!.response, "Approved the requirement; no additional changes requested.");
+  } finally { await queue.close(); store.close(); }
+});
+
+test("approval without an addendum cannot authorize wider AI changes or omit its response", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = complete(store, store.create("Review boundaries", "Track jobs", selection)); const r = project.requirements[0]!;
+    const s = store.enqueue(project.id, { id: crypto.randomUUID(), auto: true, research: false, input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "" } });
+    store.applyQueued(project.id); project = store.get(project.id);
+    const sourceID = store.submissions(project.id)[0]!.appliedSourceID!;
+    const job = store.beginJob(project.id, project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.attachContext(job.id, { ...planContext(project).manifest, submissionIDs: [s.id] });
+    const result: Analysis = { summary: "Review", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [], reviewResponses: [{ sourceID, text: "Approved" }], reviewChanges: [{ type: "reject", sourceID, requirementID: r.id, reason: "Unrequested change" }] };
+    assert.throws(() => store.finishJob(job.id, result), /current review addendum/);
+    assert.throws(() => store.finishJob(job.id, { ...result, reviewChanges: [], reviewResponses: [] }), /one AI response/);
+    assert.equal(store.get(project.id).revision, project.revision); assert.equal(store.get(project.id).requirements[0]!.status, "accepted");
+  } finally { store.close(); }
+});
+
+test("AI review follow-up is batch/source bound, revises stable IDs, and archives explicitly requested features", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = store.create("Reviews", "Track jobs", selection);
+    const output = proposal(project);
+    output.organization = [{ type: "upsert", epicID: "new:jobs", title: "Jobs", purpose: "Manage jobs", dependencies: [] }];
+    output.requirements[0]!.epicID = "new:jobs"; output.questions[0]!.epicID = "new:jobs";
+    project = complete(store, project, output);
+    const r = project.requirements[0]!;
+    const enqueue = (note: string) => {
+      const current = store.get(project.id).requirements[0]!;
+      const s = store.enqueue(project.id, { id: crypto.randomUUID(), auto: true, research: false, input: { type: "review", requirementID: r.id, requirementText: current.statement, fingerprint: reviewFingerprint(current), action: "accepted", note } });
+      store.applyQueued(project.id); return store.submissions(project.id).find((i) => i.id === s.id)!;
+    };
+    const start = (s: ReturnType<typeof enqueue>) => {
+      project = store.get(project.id);
+      const { job } = store.beginJob(project.id, project.revision); store.claimJob(job.id, Date.now() + 60000);
+      const context = planContext(project, { requiredEpicIDs: [r.epicID], recordIDs: [s.appliedSourceID!, r.id] });
+      store.attachContext(job.id, { ...context.manifest, submissionIDs: [s.id] }); return job;
+    };
+    const s = enqueue("Support offline access too");
+    let job = start(s);
+    const revision = store.get(project.id).revision;
+    const changes: Analysis = { summary: "Updated", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [], reviewResponses: [{ sourceID: s.appliedSourceID!, text: "Added offline access; please review the new wording." }], reviewChanges: [{ type: "revise", sourceID: "invented", requirementID: r.id, statement: "Record jobs offline", rationale: "Offline workflow", acceptance: ["Jobs save offline"], reason: "Requested offline support" }] };
+    assert.throws(() => store.finishJob(job.id, changes), /current review addendum/);
+    assert.equal(store.get(project.id).revision, revision, "invalid changes are atomic");
+    changes.reviewChanges![0]!.sourceID = s.appliedSourceID!;
+    store.finishJob(job.id, changes);
+    project = store.get(project.id);
+    assert.equal(project.requirements[0]!.id, r.id); assert.equal(project.requirements[0]!.status, "needs-review");
+    assert.equal(project.requirements[0]!.statement, "Record jobs offline");
+    s.status = "completed"; store.saveSubmission(s);
+    const removal = enqueue("Remove this entire jobs feature; it no longer applies."); job = start(removal);
+    store.finishJob(job.id, { ...changes, reviewResponses: [{ sourceID: removal.appliedSourceID!, text: "Archived Jobs and retired its open questions." }], reviewChanges: [{ type: "archive-feature", sourceID: removal.appliedSourceID!, epicID: r.epicID, reason: "Explicit removal request" }] });
+    project = store.get(project.id);
+    assert.equal(project.epics.find((e) => e.id === r.epicID)!.archived, true);
+    assert.equal(project.requirements[0]!.status, "rejected"); assert.equal(project.questions[0]!.status, "retired");
+    assert.equal(store.get(project.id, revision).requirements[0]!.statement, "Record jobs", "history retains original wording");
+    assert.equal(store.getJob(job.id).result!.reviewResponses![0]!.sourceID, removal.appliedSourceID);
+  } finally { store.close(); }
+});
 
 test("durable queue retains exact responses across reopen, rejects reused IDs, and flags changed questions", () => {
   const directory = mkdtempSync(join(testDirectory, "queue-"));

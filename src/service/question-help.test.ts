@@ -20,18 +20,33 @@ function seed(store: ProjectStore) {
 }
 const noAnalysis: DiscoveryAdapter["analyze"] = async () => { throw new Error("Help must not call discovery"); };
 
-test("invalid concept annotations reject the entire discovery round without saving partial proposals", async () => {
+test("invalid optional concepts are omitted while valid concepts and discovery proposals are saved", async () => {
   const store = new ProjectStore(":memory:");
   try {
     const project = seed(store);
     const service = new DiscoveryService(store, { async analyze() {
-      return { summary: "Must not be saved", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], questions: [{
-        text: "Need role-based access?", whyItMatters: "Permissions", options: [{ label: "Yes", consequence: "Roles" }, { label: "No", consequence: "Shared access" }],
-        concepts: [{ field: "text", phrase: "absent", meaning: "Invalid", impact: "Invalid" }],
+      return { summary: "Saved discovery", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], questions: [{
+        text: "Need roles for offline editing or offline viewing?", whyItMatters: "Permissions", options: [{ label: "Yes", consequence: "Roles" }, { label: "No", consequence: "Shared access" }],
+        concepts: [
+          { field: "text", phrase: "absent", meaning: "Invalid", impact: "Invalid" },
+          { field: "text", phrase: "offline", meaning: "Ambiguous", impact: "Invalid" },
+          { field: "text", phrase: "roles", meaning: "Groups of permissions", impact: "Controls access" },
+          { field: "text", phrase: "Need roles", meaning: "Overlapping", impact: "Invalid" },
+          { field: "label", optionIndex: 4, phrase: "Yes", meaning: "Missing option", impact: "Invalid" },
+          { field: "text", optionIndex: 0, phrase: "viewing", meaning: "Misplaced", impact: "Invalid" },
+          { field: "consequence", optionIndex: 0, phrase: "Roles", meaning: "Groups of permissions", impact: "Controls access" },
+        ],
       }] };
     } });
-    assert.equal((await service.analyze(project.id, project.revision)).status, "failed");
-    assert.deepEqual(store.get(project.id), project);
+    assert.equal((await service.analyze(project.id, project.revision)).status, "completed");
+    const saved = store.get(project.id);
+    assert.equal(saved.summary, "Saved discovery");
+    const question = saved.questions.at(-1)!;
+    assert.equal(question.text, "Need roles for offline editing or offline viewing?");
+    assert.deepEqual(question.concepts?.map((item) => item.phrase), ["roles", "Roles"]);
+    assert.doesNotThrow(() => validateConcepts(question));
+    assert.ok(saved.roundChanges.some((change) => change.includes("Omitted 5 invalid concept annotations")));
+    assert.deepEqual(saved.questions.slice(0, -1), project.questions);
   } finally { store.close(); }
 });
 

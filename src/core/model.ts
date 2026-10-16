@@ -87,6 +87,11 @@ export const projectSchema = z.object({
 });
 export type Project = z.infer<typeof projectSchema>;
 
+/** Exact review snapshot, shared with the browser; unrelated revisions do not conflict. */
+export function reviewFingerprint(item: Project["requirements"][number]): string {
+  return JSON.stringify([item.statement, item.rationale, item.acceptance, item.epicID, item.status, item.sourceIDs, item.reviewNote ?? ""]);
+}
+
 // Every field is required so JSON-text output has one unambiguous shape.
 export const analysisSchema = z.object({
   summary: text, goals: z.array(text).max(10), actors: z.array(text).max(10),
@@ -98,6 +103,12 @@ export const analysisSchema = z.object({
   assessments: z.array(assessmentProposal).max(30).optional(),
   scopeAssessment: z.object({ confidence: z.enum(["low", "medium", "high"]), explanation: text }).strict().optional(),
   researchFindings: z.array(z.object({ localID: z.string().optional(), url: z.string().url(), title: text, finding: text, epicID: z.string() }).strict()).max(6).optional(),
+  reviewResponses: z.array(z.object({ sourceID: z.string(), text }).strict()).max(30).optional(),
+  reviewChanges: z.array(z.discriminatedUnion("type", [
+    z.object({ type: z.literal("revise"), sourceID: z.string(), requirementID: z.string(), statement: text, rationale: text, acceptance: z.array(text).min(1).max(8), reason: text }).strict(),
+    z.object({ type: z.literal("reject"), sourceID: z.string(), requirementID: z.string(), reason: text }).strict(),
+    z.object({ type: z.literal("archive-feature"), sourceID: z.string(), epicID: z.string(), reason: text }).strict(),
+  ])).max(30).optional(),
 }).strict();
 export type Analysis = z.infer<typeof analysisSchema>;
 export const scanAnalysisSchema = analysisSchema.extend({ requirements: analysisSchema.shape.requirements.max(100) });
@@ -123,6 +134,7 @@ export const submissionSchema = z.object({
   input: z.discriminatedUnion("type", [
     z.object({ type: z.literal("answer"), questionID: z.string(), questionText: z.string(), sourceID: z.string().nullable(), answer: answerSchema }).strict(),
     z.object({ type: z.literal("note"), text: answerSchema.shape.text, epicID: z.string() }).strict(),
+    z.object({ type: z.literal("review"), requirementID: z.string(), requirementText: z.string().min(1).max(12000), fingerprint: z.string().min(1).max(100000), action: z.enum(["accepted", "rejected"]), note: z.string().max(12000) }).strict(),
   ]),
   auto: z.boolean(), research: z.boolean(),
   replaces: z.string().uuid().optional(),
@@ -130,6 +142,7 @@ export const submissionSchema = z.object({
 export type Submission = z.infer<typeof submissionSchema> & {
   projectID: string; status: "queued" | "saved" | "processing" | "completed" | "needs-attention" | "superseded";
   applied: boolean; appliedSourceID?: string; conflict?: boolean; submittedAt: string; jobID?: string; diagnostic?: string;
+  response?: string;
 };
 
 export const telemetrySchema = z.object({
@@ -173,6 +186,7 @@ export function validateAnalysisReferences(project: Project, result: Analysis) {
   const normative = new Set(project.sources.filter((item) => {
     if (superseded.has(item.id)) return false;
     if (["initial", "note", "answer", "workspace"].includes(item.kind)) return true;
+    if (item.kind === "rejection" && item.requirementID) return true;
     return item.kind === "confirmation" && project.requirements.some((requirement) =>
       requirement.status === "accepted" && requirement.sourceIDs.includes(item.id));
   }).map((item) => item.id));
@@ -205,6 +219,20 @@ export function validateAnalysisReferences(project: Project, result: Analysis) {
     if (requirements.has(key)) throw new Error("Analysis repeated an existing requirement instead of preserving its stable ID.");
     requirements.add(key);
   }
+}
+
+/** Optional presentation metadata must not prevent otherwise valid discovery work. */
+export function validConcepts(question: Parameters<typeof validateConcepts>[0]): Concept[] {
+  const concepts: Concept[] = [];
+  for (const concept of question.concepts ?? []) {
+    try {
+      validateConcepts({ ...question, concepts: [...concepts, concept] });
+      concepts.push(concept);
+    } catch {
+      // Keep only exact, unambiguous, non-overlapping references; never guess a span.
+    }
+  }
+  return concepts;
 }
 
 /** Exact field references prevent invented or overlapping highlights. */

@@ -4,6 +4,7 @@ import type { Project } from "./model.js";
 export type ContextTask = {
   focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; budget?: number;
   advisory?: boolean;
+  expandMandatory?: boolean;
 };
 
 /** Plan locally before inference. Exact human guardrails are never summarized away. */
@@ -124,7 +125,18 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       sectionCharacters: Object.fromEntries(Object.entries(data).map(([key, value]) => [key, JSON.stringify(value).length])) } };
   };
   let result = pack(included);
-  if (result.manifest.characters > budget) throw new ContextBudgetError(result.manifest);
+  if (result.manifest.characters > budget) {
+    // Queue grouping still plans against the preferred bound. A single discovery
+    // task may expand only after compaction and evidence closure, without adding
+    // optional detail or dropping exact human guardrails. Help/scans stay bounded
+    // by their own budgets. This is an application input cap, not a model claim.
+    if (task.expandMandatory && !task.advisory && budget === 48000) {
+      result.manifest.budget = 96000;
+      result.manifest.selectionReason = "Expanded mandatory-evidence budget from 48,000 to 96,000 characters after task planning; exact human guardrails and linked evidence retained, optional detail not added.";
+      if (result.manifest.characters <= result.manifest.budget) return result;
+    }
+    throw new ContextBudgetError(result.manifest);
+  }
   // Prefer related proposals and open questions, then recent optional detail.
   const candidates = [...project.requirements.filter((r) => r.sourceIDs.some((id) => taskIDs.has(id))),
     ...project.questions.filter((q) => q.status === "pending"), ...project.requirements.slice().reverse(),

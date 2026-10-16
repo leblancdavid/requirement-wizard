@@ -1,0 +1,4 @@
+.review-card-heading { display: flex; width: 100%; gap: .75rem; align-items: center; text-align: left; background: transparent; color: inherit; border: 0; padding: 1rem; flex-wrap: wrap; }
+.review-card-heading strong { flex: 1 1 16rem; overflow-wrap: anywhere; }
+.review-card-heading small { flex: 0 1 auto; }
+.review-card .requirement-card { margin: 0; }

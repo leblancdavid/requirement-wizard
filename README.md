@@ -26,6 +26,10 @@ answers are batched into the next round. Oversized batches are automatically div
 into smaller revision-linked working groups, with exact human evidence retained and
 completed groups checkpointed. Expand **Processing & queue** to inspect the questions
 and submitted answers being processed, waiting, or completed in **Activity**.
+**Review** beside Questions shows requirements awaiting approval, with optional notes,
+auto-advance, durable background follow-up, and submitted/reviewed history. AI can
+propose additional requirements/questions, revise wording for another review, or
+archive features when explicitly requested in a review note.
 The default **Questions** view uses compact expandable rows with feature/category
 context. Use **Previous answers** or **Submitted** to edit responses, including
 waiting answers. **Project map** groups requirements under expandable features;

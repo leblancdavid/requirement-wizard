@@ -179,16 +179,64 @@ test("a later group failure preserves completed groups and resume does not repla
   } finally { await queue.close(); store.close(); }
 });
 
-test("indivisible mandatory human constraints fail before inference and retain the attempted manifest", async () => {
+test("oversized mandatory discovery evidence uses a bounded fallback without changing human records", async () => {
   const store = new ProjectStore(":memory:");
   try {
     let project = seed(store);
-    for (let i = 0; i < 5; i++) project = store.note(project.id, project.revision, "n".repeat(12000), "project");
+    for (let i = 0; i < 4; i++) project = store.note(project.id, project.revision, `  Constraint ${i}\n${"n".repeat(11970)}`, "project");
+    project = store.note(project.id, project.revision, "Preserve this area constraint", "inbox");
+    const task = { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id] };
+    assert.throws(() => planContext(project, task), ContextBudgetError, "queue planning still uses the normal bound");
+    const expected = planContext(project, { ...task, expandMandatory: true });
+    assert.ok(expected.manifest.characters > 48000 && expected.manifest.characters <= 96000);
+    assert.equal(expected.manifest.budget, 96000);
+    assert.equal(expected.manifest.characters, JSON.stringify(expected.data).length);
+    assert.deepEqual((expected.data as { recordIndex: unknown[] }).recordIndex, []);
+    for (const source of project.sources) {
+      assert.ok(expected.manifest.includedIDs.includes(source.id));
+      assert.ok(JSON.stringify(expected.data).includes(JSON.stringify(source.text)));
+    }
+    const progress: string[] = [];
+    let calls = 0;
+    const job = await new DiscoveryService(store, { async analyze(_snapshot, options) {
+      calls++; assert.deepEqual(options.context.data, expected.data);
+      assert.equal(options.context.manifest.budget, expected.manifest.budget); return empty();
+    } }).analyze(project.id, project.revision, { ...task, onProgress: (message) => progress.push(message) });
+    assert.equal(job.status, "completed"); assert.equal(calls, 1);
+    assert.equal(job.context!.budget, 96000);
+    assert.match(progress.join("\n"), /96,000-character fallback/);
+    assert.deepEqual(store.get(project.id).sources, project.sources);
+    assert.deepEqual(store.get(project.id).questions, project.questions);
+  } finally { store.close(); }
+});
+
+test("mandatory fallback does not add optional detail or expand advisory and explicitly smaller budgets", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    for (let i = 0; i < 5; i++) project.sources.push({ id: `note-${i}`, kind: "note", text: "n".repeat(11000), epicID: "project" });
+    project.requirements.push({ id: "optional", epicID: "inbox", statement: "Optional proposal", rationale: "Unconfirmed",
+      acceptance: ["Review"], sourceIDs: [project.sources[0]!.id], status: "proposed" });
+    const task = { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id], expandMandatory: true };
+    const pack = planContext(project, task);
+    assert.equal(pack.manifest.budget, 96000);
+    assert.ok(pack.manifest.omittedIDs.includes("optional"));
+    assert.throws(() => planContext(project, { ...task, advisory: true }), ContextBudgetError);
+    assert.throws(() => planContext(project, { ...task, budget: 6000 }), ContextBudgetError);
+  } finally { store.close(); }
+});
+
+test("indivisible mandatory human constraints beyond the fallback fail before inference and retain the attempted manifest", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = seed(store);
+    for (let i = 0; i < 8; i++) project = store.note(project.id, project.revision, "n".repeat(12000), "project");
     let calls = 0;
     const job = await new DiscoveryService(store, { async analyze() { calls++; return empty(); } })
       .analyze(project.id, project.revision, { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id], submissionIDs: ["fixture-submission"] });
     assert.equal(calls, 0); assert.equal(job.status, "failed");
     assert.equal(job.context!.partial, true); assert.ok(job.context!.characters > job.context!.budget);
+    assert.equal(job.context!.budget, 96000);
     assert.deepEqual(job.context!.submissionIDs, ["fixture-submission"]);
     assert.match(job.diagnostic!, /mandatory human constraints/);
     assert.deepEqual(store.get(project.id), project);

@@ -229,7 +229,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, options.store.note(id, input.revision, input.text, input.epicID)); return;
       }
       if (action === "review") {
-        const input = z.object({ revision, requirementID: z.string(), action: z.enum(["accepted", "rejected"]), note: text }).strict().parse(raw);
+        const input = z.object({ revision, requirementID: z.string(), action: z.enum(["accepted", "rejected"]), note: z.string().max(12000).default("") }).strict().parse(raw);
         json(res, 200, options.store.review(id, input.revision, input.requirementID, input.action, input.note)); return;
       }
       if (action === "model") {

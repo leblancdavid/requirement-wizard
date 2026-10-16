@@ -129,12 +129,49 @@ layout, folder browsing, reconnect/retry, conflict resolution, and recovery beha
    round, then choose **Explore next gaps** when ready.
    Research and automatic-follow-up preferences are retained in this browser.
 5. Expand **Add information** for free-form ideas/corrections. Original text is retained.
-6. Open **Project map**, expand a feature, then a requirement to review acceptance
+6. Open **Review** beside Questions to approve/reject requirements one at a time,
+   optionally adding direction for AI follow-up. **Project map** still exposes acceptance
    scenarios, supporting decisions, and confirmation/rejection controls. Review
    changes to confirmed information before applying reorganization proposals.
 7. Use **Activity** for processing history, revisions, research sources, and technical
    context diagnostics. **Definition progress** is collapsed under the map/activity
    views; selecting a feature exposes its detailed assessment categories and evidence.
+
+### Requirement review queue
+
+**Review** shows a project-wide count of proposed/needs-review requirements not already
+submitted. The feature filter scopes its cards. **To review** opens the first pending
+requirement and advances after submission; **Submitted** shows durable processing,
+saved/paused work, conflicts and failures; **Reviewed** includes approved/rejected
+requirements and completed AI responses. Approval and rejection need no rationale.
+An optional **Anything to add?** note is retained verbatim with the reviewed wording
+and acceptance scenarios. Drafts survive tab changes and polling within the page;
+submitted decisions survive reload/restart. Unsaved drafts are not persisted on reload.
+
+Reviews use the answer queue, batching, automatic-processing preference, cancellation,
+and explicit resume. While discovery runs, reviews wait for the next revision-bound
+round without mutating its snapshot. An exact requirement fingerprint rejects changed
+wording, acceptance, membership, evidence or status; unrelated project revisions do
+not invalidate a review. A conflicting review retains its decision/note for resubmission.
+An applied decision survives failed AI follow-up and is not duplicated on retry.
+
+Each current review receives an AI response describing changes or remaining uncertainty.
+With a nonempty addendum, discovery can revise an existing requirement (same ID,
+**Needs review**), reject explicitly unwanted related requirements, or archive an
+explicitly removed feature with its requirements rejected and open questions retired.
+The change must cite a current review source in that exact batch. Whole-feature
+retirement requires full detailed context and cannot discard waiting answers.
+History, original input, prior revisions and answered questions remain. New requirements,
+features and questions use the existing proposal path. Ambiguous direction calls for
+targeted questions rather than assumed scope removal. Wider requests outside the bounded
+working set require a focused follow-up. Ordinary reorganization of confirmed material
+still uses organization review.
+
+Deterministic checks cover optional notes, duplicate/stale decisions, atomic invalid
+follow-up rejection, stable-ID revisions and feature archival. Chromium exercises
+auto-advance, draft retention across tabs, approval with an addendum, rejection without
+one during active discovery, reload, AI responses, new review items and mobile width.
+Screenshot: `.reqwizit-state/browser-review.png`. These checks use fixtures, not live inference.
 
 ### Compact workspace and revising responses
 
@@ -307,6 +344,8 @@ its rationale, and suggested answer labels/consequences. Hover, focus with the
 keyboard, or tap to read **What it means** and **What it changes**. Escape, moving
 away, or tapping outside dismisses the tooltip. Tooltips use saved annotations and
 need no model call. Existing questions without annotations still work normally.
+Invalid phrase/option references are omitted without failing the round; the round
+changes report the count, and valid explanations and question wording are preserved.
 Option selection has a separate **Choose** control so opening an explanation never
 selects an answer. Users' own answer text is preserved as entered.
 
@@ -384,7 +423,13 @@ that context is too large, selection retries with a submitted-response area, a
 pending-question area, or the first ordinary epic. Larger projects start focused;
 submitted-response areas take precedence over unrelated pending questions. Every
 area required by the current batch and all selected dependencies remain included.
-Input detail is bounded to **48,000 characters**. If full detail still does not fit,
+The five-pending-question limit is project-wide. Discovery prompts report the global
+pending count and remaining slots even when some questions are outside the working
+set. The response schema caps new questions at the available slots plus detailed
+pending questions eligible for evidence-backed retirement; deferred retirements free
+no slots. A full batch can still receive summary, requirement and assessment updates
+with no new questions.
+Input detail normally targets **48,000 characters**. If full detail still does not fit,
 the deterministic task planner switches to an explicitly partial working set:
 
 - Pin current input records, all current human sources in selected discovery areas
@@ -405,9 +450,13 @@ the deterministic task planner switches to an explicitly partial working set:
   the next one replans against the latest revision. Only its submissions are completed.
 
 This continues finite submitted work, without autonomously generating discovery
-rounds beyond the queue. A single task plus mandatory human constraints that still
-does not fit fails before inference. This conservative constraint can still require
-a scope/dependency split for areas containing too much human evidence.
+rounds beyond the queue. After compaction and queue grouping, a discovery task whose
+mandatory evidence exceeds 48,000 characters can use a **96,000-character hard
+fallback bound**. This fallback retains exact human constraints and linked evidence,
+adds no optional detail, and records the expanded budget and selection reason in
+the job manifest with a visible progress message. Question help and scan planning
+keep their separate bounds. Mandatory evidence beyond 96,000 characters still fails
+before inference and may require a scope/dependency split.
 Omitted records and excerpted indexes are explicitly reported; references to evidence
 outside the working set are rejected. Each job records a versioned context manifest,
 revision, focus, included/omitted IDs, character count, and section sizes. Task packages
