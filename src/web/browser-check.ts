@@ -5,15 +5,23 @@ import { startApp } from "./server.js";
 import { ProjectStore } from "../storage/store.js";
 import { analysisSchema } from "../core/model.js";
 import type { Connections, LoginStatus } from "../providers/connections.js";
+import { themes } from "../ui/appearance.js";
+import { planContext } from "../core/working-set.js";
 
 // Deterministic UI exercise: no model inference, provider credentials, or billing.
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
 await mkdir(resolve(".reqwizit-state"), { recursive: true });
 const workspaceDirectory = await mkdtemp(resolve(".reqwizit-state/browser-workspace-"));
+const scanDirectory = await mkdtemp(resolve(".reqwizit-state/browser-scan-"));
+await writeFile(resolve(scanDirectory, "README.md"), "# Existing tracker\nLists saved jobs.");
+await writeFile(resolve(scanDirectory, "project.godot"), '[application]\nconfig/name="Detected tracker"\nconfig/features=PackedStringArray("4.6", "C#")');
+await mkdir(resolve(scanDirectory, "docs"));
+await writeFile(resolve(scanDirectory, "docs/GAME_VISION.md"), "# Tracker vision\n\nAn existing Godot game with persistent job tracking.");
 const store = new ProjectStore(":memory:");
 const releases: Array<() => void> = [];
 let rounds = 0;
+let failNextScan = false;
 let releaseWordHelp: (() => void) | undefined;
 let login: LoginStatus = { id: "10000000-0000-4000-8000-000000000001", status: "cancelled" };
 let loginComplete = false, connected = false, blockTest = true;
@@ -28,6 +36,17 @@ const connections: Connections = {
   cancelTest() { cancelTest?.(); }, async disconnect() { connected = false; }, async close() { cancelTest?.(); },
 };
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(project, options) {
+  if (options.scan) {
+    if (failNextScan) { failNextScan = false; throw new Error("Fixture initialization interrupted before completion"); }
+    const data = options.context.data as { capturedFiles: { id: string }[] };
+    return analysisSchema.parse({ summary: "Existing tracker from static file evidence", goals: ["Track jobs"], actors: ["Owner"], assumptions: [], questions: [], retireQuestions: [],
+      organization: [{ type: "upsert", epicID: "new:existing", title: "Existing features", purpose: "Observed functionality", dependencies: [] }],
+      requirements: [{ epicID: "new:existing", statement: "List existing saved jobs.", rationale: "README.md lines 1–2 documents listing; intent needs review.", sourceIDs: [data.capturedFiles[0]!.id], acceptance: ["Saved jobs can be listed."] }] });
+  }
+  if (project.origin) {
+    const evidence = project.sources.find((s) => s.kind === "workspace" && options.context.manifest.includedIDs.includes(s.id))!;
+    return analysisSchema.parse({ summary: "Existing tracker", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], questions: [{ text: "Should the existing saved-job recovery preserve progress after failure?", whyItMatters: "README.md documents existing tracking; failure recovery is unresolved.", evidenceIDs: [evidence.id], options: [{ label: "Preserve", consequence: "Keep saved progress" }, { label: "Reset", consequence: "Restart progress explicitly" }] }] });
+  }
   options.onProgress("Organizing sample project");
   if (rounds++ > 0) {
     await new Promise<void>((accept) => { releases.push(accept); options.signal.addEventListener("abort", () => accept(), { once: true }); });
@@ -55,7 +74,8 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
   browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, hasTouch: true });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, hasTouch: true });
+  const page = await context.newPage();
   await page.addInitScript(() => {
     if (!localStorage.getItem("reqwizit-plan-confirmed:previous-account")) {
       localStorage.setItem("wizard-plan-confirmed:previous-account", "true");
@@ -86,6 +106,59 @@ try {
   await expect(page).toHaveURL(/#\/settings$/);
   await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
   await expect(page.getByLabel("Project name")).toBeHidden();
+  const appearance = page.getByRole("region", { name: "Appearance", exact: true });
+  await expect(appearance.locator(".theme-card")).toHaveCount(12);
+  for (const { name, palette } of themes) {
+    await appearance.getByRole("button", { name: `${name} theme`, exact: true }).click();
+    await expect(appearance.getByRole("button", { name: `${name} theme`, exact: true })).toHaveAttribute("aria-pressed", "true");
+    const cssRGB = (hex: string) => `rgb(${[1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16)).join(", ")})`;
+    await expect(page.locator("body")).toHaveCSS("background-color", cssRGB(palette.background));
+    await expect(appearance.locator('.theme-card[aria-pressed="false"]').first()).toHaveCSS("background-color", cssRGB(palette.surface));
+  }
+  await appearance.getByRole("button", { name: "Customize current preset", exact: true }).click();
+  await appearance.getByLabel("Accent color", { exact: true }).fill("#dab489");
+  await appearance.getByLabel("Interface font").selectOption("serif");
+  await appearance.getByLabel("Text size", { exact: true }).fill("20");
+  await expect(page.locator("html")).toHaveCSS("font-size", "20px");
+  await expect(page.locator("html")).toHaveCSS("font-family", /Georgia/);
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "custom");
+  await expect(page.locator("html")).toHaveCSS("font-size", "20px");
+  await expect(appearance.getByLabel("Accent color", { exact: true })).toHaveValue("#dab489");
+  await appearance.getByRole("button", { name: "Sage theme", exact: true }).click();
+  await appearance.getByRole("button", { name: "Custom theme", exact: true }).click();
+  await expect(appearance.getByLabel("Accent color", { exact: true })).toHaveValue("#dab489");
+  await appearance.getByLabel("Text color", { exact: true }).fill("#342923");
+  await expect(appearance.locator(".contrast-hint")).toContainText("Text may be difficult to read");
+  await appearance.getByRole("button", { name: "Reset appearance", exact: true }).click();
+  await expect(page.locator("html")).toHaveCSS("font-size", "14px");
+  const sharedWorkspace = await page.context().newPage();
+  await sharedWorkspace.goto(app.origin);
+  await appearance.getByRole("button", { name: "Forest theme", exact: true }).click();
+  await expect(sharedWorkspace.locator("html")).toHaveAttribute("data-theme", "forest");
+  await appearance.getByRole("button", { name: "Reset appearance", exact: true }).click();
+  await expect(sharedWorkspace.locator("html")).toHaveAttribute("data-theme", "sage");
+  await sharedWorkspace.close();
+  // Exercise the actual native picker, including keyboard selection and dismissal.
+  await appearance.getByLabel("Interface font").click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await expect(appearance.getByLabel("Interface font")).toHaveValue("mono");
+  await appearance.getByLabel("Interface font").click();
+  await page.keyboard.press("Escape");
+  await expect(appearance.getByLabel("Interface font")).toBeFocused();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await appearance.getByLabel("Text size", { exact: true }).fill("20");
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Appearance fits mobile at largest text size");
+  await page.screenshot({ path: resolve(".reqwizit-state/appearance-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await appearance.getByRole("button", { name: "Midnight theme", exact: true }).click();
+  await expect(appearance.locator(".theme-card").first()).toHaveCSS("background-color", "rgb(28, 41, 60)");
+  await page.screenshot({ path: resolve(".reqwizit-state/appearance-dark.png"), fullPage: true });
+  await appearance.getByLabel("Interface font").click();
+  await page.screenshot({ path: resolve(".reqwizit-state/appearance-dropdown.png") });
+  await page.keyboard.press("Escape");
+  await appearance.getByRole("button", { name: "Reset appearance", exact: true }).click();
   const connectionPanel = page.getByRole("region", { name: "AI connections", exact: true });
   await expect(connectionPanel.getByRole("button", { name: "Continue with ChatGPT" })).toBeEnabled();
   const firstPopup = page.waitForEvent("popup");
@@ -187,6 +260,10 @@ try {
   await answer.focus();
   await concept.focus();
   await expect(card.getByRole("tooltip")).toBeVisible();
+  const conceptStyle = await card.locator(".concept-tip").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return [style.backgroundColor, style.color, style.borderColor, style.borderRadius, style.boxShadow, style.fontSize, style.lineHeight, style.paddingTop, style.paddingLeft];
+  });
   await concept.press("Escape");
   await card.getByRole("button", { name: "Explain roles", exact: true }).click();
   await expect(answer).toHaveValue("My unfinished answer");
@@ -201,6 +278,23 @@ try {
   await card.getByRole("button", { name: "Explain word release", exact: true }).click();
   const wordHelp = card.getByRole("button", { name: "What do you mean by “release”?", exact: true });
   await expect(wordHelp).toBeVisible();
+  assert.deepEqual(await card.locator(".word-help").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return [style.backgroundColor, style.color, style.borderColor, style.borderRadius, style.boxShadow, style.fontSize, style.lineHeight, style.paddingTop, style.paddingLeft];
+  }), conceptStyle, "Word help should match the saved concept tooltip styling");
+  await expect(wordHelp).toHaveCSS("font-size", conceptStyle[5]!);
+  await expect(wordHelp).toHaveCSS("font-weight", "400");
+  for (const selector of [".word-help-close", ".word-help-icon"]) {
+    const centers = await card.locator(selector).evaluate((element) => {
+      const outer = element.getBoundingClientRect(), icon = element.querySelector("svg")!.getBoundingClientRect();
+      return [Math.abs(outer.x + outer.width / 2 - icon.x - icon.width / 2), Math.abs(outer.y + outer.height / 2 - icon.y - icon.height / 2)];
+    });
+    assert.ok(centers.every((delta) => delta < 1), `${selector} icon is centered`);
+  }
+  await card.getByRole("button", { name: "Close word explanation", exact: true }).click();
+  await expect(wordHelp).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Explain word release", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
   await wordHelp.press("Escape");
   await expect(wordHelp).toHaveCount(0);
   await card.getByRole("button", { name: "Explain word release", exact: true }).press("Enter");
@@ -226,13 +320,18 @@ try {
   await card.getByRole("button", { name: "Explain word release", exact: true }).click();
   await expect(card.locator(".word-help").getByRole("tooltip")).toContainText("this word describes who can use");
   assert.equal(releaseWordHelp, undefined, "Reopening a completed tooltip must not request more inference");
+  await card.getByRole("button", { name: "Close word explanation", exact: true }).click();
   await card.getByRole("button", { name: "Explain word management", exact: true }).click();
   await card.getByRole("button", { name: "What do you mean by “management”?", exact: true }).click();
   await expect.poll(() => !!releaseWordHelp).toBe(true);
   await expect(card.getByRole("button", { name: /Choose Owner only/ })).toHaveAttribute("aria-pressed", "false");
-  releaseWordHelp!(); releaseWordHelp = undefined;
+  await card.getByRole("button", { name: "Canceled", exact: true }).click();
+  await expect(card.locator(".word-help")).toContainText("cancelled");
+  await expect(card.getByRole("button", { name: "Canceled", exact: true })).toHaveCount(0);
+  releaseWordHelp = undefined;
   await expect(card.locator(".help-exchange").last()).toContainText("Text: Keeps account management simple.");
   await expect(card.locator(".help-spinner")).toHaveCount(0);
+  await card.getByRole("button", { name: "Close word explanation", exact: true }).click();
   await card.getByLabel("Ask a follow-up", { exact: true }).fill("What about a small team?");
   await card.getByRole("button", { name: "Ask for clarification" }).click();
   await expect(card.locator(".help-exchange").last()).toContainText("A small team could share job records");
@@ -396,6 +495,63 @@ try {
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect(page.getByText(/Account disconnected\. Projects retain/)).toBeVisible();
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
+  await page.getByLabel("AI connection", { exact: true }).selectOption("");
+  await page.getByRole("button", { name: "Back to workspace" }).click();
+  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByRole("radio", { name: "Existing project", exact: true }).check();
+  await page.getByLabel("Local workspace directory", { exact: true }).fill(scanDirectory);
+  await expect(page.getByLabel("Project name")).toHaveValue("Detected tracker");
+  await expect(page.getByLabel("Project description (suggested from files)")).toHaveValue("An existing Godot game with persistent job tracking.");
+  await expect(page.locator(".folder-preview")).toContainText("Godot / C# game");
+  await page.getByLabel("Project name").fill("Scanned application");
+  await page.getByLabel("Project description (suggested from files)").fill("My revised existing-game description.");
+  await page.getByLabel("Local workspace directory", { exact: true }).fill(workspaceDirectory);
+  await expect(page.locator(".folder-preview")).toContainText("Existing software project");
+  await expect(page.getByLabel("Project name")).toHaveValue("Scanned application");
+  await expect(page.getByLabel("Project description (suggested from files)")).toHaveValue("My revised existing-game description.");
+  await page.getByLabel("Local workspace directory", { exact: true }).fill(scanDirectory);
+  await expect(page.locator(".folder-preview")).toContainText("Godot / C# game");
+  failNextScan = true;
+  await page.getByRole("button", { name: "Create & initialize" }).click();
+  await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("Initialization incomplete");
+  await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeDisabled();
+  await page.getByRole("button", { name: "Retry initialization", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Rescan folder", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Project map" })).toHaveAttribute("aria-selected", "true");
+  const scanned = store.list().find((item) => item.name === "Scanned application")!;
+  assert.equal(store.get(scanned.id).questions.length, 0);
+  assert.equal(store.get(scanned.id).requirements[0]!.status, "proposed");
+  assert.equal(store.get(scanned.id).origin?.descriptionEdited, true);
+  await writeFile(resolve(scanDirectory, "README.md"), "# Existing tracker\nLists saved jobs and archives completed work.");
+  await page.getByRole("button", { name: "Rescan folder", exact: true }).click();
+  await expect.poll(() => store.get(scanned.id).scans.length).toBe(2);
+  await page.getByText(/^Last scan:/).click();
+  await page.getByText("File changes", { exact: true }).click();
+  await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("changed: README.md");
+  await page.reload();
+  await page.getByRole("tab", { name: "Project map" }).click();
+  await expect(page.getByRole("button", { name: "Rescan folder", exact: true })).toBeVisible();
+  assert.equal(store.get(scanned.id).requirements.length, 1);
+  assert.equal(store.get(scanned.id).scans.length, 2);
+  await page.getByText(/^Last scan:/).click();
+  await page.getByText("Inspected files and retained evidence", { exact: true }).click();
+  await page.getByText("README.md · lines 1–2", { exact: true }).click();
+  await page.screenshot({ path: ".reqwizit-state/browser-scan.png", fullPage: true });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Scan review should fit mobile width");
+  let baseline = store.get(scanned.id);
+  const seed = store.beginJob(scanned.id, baseline.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+  const contextPack = planContext(baseline); store.attachContext(seed.id, contextPack.manifest);
+  const evidenceID = baseline.sources.find((s) => s.kind === "workspace" && contextPack.manifest.includedIDs.includes(s.id))!.id;
+  store.finishJob(seed.id, { summary: baseline.summary, goals: baseline.goals, actors: baseline.actors, assumptions: [], retireQuestions: [], requirements: [], questions: ["Generic unrelated one?", "Generic unrelated two?"].map((text) => ({ text, whyItMatters: "Old generic question", evidenceIDs: [evidenceID], options: [{ label: "A", consequence: "One" }, { label: "B", consequence: "Two" }] })) });
+  await page.reload();
+  await page.getByText("Unrelated questions / cleanup", { exact: true }).click();
+  await page.getByRole("button", { name: "Dismiss unrelated question: Generic unrelated one?", exact: true }).click();
+  await expect.poll(() => store.get(scanned.id).questions.filter((q) => q.status === "retired").length).toBe(1);
+  await page.getByRole("button", { name: "Replace unanswered questions from project evidence", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Should the existing saved-job recovery preserve progress after failure?", exact: true })).toBeVisible();
+  baseline = store.get(scanned.id);
+  assert.equal(baseline.questions.filter((q) => q.status === "retired").length, 2);
+  assert.ok(baseline.questions.at(-1)!.evidenceIDs?.length);
   assert.deepEqual(errors, []);
-  console.log("Browser checks passed: local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation, and mobile layout. Screenshots: .reqwizit-state/browser-{connections,connections-mobile,desktop,mobile,help-mobile,map}.png");
-} finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); }
+  console.log("Browser checks passed: appearance presets, custom colors, fonts/text size, persistence, cross-tab sync, reset, contrast hints, keyboard dropdowns and mobile sizing; local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation; explicit existing-project entry, local identity autofill, preserved manual edits across folders, initialization failure/retry, review-first project map, manual rescan, retained IDs, question dismissal and evidence-grounded replacements, reload and mobile width. Screenshots: .reqwizit-state/appearance-{dark,mobile,dropdown}.png and browser-{connections,connections-mobile,desktop,mobile,help-mobile,map,scan}.png");
+} finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); await rm(scanDirectory, { recursive: true, force: true }); }

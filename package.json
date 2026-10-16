@@ -17,7 +17,7 @@
     "spike": "tsx src/spike/cli.ts",
     "provider": "tsx src/providers/cli.ts",
     "check": "tsc --noEmit",
-    "test": "tsx --test src/spike/contract.test.ts src/storage/store.test.ts src/storage/workspace.test.ts src/storage/paths.test.ts src/service/discovery.test.ts src/service/question-help.test.ts src/core/epics.test.ts src/core/working-set.test.ts src/runtime/http.test.ts src/runtime/research.test.ts src/web/server.test.ts src/providers/chatgpt.test.ts src/providers/credentials.test.ts src/providers/connections.test.ts",
+    "test": "tsx --test src/spike/contract.test.ts src/storage/store.test.ts src/storage/workspace.test.ts src/storage/folder-preview.test.ts src/storage/paths.test.ts src/service/discovery.test.ts src/service/scan.test.ts src/service/question-help.test.ts src/core/epics.test.ts src/core/working-set.test.ts src/runtime/http.test.ts src/runtime/research.test.ts src/web/server.test.ts src/providers/chatgpt.test.ts src/providers/credentials.test.ts src/providers/connections.test.ts src/ui/appearance.test.ts",
     "test:browser": "npm run build:ui && tsx src/web/browser-check.ts"
   },
   "dependencies": {

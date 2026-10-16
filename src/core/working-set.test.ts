@@ -69,6 +69,47 @@ test("50,777-character focused context recovers with exact evidence and explicit
   } finally { store.close(); }
 });
 
+test("48,051-character task packages reclaim optional index space before rejecting exact evidence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    project.epics.push({ id: "other", title: "Other area", purpose: "Unrelated", dependencies: [], archived: false });
+    for (let i = 0; i < 60; i++) project.questions.push({ ...structuredClone(project.questions[0]!),
+      id: `indexed-${i}`, epicID: "other", status: "retired", sourceID: undefined, text: `Unrelated ${i} ${"x".repeat(180)}` });
+    const task = { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id] };
+    const baseline = planContext(project, task);
+    assert.equal(baseline.manifest.partial, true);
+    assert.equal(baseline.manifest.indexedIDs!.length, 60);
+    project.questions[0]!.whyItMatters += "w".repeat(48051 - baseline.manifest.characters);
+    const before = structuredClone(project);
+    const pack = planContext(project, task);
+    const data = pack.data as { recordIndex: Array<{ id: string }>; sources: unknown[]; questions: Project["questions"] };
+    assert.ok(pack.manifest.characters <= 48000);
+    assert.equal(pack.manifest.characters, JSON.stringify(data).length);
+    assert.ok(data.recordIndex.length > 0 && data.recordIndex.length < 60);
+    assert.deepEqual(pack.manifest.indexedIDs, data.recordIndex.map((r) => r.id));
+    assert.equal(data.recordIndex.at(-1)!.id, "indexed-59", "most recent navigation labels take priority");
+    assert.deepEqual(data.sources, project.sources);
+    for (const q of project.questions.filter((q) => q.epicID === "inbox")) {
+      const detail = data.questions.find((r) => r.id === q.id)!;
+      assert.equal(detail.text, q.text); assert.deepEqual(detail.options, q.options);
+      assert.equal(detail.sourceID, q.sourceID);
+    }
+    assert.equal(data.questions[0]!.whyItMatters, project.questions[0]!.whyItMatters);
+    assert.deepEqual(project, before);
+
+    // Optional detailed evidence also takes priority over navigation labels.
+    project.requirements.push({ id: "optional-proposal", epicID: "inbox", status: "proposed",
+      statement: "p".repeat(1000), rationale: "Related detail", acceptance: ["Review behavior"],
+      sourceIDs: [project.questions[1]!.sourceID!] });
+    const expanded = planContext(project, task);
+    assert.ok(expanded.manifest.includedIDs.includes("optional-proposal"));
+    assert.ok(expanded.manifest.indexedIDs!.length < pack.manifest.indexedIDs!.length);
+    assert.equal(expanded.manifest.characters, JSON.stringify(expanded.data).length);
+    assert.ok(expanded.manifest.characters <= 48000);
+  } finally { store.close(); }
+});
+
 test("partial passes preserve global interpretation and reject assessments, unrelated retirement and organization", async () => {
   const store = new ProjectStore(":memory:");
   try {

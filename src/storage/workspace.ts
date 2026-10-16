@@ -72,7 +72,7 @@ export function renderWorkspace(project: Project): Record<string, string> {
     // Portable specification: no connection/account selection or machine-specific paths.
     "requirements.json": JSON.stringify({ formatVersion: 1, projectID: project.id, name: project.name, revision: project.revision,
       summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
-      epics: project.epics, requirements: project.requirements, questions: project.questions, sources: project.sources, research: project.research }, null, 2) + "\n",
+       epics: project.epics, requirements: project.requirements, questions: project.questions, sources: project.sources, research: project.research, scans: project.scans, origin: project.origin }, null, 2) + "\n",
     "progress.json": JSON.stringify({ formatVersion: 1, projectID: project.id, revision: project.revision, discovery: score, implementation: progress }, null, 2) + "\n",
     "progress.md": [title, `## Discovery\n\nEstimated definition coverage: ${score.percent}%${score.stale ? " (needs review)" : ""}. This is not proof of completeness.`,
       `Requirements: ${project.requirements.filter((r) => r.status === "accepted").length} accepted / ${project.requirements.length} total.`,

@@ -52,6 +52,85 @@ updates. Git initialization, staging, commits, and pushes remain user-managed.
 These files are generated outputs, not a two-way editing or project-import format.
 They do not include the entire SQLite history or constitute a complete app backup.
 
+## Initialize definitions and rescan
+
+On **New project**, choose **Existing project**, select a folder first, review the
+suggested project name/description/type, then **Create & initialize existing project**.
+The description is optional. A bounded local preview reads Godot/package/.NET metadata
+and README/vision prose without model calls, executing scripts, creating directories,
+or writing artifacts. Source paths/hashes and suggested values are retained separately
+from human edits; unedited descriptions are workspace evidence, not human decisions.
+Changing folders updates unedited suggestions but retains manual edits. A fingerprint
+check rejects changed preview evidence before project creation. **New idea** retains
+manual naming/description and optional folder creation. Existing projects offer
+**Initialize from folder** after workspace connection,
+on the workspace and in **Settings → Project workspace**. Review inferred requirements
+using the normal accept/reject controls on the **Project map**, then explicitly start
+**Explore next gaps**. Scanning pauses automatic discovery and creates no new questions.
+Failed/cancelled initialization shows **Initialization incomplete → Retry initialization**;
+discovery and automatic answer processing remain paused until a source scan completes.
+This also applies to legacy projects with unsuccessful scan attempts and generic questions.
+
+Use **Questions → Unrelated questions / cleanup** to dismiss an individual question or
+all unanswered questions. **Replace unanswered questions from project evidence** retires
+that batch and starts a new evidence-grounded round after successful initialization.
+Answered questions, saved/queued responses and decisions are protected. Retirement
+reasons remain in history and future context to discourage reintroducing unrelated choices.
+New questions for initialized projects must cite detailed working-context evidence IDs;
+the prompt asks for specific baseline gaps/conflicts and names supporting files in the
+rationale. Reference checks do not prove semantic relevance; review remains important.
+
+Use **Rescan folder** on the Project map or in workspace Settings after local changes.
+Last-scan details show inspected files and retained contents, hashes/line ranges,
+added/changed/removed paths, affected existing requirement IDs, exclusions and omissions.
+Budget-omitted files are not reported as deleted. Different folder paths have separate
+comparison histories. There is no automatic watcher or structured definition import;
+existing specification documents are evidence alongside code and tests.
+
+The service reads eligible files without executing scripts. File contents are sent to
+the saved AI connection (direct ChatGPT or legacy OpenCode), with tools/web research
+disabled. Generated `.requirement-wizard` artifacts are excluded. Capture defaults:
+160 explicit excerpts, up to 32,000 bytes captured per file and 180,000 bytes total
+(72KB documentation, 12KB configuration, 96KB source), 4,000 visited entries and depth 16.
+Each excerpt has exact text, full-file hash, line range and character offsets; partial
+files have visible omissions. Read inspection is bounded to 512KB/file and 4MB total.
+Vision/README/slice documents, project metadata, gameplay controllers/state and scenes
+are prioritized. Godot `.godot`, `.gd`, `.tscn`, `.tres` and .NET project files are supported.
+Staging/log directories and agent/tool instructions are excluded from feature capture.
+Dependency/build/
+cache directories, hidden paths, potentially sensitive filenames, links/junctions,
+unsupported/binary files and common secret-content patterns are excluded. These are
+conservative heuristics, not a guarantee arbitrary code contains no secrets. User file
+selection and Git ignore integration remain future work. Unenumerated scope is flagged.
+
+File batches are capped at 36,000 characters; input context at 90,000 characters with
+a fifteen-minute scan timeout and sixteen-minute lease. Cancellation diagnostics
+distinguish timeout from explicit stop/app closure. Existing context uses the normal bounded planner and exact
+mandatory evidence; oversized contexts fail explicitly. All validated scan batches
+apply together in one revision or none apply. Cancellation, stale revision/folder
+checks and expired-job recovery preserve decisions; restart does not repeat inference.
+Files can be captured at different instants, so this is not a filesystem-wide atomic
+snapshot. Connected workspace artifacts continue publishing normally after application.
+
+Captured evidence uses the separate `workspace` source kind, retained with contents
+after local files change. Portable requirements JSON includes scan metadata/evidence.
+Scanning never confirms requirements, implementation or successful test execution.
+Rescans retain accepted/rejected decisions and stable IDs; exact duplicate statements
+and same-title feature epics are reused. Semantic duplicates and nonidentical change
+proposals still need review. Fixed budgets mean scans cannot claim exhaustive features.
+Unlinked captured files are optional context; linked evidence for accepted requirements
+and human decisions remains pinned. This prevents large captures from making every
+subsequent discovery call exceed the ordinary context budget.
+
+Terminal initialization and rescanning share one command:
+
+```powershell
+npm run reqwizit -- scan --project "project-id" --expected-revision 3
+```
+
+Inspect the actual revision first. This command sends files to the saved AI connection
+and stops for proposal review; run `analyze` explicitly to continue gap discovery.
+
 ## Implementation progress
 
 Open **Project map → Implementation progress**. The feature filter scopes the list.
@@ -125,6 +204,11 @@ folder browsing/selection, creation with a workspace, verification evidence, sav
 progress files, conflict display/retry, disconnect/reconnect, reload, and mobile
 overflow with a deterministic adapter and no model inference.
 
-This foundation does not yet launch OpenCode against the connected repository or
-analyze existing source files. Integrated build execution remains M6; evidence-backed
-existing-project reconstruction remains M7.
+Initialization/rescan is the first M7 slice, implemented under DEC-018. Deterministic
+checks cover exclusions, retained evidence, rescan changes/identity, accepted-decision
+preservation, malformed references, stale revisions/folder bindings, cancellation,
+multi-batch rollback, interrupted leases, authenticated API access and review-first queue
+pausing. Playwright covers creation without an idea, initialization, manual rescan,
+reload and mobile width. No live model scan or real-project reconstruction-quality
+evaluation has been run. Integrated build execution remains M6; full M7 change planning
+and handoff evaluation remain future work.

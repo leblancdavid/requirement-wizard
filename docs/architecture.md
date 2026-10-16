@@ -263,22 +263,45 @@ packages. Revision invalidation marks dependent assessments and plans for review
 Dependency traversal can identify candidates for review; it does not prove semantic
 impact completeness. Model analysis may propose additional affected records.
 
-## Existing-project discovery (proposed follow-on)
+## Existing-project discovery (initial slice implemented)
 
-M7 adds a second entry path into the shared discovery engine:
+DEC-018 brings the initial M7 entry path into the shared discovery engine:
 
 ```text
 Local source folder → Bounded evidence snapshot → Proposed project understanding
     → Human review → Requested feature/change → Discovery → Plan → Export
 ```
 
+`src/storage/scan.ts` owns bounded read-only capture. `DiscoveryService.scan` runs
+sequential batches using the selected adapter with tools/research disabled.
+`ProjectStore.finishScan` applies all validated batches in one expected-revision/binding
+transaction, recording scan manifests and distinct `workspace` evidence sources.
+The queue pauses for review; API `POST /api/projects/:id/scan` and terminal `scan`
+share the service. Captured contents keep file evidence available after local changes.
+DEC-019 adds explicit existing-project creation and a separate read-only folder preview
+(`src/storage/folder-preview.ts`, shared schema in `src/core/folder-preview.ts`). Metadata
+and document suggestions carry file hashes and a fingerprint rechecked before creation;
+portable `origin` metadata distinguishes suggestions from manual edits. Existing creation
+starts a scan server-side, never a generic interview. Incomplete scans block discovery
+including automatic queue work. Question retirement is an expected-revision transaction
+protecting saved/queued responses, with reasons retained in working context; replacements
+start only after successful initialization. Initialized-project questions must cite
+detailed evidence IDs. This validates provenance, not semantic relevance.
+
+Capture now prioritizes project/vision/slice metadata, gameplay source and scenes, supports
+Godot/.NET text formats, and splits larger files into bounded explicit excerpts. Human
+guardrails and accepted-requirement evidence remain mandatory; unrelated captured files
+are optional context so capture volume does not itself exhaust later discovery budgets.
+
 The local service owns folder access and snapshot capture; the renderer presents
-selection, inspection scope, progress, and review. A proposed import adapter selects
+selection, inspection scope, progress, and review. The capture module selects
 documentation, source, tests, and configuration under explicit file/total budgets,
 recording exclusions and omissions. Initial import is read-only and does not execute
 project scripts. Target files and repository instructions are evidence, not authority
-to alter the discovery tool profile. Selection must exclude credentials and generated
-or dependency content before model context is assembled; exact rules remain OPEN-008.
+to alter the discovery tool profile. Fixed rules exclude potentially sensitive/hidden,
+generated and dependency paths and common secret-content patterns before inference.
+Limits/heuristic limitations are documented in project-workspaces.md; calibration,
+configurable selection and ignore-rule integration remain OPEN-008.
 
 Capture repository identity/commit when available plus file hashes and retained evidence
 for the actual selected content, including local changes and non-Git folders. Findings
@@ -295,7 +318,8 @@ Import runs through durable jobs with cancellation, interruption recovery, and
 expected-revision application. It cannot silently replace confirmed decisions. A reviewed
 baseline then supports change discovery with explicit additions, modifications, and
 preservation scenarios. Handoffs identify both specification revision and source snapshot.
-Initial capture is one-time; automatic refresh/change detection is future work.
+Explicit rescans compare captured file hashes and flag affected requirement IDs while
+retaining human decisions. Automatic watching and change-focused handoffs remain future work.
 
 ## Export boundary
 

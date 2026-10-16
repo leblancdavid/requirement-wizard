@@ -1,0 +1,218 @@
+/* Keep layout rules together; semantic appearance rules take precedence over legacy colors. */
+@import "./styles.css" layer(layout);
+@import "./details.css" layer(layout);
+@import "./workspace.css" layer(layout);
+@import "./question-help.css" layer(layout);
+@import "./connections.css" layer(layout);
+@import "./workspace-files.css" layer(layout);
+
+:root {
+  --background: #f6f7f3;
+  --surface: #fff;
+  --text: #233b35;
+  --accent: #315f45;
+  --muted: #5a6c64;
+  --border: #d3dcd7;
+  --soft: #eff3f0;
+  --selected: #e0e9e3;
+  --on-accent: #fff;
+  --font-family: Inter, "Segoe UI", Arial, sans-serif;
+  --font-size: 14px;
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  color: var(--text);
+  background: var(--background);
+  accent-color: var(--accent);
+}
+* { border-color: var(--border); }
+body { background: var(--background); }
+::selection { background: var(--selected); color: var(--text); }
+button, input, textarea, select { font-family: inherit; }
+p, small, label, .muted, .quiet, .question-meta, .question-context, .question-title > span,
+.project-overview, .view-intro, .feature-group > summary > span, .definition-details > summary > span,
+.round-status, .review-note, .option small, .help-exchange small, .word-help small, .word-help-hint,
+.requirement-card summary, .requirement-card ul, .insight-card ul, .insight-card summary,
+.check-status, .past-answers > summary, .map-prompt, .add-information { color: var(--muted); }
+.muted { color: var(--muted) !important; }
+a, a:hover, .connection-heading a, .connection-notice a, .plan-label, .concept-trigger,
+.word-help-action, .question-help > summary, .option .option-choose, .selected-mark,
+.tabs button.active, .insight-percent { color: var(--accent); text-decoration-color: var(--border); }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible {
+  outline: 3px solid var(--accent); outline-offset: 3px;
+}
+input, textarea, select, .question-card textarea, .answer-actions select {
+  color: var(--text); background-color: var(--surface); border-color: var(--border);
+}
+input[type=checkbox] { accent-color: var(--accent); }
+.question-card, .requirement-card, .feature-group, .settings-panel, .empty-card, .epic-card,
+.option, .word-help, .insight-card { background: var(--surface); color: var(--text); }
+.question-card, .requirement-card { box-shadow: none; }
+.connection-card, .connection-notice, .help-exchange, .queue-panel, .note-card, .research-intro,
+.epic-form, .overview, .changes { background: var(--soft); }
+.concept-tip, .option .concept-tip, .word-help { background: var(--sidebar); color: var(--sidebar-text); border-color: var(--sidebar-border); box-shadow: 0 6px 24px var(--shadow); }
+.word-help .word-help-summary, .word-help .word-help-summary > b, .word-help small, .word-help .word-help-action, .word-help .word-help-close, .word-help .word-help-cancel { color: var(--sidebar-text); }
+.word-help-close:hover, .word-help-cancel:hover:not(:disabled) { background: var(--sidebar-hover); }
+.concept-tip b, .option .concept-tip b { color: var(--sidebar-text); }
+.sidebar { background: var(--sidebar); color: var(--sidebar-text); }
+.brand div > span, .sidebar-label, .sidebar-bottom, .sidebar-bottom p, .project-link { color: var(--sidebar-muted); }
+.brand-mark, .project-link > span { color: var(--sidebar-text); }
+.new-project, .settings-toggle { color: var(--sidebar-text); border-color: var(--sidebar-border); }
+.new-project:hover, .project-link.selected, .settings-toggle:hover, .settings-toggle.selected {
+  background: var(--sidebar-hover); color: var(--sidebar-text); border-color: var(--sidebar-border);
+}
+.primary, .word-help-icon { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.primary:hover:not(:disabled) { background: var(--accent-hover); }
+.secondary { background: var(--soft); color: var(--accent); border-color: var(--border); }
+.secondary:hover:not(:disabled), .filter-row button:hover, .option:hover:not(:disabled), .word-trigger:hover,
+.word-trigger:focus-visible { background: var(--selected); border-color: var(--accent); }
+.filter-row button { color: var(--muted); }
+.filter-row button.active, .option.chosen, .map-all.active { background: var(--selected); color: var(--text); border-color: var(--accent); }
+.epic-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.epic-card:hover { border-color: var(--accent); }
+.tabs button { color: var(--muted); border-bottom-color: transparent; }
+.tabs button.active { border-bottom-color: var(--accent); }
+.tabs button > span, .question-meta > span:first-child, .badge, .subtle-badge { background: var(--soft); color: var(--muted); }
+.badge.accepted, .save-notice, .queue-item .processing { background: var(--success-bg); color: var(--success); }
+.badge.needs-review, .queue-item .needs-attention { background: var(--warning-bg); color: var(--warning); }
+.badge.rejected, .error, .connection-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
+.job-error, .round-status > button { color: var(--danger); }
+.check-icon { color: var(--muted); }
+.check-icon.defined { color: var(--success); }
+.check-icon.partial { color: var(--warning); }
+.meter { background: var(--border); }
+.meter > span, .pulse, .connection-dot, .history-dot { background: var(--accent); }
+.meter.stale > span { background: var(--warning); }
+.help-spinner { border-color: var(--border); border-top-color: var(--accent); }
+.review-organization { border-color: var(--warning); }
+.option-circle { border-color: var(--border); color: var(--accent); }
+.icon-button { background: var(--soft); color: var(--accent); }
+
+/* Relative type sizes let the single text-size preference scale the whole interface. */
+button, input, textarea, select { font-size: 1rem; }
+h1, .topbar h1 { font-size: 1.643rem; }
+h2 { font-size: 1.571rem; }
+h3 { font-size: 1.214rem; }
+.brand { font-size: 1.071rem; }
+.brand-mark { font-size: 2.286rem; }
+.brand div > span, .sidebar-label, .sidebar-bottom, .sidebar-bottom p { font-size: .714rem; }
+.new-project, .project-link { font-size: .857rem; }
+.project-link > span { font-size: 1.429rem; }
+.topbar small, label, .primary, .secondary, .quiet, .page-navigation, .tabs button,
+.main-tabs button, .filter-row button, .question-meta, .question-title > button, .question-title > span,
+.question-context, .answer-preview, .option small, .option-copy small, .question-card textarea,
+.answer-actions select, .save-notice, .map-prompt, .question-help > summary, .question-help > p,
+.help-actions .secondary, .help-exchange, .word-help, .word-help-hint, .concept-tip,
+.requirement-detail > summary, .requirement-card p, .requirement-card li, .requirement-card summary,
+.requirement-card h4, .definition-details > p, .queue-item small, .queue-panel > p,
+.settings-panel p, .ai-connections p, .connection-heading a, .connection-summary, .review-form input,
+.feature-group > summary > span, .feature-group > p, .feature-decisions, .round-status,
+.note-card textarea, .insight-card p, .insight-card ul, .insight-card summary, .check-row summary,
+.past-answers > summary, .history-list p, .history-list strong, .empty-card p { font-size: .857rem; }
+.error, .connection-error, .option .option-choose { font-size: .857rem; }
+.word-trigger, .concept-trigger { font: inherit; }
+.word-help .word-help-action, .word-help .word-help-cancel { font: inherit; }
+small, .header-progress small, .question-help small, .word-help small, .concept-tip b, .word-help-summary > b,
+.badge, .requirement-detail .badge, .tabs button > span, .evidence p, .evidence a, .subtle-badge,
+.insight-card small, .insight-card summary > span { font-size: .786rem; }
+.check-status { font-size: .786rem !important; }
+.question-title h3, .question-card h3, .feature-group > summary { font-size: 1.071rem; }
+.question-body > p, .option strong, .option-copy strong, .view-intro, .project-overview,
+.add-information > summary, .requirement-card h3, .queue-item p { font-size: .929rem; }
+.work-heading h2 { font-size: 1.286rem; }
+.settings-panel h2, .empty-card h3, .insight-card h3 { font-size: 1.143rem; }
+.header-progress-label { font-size: .857rem; }
+.header-progress-label strong { font-size: 1.571rem; }
+.definition-details > summary { font-size: 1rem; }
+.definition-details > summary > span { font-size: .857rem; }
+.welcome h2 { font-size: 3rem; }
+.welcome > p { font-size: .929rem; }
+.welcome form > .primary { font-size: .857rem; }
+.work-heading, .answer-actions { flex-wrap: wrap; }
+.answer-actions select { max-width: 19rem; }
+
+/* Native accessible selects, progressively enhanced with a fully themed picker. */
+select, .area-filter select, .answer-actions select {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: .65rem 2.6rem .65rem .85rem;
+  min-height: 2.7rem;
+  background-color: var(--surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23818b89' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right .85rem center;
+  box-shadow: 0 1px 2px var(--shadow);
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+  text-overflow: ellipsis;
+}
+select:hover:not(:disabled) { border-color: var(--accent); }
+select:disabled { opacity: .55; cursor: not-allowed; }
+select option { color: var(--text); background: var(--surface); }
+@supports (appearance: base-select) {
+  select, .area-filter select, .answer-actions select, select::picker(select) { appearance: base-select; }
+  select, .area-filter select, .answer-actions select { background-image: none; padding-right: .85rem; justify-content: space-between; }
+  select::picker-icon { color: var(--muted); transition: rotate .15s; margin-left: .8rem; }
+  select:open::picker-icon { rotate: 180deg; }
+  select::picker(select) {
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: .35rem; margin-block: .35rem;
+    box-shadow: 0 8px 28px var(--shadow); max-height: min(22rem, 60vh);
+    overflow: auto; font: inherit;
+  }
+  select option { border-radius: 6px; padding: .6rem .7rem; gap: .65rem; white-space: normal; overflow-wrap: anywhere; }
+  select option:hover, select option:focus { background: var(--soft); outline: none; }
+  select option:checked { background: var(--selected); color: var(--text); font-weight: 600; }
+  select option::checkmark { color: var(--accent); }
+}
+
+.appearance-settings { border-bottom: 1px solid var(--border); padding-bottom: 1.5rem; margin-bottom: 1.5rem; }
+.appearance-heading { display: flex; align-items: start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.appearance-heading h2 { margin-bottom: .4rem; }
+.appearance-heading p { margin-bottom: .5rem; }
+.appearance-heading > button { flex-shrink: 0; }
+.theme-fieldset, .custom-colors { margin: 1.2rem 0; padding: 0; border: 0; min-width: 0; }
+.theme-fieldset legend, .custom-colors legend { font-size: .857rem; font-weight: 600; margin-bottom: .7rem; }
+.theme-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .65rem; }
+.theme-card { min-width: 0; padding: .4rem; border: 1px solid var(--border); border-radius: 9px; text-align: left; background: var(--surface); font-size: .857rem; }
+.theme-card:hover { border-color: var(--accent); }
+.theme-card[aria-pressed=true] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--soft); }
+.theme-card > span:last-child { display: block; padding: .35rem .15rem .1rem; }
+.theme-preview { height: 4rem; display: flex; overflow: hidden; border-radius: 5px; background: var(--preview-bg); border: 1px solid color-mix(in srgb, var(--preview-text) 20%, transparent); }
+.preview-sidebar { width: 20%; background: var(--preview-accent); }
+.preview-content { flex: 1; padding: .6rem; display: grid; align-content: start; gap: .3rem; }
+.preview-content > span { height: .3rem; width: 65%; background: var(--preview-text); opacity: .6; border-radius: 2px; }
+.preview-content > span + span { width: 90%; opacity: .2; }
+.preview-content i { display: block; background: var(--preview-surface); height: 1.1rem; border-left: 3px solid var(--preview-accent); margin-top: .1rem; }
+.custom-heading { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin: 1rem 0; }
+.custom-heading [aria-pressed=true] { border-color: var(--accent); }
+.custom-colors { padding: 1rem; border: 1px solid var(--border); border-radius: 9px; background: var(--soft); }
+.color-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
+.color-control { display: flex; gap: .5rem; align-items: center; margin-top: .5rem; flex-wrap: wrap; }
+.settings-panel .color-control input[type=color] { width: 2.8rem; height: 2.6rem; margin: 0; padding: .2rem; cursor: pointer; }
+.color-control code { color: var(--muted); font-size: .8rem; }
+.contrast-hint { color: var(--warning); }
+.typography-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1.4rem; }
+.typography-controls label { min-width: 0; }
+.typography-controls small { display: block; font-weight: 400; margin-top: .5rem; }
+.typography-controls small > span { float: right; }
+.typography-controls output { float: right; color: var(--accent); }
+.settings-panel .typography-controls input[type=range] { max-width: none; width: 100%; accent-color: var(--accent); padding: 0; margin: 1.1rem 0; box-shadow: none; }
+.appearance-sample { padding: 1rem; margin-top: 1rem; background: var(--soft); border: 1px solid var(--border); border-radius: 9px; }
+.appearance-sample p { margin: .4rem 0 .8rem; }
+@media(max-width: 1100px) { .theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media(max-width: 800px) {
+  .color-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .typography-controls { grid-template-columns: 1fr; gap: .4rem; }
+  .welcome h2 { font-size: 2.429rem; }
+}
+@media(max-width: 540px) {
+  .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .work-heading > .primary { max-width: 100%; white-space: normal; font-size: .857rem; }
+  .answer-actions .primary { white-space: normal; }
+  .main-tabs { gap: .25rem; }
+  .main-tabs button { padding-inline: .5rem; }
+  .appearance-heading > button { width: 100%; }
+}
+@media(prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+@media(forced-colors: active) { select { appearance: auto; background-image: none; } .theme-card[aria-pressed=true] { outline: 2px solid Highlight; } }

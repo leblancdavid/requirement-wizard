@@ -27,9 +27,9 @@ An Electron desktop wrapper is implemented under DEC-017, reusing the browser UI
 and local engine. Closing its window cancels owned active work and quits; saved
 state remains available and interrupted work requires explicit resume. See
 [desktop.md](desktop.md) for packaging and verified versus outstanding release checks.
-Existing-project discovery is a follow-on after review and portable handoffs (M7),
-starting with a local source folder and a one-time, read-only analysis. Repository
-refresh and automatic change detection are later extensions.
+DEC-018 brings source-folder initialization and manual rescanning forward from M7.
+Read-only evidence capture produces reviewable definitions before gap discovery.
+Broader existing-project change planning/handoffs and automatic watching remain later work.
 An integrated coding workspace follows the initial release. Hosted collaboration,
 cloud synchronization and autonomous deployment are outside this release.
 DEC-015 adds staged direct-provider migration: direct ChatGPT discovery/help and
@@ -245,14 +245,25 @@ global information, focused epics, dependencies, exact evidence, and omission ma
 - Reject generated references outside the detailed working set; support focused rounds.
 - Record the context revision, selection, budget, and usage metadata available from the runtime.
 
-### Existing-project discovery (follow-on; not implemented)
+### Existing-project discovery (initialization/rescan implemented; planning follow-on)
 
 **RW-021 — Evidence-backed project reconstruction.** Import a selected local source
 folder and propose a structured understanding of its goals, actors, epics, workflows,
 business rules, integrations, and technical constraints.
 
-- Inspect selected documentation, source, tests, and configuration without modifying
-  the target project or running its scripts as part of the initial import.
+- Inspect documentation, source, tests and configuration without modifying source
+  files or running scripts. Offer initialization during creation and after workspace
+  connection, with an optional idea for source initialization. Generate initial
+  definitions/requirements, then stop for review before missing-requirement discovery.
+  Existing specification documents are evidence, not structured imports.
+- Explicitly distinguish a new idea from an existing project. Existing-project entry
+  selects the folder first and suggests editable title/description/type from local
+  metadata and documents without inference. Preserve extraction provenance and manual
+  edits. Reject changed preview evidence before creation. Incomplete initialization
+  must offer retry rather than silently starting an idea interview.
+- Allow users to retire unrelated unanswered questions individually or in a batch,
+  retaining reasons/history and protecting answered or queued input. After a successful
+  scan, offer replacements tied to detailed baseline evidence and specific gaps/conflicts.
 - Record inspected and omitted scope, analysis limitations, and snapshot identity.
   Link each finding to file evidence at that snapshot; a Git commit alone is insufficient
   when selected files contain uncommitted or untracked content.
@@ -265,6 +276,9 @@ business rules, integrations, and technical constraints.
   workflows; preserve unknowns rather than inventing a complete specification.
 - Preserve prior human input and apply validated results atomically with expected-revision
   checks. Failed, cancelled, interrupted, or stale analysis cannot confirm requirements.
+- Offer explicit folder rescanning, retained evidence, inspected-file changes and
+  omission reports. Preserve accepted/rejected decisions and stable IDs; expose affected
+  requirements for review. Fixed budgets limit coverage; automatic watching is deferred.
 
 **RW-022 — Feature work from a reviewed existing-project baseline.** Use reviewed
 project understanding to discover and plan new or revised behavior.

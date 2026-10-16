@@ -3,6 +3,20 @@
 Status: first playable local browser application. It shares the existing SQLite
 projects with the terminal client. No desktop installation is required.
 
+Source-folder initialization is available during creation: choose **Existing project**,
+select a folder first, review editable local name/description/type suggestions, and
+choose **Create & initialize existing project**. Preview uses no AI calls. Connected projects also offer **Initialize from
+folder**, or **Rescan folder** after the first scan, on the Project map and in workspace
+Settings. Review inferred requirements before explicitly starting **Explore next gaps**.
+Last-scan details expose inspected files/evidence, changes and omissions. See
+[initialization and rescanning](project-workspaces.md#initialize-definitions-and-rescan)
+for source transmission, limits, exclusions and verification status.
+Incomplete initialization offers **Retry initialization** and blocks ordinary discovery
+until a scan succeeds. **Questions → Unrelated questions / cleanup** provides individual
+and batch dismissal plus evidence-grounded replacement, retaining answered/queued input
+and retirement history. Godot project/configuration/scenes and larger source excerpts
+are supported with explicit inspected ranges and omissions.
+
 ## Run
 
 ```powershell
@@ -58,6 +72,37 @@ that route, use `opencode auth login` if needed; Settings still accepts an expli
 OpenCode model ID. There is no automatic provider/model/account fallback.
 
 ## Workflow
+
+### Appearance and dropdowns
+
+Open **Settings → Appearance** to change the entire browser/desktop workspace:
+
+- Six light presets: Sage (default), Paper, Cloud, Ocean, Lavender, and Sand.
+- Six dark presets: Forest, Charcoal, Midnight, Deep Ocean, Aubergine, and Espresso.
+- **Customize current preset** copies its accent, background, surface, and text
+  colors into a custom palette. **Custom theme** reopens your saved palette without
+  replacing it when switching presets. Borders, secondary text, selection, and hover
+  colors are derived automatically. Low body-text contrast displays a hint.
+- **Interface font** offers system sans, Inter/modern sans, humanist sans, book serif,
+  and monospace stacks. Fonts resolve locally with fallbacks; there are no network
+  font downloads, and Inter is used only when already installed.
+- **Text size** scales interface typography from a 12–20px base (14px default).
+- **Reset appearance** restores Sage, the default font stack, text size, and custom
+  palette. Changes apply immediately and are saved under `reqwizit-appearance` in
+  local browser storage, independently of project revisions and exports. Preferences
+  persist across reloads in that browser profile or desktop installation; browsers,
+  separate origins, and the desktop shell have independent local preferences.
+
+Dropdowns share theme-matched borders, spacing, focus/disabled states, and chevrons.
+Browsers supporting `appearance: base-select` also render themed rounded option
+menus with selected/hover states and scrolling. Other browsers retain their native
+option menus with themed closed controls. Native keyboard navigation, type-to-select,
+and screen-reader semantics are retained. Forced-color mode uses native controls.
+
+Deterministic Chromium checks cover preset application, custom palette/font/size
+persistence, reset, contrast hints, actual picker keyboard selection/dismissal, and
+390px mobile layout at 20px text size. Appearance screenshots are written to
+`.reqwizit-state/appearance-{dark,mobile,dropdown}.png` by `npm run test:browser`.
 
 Projects can connect to a local folder during creation or through **Settings → Project
 workspace**. Generated requirements/progress files update after app and CLI changes;
@@ -271,7 +316,11 @@ excerpted to 420 characters. The full explanation remains in the help history be
 Reopening the word reuses its saved explanation without another model request,
 including after reload. Earlier-revision summaries are labelled as earlier project
 context, and any assumptions are flagged for review in the full explanation.
-Escape or a click outside dismisses the word shortcut; on mobile it appears
+Word shortcuts share the saved concept tooltips' theme colors, typography, spacing,
+borders, and shadow. Use **×** to close a word popup (keyboard focus returns to the
+word), or **Canceled** to stop its pending/running clarification.
+Closing the popup leaves an active request running; cancellation is explicit.
+Escape or a click outside also dismisses the word shortcut; on mobile it appears
 at the bottom of the viewport. The shortcut uses the same saved advisory history,
 cancellation, and error handling as other follow-ups and never chooses an answer.
 
@@ -340,7 +389,9 @@ the deterministic task planner switches to an explicitly partial working set:
   concept annotations and `whyItMatters` outside task questions. Human text is never
   summarized or truncated. Previous assessments and organization proposals stay saved.
 - Fill remaining space with fitting related proposals, open questions, and research.
-  A separate index of up to 60 excerpted labels is navigation only.
+  A separate index of up to 60 excerpted labels is navigation only. Its oldest
+  labels are dropped as needed to fit exact evidence and optional detail; an
+  oversized navigation index cannot cause a mandatory-evidence budget failure.
 - Preserve project summary, goals, actors, assumptions, scope confidence, and existing
   assessments when applying partial results. Partial passes cannot perform organization
   operations or replace whole-area coverage assessments.

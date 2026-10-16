@@ -4,9 +4,10 @@ import { mkdirSync } from "node:fs";
 import { z } from "zod";
 import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace } from "./workspace.js";
 import { dirname } from "node:path";
+import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
 import { organize, type Organization } from "../core/epics.js";
-import { answerSchema, analysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
+import { answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
   submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
 
 export class ProjectStore {
@@ -232,16 +233,17 @@ export class ProjectStore {
     }).immediate();
   }
 
-  create(name: string, idea: string, selection: ModelSelection): Project {
+  create(name: string, idea: string, selection: ModelSelection, origin?: Project["origin"]): Project {
     if (!idea.trim() || idea.length > 12000) throw new Error("Idea must contain 1–12000 characters.");
     const project = projectSchema.parse({
       id: randomUUID(), name, revision: 1, model: modelSelection.parse(selection),
-      sources: [{ id: randomUUID(), kind: "initial", text: idea }], questions: [], requirements: [],
+      sources: [{ id: randomUUID(), kind: origin && !origin.descriptionEdited ? "workspace" : "initial", text: idea }], questions: [], requirements: [],
+      ...(origin ? { origin } : {}),
       summary: "", goals: [], actors: [], assumptions: [],
     });
     this.db.transaction(() => {
       this.db.prepare("INSERT INTO projects VALUES (?, ?, ?)").run(project.id, 1, JSON.stringify(project));
-      this.record(project, "Project created; original human idea preserved");
+      this.record(project, origin ? "Existing project created; folder suggestions and original input provenance retained" : "Project created; original human idea preserved");
     }).immediate();
     return project;
   }
@@ -281,6 +283,20 @@ export class ProjectStore {
 
   organize(id: string, revision: number, operations: Organization[]) {
     return this.mutate(id, revision, "Human organized project areas", (project) => organize(project, operations));
+  }
+
+  retireQuestions(id: string, revision: number, questionIDs: string[], reason: string) {
+    if (!reason.trim() || reason.length > 2000 || !questionIDs.length || questionIDs.length > 100 || new Set(questionIDs).size !== questionIDs.length) throw new Error("Choose unique unanswered questions and supply a retirement reason.");
+    return this.mutate(id, revision, "Human dismissed unrelated unanswered questions; history retained", (project) => {
+      if (this.jobs(id).some((j) => !j.helpRequest && (j.status === "pending" || j.status === "running" && (j.leaseUntil ?? 0) > Date.now()))) throw new Error("Stop active work before dismissing questions.");
+      const waiting = new Set(this.submissions(id).filter((s) => ["queued", "processing", "saved", "needs-attention"].includes(s.status)).flatMap((s) => s.input.type === "answer" ? [s.input.questionID] : []));
+      for (const questionID of questionIDs) {
+        const question = project.questions.find((q) => q.id === questionID);
+        if (!question || question.status !== "pending" || question.sourceID || waiting.has(questionID)) throw new Error("Only unanswered questions without saved or queued responses can be dismissed.");
+        question.status = "retired"; question.retirementReason = reason;
+      }
+      project.roundChanges = [`Dismissed ${questionIDs.length} unanswered questions: ${reason}. Question history, answers and decisions retained.`];
+    });
   }
 
   reviewOrganization(id: string, revision: number, reviewID: string, accept: boolean) {
@@ -371,17 +387,21 @@ export class ProjectStore {
     });
   }
 
-  beginJob(id: string, revision: number, helpRequest?: QuestionHelpRequest): { project: Project; job: Job } {
+  beginJob(id: string, revision: number, helpRequest?: QuestionHelpRequest, scan = false): { project: Project; job: Job } {
     return this.db.transaction(() => {
       const project = this.get(id);
       if (project.revision !== revision) throw new StaleRevisionError();
+      if (!helpRequest) {
+        const active = this.jobs(id).filter((j) => !j.helpRequest && (j.status === "pending" || (j.status === "running" && (j.leaseUntil ?? 0) > Date.now())));
+        if (active.some((j) => scan || j.kind === "scan")) throw new Error("This project already has active work. Wait or stop it before scanning/discovery.");
+      }
       if (helpRequest) {
         helpRequest = questionHelpRequestSchema.parse(helpRequest);
         if (!project.questions.some((q) => q.id === helpRequest!.questionID && q.status !== "retired")) throw new Error("Question is missing or retired.");
         if (this.jobs(id).some((j) => j.helpRequest && (j.status === "pending" || (j.status === "running" && (j.leaseUntil ?? 0) > Date.now())))) throw new Error("This project already has an active question-help request.");
       }
       const job: Job = { id: randomUUID(), projectID: id, expectedRevision: revision,
-        status: "pending", model: project.model, leaseUntil: null, ...(helpRequest ? { helpRequest } : {}) };
+        status: "pending", model: project.model, leaseUntil: null, ...(helpRequest ? { helpRequest } : {}), ...(scan ? { kind: "scan" as const } : {}) };
       this.db.prepare("INSERT INTO jobs VALUES (?, ?, ?)").run(job.id, id, JSON.stringify(job));
       return { project, job };
     }).immediate();
@@ -452,11 +472,58 @@ export class ProjectStore {
     }).immediate();
   }
 
+  attachScan(id: string, scan: NonNullable<Job["scan"]>) {
+    const job = this.getJob(id);
+    if (job.status !== "running") throw new Error("Scan is no longer running.");
+    job.scan = scan; this.saveJob(job);
+  }
+
+  finishScan(id: string, outputs: unknown[]): Job {
+    const results = outputs.map((output) => scanAnalysisSchema.parse(output));
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (!job.scan || job.status !== "running") throw new Error("Scan is no longer running.");
+      const binding = this.workspace(job.projectID);
+      if ((job.leaseUntil ?? 0) <= Date.now()) { job.status = "interrupted"; job.diagnostic = "Scan lease expired. Retry explicitly."; }
+      else if (this.get(job.projectID).revision !== job.expectedRevision || !binding || workspaceScanKey(binding.path) !== job.scan.workspaceKey) {
+        job.status = "stale"; job.diagnostic = "Project or connected folder changed. Scan was not applied.";
+      } else {
+        this.mutate(job.projectID, job.expectedRevision, `Workspace scan ${job.scan.snapshot.id}`, (project) => {
+          const scan = job.scan!;
+          const history = this.jobs(job.projectID).filter((j) => j.status === "completed" && j.scan?.workspaceKey === scan.workspaceKey).flatMap((j) => j.scan!.snapshot.files);
+          const oldSources = new Set(history.filter((old) => !scan.snapshot.files.some((current) => current.path === old.path && current.hash === old.hash)).map((file) => file.sourceID));
+          scan.snapshot.affectedRequirementIDs = project.requirements.filter((r) => r.sourceIDs.some((s) => oldSources.has(s))).map((r) => r.id);
+          for (const source of scan.sources) if (!project.sources.some((s) => s.id === source.id)) project.sources.push(source);
+          for (const result of results) {
+            if (result.questions.length || result.retireQuestions.length || result.assessments?.length || result.researchFindings?.length || result.organization?.some((op) => op.type !== "upsert" || !op.epicID.startsWith("new:"))) throw new Error("Scans may only add feature and requirement proposals; review precedes gap discovery.");
+            const evidence = new Set(scan.sources.map((s) => s.id));
+            if (result.requirements.some((r) => !r.sourceIDs.some((s) => evidence.has(s)))) throw new Error("Each scanned requirement needs captured file evidence.");
+            const aliases = new Map<string, string>();
+            result.organization = result.organization?.filter((op) => {
+              if (op.type !== "upsert") return false;
+              const existing = project.epics.find((e) => !e.archived && e.title.toLowerCase() === op.title.toLowerCase());
+              if (existing) { aliases.set(op.epicID, existing.id); return false; }
+              return true;
+            });
+            for (const r of result.requirements) if (r.epicID) r.epicID = aliases.get(r.epicID) ?? r.epicID;
+            for (const op of result.organization ?? []) if (op.type === "upsert") op.dependencies = op.dependencies.map((id) => aliases.get(id) ?? id);
+            result.requirements = result.requirements.filter((r) => !project.requirements.some((old) => old.statement.trim().toLowerCase() === r.statement.trim().toLowerCase()));
+            applyRound(project, result, randomUUID);
+          }
+          project.scans.push(scan.snapshot);
+          project.roundChanges.push(`Scanned ${scan.snapshot.files.length} files; ${scan.snapshot.omitted.length} excluded/omitted paths. Review inferred requirements before exploring gaps.`, `${scan.snapshot.affectedRequirementIDs.length} existing requirements have changed or unavailable file evidence; their decisions were retained.`);
+        });
+        job.status = "completed";
+      }
+      job.leaseUntil = null; this.saveJob(job); return job;
+    }).immediate();
+  }
+
   finishJob(id: string, raw: unknown): Job {
     const result = analysisSchema.parse(raw);
     return this.db.transaction(() => {
       const job = this.getJob(id);
-      if (job.helpRequest) throw new Error("Question help cannot apply discovery proposals.");
+      if (job.helpRequest || job.kind === "scan") throw new Error("Question help and scans cannot apply ordinary discovery proposals.");
       if (job.status !== "running") throw new Error("Job is no longer running; result was not applied.");
       if ((job.leaseUntil ?? 0) <= Date.now()) {
         job.status = "interrupted";
@@ -466,6 +533,7 @@ export class ProjectStore {
         job.diagnostic = "Project changed while analysis was running; result was not applied.";
       } else {
         this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
+          if (project.scans.length && result.questions.some((q) => !q.evidenceIDs?.length || q.evidenceIDs.some((evidenceID) => !job.context?.includedIDs.includes(evidenceID)))) throw new Error("Existing-project questions must cite evidence in the current detailed working context. No proposals applied.");
           if (job.context && result.requirements.some((item) => item.sourceIDs.some((id) => !job.context!.includedIDs.includes(id)))) throw new Error("Requirement cites evidence outside this round's context.");
           if (job.context && result.assessments?.some((item) =>
             (!item.epicID.startsWith("new:") && job.context!.epicIDs && !job.context!.epicIDs.includes(item.epicID)) ||

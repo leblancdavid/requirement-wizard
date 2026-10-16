@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Account, LoginStatus, Model } from "../providers/connections.js";
-import "./connections.css";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
 export function AIConnections({ request, accountID, modelID, onSelect, children, disabled = false }: {

@@ -57,6 +57,13 @@ and `--create-directory`. Files update through the shared store for browser and
 terminal changes. See [local project workspaces](project-workspaces.md#terminal) for
 commands, generated artifacts, conflict handling, and verification evidence.
 
+To initialize definitions from the connected source folder, or rescan after changes:
+`npm run reqwizit -- scan --project "project-id" --expected-revision 3`.
+Use the actual inspected revision. This sends eligible source files to the saved
+AI connection, reports progress, and stops for proposal review before `analyze`.
+It uses read-only bounded capture with retained file evidence and atomic application;
+see [initialization and rescanning](project-workspaces.md#initialize-definitions-and-rescan).
+
 All noninteractive mutations require the revision you inspected. A stale revision
 fails instead of overwriting another process's work.
 

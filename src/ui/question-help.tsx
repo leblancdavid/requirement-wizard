@@ -1,6 +1,5 @@
 import React, { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Concept, Job, QuestionHelpRequest } from "../core/model.js";
-import "./question-help.css";
 
 function ConceptTip({ concept }: { concept: Concept }) {
   const id = useId();
@@ -30,10 +29,11 @@ function tooltipSummary(explanation: string) {
   return `${excerpt.slice(0, excerpt.lastIndexOf(" ") > 300 ? excerpt.lastIndexOf(" ") : excerpt.length)}…`;
 }
 
-export function AnnotatedText({ text, concepts = [], onExplain, busy = false, jobs = [], revision }: { text: string; concepts?: Concept[]; onExplain?: (phrase: string, context: string) => Promise<void>; busy?: boolean; jobs?: Job[]; revision?: number }) {
+export function AnnotatedText({ text, concepts = [], onExplain, onCancel, busy = false, jobs = [], revision }: { text: string; concepts?: Concept[]; onExplain?: (phrase: string, context: string) => Promise<void>; onCancel?: (jobID: string) => Promise<void>; busy?: boolean; jobs?: Job[]; revision?: number }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [requesting, setRequesting] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [cancelling, setCancelling] = useState(false);
   const tooltipID = useId();
   const wrapper = useRef<HTMLSpanElement>(null);
   useEffect(() => {
@@ -56,10 +56,12 @@ export function AnnotatedText({ text, concepts = [], onExplain, busy = false, jo
       return <span className="explain-word" key={start}>
         <button type="button" className="word-trigger" aria-label={`Explain word ${part}`} aria-expanded={selected === start} aria-describedby={selected === start && (loading || response) ? tooltipID : undefined} onClick={() => { setSelected(selected === start ? null : start); setError(""); }}>{part}</button>
         {selected === start && <span className="word-help" aria-live="polite">
+          <button type="button" className="word-help-close" aria-label="Close word explanation" title="Close" onClick={(event) => { event.currentTarget.closest(".explain-word")?.querySelector<HTMLButtonElement>(".word-trigger")?.focus(); setSelected(null); setError(""); }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
           {loading ? <span id={tooltipID} role="tooltip" className="help-loading"><span className="help-spinner" aria-hidden="true" /> Explaining “{part}”…</span>
             : response ? <><span id={tooltipID} role="tooltip" className="word-help-summary"><b>“{part}” in this context</b><span>{tooltipSummary(response.explanation)}</span>{response.assumptions.length > 0 && <small>Assumptions to check — see the full explanation below.</small>}{job && job.expectedRevision !== revision && <small>Earlier project context · revision {job.expectedRevision}</small>}</span><small>Full explanation saved in the help panel below.</small></>
-            : <>{job && <span role="status">{job.status}: {job.diagnostic ?? "Request an explanation again to retry."}</span>}<button type="button" className="word-help-action" disabled={busy} aria-label={`What do you mean by “${part}”?`} title="What do you mean by this?" onClick={() => { setRequesting(start); setError(""); void onExplain(part, text).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not request help. Try again.")).finally(() => setRequesting(null)); }}><span aria-hidden="true">?</span> What do you mean by this?</button></>}
+            : <>{job && <span role="status">{job.status}: {job.diagnostic ?? "Request an explanation again to retry."}</span>}<button type="button" className="word-help-action" disabled={busy} aria-label={`What do you mean by “${part}”?`} title="What do you mean by this?" onClick={() => { setRequesting(start); setError(""); void onExplain(part, text).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not request help. Try again.")).finally(() => setRequesting(null)); }}><span className="word-help-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 8a3 3 0 0 1 6 0c0 2-3 2-3 5" /><path d="M12 17h.01" /></svg></span><span>What do you mean by this?</span></button></>}
           {error && <span role="alert">{error}</span>}
+          {loading && job && ["pending", "running"].includes(job.status) && onCancel && <button type="button" className="word-help-cancel" disabled={cancelling} onClick={() => { setCancelling(true); setError(""); void onCancel(job.id).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not cancel explanation. Try again.")).finally(() => setCancelling(false)); }}>{cancelling ? "Cancelling…" : "Canceled"}</button>}
         </span>}
       </span>;
     });

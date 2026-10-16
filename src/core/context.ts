@@ -32,7 +32,12 @@ export function buildContext(project: Project, focusEpicID?: string, budget = 48
   const questions = project.questions.filter((item) => selected.has(item.epicID) && item.status !== "retired");
   const requirements = project.requirements.filter((item) => selected.has(item.epicID));
   const research = project.research.filter((item) => selected.has(item.epicID));
-  const sourceIDs = new Set([...questions.flatMap((item) => item.sourceID ? [item.sourceID] : []), ...requirements.flatMap((item) => item.sourceIDs)]);
+  const sourceIDs = new Set([...questions.flatMap((item) => [...(item.sourceID ? [item.sourceID] : []), ...(item.evidenceIDs ?? [])]), ...requirements.flatMap((item) => item.sourceIDs)]);
+  let extraBytes = 0;
+  const currentFiles = new Set(project.scans.at(-1)?.files.map((file) => file.sourceID));
+  for (const source of project.sources) if (source.kind === "workspace" && currentFiles.has(source.id) && !sourceIDs.has(source.id) && extraBytes + source.text.length <= 12000) {
+    sourceIDs.add(source.id); extraBytes += source.text.length;
+  }
   const sources = project.sources.filter((item) => item.kind === "initial" || (item.kind === "note" && selected.has(item.epicID)) || sourceIDs.has(item.id));
   const includedIDs = [...sources, ...questions, ...requirements, ...research].map((item) => item.id);
   const included = new Set(includedIDs);
@@ -41,6 +46,12 @@ export function buildContext(project: Project, focusEpicID?: string, budget = 48
     id: project.id, name: project.name, revision: project.revision, focusEpicID: focus ?? null,
     previousInterpretation: { summary: project.summary, generatedAtRevision: project.analysisRevision, stale: project.analysisRevision !== project.revision },
     goals: project.goals, actors: project.actors, assumptions: project.assumptions,
+    projectOrigin: project.origin ?? null,
+    retiredQuestionGuidance: project.questions.filter((q) => q.status === "retired").slice(-20).map((q) => ({ text: q.text, reason: q.retirementReason })),
+    workspaceEvidence: project.scans.length ? { snapshotID: project.scans.at(-1)!.id, capturedAt: project.scans.at(-1)!.capturedAt,
+      historicalSourceIDs: sources.filter((s) => s.kind === "workspace" && !project.scans.at(-1)!.files.some((file) => file.sourceID === s.id)).map((s) => s.id),
+      affectedRequirementIDs: project.scans.at(-1)!.affectedRequirementIDs,
+      limitation: "Captured static evidence only. Historical source IDs are not present in the latest captured file selection; they may have changed, been removed or omitted. Never treat them as current behavior without review. The working folder may change after any scan." } : null,
     epicMap: active.map((item) => ({ ...item, purpose: item.purpose.slice(0, 300), purposeIsExcerpt: item.purpose.length > 300 })),
     movableRecordIDs: organizationRecords(project).filter((item) => included.has(item.id)).map((item) => item.id),
     focusedEpics: active.filter((item) => selected.has(item.id)).map((epic) => ({ ...epic,

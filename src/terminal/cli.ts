@@ -21,6 +21,7 @@ npm run reqwizit -- list
 npm run reqwizit -- show --project <id> [--revision <n>] [--json]
 npm run reqwizit -- interview --project <id>
 npm run reqwizit -- analyze --project <id> --expected-revision <n>
+npm run reqwizit -- scan --project <id> --expected-revision <n>
 npm run reqwizit -- answer --project <id> --expected-revision <n> --question <id> --text "Answer"
 npm run reqwizit -- review --project <id> --expected-revision <n> --requirement <id> --decision accept --text "Rationale"
 npm run reqwizit -- model --project <id> --expected-revision <n> --provider openai --model gpt-6.1-sol
@@ -38,7 +39,8 @@ new supports --path <absolute-directory> [--create-directory] to connect a works
 Implementation statuses: not-started, in-progress, blocked, implemented, verified.
 Verified requires --evidence. Disconnect retains workspace files and app data.
 Model changes retain the existing connection unless explicitly changed.
-Only analyze/interview make model calls (using the saved explicit provider/model).
+Only analyze/interview/scan make model calls (using the saved explicit provider/model).
+scan initializes or rescans a connected folder, then stops for proposal review.
 analyze supports --focus-epic <epic-id> and opt-in --research for bounded web retrieval.
 interview saves answers immediately; quit and resume with the same project ID.
 This CLI uses JSON-text validation and does not claim release readiness. Research is opt-in.
@@ -106,7 +108,7 @@ async function main() {
   } });
   if (values.help || !positionals.length) { console.log(help); return; }
   const command = positionals[0];
-  if (positionals.length !== 1 || !["new", "list", "show", "model", "answer", "review", "analyze", "interview", "jobs", "recover", "workspace", "implementation"].includes(command!)) {
+  if (positionals.length !== 1 || !["new", "list", "show", "model", "answer", "review", "analyze", "scan", "interview", "jobs", "recover", "workspace", "implementation"].includes(command!)) {
     throw new Error("Unknown command. See --help.");
   }
   if (command === "interview" && (!stdin.isTTY || !stdout.isTTY)) throw new Error("interview requires an interactive terminal; use analyze/answer/review for scripting.");
@@ -143,6 +145,14 @@ async function main() {
     } else {
       const id = required(values.project, "project");
       if (command === "show") print(store.get(id, values.revision ? revision(values.revision) : undefined));
+      else if (command === "scan") {
+        console.error("Scanning sends eligible source files to the saved AI connection and consumes allowance. Ctrl+C cancels.");
+        store.pauseQueue(id, true);
+        const job = await service.scan(id, revision(values["expected-revision"]), { signal: controller.signal, onProgress: (message) => console.error(message) });
+        console.error(`Scan ${job.id}: ${job.status}${job.diagnostic ? ` — ${job.diagnostic}` : " — Review proposals before running analyze."}`);
+        if (job.status !== "completed") process.exitCode = 1;
+        print(store.get(id));
+      }
       else if (command === "workspace") {
         store.get(id);
         const operation = required(values.operation, "operation");

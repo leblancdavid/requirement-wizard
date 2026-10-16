@@ -200,12 +200,22 @@ Exit checks:
 
 ## M7 — Existing-project discovery and feature planning (follow-on)
 
-Status: planned, not implemented. Follows DEC-014. The milestone number identifies
+Status: initialization and manual rescan implemented under DEC-018; broader change
+planning/handoffs remain planned. DEC-018 brings the first slice forward from DEC-014.
+The milestone number identifies
 the backlog item; M6 integrated execution is not a dependency.
 
-Dependencies: M4 review/baseline capabilities and M5 portable handoffs. Covers RW-021–022.
-Initial scope is a local source folder and a one-time, read-only analysis; automatic
-repository refresh/change detection remains later work.
+Dependencies: full change planning depends on M4 review/baselines and M5 portable
+handoffs. Initialization reuses current requirement review independently. Covers
+RW-021–022. Read-only capture and manual rescans are implemented; automatic watching
+remains later work. M7.1–3 have a fixed-budget, fixture-verified implementation; M7.4
+reuses existing review and explicitly started gap discovery. Selection controls,
+real-project quality evaluation, and M7.5–6 change planning/handoffs remain incomplete.
+DEC-019 additionally implements explicit existing-project entry with local identity
+preview, provenance/manual-edit retention, Godot text capture and source excerpts,
+incomplete-scan retry/discovery gating, and unrelated-question retirement/replacement.
+Preview/capture were checked read-only against Rust Grind Galaxy without inference or
+project mutation. Live reconstruction and generated-question quality remain unqualified.
 
 Work:
 
@@ -231,7 +241,8 @@ Exit checks:
   exclusions and analysis limits remain visible.
 - Conflicting documentation/code and missing intent produce reviewable questions;
   inferred behavior does not silently become confirmed intent or completeness credit.
-- Initial import leaves target files unchanged and does not run project scripts.
+- Capture leaves source files unchanged and does not run project scripts; connected
+  workspace artifacts continue publishing definitions as usual.
 - Malformed references, stale revisions, failure, cancellation, and restart preserve
   saved human decisions and never partially apply or automatically repeat analysis.
 - The handoff clearly identifies its one-time source snapshot and unresolved impact

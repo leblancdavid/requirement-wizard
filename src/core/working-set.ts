@@ -19,7 +19,7 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
     ?? (source.requirementID ? requirementAreas.get(source.requirementID) : undefined) ?? source.epicID;
   try {
     const pack = buildContext(project, task.focusEpicID, budget, task.requiredEpicIDs);
-    const mandatory = project.sources.filter((s) => s.kind === "initial" || (!superseded.has(s.id)
+    const mandatory = project.sources.filter((s) => s.kind === "initial" || (s.kind !== "workspace" && !superseded.has(s.id)
       && pack.manifest.epicIDs?.includes(sourceArea(s))));
     if ([...(task.recordIDs ?? []), ...mandatory.map((s) => s.id)].every((id) => pack.manifest.includedIDs.includes(id))) {
       if (task.recordIDs?.length) {
@@ -56,7 +56,7 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   // Advisory help can use a question-sized scope. Discovery must retain every
   // current human constraint in the selected areas, including dependencies.
   for (const source of project.sources) {
-    if (source.kind === "initial" || (!superseded.has(source.id) && selected.has(sourceArea(source))
+    if (source.kind === "initial" || (source.kind !== "workspace" && !superseded.has(source.id) && selected.has(sourceArea(source))
       && (!task.advisory || sourceArea(source) === "project"))) included.add(source.id);
   }
   for (const requirement of project.requirements) {
@@ -70,7 +70,10 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
     let changed = true;
     while (changed) {
       const size = ids.size;
-      for (const q of project.questions) if (ids.has(q.id) && q.sourceID) ids.add(q.sourceID);
+      for (const q of project.questions) if (ids.has(q.id)) {
+        if (q.sourceID) ids.add(q.sourceID);
+        for (const evidenceID of q.evidenceIDs ?? []) ids.add(evidenceID);
+      }
       for (const r of project.requirements) if (ids.has(r.id)) for (const id of r.sourceIDs) ids.add(id);
       for (const s of project.sources) if (ids.has(s.id)) {
         if (s.questionID) ids.add(s.questionID);
@@ -93,6 +96,9 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
         label: ("text" in r ? r.text : r.statement).slice(0, 120), labelIsExcerpt: true }));
     return {
       id: project.id, name: project.name, revision: project.revision, focusEpicID: focus,
+      projectOrigin: project.origin ?? null,
+      workspaceEvidence: project.scans.length ? { snapshotID: project.scans.at(-1)!.id, capturedAt: project.scans.at(-1)!.capturedAt, limitation: "Only detailed included source excerpts can support claims about existing behavior." } : null,
+      retiredQuestionGuidance: project.questions.filter((q) => q.status === "retired").slice(-20).map((q) => ({ text: q.text, reason: q.retirementReason })),
       taskRecordIDs: [...taskIDs], partial: true,
       previousInterpretation: { summary: project.summary.slice(0, 1000), summaryIsExcerpt: project.summary.length > 1000,
         generatedAtRevision: project.analysisRevision, advisoryOnly: true },
@@ -106,6 +112,10 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   };
   const pack = (ids: Set<string>): ContextPack => {
     const data = render(ids);
+    // Navigation labels are optional, even for the initial mandatory package.
+    // Prefer recent labels and reclaim their space for every candidate's exact
+    // evidence closure before deciding that human constraints cannot fit.
+    while (data.recordIndex.length && JSON.stringify(data).length > budget) data.recordIndex.shift();
     return { data, manifest: { version: "tasks-v1", revision: project.revision, focusEpicID: focus,
       characters: JSON.stringify(data).length, budget, includedIDs: [...ids],
       omittedIDs: allRecords.filter((r) => !ids.has(r.id)).map((r) => r.id),
@@ -118,7 +128,8 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   // Prefer related proposals and open questions, then recent optional detail.
   const candidates = [...project.requirements.filter((r) => r.sourceIDs.some((id) => taskIDs.has(id))),
     ...project.questions.filter((q) => q.status === "pending"), ...project.requirements.slice().reverse(),
-    ...project.research.slice().reverse()];
+    ...project.research.slice().reverse(),
+    ...project.sources.filter((s) => s.kind === "workspace" && project.scans.at(-1)?.files.some((file) => file.sourceID === s.id))];
   for (const record of candidates) {
     if (included.has(record.id) || !selected.has(record.epicID)) continue;
     const next = new Set(included); next.add(record.id); closeEvidence(next);

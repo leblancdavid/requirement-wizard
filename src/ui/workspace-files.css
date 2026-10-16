@@ -10,3 +10,12 @@
 .implementation-progress summary span, .implementation-item summary span { display: block; font-size: .85rem; font-weight: normal; margin-top: 6px; }
 .implementation-item { padding: 12px 0; border-top: 1px solid var(--border, #ddd); }
 .implementation-item form { display: grid; gap: 12px; margin-top: 12px; }
+.workspace-scan { overflow-wrap: anywhere; min-width: 0; }
+.workspace-scan > small { display: block; margin: 12px 0; }
+.workspace-scan details { margin-top: 12px; min-width: 0; }
+.workspace-scan pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+.project-start { display: flex; flex-wrap: wrap; gap: 20px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; }
+.project-start input[type="radio"] { width: auto; }
+.folder-preview { padding: 14px; border: 1px solid var(--border); border-radius: 10px; overflow-wrap: anywhere; }
+.question-cleanup { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin: 12px 0; overflow-wrap: anywhere; }
+.cleanup-question { padding: 12px 0; border-top: 1px solid var(--border); display: grid; gap: 6px; }

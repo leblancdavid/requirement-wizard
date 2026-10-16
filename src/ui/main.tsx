@@ -3,13 +3,13 @@ import { createRoot } from "react-dom/client";
 import type { Job, Project, Submission } from "../core/model.js";
 import type { coverage } from "../core/coverage.js";
 import { dimensionLabels } from "../core/epics.js";
-import "./styles.css";
-import "./details.css";
-import "./workspace.css";
+import "./appearance.css";
+import { AppearanceSettings } from "./appearance-settings.js";
 import { AnnotatedText, QuestionHelp, wordHelpContext, type HelpControls } from "./question-help.js";
 import { AIConnections } from "./connections.js";
-import { WorkspacePicker, WorkspaceConnection, ImplementationProgress } from "./workspace-files.js";
+import { WorkspacePicker, WorkspaceConnection, WorkspaceScan, ImplementationProgress } from "./workspace-files.js";
 import type { Workspace } from "../storage/workspace.js";
+import type { FolderPreview } from "../core/folder-preview.js";
 
 type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; submissions: Submission[]; queuePaused: boolean };
 type Item = { id: string; name: string; revision: number };
@@ -30,6 +30,18 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error ?? "Request failed.");
   return data as T;
+}
+function QuestionCleanup({ project, queuedIDs, disabled, replaceDisabled, retire }: { project: Project; queuedIDs: Set<string>; disabled: boolean; replaceDisabled: boolean; retire: (ids: string[], regenerate?: boolean) => Promise<void> }) {
+  const eligible = project.questions.filter((q) => q.status === "pending" && !q.sourceID && !queuedIDs.has(q.id));
+  const retired = project.questions.filter((q) => q.status === "retired");
+  if (!eligible.length && !retired.length) return null;
+  return <details className="question-cleanup"><summary>Unrelated questions / cleanup</summary>
+    <p>Dismiss unanswered questions that do not fit this project. Questions and reasons remain in history; saved and queued responses are protected.</p>
+    {eligible.map((q) => <div className="cleanup-question" key={q.id}><span>{q.text}</span><button className="quiet" disabled={disabled} onClick={() => void retire([q.id])} aria-label={`Dismiss unrelated question: ${q.text}`}>Unrelated / dismiss</button></div>)}
+    {!!eligible.length && <div className="button-row"><button className="secondary" disabled={disabled} onClick={() => void retire(eligible.map((q) => q.id))}>Dismiss unanswered questions</button><button className="secondary" disabled={disabled || replaceDisabled} onClick={() => void retire(eligible.map((q) => q.id), true)}>Replace unanswered questions from project evidence</button></div>}
+    {replaceDisabled && <small>Complete a folder scan before generating evidence-based replacements.</small>}
+    {!!retired.length && <details><summary>Dismissed questions · {retired.length}</summary>{retired.map((q) => <p key={q.id}><strong>{q.text}</strong><br />{q.retirementReason}</p>)}</details>}
+  </details>;
 }
 function Meter({ value, stale = false }: { value: number; stale?: boolean }) {
   return <div className={`meter ${stale ? "stale" : ""}`} role="meter" aria-label="Definition coverage" aria-valuenow={value} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${value}%` }} /></div>;
@@ -52,6 +64,11 @@ function App() {
   const [research, setResearch] = useState(localStorage.getItem("reqwizit-research") !== "false");
   const [name, setName] = useState(""); const [idea, setIdea] = useState("");
   const [workspacePath, setWorkspacePath] = useState(""); const [createDirectory, setCreateDirectory] = useState(false);
+  const [initializeFolder, setInitializeFolder] = useState(false);
+  const [folderPreview, setFolderPreview] = useState<FolderPreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const editedIdentity = useRef({ name: false, description: false });
   const [model, setModel] = useState("gpt-6.1-sol");
   const [connectionID, setConnectionID] = useState("");
   const [note, setNote] = useState("");
@@ -80,6 +97,8 @@ function App() {
   const busy = pending || !!data?.active;
   const connectionChanged = !!project && (model !== project.model.modelID || connectionID !== (project.model.connectionID ?? ""));
   const activeConnection = project ? `${project.model.connectionID ? "Direct ChatGPT plan" : "OpenCode"} · ${project.model.modelID}` : "";
+  const lastScan = data?.jobs.filter((job) => job.kind === "scan").at(-1);
+  const needsInitialization = !!project && !project.scans.length && (!!project.origin || !!lastScan);
   const help: HelpControls = {
     jobs: data?.helpJobs ?? [], revision: project?.revision ?? 1,
     busy: !!data?.helpJobs.some((j) => ["pending", "running"].includes(j.status)),
@@ -101,6 +120,21 @@ function App() {
     if (selected.current === projectID) setData((previous) => previous && previous.project.id === projectID && previous.project.revision > snapshot.project.revision ? previous : snapshot);
   }
   useEffect(() => { void list().catch((error: Error) => setError(error.message)); }, []);
+  useEffect(() => {
+    let current = true;
+    setFolderPreview(null); setPreviewError("");
+    if (!initializeFolder || !workspacePath.trim()) { setPreviewBusy(false); return; }
+    setPreviewBusy(true);
+    const timer = setTimeout(() => {
+      void api<FolderPreview>("folder-preview", { path: workspacePath.trim() }).then((preview) => {
+        if (!current) return;
+        setFolderPreview(preview);
+        if (!editedIdentity.current.name) setName(preview.name);
+        if (!editedIdentity.current.description) setIdea(preview.description);
+      }).catch((error: Error) => { if (current) setPreviewError(error.message); }).finally(() => { if (current) setPreviewBusy(false); });
+    }, 350);
+    return () => { current = false; clearTimeout(timer); };
+  }, [initializeFolder, workspacePath]);
   useEffect(() => {
     const syncPage = () => setShowSettings(location.hash === "#/settings");
     window.addEventListener("popstate", syncPage);
@@ -146,6 +180,9 @@ function App() {
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before exploring.");
     if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
+  async function dismissQuestions(questionIDs: string[], regenerate = false) {
+    await mutate("retire-questions", { questionIDs, reason: regenerate ? "Replace generic unanswered questions with gaps grounded in the existing project evidence." : "Dismissed by the user as unrelated to this project.", regenerate, research: project?.model.connectionID ? false : research });
+  }
   async function submit(input: Submission["input"], key: string, replaces?: string): Promise<boolean> {
     if (!project || inFlight.current.has(key)) return false;
     const projectID = project.id;
@@ -162,11 +199,16 @@ function App() {
   }
   async function create(event: FormEvent) {
     event.preventDefault();
+    if (initializeFolder && (!workspacePath.trim() || !folderPreview || previewBusy)) { setError("Inspect an existing local folder before creating the project."); return; }
     await act(async () => {
-      const created = await api<Project & { workspaceError?: string }>("projects", { name, idea, model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) }, ...(workspacePath.trim() ? { workspace: { path: workspacePath, create: createDirectory } } : {}) });
+      const created = await api<Project & { workspaceError?: string }>("projects", { name, idea: idea.trim() ? idea : "Reconstruct the existing project from its connected source folder; review inferred definitions before discovering missing requirements.", entryMode: initializeFolder ? "existing" : "idea", ...(initializeFolder ? { previewFingerprint: folderPreview!.fingerprint } : {}), model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) }, ...(workspacePath.trim() ? { workspace: { path: workspacePath, create: initializeFolder ? false : createDirectory } } : {}) });
       setID(created.id); selected.current = created.id; setCreating(false); setName(""); setIdea("");
       setWorkspacePath(""); setCreateDirectory(false);
-      await list(); await api(`projects/${created.id}/analyze`, { revision: created.revision, research: connectionID ? false : research });
+      editedIdentity.current = { name: false, description: false };
+      await list();
+      if (initializeFolder) {
+        setInitializeFolder(false); setTab("requirements");
+      } else await api(`projects/${created.id}/analyze`, { revision: created.revision, research: connectionID ? false : research });
       if (created.workspaceError) setError(`Project created, but workspace connection failed: ${created.workspaceError}. Connect it in Settings.`);
     });
   }
@@ -211,37 +253,43 @@ function App() {
         {!showSettings && project && summary && !creating && <div className="header-progress" title="Estimated coverage of identified work, not completeness or build readiness."><div className="header-progress-label"><span>Definition progress</span><strong>{summary.percent}%</strong></div><Meter value={summary.percent} stale={summary.stale} /><small>Estimated coverage{summary.stale ? " · Review needed" : ""}</small></div>}</header>
       {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
       {showSettings && <section id="workspace-settings" className="settings-panel" aria-label="Settings">
+        <AppearanceSettings />
         <AIConnections request={api} disabled={pending} accountID={connectionID} modelID={model} onSelect={(account, selectedModel) => { setConnectionID(account); setModel(selectedModel); }}>
           {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Explore next gaps and question help."}</p><button disabled={busy || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
         </AIConnections>
         {project && !creating ? <><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p></> : <p>Your selected connection and model will be used when you create a project.</p>}
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
-        {project && !creating && <WorkspaceConnection project={project} workspace={data?.workspace ?? null} request={api} disabled={pending} run={act} />}
+        {project && !creating && <WorkspaceConnection project={project} scanJob={lastScan} workspace={data?.workspace ?? null} request={api} disabled={pending || !!data?.active} run={act} />}
       </section>}
       <div hidden={showSettings}>
       {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => navigate("settings")}>Review connection settings</button></div>}
       {(creating || !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>
         <form onSubmit={(event) => void create(event)}>
-          <label>Project name<input required maxLength={150} value={name} onChange={(event) => setName(event.target.value)} placeholder="Something worth building" /></label>
-          <label>Your idea<textarea required maxLength={12000} value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="I want to build an app that…" rows={5} /></label>
-          <WorkspacePicker path={workspacePath} create={createDirectory} onChange={(path, make) => { setWorkspacePath(path); setCreateDirectory(make); }} request={api} disabled={pending} />
+          <fieldset className="project-start"><legend>Start from</legend><label><input type="radio" name="project-start" checked={!initializeFolder} disabled={pending} onChange={() => setInitializeFolder(false)} /> New idea</label><label><input type="radio" name="project-start" checked={initializeFolder} disabled={pending} onChange={() => { setInitializeFolder(true); setCreateDirectory(false); }} /> Existing project</label></fieldset>
+          {initializeFolder && <><WorkspacePicker path={workspacePath} create={false} existingOnly onChange={(path) => setWorkspacePath(path)} request={api} disabled={pending} /><div className="folder-preview" aria-live="polite">{previewBusy ? "Inspecting local metadata and documentation…" : folderPreview ? <><strong>Detected: {folderPreview.projectType}</strong><p>Name and description are editable suggestions. No AI connection was used for this preview.</p><small>{folderPreview.evidence.length ? folderPreview.evidence.map((item) => `${item.field}: ${item.path}`).join(" · ") : "Name suggested from the folder name; no descriptive metadata found."}</small>{!folderPreview.description && <p>No suitable description found. You can enter one or let initialization reconstruct it.</p>}</> : "Choose an existing folder to suggest the project name and description."}{previewError && <p role="alert">{previewError}</p>}</div></>}
+          <label>Project name<input required maxLength={150} value={name} onChange={(event) => { editedIdentity.current.name = true; setName(event.target.value); }} placeholder="Something worth building" /></label>
+          <label>{initializeFolder ? "Project description (suggested from files)" : "Your idea"}<textarea required={!initializeFolder} maxLength={12000} value={idea} onChange={(event) => { editedIdentity.current.description = true; setIdea(event.target.value); }} placeholder={initializeFolder ? "Describe this existing project, or leave blank for initialization…" : "I want to build an app that…"} rows={5} /></label>
+          {!initializeFolder && <WorkspacePicker path={workspacePath} create={createDirectory} onChange={(path, make) => { setWorkspacePath(path); setCreateDirectory(make); }} request={api} disabled={pending} />}
+          {initializeFolder && <p>Source files will be sent to your selected AI connection in bounded batches. Review the generated feature and requirement proposals first. {workspacePath.trim() ? "" : "Select a local folder to initialize."}</p>}
           <div className="connection-summary">{connectionID ? "Direct ChatGPT plan" : "OpenCode connection"} · {model || "Choose a model in Settings"} <button type="button" className="quiet" onClick={() => navigate("settings")}>Choose AI connection</button></div>
           <label className="research-toggle"><input type="checkbox" checked={!connectionID && research} disabled={!!connectionID} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted web research</label>
-          <button className="primary" disabled={pending || !model}>{pending ? "Creating…" : "Create & explore →"}</button>
+          <button className="primary" disabled={pending || !model || initializeFolder && (!workspacePath.trim() || previewBusy || !folderPreview)}>{pending ? "Creating…" : initializeFolder ? "Create & initialize existing project →" : "Create & explore →"}</button>
         </form>
       </section> : !project || !summary ? <div className="empty">Loading your workspace…</div> : <>
         <div className="workspace-status" role="status"><span>{data.workspace ? `${data.workspace.status === "saved" ? "Saved" : data.workspace.status === "pending" ? "Saving" : data.workspace.status === "conflict" ? "Conflict" : "Unavailable"} · ${data.workspace.path}${data.workspace.savedRevision ? ` · r${data.workspace.savedRevision}` : ""}` : "No local folder connected"}</span><button className="quiet" onClick={() => navigate("settings")}>{data.workspace ? "Workspace settings" : "Connect workspace"}</button>{data.workspace?.diagnostic && <span>{data.workspace.diagnostic}</span>}</div>
         <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Questions"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}</button>)}</div>
         <section className="workspace">
           <div className="discovery-column">
-            <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div><button className="primary" disabled={busy || connectionChanged} onClick={() => void act(explore)}>{data.active ? "Discovering…" : "Explore next gaps →"}</button></div>
-            <div className="round-status" aria-live="polite">{data.active ? <><span className="pulse" />{data.progress.at(-1) ?? "Starting discovery…"}<button onClick={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); })}>Stop</button></> : lastJob?.status === "failed" || lastJob?.status === "stale" || lastJob?.status === "interrupted" ? <span className="job-error">Last round {lastJob.status}: {lastJob.diagnostic}</span> : <><span className="connection-dot" />{lastJob?.status === "completed" ? "Discovery saved. Your project map is ready to explore." : lastJob?.status === "cancelled" ? "Discovery stopped. Your saved answers are intact." : "Ready when you are. Start a round to explore your idea."}</>}</div>
+            <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div><button className="primary" disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(explore)}>{data.active ? "Discovering…" : "Explore next gaps →"}</button></div>
+            <div className="round-status" aria-live="polite">{data.active ? <><span className="pulse" />{data.progress.at(-1) ?? "Starting discovery…"}<button onClick={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); })}>Stop</button></> : lastJob?.status === "failed" || lastJob?.status === "stale" || lastJob?.status === "interrupted" ? <span className="job-error">Last {lastJob.kind === "scan" ? "scan" : "round"} {lastJob.status}: {lastJob.diagnostic}</span> : <><span className="connection-dot" />{lastJob?.status === "completed" ? lastJob.kind === "scan" ? "Scan saved. Review the reconstructed project map before exploring gaps." : "Discovery saved. Your project map is ready to explore." : lastJob?.status === "cancelled" ? lastJob.kind === "scan" ? "Scan stopped. Its proposals were not applied. Retry explicitly." : "Discovery stopped. Your saved answers are intact." : "Ready when you are. Start a round to explore your idea."}</>}</div>
+            {needsInitialization && <p role="status">Initialization must complete before gap discovery. Retry the folder scan below.</p>}
+            {data.workspace && (!project.scans.length || tab === "requirements") && <WorkspaceScan project={project} scanJob={lastScan} disabled={busy || connectionChanged} scan={() => act(async () => { await api(`projects/${project.id}/scan`, { revision: project.revision }); setTab("requirements"); })} />}
             {(tab === "history" || tab === "research") && <div className="filter-row"><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Revisions & processing</button><button className={tab === "research" ? "active" : ""} onClick={() => setTab("research")}>Research sources</button></div>}
             {(tab === "history" || data.queuePaused || data.submissions.some((item) => item.status === "needs-attention" && !item.conflict)) && <details className="queue-panel">
               <summary aria-live="polite">Processing &amp; queue · {processing.length} processing · {waiting.length} waiting{data.submissions.some((item) => item.status === "needs-attention") ? ` · ${data.submissions.filter((item) => item.status === "needs-attention").length} need attention` : ""}{data.queuePaused ? " · Paused" : ""}</summary>
               <p>Answers in a batch are considered together. You can keep answering while discovery runs.</p>
-              {data.queuePaused && <p role="status">Processing is paused. Saved submissions are retained. {selectedEpic ? `Resume processes responses in ${areaTitle(selectedEpic)}; other areas remain pending.` : "Use the feature filter to resume one area's responses, or resume all areas together."} <button className="secondary" disabled={busy} onClick={() => void act(explore)}>Resume discovery</button></p>}
+              {data.queuePaused && <p role="status">Processing is paused. Saved submissions are retained. {selectedEpic ? `Resume processes responses in ${areaTitle(selectedEpic)}; other areas remain pending.` : "Use the feature filter to resume one area's responses, or resume all areas together."} <button className="secondary" disabled={busy || needsInitialization} onClick={() => void act(explore)}>Resume discovery</button></p>}
               {!data.active && !data.queuePaused && waiting.length > 0 && <button className="secondary" disabled={pending} onClick={() => void act(explore)}>Process waiting answers</button>}
               {data.active && !processing.length && <p>The active round is exploring existing project information; queued responses join the next round.</p>}
               {data.submissions.length === 0 && <p>No responses submitted yet.</p>}
@@ -258,6 +306,7 @@ function App() {
               })}
             </details>}
             {tab === "discover" && <>
+              <QuestionCleanup project={project} disabled={busy || connectionChanged} queuedIDs={queuedQuestionIDs} replaceDisabled={!project.scans.length} retire={(ids, regenerate) => act(() => dismissQuestions(ids, regenerate))} />
               <div className="filter-row" aria-label="Question filters">{([ ["open", "To answer"], ["answered", "Previous answers"], ["later", "Deferred / delegated"], ["submitted", "Submitted"] ] as const).map(([key, label]) => <button key={key} aria-pressed={questionFilter === key} className={questionFilter === key ? "active" : ""} onClick={() => { setQuestionFilter(key); setExpandedQuestion(null); }}>{label} <span>{scopedQuestions.filter((q) => key === "submitted" ? queuedQuestionIDs.has(q.id) : !queuedQuestionIDs.has(q.id) && (key === "open" ? q.status === "pending" : key === "answered" ? q.status === "answered" : ["deferred", "delegated"].includes(q.status))).length}</span></button>)}</div>
               {savedMessage && <div className="save-notice" role="status">{savedMessage.text} <button className="quiet" onClick={() => { const q = project.questions.find((q) => q.id === savedMessage.id); setQuestionFilter(queuedQuestionIDs.has(savedMessage.id) ? "submitted" : q?.status === "answered" ? "answered" : "later"); setExpandedQuestion(savedMessage.id); }}>Edit answer</button><button className="quiet" aria-label="Dismiss saved message" onClick={() => setSavedMessage(null)}>×</button></div>}
               {visibleQuestions.length === 0 && <div className="empty-card"><h3>{questionFilter !== "open" ? "No responses in this view yet." : queuedQuestionIDs.size ? "Your responses are in the queue." : "Ready for the next questions?"}</h3><p>{questionFilter === "open" ? "Explore the next gaps or add more information. Questions will adapt as you answer; no open questions does not mean the specification is complete." : "Use the filters above to answer questions or revisit a saved response."}</p></div>}
@@ -327,7 +376,7 @@ function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, h
     try { await help.request({ questionID: question.id, action: "follow-up", message: `${wordHelpContext(phrase, context)}Start with a short, plain-language summary in one or two sentences as the first paragraph (for an inline tooltip). Then explain what it changes for this project's choice. Keep any assumptions or caveats explicit.` }); }
     finally { explanationInFlight.current = false; setExplaining(false); }
   }
-  const annotated = (text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => <AnnotatedText text={text} concepts={question.concepts?.filter((c) => c.field === field && c.optionIndex === optionIndex)} onExplain={explain} busy={explaining || help.busy} jobs={help.jobs.filter((job) => job.helpRequest?.questionID === question.id)} revision={help.revision} />;
+  const annotated = (text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => <AnnotatedText text={text} concepts={question.concepts?.filter((c) => c.field === field && c.optionIndex === optionIndex)} onExplain={explain} onCancel={help.cancel} busy={explaining || help.busy} jobs={help.jobs.filter((job) => job.helpRequest?.questionID === question.id)} revision={help.revision} />;
   return <article className={`question-card ${expanded ? "expanded" : "collapsed"}`}><div className="question-meta"><span>{area}{question.category ? ` · ${dimensionLabels[question.category]}` : ""}</span><span role="status">{status ?? (question.status === "pending" ? "To answer" : question.status === "answered" ? "Answered" : question.status)}</span></div><div className="question-title"><h3 aria-label={question.text}>{expanded ? annotated(question.text, "text") : <button aria-expanded={false} onClick={onToggle}>{question.text}</button>}</h3>{expanded && currentQuestion ? <span className="quiet">Current question</span> : <button className="quiet" aria-expanded={expanded} onClick={onToggle}>{expanded ? "Collapse" : initialText ? "Edit answer" : "Answer"}</button>}</div>{!expanded && initialText && <p className="answer-preview">{initialText}</p>}{expanded && <div className="question-body"><p>{annotated(question.whyItMatters, "whyItMatters")}</p>{purpose && <details className="question-context"><summary>About this feature</summary><p>{purpose}</p></details>}{status === "processing" && <p className="correction-hint">This response is being reviewed. A correction will be saved for the next round.</p>}{status === "queued" && <p className="correction-hint">Saving changes replaces this waiting response. Its earlier version stays in history.</p>}<div className="options">{question.options.map((option, index) => <div className={`option ${kind === "answer" && text === option.label ? "chosen" : ""}`} key={index}><span className="option-circle">{String.fromCharCode(65 + index)}</span><div className="option-copy"><strong>{annotated(option.label, "label", index)}</strong><small>{annotated(option.consequence, "consequence", index)}</small></div><button type="button" className="option-choose" aria-label={`Choose ${option.label}. ${option.consequence}`} aria-pressed={kind === "answer" && text === option.label} disabled={disabled} onClick={() => { setKind("answer"); setText(option.label); onDraft({ kind: "answer", text: option.label }); }}>{kind === "answer" && text === option.label ? "✓ Selected" : "Choose"}</button></div>)}</div>
     <p className="word-help-hint">Unclear wording? Click any word, then ? to ask what it means. Underlined concepts explain instantly.</p>
     <QuestionHelp questionID={question.id} help={help} reveal={helpReveal} requesting={explaining} />

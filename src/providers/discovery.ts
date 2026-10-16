@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { DiscoveryAdapter, DiscoveryOptions } from "../service/discovery.js";
 import type { Project, QuestionHelpRequest } from "../core/model.js";
-import { discoveryPrompt, questionHelpPrompt } from "../runtime/discovery.js";
+import { discoveryPrompt, questionHelpPrompt, scanPrompt } from "../runtime/discovery.js";
 import { ConnectionManager, connectionError } from "./connections.js";
 import { generate, ProviderError } from "./chatgpt.js";
 
@@ -11,7 +11,7 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
   analyze(project: Project, options: DiscoveryOptions) {
     if (!project.model.connectionID) return this.legacy.analyze(project, options);
     if (options.research) throw new ProviderError("Direct ChatGPT research is not available yet. Turn off targeted research in Settings before exploring.");
-    return this.direct(project, options, discoveryPrompt(project, options.context, false));
+    return this.direct(project, options, options.scan ? scanPrompt(project, options.context) : discoveryPrompt(project, options.context, false));
   }
   clarify(project: Project, request: QuestionHelpRequest, options: DiscoveryOptions) {
     if (!project.model.connectionID) {

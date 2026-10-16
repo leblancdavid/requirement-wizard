@@ -24,6 +24,8 @@ every technical detail proposed in the planning documents.
 | DEC-015 | Move toward app-owned AI connections, authentication, and model selection without requiring OpenCode for discovery; start with a direct ChatGPT-plan compatibility spike. | User requested independence and approved the staged recommendation; distribution/license and live direct access remain unresolved |
 | DEC-016 | Give each project a persistent local workspace connection with automatically generated requirements/progress files. Start with app-generated outputs and track both discovery and manual implementation progress, retaining external-edit conflicts for review. | User requested per-project local repos/workspaces, chose app-generated files and discovery plus implementation tracking, then approved implementation |
 | DEC-017 | Build the desktop application with Electron. Closing the window quits and cancels active work, without tray/background mode or confirmation; retained work requires explicit resume. | User approved Electron implementation and specified quitting active work on close |
+| DEC-018 | Bring source-folder initialization forward: offer it during creation and after workspace selection, plus explicit rescanning. Generate reviewable definitions/requirements before gap discovery. Existing specification documents are evidence alongside code/tests, not structured imports. | User requested initialization/rescan, selected review first and existing definitions as evidence, then approved implementation |
+| DEC-019 | Explicitly distinguish New idea from Existing project. For existing projects, choose the folder first and suggest editable name/description from local metadata/documents, then initialize before gap discovery. Add unrelated-question cleanup and evidence-based replacements; improve Godot/source capture and incomplete-initialization recovery. | User reported irrelevant questions for Rust Grind Galaxy, requested existing-project identity autofill, then approved the combined implementation |
 
 ## Proposed implementation defaults
 
@@ -40,7 +42,7 @@ every technical detail proposed in the planning documents.
 | TECH-009 | Use Vite 6.4.4 and React for the browser build. | Compatible with Node 20.11; built assets served by the local Node API. |
 | TECH-010 | Nine fixed coverage dimensions with evidence-gated statuses and 3/2/1 importance weights. | Implemented deterministic estimate; calibration and model semantic judgment remain limitations. |
 | TECH-011 | Fresh revision-bound context with a 48,000-character detail budget. | Implemented deterministic task working sets and automatic queue grouping on overflow, with pinned human guardrails/evidence closure, versioned manifests, and scope-validated partial results. Help reserves room for bounded history. Exact tokenization/model-capacity adaptation remain future work. |
-| TECH-012 | Start existing-project discovery with a one-time, read-only source snapshot and bounded analysis of documentation, source, and tests. | Proposed M7 design; capture file identity and inspected/omitted scope. Automatic refresh and repository change detection follow later. |
+| TECH-012 | Capture read-only bounded snapshots, analyze sequential batches, retain content/hash/path evidence and inspected/omitted scope, and offer manual hash-based rescans. | Implemented under DEC-018; see project-workspaces.md for limits. Automatic watching and configurable selection remain future work. |
 
 ## Open questions
 
@@ -53,7 +55,7 @@ every technical detail proposed in the planning documents.
 | OPEN-005 | How should service discovery, lifecycle, and local authentication work? | Milestone 2 | Foreground loopback browser server with per-launch token and same-origin checks implemented; daemon discovery/CLI attachment remain open. |
 | OPEN-006 | What budgets should apply to discovery and research? | Milestone 4 | Start with bounded configurable calls/retries; calibrate from observed use. |
 | OPEN-007 | What export layout best supports fresh OpenCode sessions? | Milestone 5 | Evaluate a manifest, baseline documents, and per-phase packages. |
-| OPEN-008 | Which files and snapshot limits give useful existing-project coverage without excessive context or storage? | Milestone 7 | Define selection/exclusion rules, file and total budgets, and evidence retention before implementation; surface omissions explicitly. |
+| OPEN-008 | Which files and snapshot limits give useful existing-project coverage without excessive context or storage? | Milestone 7 | Fixed capture rules/budgets implemented and fixture-tested; real-project calibration, configurable selection, ignore-rule integration and larger-project snapshot storage remain open. |
 | OPEN-009 | Does intended distribution qualify for OpenAI's direct ChatGPT-plan preview, and does the direct flow work for the account? | Direct-provider migration | Confirm open-source/local versus paid/hosted distribution; run independent live sign-in/catalog/inference/refresh checks. No direct live access claimed. |
 
 ## Revision policy

@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ProjectStore } from "../storage/store.js";
 import { browseDirectories } from "../storage/workspace.js";
+import { previewFolder } from "../storage/folder-preview.js";
 import { DiscoveryService, type DiscoveryAdapter } from "../service/discovery.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
@@ -123,15 +124,23 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (url.pathname === "/api/projects") {
         if (req.method === "GET") { json(res, 200, options.store.list()); return; }
         if (req.method === "POST") {
-          const input = z.object({ name: text, idea: text, model: modelSelection, workspace: z.object({ path: z.string().min(1).max(4096), create: z.boolean().optional() }).strict().optional() }).strict().parse(await body(req));
+          const input = z.object({ name: text, idea: text, model: modelSelection, entryMode: z.enum(["idea", "existing"]).optional(), previewFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(), workspace: z.object({ path: z.string().min(1).max(4096), create: z.boolean().optional() }).strict().optional() }).strict().parse(await body(req));
+          if (input.entryMode === "existing" && (!input.workspace || input.workspace.create)) throw new Error("Choose an existing folder before initialization.");
+          const preview = input.entryMode === "existing" ? await previewFolder(input.workspace!.path) : undefined;
+          if (preview && preview.fingerprint !== input.previewFingerprint) throw new Error("Folder preview changed. Inspect the selected folder again before creating the project.");
           await validateConnection(input.model);
-          const created = options.store.create(input.name, input.idea, input.model);
+          const created = options.store.create(input.name, input.idea, input.model, preview ? { mode: "existing", preview, nameEdited: input.name !== preview.name, descriptionEdited: input.idea !== preview.description } : undefined);
           // Project creation is retained even when a folder cannot be connected.
           let workspaceError: string | undefined;
           if (input.workspace) try { options.store.connectWorkspace(created.id, created.revision, input.workspace.path, input.workspace.create); }
           catch (error) { workspaceError = error instanceof Error ? error.message : "Workspace connection failed."; }
+          if (preview && !workspaceError) queue.scan(created.id, created.revision);
           json(res, 201, { ...created, ...(workspaceError ? { workspaceError } : {}) }); return;
         }
+      }
+      if (url.pathname === "/api/folder-preview" && req.method === "POST") {
+        const input = z.object({ path: z.string().min(1).max(4096) }).strict().parse(await body(req));
+        json(res, 200, await previewFolder(input.path)); return;
       }
       const route = /^\/api\/projects\/([^/]+)(?:\/([a-z-]+))?$/.exec(url.pathname);
       if (!route?.[1]) { json(res, 404, { error: "Route not found." }); return; }
@@ -139,7 +148,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       const project = options.store.get(id);
       const action = route[2];
       if (req.method === "GET" && !action) {
-        const jobs = options.store.jobs(id).filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, ...job }) => job);
+        const jobs = options.store.jobs(id).filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, ...job }) => ({ ...job, ...(scan ? { scan: { ...scan, sources: [] } } : {}) }));
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? coverage(options.store.get(id, lastRound.expectedRevision)).percent : null;
         const helpJobs = options.store.jobs(id).filter((j) => j.helpRequest).map(({ result: _, researchEvidence: __, ...job }) => job);
@@ -148,6 +157,13 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (req.method === "GET" && action === "history") { json(res, 200, options.store.history(id)); return; }
       if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
       const raw = await body(req);
+      if (action === "retire-questions") {
+        const input = z.object({ revision, questionIDs: z.array(z.string().min(1)).min(1).max(100), reason: z.string().trim().min(1).max(2000), regenerate: z.boolean().optional(), research: z.boolean().optional() }).strict().parse(raw);
+        if (input.regenerate) { service.assertCanDiscover(id); if (!project.scans.length) throw new Error("Complete a folder scan before generating evidence-based replacements."); }
+        const updated = options.store.retireQuestions(id, input.revision, input.questionIDs, input.reason);
+        if (input.regenerate) queue.resume(id, { research: input.research ?? false });
+        json(res, 200, updated); return;
+      }
       if (action === "workspace") {
         const input = z.discriminatedUnion("operation", [
           z.object({ operation: z.literal("connect"), revision, path: z.string().min(1).max(4096), create: z.boolean().optional() }).strict(),
@@ -190,6 +206,13 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
           json(res, 409, { error: "This project already has an active discovery job." }); return;
         }
         queue.resume(id, input);
+        json(res, 202, { started: true }); return;
+      }
+      if (action === "scan") {
+        const input = z.object({ revision }).strict().parse(raw);
+        if (project.revision !== input.revision) throw new StaleRevisionError();
+        if (!options.store.workspace(id)) throw new Error("Connect a local workspace before initializing.");
+        queue.scan(id, input.revision);
         json(res, 202, { started: true }); return;
       }
       if (action === "cancel") { z.object({}).strict().parse(raw); queue.stop(id); json(res, 200, { cancelled: queue.isActive(id) }); return; }

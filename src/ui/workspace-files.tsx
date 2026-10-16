@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from "react";
-import type { Project } from "../core/model.js";
+import type { Project, Job } from "../core/model.js";
 import { implementationNeedsReview } from "../core/implementation.js";
 import type { Workspace } from "../storage/workspace.js";
-import "./workspace-files.css";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
 type Directories = { path: string; parent: string | null; directories: string[] };
-export function WorkspacePicker({ path, create, onChange, request, disabled }: {
+export function WorkspacePicker({ path, create, onChange, request, disabled, existingOnly = false }: {
   path: string; create: boolean; onChange: (path: string, create: boolean) => void; request: Request; disabled: boolean;
+  existingOnly?: boolean;
 }) {
   const [listing, setListing] = useState<Directories | null>(null);
   const [error, setError] = useState(""); const [loading, setLoading] = useState(false);
@@ -25,7 +25,7 @@ export function WorkspacePicker({ path, create, onChange, request, disabled }: {
   return <div className="workspace-picker">
     <label>Local workspace directory<input value={path} maxLength={4096} disabled={disabled} onChange={(event) => onChange(event.target.value, create)} placeholder="D:\Projects\my-app" /></label>
     <div className="button-row"><button type="button" className="secondary" disabled={disabled || loading} onClick={() => void browse(path || undefined)}>Browse folders</button>
-      <label><input type="checkbox" checked={create} disabled={disabled} onChange={(event) => onChange(path, event.target.checked)} /> Create directory if needed</label></div>
+      {!existingOnly && <label><input type="checkbox" checked={create} disabled={disabled} onChange={(event) => onChange(path, event.target.checked)} /> Create directory if needed</label>}</div>
     {error && <p role="alert">{error}</p>}
     {listing && <div className="folder-browser" aria-label="Local folders"><strong>{listing.path}</strong><div className="button-row">
       <button type="button" disabled={disabled || loading || !listing.parent} onClick={() => void browse(listing.parent!)}>↑ Parent</button>
@@ -36,8 +36,9 @@ export function WorkspacePicker({ path, create, onChange, request, disabled }: {
   </div>;
 }
 
-export function WorkspaceConnection({ project, workspace, request, disabled, run }: {
+export function WorkspaceConnection({ project, workspace, request, disabled, run, scanJob }: {
   project: Project; workspace: Workspace | null; request: Request; disabled: boolean; run: (action: () => Promise<void>) => Promise<void>;
+  scanJob?: Job;
 }) {
   const [path, setPath] = useState(workspace?.path ?? ""); const [create, setCreate] = useState(false);
   useEffect(() => { setPath(workspace?.path ?? ""); setCreate(false); }, [project.id, workspace?.path]);
@@ -48,7 +49,27 @@ export function WorkspaceConnection({ project, workspace, request, disabled, run
     <WorkspacePicker path={path} create={create} onChange={(value, make) => { setPath(value); setCreate(make); }} request={request} disabled={disabled} />
     <div className="button-row"><button className="secondary" disabled={disabled || !path.trim()} onClick={() => void action({ operation: "connect", revision: project.revision, path, create })}>{workspace ? "Reconnect workspace" : "Connect workspace"}</button>
       {workspace && <><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "sync" })}>Retry sync</button><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "disconnect", revision: project.revision })}>Disconnect folder</button></>}</div>
+    {workspace && <WorkspaceScan project={project} scanJob={scanJob} disabled={disabled} scan={() => run(async () => { await request(`projects/${project.id}/scan`, { revision: project.revision }); })} />}
     <small>Disconnecting keeps the generated files and all app data. To resolve a conflict, preserve external edits and restore the generated files, or choose a new folder.</small>
+  </section>;
+}
+
+export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: Project; disabled: boolean; scan: () => Promise<void>; scanJob?: Job }) {
+  const latest = project.scans.at(-1);
+  const incomplete = !latest && (project.origin || scanJob) && !["running", "pending"].includes(scanJob?.status ?? "");
+  return <section aria-label="Source initialization" className="insight-card workspace-scan">
+    <h3>{latest ? "Folder scan" : "Initialize from existing project"}</h3>
+    {incomplete && <p role="status"><strong>Initialization incomplete.</strong> {scanJob?.diagnostic ?? "Complete the source scan before exploring gaps."} Existing questions are not a reconstructed baseline.</p>}
+    <p>Scan documentation, source, configuration and tests to propose feature definitions and requirements. Review the proposals before continuing missing-requirement discovery.</p>
+    <button type="button" className="secondary" disabled={disabled} onClick={() => void scan()}>{latest ? "Rescan folder" : incomplete ? "Retry initialization" : "Initialize from folder"}</button>
+    <small>Read-only static inspection. Dependencies, generated files, hidden paths and potentially sensitive files are excluded. Files are sent to the selected AI connection. Scanning does not run tests or confirm requirements.</small>
+    {latest && <details><summary>Last scan: {new Date(latest.capturedAt).toLocaleString()} · {new Set(latest.files.map((file) => file.path)).size} files / {latest.files.length} excerpts · {latest.changes.length} changes · {latest.omitted.length} omitted paths</summary>
+      <p>Snapshot {latest.id}. {latest.traversalLimited ? "Traversal limit reached; additional paths were not enumerated." : "Inspected scope is listed below; excluded directories are not traversed."}</p>
+      {!!latest.affectedRequirementIDs.length && <p>Changed or unavailable evidence affects these existing requirements; review their intent: {latest.affectedRequirementIDs.join(", ")}</p>}
+      <details><summary>Inspected files and retained evidence</summary>{latest.files.map((file) => <details key={file.sourceID}><summary>{file.path} · lines {file.startLine ?? 1}–{file.endLine ?? file.lines}</summary><small>SHA-256 {file.hash}</small><pre className="source-excerpt">{project.sources.find((s) => s.id === file.sourceID)?.text}</pre></details>)}</details>
+      <details><summary>File changes</summary>{latest.changes.map((change) => <p key={change.path}>{change.kind}: {change.path}</p>)}</details>
+      <details><summary>Exclusions and omissions</summary>{latest.omitted.map((item) => <p key={item.path}>{item.path}: {item.reason}</p>)}</details>
+    </details>}
   </section>;
 }
 

@@ -29,6 +29,9 @@ context. Use **Previous answers** or **Submitted** to edit responses, including
 waiting answers. **Project map** groups requirements under expandable features;
 definition progress and supporting evidence open on demand. Model/research and
 automatic-processing preferences live in **Settings**.
+**Settings → Appearance** offers six light and six dark themes, a custom-color
+editor, five local font stacks, and adjustable text size. Preferences apply across
+projects and persist locally. Dropdowns coordinate with the selected theme.
 Question cards offer **Help me with this question** for simpler wording, examples,
 tradeoffs, and follow-ups. Clarifications are saved without selecting an answer.
 Underlined concepts in newly generated questions explain meaning and impact on
@@ -137,8 +140,16 @@ specification revision used to generate them.
 The initial release ends with portable build packages. A subsequent integrated
 Build workspace will launch and monitor OpenCode against a target project.
 
-Existing-project discovery is also planned as a follow-on after review and handoffs:
-select a local source folder, reconstruct evidence-backed requirements, review the
-findings, and use that baseline for new feature work. Initial scope is a one-time,
-read-only analysis of documentation, source, and tests, with change-focused handoffs
-and explicit preservation scenarios. See [M7 in the milestone backlog](docs/milestones.md#m7--existing-project-discovery-and-feature-planning-follow-on).
+Existing-project initialization is available: on **New project**, choose **Existing
+project** and select the folder first. A local metadata/document preview suggests an
+editable name, description and project type without using the AI connection. Choose
+**Create & initialize existing project** to reconstruct its features. Existing projects offer **Initialize from folder**
+after connection, and **Rescan folder** on the Project map or in workspace Settings.
+Scans propose feature definitions and requirements from bounded source/documentation/test
+evidence, then stop for review before gap discovery. Rescans report file changes and
+preserve accepted decisions. Eligible files are sent to the saved AI connection;
+inspected scope and omissions remain visible. See [workspace scanning](docs/project-workspaces.md#initialize-definitions-and-rescan).
+Failed initialization offers an explicit retry before gap discovery. **Questions →
+Unrelated questions / cleanup** can dismiss unanswered questions or replace them with
+questions grounded in the scanned baseline, preserving answers and history.
+Broader change planning/handoffs remain [M7 follow-on work](docs/milestones.md#m7--existing-project-discovery-and-feature-planning-follow-on).

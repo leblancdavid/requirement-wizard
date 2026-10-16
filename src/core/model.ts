@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { folderPreviewSchema } from "./folder-preview.js";
 import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal } from "./epics.js";
 
 const text = z.string().trim().min(1).max(12000);
@@ -9,7 +10,7 @@ export const modelSelection = z.object({
 export type ModelSelection = z.infer<typeof modelSelection>;
 
 const source = z.object({
-  id: z.string(), kind: z.enum(["initial", "note", "answer", "delegation", "deferral", "confirmation", "rejection"]),
+   id: z.string(), kind: z.enum(["initial", "note", "answer", "delegation", "deferral", "confirmation", "rejection", "workspace"]),
   text: z.string().min(1), questionID: z.string().optional(), supersedes: z.string().optional(),
   requirementID: z.string().optional(),
   epicID: z.string().default("project"),
@@ -44,6 +45,7 @@ const question = z.object({
   sourceID: z.string().optional(), retirementReason: z.string().optional(),
   concepts: z.array(conceptSchema).max(8).optional(),
   category: z.enum(dimensions).optional(),
+  evidenceIDs: z.array(z.string().min(1)).min(1).max(8).optional(),
 });
 const requirement = z.object({
   id: z.string(), statement: text, rationale: text, sourceIDs: z.array(z.string()).min(1),
@@ -64,6 +66,7 @@ export const projectSchema = z.object({
   model: modelSelection, sources: z.array(source), questions: z.array(question),
   requirements: z.array(requirement), summary: z.string(), goals: z.array(text),
   actors: z.array(text), assumptions: z.array(text),
+  origin: z.object({ mode: z.literal("existing"), preview: folderPreviewSchema, descriptionEdited: z.boolean(), nameEdited: z.boolean() }).optional(),
   epics: z.array(epicSchema).default(initialEpics),
   assessments: z.array(assessmentSchema).default([]),
   organizationReviews: z.array(organizationReviewSchema).default([]),
@@ -74,6 +77,12 @@ export const projectSchema = z.object({
     requirementID: z.string(), status: z.enum(["not-started", "in-progress", "blocked", "implemented", "verified"]),
     notes: z.string().max(12000), evidence: z.string().max(12000),
     requirementFingerprint: z.string(), updatedAt: z.string(),
+  })).default([]),
+  scans: z.array(z.object({
+    id: z.string(), capturedAt: z.string(), files: z.array(z.object({ path: z.string(), hash: z.string(), sourceID: z.string(), lines: z.number(), startLine: z.number().int().positive().optional(), endLine: z.number().int().positive().optional() })),
+    omitted: z.array(z.object({ path: z.string(), reason: z.string() })), traversalLimited: z.boolean(),
+    changes: z.array(z.object({ path: z.string(), kind: z.enum(["added", "changed", "removed"]) })),
+    affectedRequirementIDs: z.array(z.string()),
   })).default([]),
 });
 export type Project = z.infer<typeof projectSchema>;
@@ -91,6 +100,7 @@ export const analysisSchema = z.object({
   researchFindings: z.array(z.object({ localID: z.string().optional(), url: z.string().url(), title: text, finding: text, epicID: z.string() }).strict()).max(6).optional(),
 }).strict();
 export type Analysis = z.infer<typeof analysisSchema>;
+export const scanAnalysisSchema = analysisSchema.extend({ requirements: analysisSchema.shape.requirements.max(100) });
 
 export const answerSchema = z.object({
   kind: z.enum(["answer", "delegation", "deferral"]),
@@ -123,6 +133,7 @@ export type Telemetry = z.infer<typeof telemetrySchema>;
 
 export type Job = {
   id: string; projectID: string; expectedRevision: number;
+  kind?: "scan";
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
   model: ModelSelection; leaseUntil: number | null;
   diagnostic?: string; sessionID?: string; result?: Analysis; telemetry?: Telemetry;
@@ -133,6 +144,7 @@ export type Job = {
   researchEvidence?: ResearchEvidence[];
   helpRequest?: QuestionHelpRequest;
   helpResponse?: QuestionHelpResponse;
+  scan?: { workspaceKey: string; snapshot: Project["scans"][number]; sources: Project["sources"] };
 };
 
 export class StaleRevisionError extends Error {
@@ -140,11 +152,15 @@ export class StaleRevisionError extends Error {
 }
 
 export function validateAnalysisReferences(project: Project, result: Analysis) {
-  for (const question of result.questions) validateConcepts(question);
+  const knownEvidence = new Set([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => r.id));
+  for (const question of result.questions) {
+    validateConcepts(question);
+    if (question.evidenceIDs?.some((id) => !knownEvidence.has(id))) throw new Error("Question references missing project evidence.");
+  }
   const superseded = new Set(project.sources.flatMap((item) => item.supersedes ? [item.supersedes] : []));
   const normative = new Set(project.sources.filter((item) => {
     if (superseded.has(item.id)) return false;
-    if (["initial", "note", "answer"].includes(item.kind)) return true;
+    if (["initial", "note", "answer", "workspace"].includes(item.kind)) return true;
     return item.kind === "confirmation" && project.requirements.some((requirement) =>
       requirement.status === "accepted" && requirement.sourceIDs.includes(item.id));
   }).map((item) => item.id));
