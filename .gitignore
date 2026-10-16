@@ -5,3 +5,4 @@ dist/
 !.env.example
 .spike-workspace/
 .wizard-state/
+.provider-state/

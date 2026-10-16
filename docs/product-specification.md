@@ -18,7 +18,7 @@ success measures.
 ## 2. Initial release scope
 
 Include a browser workspace and terminal client, shared local projects,
-ChatGPT subscription connections through OpenCode, adaptive interviews,
+ChatGPT subscription connections, adaptive interviews,
 source-backed research, specification review, readiness assessment, and portable
 OpenCode handoffs.
 
@@ -28,8 +28,11 @@ Existing-project discovery is a follow-on after review and portable handoffs (M7
 starting with a local source folder and a one-time, read-only analysis. Repository
 refresh and automatic change detection are later extensions.
 An integrated coding workspace follows the initial release. Hosted collaboration,
-cloud synchronization, direct-provider adapters, and autonomous deployment are
-outside this release.
+cloud synchronization and autonomous deployment are outside this release.
+DEC-015 adds staged direct-provider migration: direct ChatGPT discovery/help and
+in-app connection management are implemented alongside legacy OpenCode selections.
+Direct research remains unsupported; direct live verification and distribution
+eligibility remain open; see [direct-providers.md](direct-providers.md).
 
 ## 3. Main journey
 
@@ -81,14 +84,20 @@ technical detail, tradeoffs, and recommendations per question.
 
 ### Providers and model work
 
-**RW-004 — Subscription connections.** Support ChatGPT subscription access through
-supported OpenCode connection flows, with no separate API key required for that flow.
+**RW-004 — Subscription connections.** Support ChatGPT subscription access with no
+separate API key required for that flow. Move toward app-owned sign-in and connection
+management without requiring OpenCode, subject to direct-flow qualification (DEC-015).
 GitHub Copilot support is deferred.
 
 - Verify ChatGPT with an authenticated live response during milestone 1.
 - Show actionable states for missing runtime, disconnected account, expired login,
   unavailable model, and provider limits when reported by the runtime.
 - Initial onboarding may hand off to OpenCode's own connection interface.
+- The direct path must validate identity and plan permission, protect local credentials,
+  and support reconnect/disconnect without placing credentials in project records.
+- Browser Settings supports sign-in, account/model catalogs, explicit allowance-using
+  connection tests/cancellation, and project selection before or after creation.
+- A disconnected direct selection reports an error without falling back to OpenCode.
 
 **RW-005 — Model selection.** List connected providers and available models; allow
 selection and switching for subsequent calls while preserving project state.
@@ -222,6 +231,10 @@ show a deterministic project aggregate with explanations and evidence.
 global information, focused epics, dependencies, exact evidence, and omission manifests.
 
 - Summaries do not replace original human decisions.
+- Automatically plan smaller task working sets and sequential saved-response groups
+  when full detail exceeds the budget; checkpoint completed groups without replaying sources.
+- Partial passes cannot replace global interpretation or whole-area assessments, or
+  reorganize areas. Retirements and organization changes require detailed records.
 - Reject oversized calls before inference rather than silently truncating decisions.
 - Reject generated references outside the detailed working set; support focused rounds.
 - Record the context revision, selection, budget, and usage metadata available from the runtime.

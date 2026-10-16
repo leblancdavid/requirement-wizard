@@ -3,12 +3,15 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { modelSelection, type Project } from "../core/model.js";
+import { modelSelection, type ModelSelection, type Project } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
 import { safeMessage } from "../runtime/contract.js";
 import { coverage } from "../core/coverage.js";
+import { ConnectionManager } from "../providers/connections.js";
+import { CredentialStore } from "../providers/credentials.js";
+import { ConnectedDiscovery } from "../providers/discovery.js";
 
 const help = `Requirement Wizard — persistent terminal discovery
 
@@ -26,6 +29,8 @@ npm run wizard -- recover
 answer supports --kind answer|delegation|deferral. Delegation text must describe its scope.
 review supports accept|reject. Historical revisions are read-only snapshots.
 Optional --data-dir <directory> overrides the user-local data location.
+Optional --connection <saved-account-id|opencode> selects the route for new/model.
+Model changes retain the existing connection unless explicitly changed.
 Only analyze/interview make model calls (using the saved explicit provider/model).
 analyze supports --focus-epic <epic-id> and opt-in --research for bounded web retrieval.
 interview saves answers immediately; quit and resume with the same project ID.
@@ -80,7 +85,7 @@ function printProject(project: Project) {
 async function main() {
   const { positionals, values } = parseArgs({ allowPositionals: true, options: {
     help: { type: "boolean" }, json: { type: "boolean" }, "data-dir": { type: "string" },
-    name: { type: "string" }, idea: { type: "string" }, provider: { type: "string" }, model: { type: "string" },
+    name: { type: "string" }, idea: { type: "string" }, provider: { type: "string" }, model: { type: "string" }, connection: { type: "string" },
     project: { type: "string" }, revision: { type: "string" }, "expected-revision": { type: "string" },
     question: { type: "string" }, text: { type: "string" }, kind: { type: "string" },
     requirement: { type: "string" }, decision: { type: "string" },
@@ -94,12 +99,19 @@ async function main() {
   if (command === "interview" && (!stdin.isTTY || !stdout.isTTY)) throw new Error("interview requires an interactive terminal; use analyze/answer/review for scripting.");
   const directory = resolve(values["data-dir"] ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local/share"), "requirement-wizard"));
   const store = new ProjectStore(join(directory, "projects.sqlite"));
-  const service = new DiscoveryService(store, new OpenCodeDiscovery(join(directory, "runtime")));
+  const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
+  const service = new DiscoveryService(store, new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))));
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.once("SIGINT", cancel);
   try {
     const print = (project: Project) => values.json ? console.log(JSON.stringify(project, null, 2)) : printProject(project);
+    const selectModel = (previous?: ModelSelection) => {
+      const providerID = required(values.provider, "provider");
+      const connectionID = values.connection === "opencode" ? undefined : values.connection ?? (previous?.providerID === providerID ? previous.connectionID : undefined);
+      if (connectionID && providerID !== "openai") throw new Error("Direct ChatGPT connections require --provider openai.");
+      return modelSelection.parse({ providerID, modelID: required(values.model, "model"), ...(connectionID ? { connectionID } : {}) });
+    };
     const runAnalysis = async (id: string, rev: number) => {
       console.error("Analysis sends project context to the saved provider and consumes allowance. Ctrl+C cancels.");
       const job = await service.analyze(id, rev, { signal: controller.signal, research: values.research, focusEpicID: values["focus-epic"], onProgress: (message) => console.error(message) });
@@ -108,9 +120,7 @@ async function main() {
       return job;
     };
     if (command === "new") {
-      print(store.create(required(values.name, "name"), required(values.idea, "idea"), modelSelection.parse({
-        providerID: required(values.provider, "provider"), modelID: required(values.model, "model"),
-      })));
+      print(store.create(required(values.name, "name"), required(values.idea, "idea"), selectModel()));
     } else if (command === "list") {
       console.log(JSON.stringify(store.list(), null, 2));
     } else if (command === "recover") {
@@ -119,9 +129,7 @@ async function main() {
       const id = required(values.project, "project");
       if (command === "show") print(store.get(id, values.revision ? revision(values.revision) : undefined));
       else if (command === "jobs") console.log(JSON.stringify(store.jobs(id), null, 2));
-      else if (command === "model") print(store.setModel(id, revision(values["expected-revision"]), modelSelection.parse({
-        providerID: required(values.provider, "provider"), modelID: required(values.model, "model"),
-      })));
+      else if (command === "model") print(store.setModel(id, revision(values["expected-revision"]), selectModel(store.get(id).model)));
       else if (command === "answer") {
         const kind = values.kind ?? "answer";
         if (kind !== "answer" && kind !== "delegation" && kind !== "deferral") throw new Error("kind must be answer, delegation, or deferral.");
@@ -174,6 +182,7 @@ async function main() {
     }
   } finally {
     process.removeListener("SIGINT", cancel);
+    await connections.close();
     store.close();
   }
 }

@@ -4,6 +4,7 @@ import { dimensions, epicSchema, initialEpics, organizationSchema, organizationR
 const text = z.string().trim().min(1).max(12000);
 export const modelSelection = z.object({
   providerID: z.enum(["openai", "github-copilot"]), modelID: z.string().min(1),
+  connectionID: z.string().min(1).max(500).optional(),
 }).strict();
 export type ModelSelection = z.infer<typeof modelSelection>;
 
@@ -121,6 +122,8 @@ export type Job = {
   model: ModelSelection; leaseUntil: number | null;
   diagnostic?: string; sessionID?: string; result?: Analysis; telemetry?: Telemetry;
   context?: { revision: number; focusEpicID: string | null; characters: number; budget: number; includedIDs: string[]; omittedIDs: string[]; epicIDs?: string[]; version?: string; sectionCharacters?: Record<string, number>;
+    partial?: boolean; taskRecordIDs?: string[]; indexedIDs?: string[]; selectionReason?: string;
+    submissionIDs?: string[];
     compaction?: { originalCharacters: number; omittedQuestionConcepts: number; duplicateIndexEntries: number } };
   researchEvidence?: ResearchEvidence[];
   helpRequest?: QuestionHelpRequest;

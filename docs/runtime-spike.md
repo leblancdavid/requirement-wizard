@@ -2,6 +2,10 @@
 
 Observed October 15, 2026. M1 is **partially verified**, not complete.
 
+DEC-015 starts migration toward independent provider connections. A separate
+[direct ChatGPT spike](direct-providers.md) is implemented but not live-qualified.
+The observations below describe the existing OpenCode execution path only.
+
 Current scope: ChatGPT is the initial provider. Copilot support and live checks are
 deferred by DEC-007 in [decisions.md](decisions.md). Earlier Copilot results below
 are retained as observations, not outstanding release gates.

@@ -21,6 +21,7 @@ every technical detail proposed in the planning documents.
 | DEC-012 | Explain ambiguous concepts inline and offer question-level rephrasing, context, examples, and decision support without automatically answering the question. | User requested concept tooltips and clarification/help deciding, then approved the proposed behavior |
 | DEC-013 | Make the browser question-first with a compact expandable list, visible answer revision, feature/category context, a grouped feature map, and on-demand progress/details. | User selected the compact question list, requested broader map/health/header cleanup, and approved implementation |
 | DEC-014 | Add existing-project discovery as a follow-on after core review and portable handoffs: reconstruct evidence-backed requirements from a local source folder, review them with the user, and use them as the starting point for feature work. | User proposed importing existing projects and approved the recommended follow-on scope |
+| DEC-015 | Move toward app-owned AI connections, authentication, and model selection without requiring OpenCode for discovery; start with a direct ChatGPT-plan compatibility spike. | User requested independence and approved the staged recommendation; distribution/license and live direct access remain unresolved |
 
 ## Proposed implementation defaults
 
@@ -28,7 +29,7 @@ every technical detail proposed in the planning documents.
 | --- | --- | --- |
 | TECH-001 | Local-first TypeScript service with SQLite. | SQLite/in-process service and authenticated loopback browser API implemented. CLI still attaches to storage in process; daemon discovery remains planned. |
 | TECH-002 | React browser first; Electron wrapper and Ink terminal remain later options. | Browser delivery follows DEC-008; retain shared engine boundaries. |
-| TECH-003 | Use OpenCode as the initial model/tool runtime. | Partial live verification on 1.18.32; JSON text works for ChatGPT, native schema recovery remains unresolved. Copilot observations are historical for deferred support. See runtime-spike.md. |
+| TECH-003 | Use OpenCode as the initial model/tool runtime, migrating toward direct providers under DEC-015. | Legacy selections retain OpenCode with partial live verification on 1.18.32. App-owned ChatGPT auth/catalog Settings UI and direct discovery/help dispatch are implemented and fixture-verified, but not live-qualified. Direct research is unsupported. See runtime-spike.md and direct-providers.md. |
 | TECH-004 | Use ChatGPT subscription sign-in for the initial release. | Current provider scope follows DEC-007; verify actual account/model availability. |
 | TECH-005 | Export build packages before embedding build execution. | Test specification quality with a fresh coding session before adding orchestration. |
 | TECH-006 | Windows first for verification. | Current development environment; portable core preserves later platform options. |
@@ -36,7 +37,7 @@ every technical detail proposed in the planning documents.
 | TECH-008 | Use better-sqlite3 11.10.0 and a readline terminal prototype for the first vertical slice. | Native module verified on Node 20.11/Windows; keeps persistence usable before introducing the richer Ink interface. |
 | TECH-009 | Use Vite 6.4.4 and React for the browser build. | Compatible with Node 20.11; built assets served by the local Node API. |
 | TECH-010 | Nine fixed coverage dimensions with evidence-gated statuses and 3/2/1 importance weights. | Implemented deterministic estimate; calibration and model semantic judgment remain limitations. |
-| TECH-011 | Fresh revision-bound context with a 48,000-character detail budget. | Implemented dependency selection, manifests, and explicit compaction of explanatory question annotations/duplicate index labels on overflow; exact evidence is retained. Exact tokenization/model-capacity adaptation remain future work. |
+| TECH-011 | Fresh revision-bound context with a 48,000-character detail budget. | Implemented deterministic task working sets and automatic queue grouping on overflow, with pinned human guardrails/evidence closure, versioned manifests, and scope-validated partial results. Help reserves room for bounded history. Exact tokenization/model-capacity adaptation remain future work. |
 | TECH-012 | Start existing-project discovery with a one-time, read-only source snapshot and bounded analysis of documentation, source, and tests. | Proposed M7 design; capture file identity and inspected/omitted scope. Automatic refresh and repository change detection follow later. |
 
 ## Open questions
@@ -51,6 +52,7 @@ every technical detail proposed in the planning documents.
 | OPEN-006 | What budgets should apply to discovery and research? | Milestone 4 | Start with bounded configurable calls/retries; calibrate from observed use. |
 | OPEN-007 | What export layout best supports fresh OpenCode sessions? | Milestone 5 | Evaluate a manifest, baseline documents, and per-phase packages. |
 | OPEN-008 | Which files and snapshot limits give useful existing-project coverage without excessive context or storage? | Milestone 7 | Define selection/exclusion rules, file and total budgets, and evidence retention before implementation; surface omissions explicitly. |
+| OPEN-009 | Does intended distribution qualify for OpenAI's direct ChatGPT-plan preview, and does the direct flow work for the account? | Direct-provider migration | Confirm open-source/local versus paid/hosted distribution; run independent live sign-in/catalog/inference/refresh checks. No direct live access claimed. |
 
 ## Revision policy
 

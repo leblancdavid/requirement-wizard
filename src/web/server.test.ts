@@ -6,11 +6,56 @@ import { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "../service/discovery.js";
 import { analysisSchema } from "../core/model.js";
 import type { Job, Project, Submission } from "../core/model.js";
+import type { Connections } from "../providers/connections.js";
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 100; i++) { if (check()) return; await new Promise((accept) => setTimeout(accept, 10)); }
   assert.fail("Timed out waiting for background work");
 }
+
+test("connection API requires local authentication, validates selection, and redacts provider errors", async () => {
+  const store = new ProjectStore(":memory:");
+  const loginID = "10000000-0000-4000-8000-000000000001";
+  let tested = 0, cancelled = 0, disconnected = 0, closed = false;
+  const connections: Connections = {
+    async accounts() { return [{ id: "account", label: "Fixture account", expiresAt: 123 }]; },
+    async beginLogin() { return { id: loginID, url: "https://auth.openai.com/api/accounts/authorize?state=fixture" }; },
+    loginStatus(id) { return { id, status: "waiting" }; }, cancelLogin() { cancelled++; },
+    async models(id) { if (id !== "account") throw new Error("Bearer private-provider-secret"); return [{ id: "fixture", name: "Fixture" }]; },
+    async test() { tested++; }, cancelTest() { cancelled++; }, async disconnect() { disconnected++; }, async close() { closed = true; },
+  };
+  const app = await startApp({ store, connections, adapter: { async analyze() { throw new Error("Unexpected inference"); } }, port: 0 });
+  const headers = { "X-Wizard-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const post = (path: string, value: unknown) => fetch(`${app.origin}/api/${path}`, { method: "POST", headers, body: JSON.stringify(value) });
+  try {
+    assert.equal((await fetch(`${app.origin}/api/connections`)).status, 403);
+    assert.equal((await fetch(`${app.origin}/api/connections/login`, { method: "POST", headers: { ...headers, Origin: "https://external.example" }, body: "{}" })).status, 403);
+    const snapshot = await (await fetch(`${app.origin}/api/connections`, { headers })).json();
+    assert.deepEqual(snapshot, { available: true, accounts: [{ id: "account", label: "Fixture account", expiresAt: 123 }] });
+    assert.equal((await post("connections/login", {})).status, 202);
+    assert.equal((await fetch(`${app.origin}/api/connections/login?id=${loginID}`, { headers })).status, 200);
+    assert.equal((await post("connections/cancel-login", { id: loginID })).status, 200);
+    assert.equal((await post("connections/test", { accountID: "account", modelID: "fixture" })).status, 200);
+    assert.equal(tested, 1);
+    assert.equal((await post("connections/test", { accountID: "account" })).status, 400);
+    assert.equal(tested, 1);
+    await post("connections/cancel-test", {}); assert.equal(cancelled, 2);
+    const failed = await post("connections/models", { accountID: "missing" });
+    assert.equal(failed.status, 400); assert.equal((await failed.text()).includes("private-provider-secret"), false);
+    const model = { providerID: "openai", modelID: "fixture", connectionID: "account" };
+    const created = await post("projects", { name: "Direct project", idea: "Use connected account", model });
+    assert.equal(created.status, 201);
+    const project = await created.json() as Project;
+    assert.deepEqual(project.model, model);
+    assert.equal((await post(`projects/${project.id}/model`, { revision: project.revision, model: { ...model, modelID: "unknown" } })).status, 400);
+    assert.equal(store.get(project.id).revision, project.revision);
+    assert.equal((await post(`projects/${project.id}/model`, { revision: project.revision, model: { providerID: "openai", modelID: "legacy" } })).status, 200);
+    assert.equal((await post(`projects/${project.id}/model`, { revision: project.revision, model })).status, 409);
+    assert.equal((await post("connections/disconnect", { accountID: "account" })).status, 200);
+    assert.equal(disconnected, 1);
+  } finally { await app.close(); store.close(); }
+  assert.equal(closed, true);
+});
 
 test("question help runs independently, survives page requests, and supports authenticated cancellation", async () => {
   const store = new ProjectStore(":memory:");
@@ -236,7 +281,7 @@ test("shutdown preserves the active batch and waiting queue; restart waits for e
   } finally { await app.close(); store.close(); }
 });
 
-test("oversized resume preserves diagnostics and recovers one selected epic without replaying other responses", async () => {
+test("oversized batches automatically process smaller revision-linked groups without duplicating responses", async () => {
   const store = new ProjectStore(":memory:");
   let project = store.create("Large queue", "Track work", { providerID: "openai", modelID: "fixture" });
   project = store.organize(project.id, project.revision, ["area-a", "area-b"].map((epicID) => ({
@@ -272,25 +317,23 @@ test("oversized resume preserves diagnostics and recovers one selected epic with
   };
   try {
     assert.equal((await post()).status, 202); await idle();
-    assert.equal(contexts.length, 0, "overflow must fail before inference");
-    const failed = store.jobs(project.id).at(-1)!;
-    assert.equal(failed.status, "failed");
-    assert.ok(failed.context!.characters > failed.context!.budget);
-    assert.ok(failed.context!.sectionCharacters!.sources! > 48000);
-    assert.match(failed.diagnostic!, /Largest sections/);
-    assert.ok(store.submissions(project.id).every((s) => s.status === "needs-attention" && s.applied));
+    assert.equal(contexts.length, 2);
+    assert.ok(contexts.every((c) => c.characters <= c.budget && c.submissionIDs?.length === 4));
+    assert.ok(contexts[1]!.revision > contexts[0]!.revision, "each group replans against the committed revision");
+    assert.ok(store.submissions(project.id).every((s) => s.status === "completed" && s.applied));
+    assert.equal(store.jobs(project.id).filter((j) => j.status === "failed").length, 0);
     const sources = store.get(project.id).sources;
     const extra = store.enqueue(project.id, { id: crypto.randomUUID(), auto: true, research: false,
       input: { type: "note", text: "Waiting B note", epicID: "area-b" } });
 
     assert.equal((await post("missing")).status, 400);
-    assert.equal(store.queuePaused(project.id), true);
+    assert.equal(store.queuePaused(project.id), false);
     assert.equal((await post("area-a")).status, 202); await idle();
-    assert.equal(contexts.length, 1);
+    assert.equal(contexts.length, 3);
     assert.equal(contexts[0]!.focusEpicID, "area-a");
     const submissions = store.submissions(project.id);
     assert.ok(submissions.slice(0, 4).every((s) => s.status === "completed"));
-    assert.ok(submissions.slice(4, 8).every((s) => s.status === "needs-attention"));
+    assert.ok(submissions.slice(4, 8).every((s) => s.status === "completed"));
     assert.equal(submissions.find((s) => s.id === extra.id)!.status, "queued");
     assert.equal(store.queuePaused(project.id), true, "other areas wait for explicit resume");
     assert.deepEqual(store.get(project.id).sources, sources, "applied notes must not be duplicated");
@@ -301,7 +344,7 @@ test("oversized resume preserves diagnostics and recovers one selected epic with
     assert.ok(contexts[0]!.omittedIDs.includes(answered.find((q) => q.epicID === "area-b")!.sourceID!));
 
     assert.equal((await post("area-b")).status, 202); await idle();
-    assert.equal(contexts.length, 2);
+    assert.equal(contexts.length, 4);
     assert.ok(store.submissions(project.id).every((s) => s.status === "completed"));
     assert.equal(store.get(project.id).sources.length, sources.length + 1);
     assert.equal(store.queuePaused(project.id), false);

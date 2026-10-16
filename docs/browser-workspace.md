@@ -31,9 +31,17 @@ project-wide and inbox areas on read without losing record IDs, original input,
 or revision history. New fields are saved on subsequent mutations; the SQLite
 table schema remains version 1.
 
-Use your existing OpenCode ChatGPT connection. If needed, run `opencode auth login`
-first. The UI defaults to `gpt-6.1-sol`; **Settings** lets you select
-another explicit model ID. There is no automatic provider/model fallback.
+**Settings → AI connections** now supports in-app direct ChatGPT sign-in, saved
+accounts, account-specific model catalogs, explicit connection tests, reconnect,
+and disconnect. Settings is also available before creating your first project.
+Choose a direct account/model and **Save model** to switch an existing project;
+new projects use the selected connection. Direct discovery/help need no OpenCode
+executable but remain live-unqualified. Direct web research is unavailable and
+disabled in the UI. See [direct-providers.md](direct-providers.md) for details.
+
+Existing projects retain their OpenCode selection until explicitly changed. For
+that route, use `opencode auth login` if needed; Settings still accepts an explicit
+OpenCode model ID. There is no automatic provider/model/account fallback.
 
 ## Workflow
 
@@ -119,8 +127,9 @@ the remaining questions to answer. Other question drafts survive polling and
 background round completion. Completed answers return to the previous-answer view;
 responses needing attention become available for review again. Submitted responses
 can be edited from the Submitted filter even while a round is active.
-The queue and active-batch view survive page reload. A batch is analyzed together;
-the view does not claim the model processes individual questions sequentially.
+The queue and active-batch view survive page reload. A fitting working group is
+analyzed together; oversized batches are divided automatically before inference.
+Progress reports the current group's response count and how many are waiting.
 
 Stop, a failed/stale round, or interruption pauses automatic processing. Expand the
 queue and choose **Resume discovery** (or **Explore next gaps**) to explicitly retry
@@ -128,16 +137,16 @@ applied responses and include waiting inputs, without adding duplicate human sou
 Conflicting unapplied responses need review and resubmission against the current
 question; a retired question's retained response can be copied into a note. Restart
 retains pending submissions and requires explicit resume rather than repeating model
-calls. Queuing does not bypass the context limit: an oversized batch fails before
-inference, preserves the responses, and reports needs-attention.
+calls. Context planning uses no model calls. Completed groups stay completed when
+a later group fails; resume retries only unfinished work and reuses saved sources.
 
-If **Resume discovery** reports an oversized context, select one epic in the project
-map, then resume. A focused resume applies and analyzes only that area's queued/saved
-responses; other areas stay pending, and the queue pauses again if work remains.
-Previously applied responses are reused without duplicating their human sources.
-Select another epic and resume to continue, or select **All project areas** to retry
-the remaining responses together. Dependencies and project-wide evidence still join
-each focused context; a single oversized area may still need its work split.
+A focused resume applies and analyzes only that area's queued/saved responses, in
+multiple working groups when necessary. Other areas stay pending, and the queue
+pauses again if unrelated work remains. Select **All project areas** to let the
+planner group remaining responses across areas automatically. An indivisible task
+whose mandatory human constraints still exceed the budget stops before inference
+with its attempted manifest retained; review that area's notes/dependency scope or
+split its work. Saved human input is preserved.
 
 ## Epic organization
 
@@ -244,9 +253,12 @@ The panel shows loading, **Stop clarification**, and failed/cancelled/interrupte
 stale requests. Retry using a help action. One help request per project may run at a
 time; discovery and answering remain available. Project changes during generation
 make the result stale rather than presenting it as current advice. Saved earlier
-exchanges show their context revision. Only the latest six completed exchanges join
-new focused context, with an explicit omitted-history count; all exchanges remain
-stored. Oversized context fails before inference. Like other jobs, interrupted work
+exchanges show their context revision. Up to six recent completed exchanges join
+new focused context, with an explicit omitted-history count; older exchanges are
+dropped from the request as needed to fit. All exchanges remain stored. Help reserves
+12,000 characters of the 48,000-character package for its request/history and can use
+question evidence plus project guardrails independently of a large epic. Oversized
+mandatory context fails before inference. Like other jobs, interrupted work
 is recovered after its lease expires without automatically repeating model calls.
 
 ## Context management
@@ -277,17 +289,40 @@ that context is too large, selection retries with a submitted-response area, a
 pending-question area, or the first ordinary epic. Larger projects start focused;
 submitted-response areas take precedence over unrelated pending questions. Every
 area required by the current batch and all selected dependencies remain included.
-Input detail is bounded
-to **48,000 characters**; if it does not fit, the round fails before inference and
-asks for a smaller focus/split. There is no silent truncation of human decisions.
+Input detail is bounded to **48,000 characters**. If full detail still does not fit,
+the deterministic task planner switches to an explicitly partial working set:
+
+- Pin current input records, all current human sources in selected discovery areas
+  (including project-wide and transitive dependency decisions), non-proposed
+  requirements, related proposals, and exact recursively linked evidence.
+- Keep question wording, options, status, and answer links exact. Remove generated
+  concept annotations and `whyItMatters` outside task questions. Human text is never
+  summarized or truncated. Previous assessments and organization proposals stay saved.
+- Fill remaining space with fitting related proposals, open questions, and research.
+  A separate index of up to 60 excerpted labels is navigation only.
+- Preserve project summary, goals, actors, assumptions, scope confidence, and existing
+  assessments when applying partial results. Partial passes cannot perform organization
+  operations or replace whole-area coverage assessments.
+- Split saved-response batches greedily into fitting groups, including within one
+  epic when its task-specific detail is too large. Each group commits independently;
+  the next one replans against the latest revision. Only its submissions are completed.
+
+This continues finite submitted work, without autonomously generating discovery
+rounds beyond the queue. A single task plus mandatory human constraints that still
+does not fit fails before inference. This conservative constraint can still require
+a scope/dependency split for areas containing too much human evidence.
 Omitted records and excerpted indexes are explicitly reported; references to evidence
 outside the working set are rejected. Each job records a versioned context manifest,
-revision, focus, included/omitted IDs, character count, and section sizes. Oversized
+revision, focus, included/omitted IDs, character count, and section sizes. Task packages
+also record partial scope, task/indexed IDs, selection reason, and submission IDs.
+Activity technical details distinguish task-sized passes and their response counts.
+Oversized
 failures also retain their attempted manifest and report the actual size, budget,
 number of included areas, and largest sections before any model call.
 
-This is a conservative character budget, not an exact model tokenizer or dynamic
-provider context-window calculation. Persisted source records remain authoritative;
+This is a conservative working-data character budget, not an exact model tokenizer,
+total prompt-size limit (instructions/schema are additional), or dynamic provider
+context-window calculation. Persisted source records remain authoritative;
 epic descriptions and AI interpretations do not replace them.
 
 ## Research
@@ -377,8 +412,17 @@ October 15, 2026:
   websearch, adversarial permission enforcement, and over-budget cancellation have
   not yet been live-qualified. No claim of a general tool sandbox is made.
 
+Automatic context management verification (2026-10-15): `npm run check` and all
+62 deterministic tests passed, including a 50,777-character post-compaction fixture,
+multi-area and single-area grouping, dependency/confirmed-evidence retention,
+partial-result guards, later-group failure/cancellation, restart/resume, and bounded
+question help. `npm run test:browser` passed with Chromium and includes the production
+UI build. These checks use deterministic adapters; large-context live model output
+quality has not been qualified by this change.
+
 Remaining work includes deeper scenario/conflict review, readiness baselines, richer
-requirement editing, automatic context-summary compaction/tokenizer calibration,
+requirement editing, tokenizer/model-capacity calibration and live qualification of
+large-context task passes,
 provider auth onboarding, portable handoffs, and the eventual desktop wrapper.
 
 ### Browser check setup

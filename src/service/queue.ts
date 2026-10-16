@@ -1,6 +1,8 @@
 import type { Project, Submission } from "../core/model.js";
 import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
+import { planContext } from "../core/working-set.js";
+import { ContextBudgetError } from "../core/context.js";
 
 type Work = { controller: AbortController; promise: Promise<void> };
 
@@ -75,6 +77,7 @@ export class DiscoveryQueue {
     // Defer to a microtask so active is installed before any round can finish.
     const promise = Promise.resolve().then(async () => {
       let explicit = manual;
+      let continuing = false;
       while (!this.closing && !controller.signal.aborted && !this.service.store.queuePaused(id)) {
         const scope = manual?.focusEpicID;
         const before = this.service.store.get(id);
@@ -88,22 +91,37 @@ export class DiscoveryQueue {
           item.diagnostic = "This saved response was superseded by a newer answer. The newer answer is authoritative; this submission is retained for reference.";
           this.service.store.saveSubmission(item); return false;
         });
-        if (!explicit && !saved.some((s) => s.auto)) break;
-        const batch = saved;
-        const research = explicit?.research ?? batch.some((s) => s.research);
-        // A batch can span epics; require every submitted answer's area in the bounded context.
-        const focusEpicID = explicit?.focusEpicID;
+        if (!explicit && !continuing && !saved.some((s) => s.auto)) break;
+        if (!explicit && !saved.length) break;
+        const focusEpicID = manual?.focusEpicID;
         explicit = undefined;
         const project = this.service.store.get(id);
-        const requiredEpicIDs = [...new Set(batch.map((item) => {
-          const input = item.input;
-          if (input.type === "note") return project.sources.find((s) => s.id === item.appliedSourceID)?.epicID ?? input.epicID;
-          const question = project.questions.find((q) => q.id === input.questionID);
-          if (!question) throw new Error("A submitted question is no longer available. Review the retained response.");
-          return question.epicID;
-        }))];
+        const task = (items: Submission[]) => ({ focusEpicID,
+          requiredEpicIDs: [...new Set(items.map((item) => {
+            const epicID = submissionEpic(project, item);
+            if (!epicID) throw new Error("A submitted question is no longer available. Review the retained response.");
+            return epicID;
+          }))],
+          recordIDs: items.flatMap((s) => [s.appliedSourceID!, ...(s.input.type === "answer" ? [s.input.questionID] : [])]),
+        });
+        // Greedy deterministic grouping, with no model call during planning.
+        // An indivisible first task still goes through the service so its failed
+        // manifest is persisted. Other saved responses remain available.
+        let batch = saved;
+        try { planContext(project, task(batch)); }
+        catch (error) {
+          if (!(error instanceof ContextBudgetError)) throw error;
+          batch = saved.slice(0, 1);
+          for (const item of saved.slice(1)) {
+            try { planContext(project, task([...batch, item])); batch.push(item); }
+            catch (candidateError) { if (!(candidateError instanceof ContextBudgetError)) throw candidateError; }
+          }
+        }
+        continuing = batch.length < saved.length;
+        if (continuing) report(`Processing saved responses in smaller working groups to keep context manageable. This group: ${batch.length}; waiting: ${saved.length - batch.length}.`);
+        const research = manual?.research ?? batch.some((s) => s.research);
         const job = await this.service.analyze(id, project.revision, {
-          signal: controller.signal, research, requiredEpicIDs, ...(focusEpicID ? { focusEpicID } : {}), onProgress: report,
+          signal: controller.signal, research, ...task(batch), submissionIDs: batch.map((s) => s.id), onProgress: report,
           onJob: (job) => {
             for (const item of batch) { item.status = "processing"; item.jobID = job.id; this.service.store.saveSubmission(item); }
           },
@@ -114,9 +132,8 @@ export class DiscoveryQueue {
           this.service.store.saveSubmission(item);
         }
         if (job.status !== "completed") { this.service.store.pauseQueue(id, true); break; }
-        // A focused resume is one bounded round, not permission to retry all
-        // remaining areas automatically after the selected area succeeds.
-        if (scope) {
+        // Finish the finite selected work, then leave unrelated areas paused.
+        if (scope && !continuing) {
           const remaining = this.service.store.submissions(id).some((s) => ["queued", "saved", "needs-attention"].includes(s.status));
           this.service.store.pauseQueue(id, remaining);
           break;

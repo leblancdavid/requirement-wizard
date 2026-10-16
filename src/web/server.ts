@@ -14,16 +14,28 @@ import { modelSelection, answerSchema, questionHelpRequestSchema, StaleRevisionE
 import { organizationSchema } from "../core/epics.js";
 import { coverage } from "../core/coverage.js";
 import { safeMessage } from "../runtime/contract.js";
+import { ConnectionManager, connectionError, type Connections } from "../providers/connections.js";
+import { ProviderError } from "../providers/chatgpt.js";
+import { CredentialStore } from "../providers/credentials.js";
+import { ConnectedDiscovery } from "../providers/discovery.js";
+import type { ModelSelection } from "../core/model.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
 
-export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; port?: number; staticDir?: string }) {
+export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; connections?: Connections; port?: number; staticDir?: string }) {
   const token = randomBytes(32).toString("hex");
   const service = new DiscoveryService(options.store, options.adapter);
   const queue = new DiscoveryQueue(service);
   const helpWork = new Map<string, { controller: AbortController; promise: Promise<unknown> }>();
   const root = resolve(options.staticDir ?? "dist/web");
+  const validateConnection = async (model: ModelSelection) => {
+    if (!model.connectionID) return;
+    if (!options.connections || model.providerID !== "openai") throw new Error("ChatGPT connection unavailable.");
+    try {
+      if (!(await options.connections.models(model.connectionID)).some((entry) => entry.id === model.modelID)) throw new ProviderError("Selected model is not available for this ChatGPT account. Refresh models in Settings.");
+    } catch (error) { throw new ProviderError(connectionError(error)); }
+  };
   let origin = "";
   const json = (res: ServerResponse, status: number, data: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -59,10 +71,52 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 403, { error: "Invalid local app session. Reload this app's page." }); return;
       }
       if (req.method !== "GET" && req.headers.origin !== origin) { json(res, 403, { error: "Same-origin request required." }); return; }
+      if (url.pathname.startsWith("/api/connections")) {
+        try {
+          if (req.method === "GET" && url.pathname === "/api/connections") {
+            json(res, 200, { available: !!options.connections, accounts: options.connections ? await options.connections.accounts() : [] }); return;
+          }
+          const connections = options.connections;
+          if (!connections) throw new Error("Connection service unavailable.");
+          if (req.method === "GET" && url.pathname === "/api/connections/login") {
+            json(res, 200, connections.loginStatus(z.string().uuid().parse(url.searchParams.get("id")))); return;
+          }
+          if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+          const raw = await body(req);
+          const accountID = z.string().min(1).max(500);
+          if (url.pathname === "/api/connections/login") {
+            const input = z.object({ accountID: accountID.optional() }).strict().parse(raw);
+            json(res, 202, await connections.beginLogin(input.accountID)); return;
+          }
+          if (url.pathname === "/api/connections/cancel-login") {
+            const input = z.object({ id: z.string().uuid() }).strict().parse(raw);
+            connections.cancelLogin(input.id); json(res, 200, { cancelled: true }); return;
+          }
+          if (url.pathname === "/api/connections/models") {
+            const input = z.object({ accountID }).strict().parse(raw);
+            json(res, 200, { models: await connections.models(input.accountID) }); return;
+          }
+          if (url.pathname === "/api/connections/test") {
+            const input = z.object({ accountID, modelID: z.string().min(1).max(500) }).strict().parse(raw);
+            await connections.test(input.accountID, input.modelID); json(res, 200, { verified: true }); return;
+          }
+          if (url.pathname === "/api/connections/cancel-test") {
+            z.object({}).strict().parse(raw); connections.cancelTest(); json(res, 200, { cancelled: true }); return;
+          }
+          if (url.pathname === "/api/connections/disconnect") {
+            const input = z.object({ accountID }).strict().parse(raw);
+            await connections.disconnect(input.accountID); json(res, 200, { disconnected: true }); return;
+          }
+          json(res, 404, { error: "Connection route not found." }); return;
+        } catch (error) {
+          json(res, 400, { error: error instanceof z.ZodError ? "Invalid connection request fields." : connectionError(error) }); return;
+        }
+      }
       if (url.pathname === "/api/projects") {
         if (req.method === "GET") { json(res, 200, options.store.list()); return; }
         if (req.method === "POST") {
           const input = z.object({ name: text, idea: text, model: modelSelection }).strict().parse(await body(req));
+          await validateConnection(input.model);
           json(res, 201, options.store.create(input.name, input.idea, input.model)); return;
         }
       }
@@ -126,6 +180,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (action === "model") {
         const input = z.object({ revision, model: modelSelection }).strict().parse(raw);
+        if (project.revision !== input.revision) throw new StaleRevisionError();
+        await validateConnection(input.model);
         json(res, 200, options.store.setModel(id, input.revision, input.model)); return;
       }
       if (action === "epic") {
@@ -160,6 +216,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
     for (const work of helpWork.values()) work.controller.abort();
     await Promise.allSettled([...helpWork.values()].map((work) => work.promise));
     await queue.close();
+    await options.connections?.close();
     server.closeAllConnections();
     await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
   } };
@@ -175,7 +232,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const store = new ProjectStore(join(directory, "projects.sqlite"));
     store.recoverExpiredJobs();
     try {
-      const app = await startApp({ store, adapter: new OpenCodeDiscovery(join(directory, "runtime")), port });
+      const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
+      const app = await startApp({ store, connections, adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), port });
       console.log(`\nRequirement Wizard is ready: ${app.origin}\nOpen this address in your browser. Existing CLI projects are available. Ctrl+C stops the app.\n`);
       let closing = false;
       const close = () => { if (closing) return; closing = true; void app.close().finally(() => store.close()); };

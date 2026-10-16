@@ -7,6 +7,7 @@ import "./styles.css";
 import "./details.css";
 import "./workspace.css";
 import { AnnotatedText, QuestionHelp, type HelpControls } from "./question-help.js";
+import { AIConnections } from "./connections.js";
 
 type Snapshot = { project: Project; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; submissions: Submission[]; queuePaused: boolean };
 type Item = { id: string; name: string; revision: number };
@@ -41,6 +42,7 @@ function App() {
   const [research, setResearch] = useState(localStorage.getItem("wizard-research") !== "false");
   const [name, setName] = useState(""); const [idea, setIdea] = useState("");
   const [model, setModel] = useState("gpt-6.1-sol");
+  const [connectionID, setConnectionID] = useState("");
   const [note, setNote] = useState("");
   const [newEpic, setNewEpic] = useState(false);
   const [editingEpic, setEditingEpic] = useState<string | null>(null);
@@ -85,7 +87,7 @@ function App() {
     const timer = setInterval(() => { void load(id).catch((error: Error) => setError(error.message)); }, 2000);
     return () => clearInterval(timer);
   }, [id]);
-  useEffect(() => { if (project) setModel(project.model.modelID); }, [project?.model.modelID]);
+  useEffect(() => { if (project) { setModel(project.model.modelID); setConnectionID(project.model.connectionID ?? ""); } }, [project?.id, project?.model.modelID, project?.model.connectionID]);
   useEffect(() => {
     if (project && epicID !== "all" && !project.epics.some((item) => item.id === epicID && !item.archived)) setEpicID("all");
   }, [project?.revision, epicID]);
@@ -101,21 +103,22 @@ function App() {
   async function mutate(action: string, body: Record<string, unknown>, analyze = false) {
     if (!project) return;
     const updated = await api<Project>(`projects/${project.id}/${action}`, { revision: project.revision, ...body });
-    if (analyze && auto) await api(`projects/${project.id}/analyze`, { revision: updated.revision, research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
+    if (analyze && auto) await api(`projects/${project.id}/analyze`, { revision: updated.revision, research: updated.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
     await list();
   }
   async function explore() {
-    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
+    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
   async function submit(input: Submission["input"], key: string, replaces?: string): Promise<boolean> {
     if (!project || inFlight.current.has(key)) return false;
     const projectID = project.id;
-    const payload = JSON.stringify({ projectID, input, auto, research, replaces });
+    const useResearch = project.model.connectionID ? false : research;
+    const payload = JSON.stringify({ projectID, input, auto, research: useResearch, replaces });
     const submissionID = requests.current.get(payload) ?? crypto.randomUUID();
     requests.current.set(payload, submissionID);
     inFlight.current.add(key); setSending([...inFlight.current]); setError("");
     try {
-      await api(`projects/${projectID}/submit`, { id: submissionID, input, auto, research, ...(replaces ? { replaces } : {}) });
+      await api(`projects/${projectID}/submit`, { id: submissionID, input, auto, research: useResearch, ...(replaces ? { replaces } : {}) });
       await load(projectID); await list(); return true;
     } catch (error) { setError(error instanceof Error ? error.message : "Could not submit response. Your draft is retained."); return false; }
     finally { inFlight.current.delete(key); setSending([...inFlight.current]); }
@@ -123,9 +126,9 @@ function App() {
   async function create(event: FormEvent) {
     event.preventDefault();
     await act(async () => {
-      const created = await api<Project>("projects", { name, idea, model: { providerID: "openai", modelID: model } });
+      const created = await api<Project>("projects", { name, idea, model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } });
       setID(created.id); selected.current = created.id; setCreating(false); setName(""); setIdea("");
-      await list(); await api(`projects/${created.id}/analyze`, { revision: created.revision, research });
+      await list(); await api(`projects/${created.id}/analyze`, { revision: created.revision, research: connectionID ? false : research });
     });
   }
   const epics = project?.epics.filter((item) => !item.archived) ?? [];
@@ -163,21 +166,24 @@ function App() {
       <div className="sidebar-bottom"><span className="connection-dot" /> Local-first workspace<p>Project files are saved on this device.<br />Discovery sends context to ChatGPT.</p></div>
     </aside>
     <main>
-      <header className="topbar"><div><h1>{creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>Local workspace</small></div>
-        {project && !creating && <button className="secondary" aria-expanded={showSettings} onClick={() => setShowSettings(!showSettings)}>Settings</button>}</header>
+      <header className="topbar"><div><h1>{creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{project?.model.connectionID && !creating ? "Local workspace · Using ChatGPT plan" : "Local workspace"}</small></div>
+        <button className="secondary" aria-expanded={showSettings} onClick={() => setShowSettings(!showSettings)}>Settings</button></header>
       {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
+      {showSettings && <section className="settings-panel" aria-label="Settings">
+        <AIConnections request={api} accountID={connectionID} modelID={model} onSelect={(account, selectedModel) => { setConnectionID(account); setModel(selectedModel); }} />
+        {project && !creating ? <><h2>Project settings</h2><button disabled={busy || !model || (model === project.model.modelID && connectionID === (project.model.connectionID ?? ""))} className="secondary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button><p>Saving changes the connection for future project requests.</p><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p></> : <p>Your selected connection and model will be used when you create a project.</p>}
+        <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
+      </section>}
       {(creating || !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>
         <form onSubmit={(event) => void create(event)}>
           <label>Project name<input required maxLength={150} value={name} onChange={(event) => setName(event.target.value)} placeholder="Something worth building" /></label>
           <label>Your idea<textarea required maxLength={12000} value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="I want to build an app that…" rows={5} /></label>
-          <label>ChatGPT model<input required value={model} onChange={(event) => setModel(event.target.value)} /></label>
-          <small>Uses your existing OpenCode connection. If needed, run <code>opencode auth login</code> first.</small>
-          <label className="research-toggle"><input type="checkbox" checked={research} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted web research</label>
-          <button className="primary" disabled={pending}>{pending ? "Creating…" : "Create & explore →"}</button>
+          <div className="connection-summary">{connectionID ? "Direct ChatGPT plan" : "OpenCode connection"} · {model || "Choose a model in Settings"} <button type="button" className="quiet" onClick={() => setShowSettings(true)}>Choose AI connection</button></div>
+          <label className="research-toggle"><input type="checkbox" checked={!connectionID && research} disabled={!!connectionID} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted web research</label>
+          <button className="primary" disabled={pending || !model}>{pending ? "Creating…" : "Create & explore →"}</button>
         </form>
       </section> : !project || !summary ? <div className="empty">Loading your workspace…</div> : <>
-        {showSettings && <section className="settings-panel" aria-label="Project settings"><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p><label><input type="checkbox" checked={research} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label><label>ChatGPT model<input value={model} onChange={(event) => setModel(event.target.value)} /></label><button disabled={busy || model === project.model.modelID} className="secondary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model } }))}>Save model</button></section>}
         <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Questions"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}</button>)}</div>
         <section className="workspace">
           <div className="discovery-column">
@@ -236,7 +242,7 @@ function App() {
               })}
             </>}
             {tab === "history" && <div className="history-list">{history.map((entry) => <article key={entry.revision}><span className="history-dot" /><div><strong>Revision {entry.revision}</strong><p>{entry.reason}</p></div></article>)}</div>}
-            {tab === "research" && <><div className="research-intro"><label><input type="checkbox" checked={research} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label><p>Search and page retrieval are limited to relevant uncertainties. Sources inform choices; they do not decide your preferences. The round stops if it exceeds the monitored tool budget.</p></div>{project.research.filter((item) => epicID === "all" || item.epicID === epicID).map((finding) => <article className="requirement-card" key={finding.id}><span className="badge">{finding.kind === "fetched-page" ? "Retrieved page" : "Search-result evidence"}</span><h3><a href={finding.url} target="_blank" rel="noreferrer">{finding.title} ↗</a></h3><p>{finding.finding}</p><small>{new URL(finding.url).hostname} · {new Date(finding.retrievedAt).toLocaleString()}</small><details><summary>Source excerpt</summary><p className="source-excerpt">{finding.excerpt}</p></details></article>)}{!project.research.length && <div className="empty-card"><h3>No sources collected yet.</h3><p>Enable research and explore a concrete area. Vague ideas may need clarification before external research is useful.</p></div>}</>}
+            {tab === "research" && <><div className="research-intro"><label><input type="checkbox" checked={!project.model.connectionID && research} disabled={!!project.model.connectionID} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label><p>{project.model.connectionID ? "Direct ChatGPT discovery runs without web research. Existing sources remain available below." : "Search and page retrieval are limited to relevant uncertainties. Sources inform choices; they do not decide your preferences. The round stops if it exceeds the monitored tool budget."}</p></div>{project.research.filter((item) => epicID === "all" || item.epicID === epicID).map((finding) => <article className="requirement-card" key={finding.id}><span className="badge">{finding.kind === "fetched-page" ? "Retrieved page" : "Search-result evidence"}</span><h3><a href={finding.url} target="_blank" rel="noreferrer">{finding.title} ↗</a></h3><p>{finding.finding}</p><small>{new URL(finding.url).hostname} · {new Date(finding.retrievedAt).toLocaleString()}</small><details><summary>Source excerpt</summary><p className="source-excerpt">{finding.excerpt}</p></details></article>)}{!project.research.length && <div className="empty-card"><h3>No sources collected yet.</h3><p>{project.model.connectionID ? "Web research is not yet available for direct ChatGPT connections." : "Enable research and explore a concrete area. Vague ideas may need clarification before external research is useful."}</p></div>}</>}
           </div>
           {tab !== "discover" && <aside className="insight-column">
             <details className="insight-card definition-details"><summary><strong>Definition progress</strong><span>{epicScore?.percent ?? summary.percent}% estimated coverage · {(epicScore?.stale ?? summary.stale) ? "Review needed" : "View details"}</span></summary><p>Coverage describes identified work, not completeness or build readiness.</p><Meter value={epicScore?.percent ?? summary.percent} stale={epicScore?.stale ?? summary.stale} /><p>{epicScore?.explanation ?? summary.scopeExplanation}</p>{epicScore ? <>{epicScore.checks.map((check) => <details className="check-row" key={check.dimension}><summary><span className={`check-icon ${check.status}`}>{check.status === "defined" || check.status === "not-applicable" ? "✓" : check.status === "partial" ? "◐" : "○"}</span>{check.label}<span className="check-status">{({ unknown: "Not explored yet", partial: "Needs more detail", defined: "Decision recorded", "needs-review": "Review needed", "not-applicable": "Not relevant" } as const)[check.status]}</span></summary><p>{check.explanation}</p><small>{check.importance} · {check.evidenceIDs.length} evidence links</small>{check.evidenceIDs.map((evidenceID) => <Evidence key={evidenceID} id={evidenceID} project={project} />)}</details>)}</> : <><p className="muted">Choose a feature using the filter to inspect its definition details and supporting decisions.</p><small>{summary.note}</small></>}</details>
@@ -245,7 +251,7 @@ function App() {
             {project.organizationReviews.filter((item) => item.status === "pending").map((review) => <section key={review.id} className="insight-card review-organization"><h3>Reorganization to review</h3><p>{review.reason}</p><details><summary>See proposed changes</summary><ul>{review.operations.map((op, index) => <li key={index}>{op.type === "upsert" ? `${op.type}: ${op.title} — ${op.purpose}` : op.type === "merge" || op.type === "split" ? `${op.type}: ${op.reason}` : `Move a record to ${project.epics.find((item) => item.id === op.epicID)?.title ?? "a proposed epic"}`}</li>)}</ul></details><div className="button-row"><button className="secondary" disabled={busy} onClick={() => void act(() => mutate("organization-review", { reviewID: review.id, accept: true }))}>Apply</button><button className="quiet" disabled={busy} onClick={() => void act(() => mutate("organization-review", { reviewID: review.id, accept: false }))}>Keep current</button></div></section>)}
             {!!project.assumptions.length && <details className="insight-card"><summary>Unconfirmed assumptions <span>{project.assumptions.length}</span></summary><ul>{project.assumptions.map((item) => <li key={item}>{item.replace(/^Unconfirmed:\s*/i, "")}</li>)}</ul></details>}
             <details className="insight-card"><summary>Your original idea & recent notes</summary>{[...project.sources.filter((item) => item.kind === "initial"), ...project.sources.filter((item) => item.kind === "note").slice(-9)].map((item) => <blockquote key={item.id}><small>{item.kind === "initial" ? "Original idea" : "Your note"}</small><p className="source-excerpt">{item.text}</p></blockquote>)}<small>Original idea and latest nine notes. All saved input remains in revision history.</small></details>
-            {tab === "history" && <section className="insight-card settings"><button className="quiet" aria-expanded={showContext} onClick={() => setShowContext(!showContext)}>Technical details {showContext ? "−" : "+"}</button>{showContext && <><p>Project revision {project.revision} · Analysis revision {project.analysisRevision ?? "Not yet analyzed"}</p>{lastJob?.context && <p>{lastJob.context.characters.toLocaleString()} / {lastJob.context.budget.toLocaleString()} context characters · {lastJob.context.includedIDs.length} full records · {lastJob.context.omittedIDs.length} omitted from detail</p>}<small>Fresh revision-bound context each round. AI summaries do not replace your decisions. The context budget is a conservative character bound, not an exact tokenizer count.</small></>}</section>}
+            {tab === "history" && <section className="insight-card settings"><button className="quiet" aria-expanded={showContext} onClick={() => setShowContext(!showContext)}>Technical details {showContext ? "−" : "+"}</button>{showContext && <><p>Project revision {project.revision} · Analysis revision {project.analysisRevision ?? "Not yet analyzed"}</p>{lastJob?.context && <><p>{lastJob.context.characters.toLocaleString()} / {lastJob.context.budget.toLocaleString()} context characters · {lastJob.context.includedIDs.length} evidence records · {lastJob.context.omittedIDs.length} omitted from detail</p>{lastJob.context.partial && <p>Task-sized pass: exact human guardrails retained; whole-area assessments and project interpretation preserved.</p>}{!!lastJob.context.submissionIDs?.length && <p>{lastJob.context.submissionIDs.length} saved responses in this working group.</p>}</>}<small>Fresh revision-bound context each round. AI summaries do not replace your decisions. The context budget is a conservative character bound, not an exact tokenizer count.</small></>}</section>}
           </aside>}
         </section>
       </>}

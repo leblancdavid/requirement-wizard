@@ -7,7 +7,7 @@ implemented under `src/`. See [decisions.md](decisions.md),
 ## Implemented slice
 
 - `src/core/model.ts`: project/evidence/proposal schemas and reference rules.
-- `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`: organization, material
+- `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`, `working-set.ts`: organization, material
   change review, deterministic coverage, and bounded working sets.
 - `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.
 - `src/service/discovery.ts`: in-process orchestration and runtime adapter contract.
@@ -16,6 +16,8 @@ implemented under `src/`. See [decisions.md](decisions.md),
 - `src/service/queue.ts`: durable-submission orchestration, per-project serial rounds,
   batched follow-ups, pause/resume, and interrupted-batch reconciliation.
 - `src/runtime/`: shared owned-server lifecycle, provider validation, and discovery adapter.
+- `src/providers/`: app-owned protected ChatGPT credentials, OAuth attempt lifecycle,
+  connection service, account catalog/probe, and direct/legacy discovery dispatch.
 - `src/terminal/cli.ts`: scriptable commands and a readline interview menu.
 - `src/spike/`: compatibility runner using the shared runtime implementation.
 - `src/web/server.ts`: authenticated loopback browser API and built-asset hosting.
@@ -43,11 +45,11 @@ Loopback HTTP API                In-process facade
              /         |          \
        SQLite       Job runner    Exporter
                        |
-                 Runtime adapter
-                       |
-              OpenCode server / SDK
-                       |
-                     ChatGPT
+                 Selection dispatcher
+                   /           \
+        App-owned OAuth/API   OpenCode server / SDK
+                 |                   |
+            ChatGPT plan           ChatGPT
 ```
 
 TypeScript is shared across service, schemas, and clients. UI components do not own
@@ -57,7 +59,9 @@ revisions. Future wrappers can reuse this API; discovery/attachment is not yet a
 
 The API binds only to loopback and uses a per-launch bootstrap token, Host checks,
 same-origin mutations, bounded bodies, and a self-only script policy. Credentials
-remain with OpenCode. It is a local personal workspace, not a hosted multi-user service.
+remain with OpenCode for legacy selections; direct ChatGPT credentials are protected
+by the local provider service and never returned to the renderer. It is a local
+personal workspace, not a hosted multi-user service.
 
 ## Engine workflow
 
@@ -77,7 +81,9 @@ Submission IDs deduplicate retries; exact question text and previous source IDs 
 against conflicting answers without rejecting unrelated project changes. Queued inputs
 do not mutate an active round's snapshot. At round boundaries a transaction applies
 waiting inputs in order, retaining conflicts as needs-attention records. Follow-up
-rounds batch saved inputs and require all their epic areas in bounded context.
+rounds batch saved inputs and require their epic areas in bounded context. Oversized
+batches are greedily divided into fitting groups before inference; each committed
+group records its submission IDs and the next group replans against the new revision.
 An optional submission `replaces` ID atomically supersedes an unapplied waiting
 answer for the same question; its exact original payload remains in history with
 status `superseded` and is excluded from application/processing. Already-applied
@@ -104,8 +110,9 @@ snapshots expose help history separately from discovery jobs. Shutdown cancels o
 requests; expired leases recover without automatic inference retries.
 
 The clarification adapter disables research and uses focused, revision-bound context,
-the original question, and the latest six completed help exchanges (older history is
-explicitly counted as omitted). Combined context must fit 48,000 characters. User
+the original question, and up to six recent completed help exchanges (history removed
+to fit is explicitly counted as omitted). The base package is bounded to 36,000
+characters, reserving room for the request/history within 48,000 characters. User
 help messages and model explanations remain advisory, outside normative evidence.
 The original question/options are not replaced. Concept annotations reference exact,
 unique phrases in specified question/option fields; missing, ambiguous, overlapping,
@@ -116,6 +123,25 @@ research findings. Start with a simple impact/uncertainty/dependency rubric. Sto
 why questions were asked, resolved, deferred, or retired.
 
 ## Runtime adapter
+
+### Direct provider migration
+
+The approved direction is app-owned connections and model selection without a
+required OpenCode discovery runtime (DEC-015). `src/providers/` now contains an
+independent ChatGPT OAuth/catalog/streaming implementation and protected credential
+transactions. Browser connection endpoints and Settings provide login/status/cancel,
+account/model listing, explicit test/cancel, reconnect, and disconnect. Production
+browser and terminal discovery dispatch by the saved optional connection reference.
+Direct selections also support question help, retain schema/revision checks, and
+reject research before inference. Live compatibility/distribution eligibility remain unverified.
+See [direct-providers.md](direct-providers.md) for commands, evidence, and migration.
+
+The target boundary separates provider registry, connection metadata, credentials,
+account-specific model catalogs, and inference adapters. Connection secrets remain
+outside project snapshots/exports; project connection references require local
+mapping when transferred. Research tools must become application-owned. The
+OpenCode adapter described below remains the legacy execution path for projects
+without a connection reference. No failed direct request falls back to that path.
 
 Expose application-level operations for:
 
@@ -167,7 +193,19 @@ Before narrowing or rejecting oversized context, deterministic compaction remove
 question concept-tooltip metadata and index labels duplicated by detailed records.
 The package declares this compaction and the manifest retains original size and
 omission counts; saved records and all decision/evidence fields remain exact.
-Oversized inputs fail before inference; evidence
+If full detail still does not fit, `working-set.ts` pins the task records, current
+human evidence in selected areas and transitive dependencies, non-proposed requirements,
+and recursively linked evidence. It removes generated question help text outside the
+task, previous assessments, and other optional AI detail, then adds fitting related
+proposals/open questions/research. A bounded excerpt index provides navigation.
+These `tasks-v1` packages declare partial scope and persist task, indexed, included,
+and omitted IDs with section sizes. They cannot replace global interpretation,
+scope confidence, or whole-area assessments, or perform organization operations.
+All rounds reject retirement/organization of unseen records and proposals targeting
+areas outside their working scope. Exact source records remain authoritative.
+Question help reserves room for its request/history and can fall back to question
+evidence plus project guardrails; omitted help exchanges are explicitly counted.
+Mandatory evidence that still exceeds the budget fails before inference; evidence
 outside the detailed working set cannot justify generated requirements/assessments.
 The character bound is not an exact tokenizer/model-window estimate. See the browser
 guide for the implemented rubric and limitations.

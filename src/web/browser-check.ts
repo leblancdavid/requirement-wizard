@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { startApp } from "./server.js";
 import { ProjectStore } from "../storage/store.js";
 import { analysisSchema } from "../core/model.js";
+import type { Connections, LoginStatus } from "../providers/connections.js";
 
 // Deterministic UI exercise: no model inference, provider credentials, or billing.
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".wizard-state/browsers");
@@ -12,7 +13,19 @@ await mkdir(resolve(".wizard-state"), { recursive: true });
 const store = new ProjectStore(":memory:");
 const releases: Array<() => void> = [];
 let rounds = 0;
-const app = await startApp({ store, port: 0, adapter: { async analyze(project, options) {
+let login: LoginStatus = { id: "10000000-0000-4000-8000-000000000001", status: "cancelled" };
+let loginComplete = false, connected = false, blockTest = true;
+let cancelTest: (() => void) | undefined;
+const connections: Connections = {
+  async accounts() { return connected ? [{ id: "fixture-account", label: "Browser fixture account", expiresAt: Date.now() + 3600000 }] : []; },
+  async beginLogin() { login = { id: login.id, status: "waiting" }; loginComplete = false; return { id: login.id, url: "https://auth.openai.com/api/accounts/authorize?state=browser-fixture" }; },
+  loginStatus() { if (loginComplete) { connected = true; login = { ...login, status: "connected", accountID: "fixture-account" }; } return login; },
+  cancelLogin() { login = { ...login, status: "cancelled" }; },
+  async models() { return [{ id: "fixture", name: "Fixture model" }, { id: "fixture-alt", name: "Alternative fixture model" }]; },
+  async test() { if (blockTest) await new Promise<void>((_accept, reject) => { cancelTest = () => reject(new Error("Fixture test cancelled.")); }); },
+  cancelTest() { cancelTest?.(); }, async disconnect() { connected = false; }, async close() { cancelTest?.(); },
+};
+const app = await startApp({ store, connections, port: 0, adapter: { async analyze(project, options) {
   options.onProgress("Organizing sample project");
   if (rounds++ > 0) {
     await new Promise<void>((accept) => { releases.push(accept); options.signal.addEventListener("abort", () => accept(), { once: true }); });
@@ -38,11 +51,51 @@ try {
   browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, hasTouch: true });
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await page.context().route("https://auth.openai.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<p>Deterministic sign-in fixture. No provider contacted.</p>" }));
   await page.goto(app.origin);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const connectionPanel = page.getByRole("region", { name: "AI connections", exact: true });
+  await expect(connectionPanel.getByRole("button", { name: "Continue with ChatGPT" })).toBeEnabled();
+  const firstPopup = page.waitForEvent("popup");
+  await connectionPanel.getByRole("button", { name: "Continue with ChatGPT" }).click();
+  const cancelledPopup = await firstPopup;
+  await expect(connectionPanel.getByText("Waiting for ChatGPT sign-in…", { exact: true })).toBeVisible();
+  await connectionPanel.getByRole("button", { name: "Cancel sign-in" }).click();
+  await cancelledPopup.close();
+  const secondPopup = page.waitForEvent("popup");
+  await connectionPanel.getByRole("button", { name: "Continue with ChatGPT" }).click();
+  const signedInPopup = await secondPopup;
+  loginComplete = true;
+  await expect(connectionPanel.getByText("You’re using your ChatGPT plan", { exact: true })).toBeVisible();
+  await signedInPopup.close();
+  await connectionPanel.getByRole("button", { name: "Got it", exact: true }).click();
+  await expect(connectionPanel.getByLabel("ChatGPT model", { exact: true })).toBeEnabled();
+  await connectionPanel.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture");
+  await connectionPanel.getByRole("button", { name: "Test connection", exact: true }).click();
+  await expect.poll(() => !!cancelTest).toBe(true);
+  await connectionPanel.getByRole("button", { name: "Stop test", exact: true }).click();
+  await expect(connectionPanel.getByRole("alert")).toContainText("could not complete");
+  blockTest = false;
+  await connectionPanel.getByRole("button", { name: "Test connection", exact: true }).click();
+  await expect(connectionPanel.getByText(/Connection test passed/)).toBeVisible();
+  await page.screenshot({ path: ".wizard-state/browser-connections.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Connection settings must fit a mobile viewport");
+  await page.screenshot({ path: ".wizard-state/browser-connections-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByLabel("Project name").fill("Browser sample");
   await page.getByLabel("Your idea", { exact: true }).fill("Track contractor jobs and save their information.");
   await page.getByRole("button", { name: "Create & explore" }).click();
   await expect(page.getByRole("heading", { name: "Who will use the first release?", exact: true })).toBeVisible();
+  assert.equal(store.list().length, 1);
+  assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-alt");
+  await page.getByRole("button", { name: "Save model", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Save model", exact: true })).toBeDisabled();
+  assert.equal(store.get(store.list()[0]!.id).model.modelID, "fixture-alt");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.locator(".insight-column")).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toBeVisible();
   await expect(page.locator(".question-card.expanded")).toHaveCount(1);
@@ -189,6 +242,11 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: ".wizard-state/browser-mobile.png", fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile layout should not overflow horizontally");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByLabel("ChatGPT model", { exact: true })).toHaveValue("fixture-alt");
+  await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await expect(page.getByText(/Account disconnected\. Projects retain/)).toBeVisible();
+  assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   assert.deepEqual(errors, []);
-  console.log("Browser checks passed: concept hover/focus/tap and dismissal, clarification/follow-up/cancellation/history, answer draft preservation, discovery queue/reload, requirement confirmation, and mobile layout. Screenshots: .wizard-state/browser-{desktop,mobile,help-mobile}.png");
+  console.log("Browser checks passed: ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation, and mobile layout. Screenshots: .wizard-state/browser-{connections,connections-mobile,desktop,mobile,help-mobile}.png");
 } finally { await browser?.close(); await app.close(); store.close(); }

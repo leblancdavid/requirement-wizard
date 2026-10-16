@@ -5,7 +5,8 @@ specification and an actionable AI build plan.
 
 Describe an idea, answer adaptive questions, investigate uncertainties, and review
 the resulting requirements. Start with the local browser app or terminal interface, with
-ChatGPT subscription access initially provided through OpenCode. GitHub Copilot
+ChatGPT subscription access through app-owned sign-in (direct preview) or an existing
+OpenCode connection. Direct live compatibility is not yet qualified. GitHub Copilot
 support is deferred.
 
 ## Project status
@@ -15,8 +16,10 @@ clickable questions, researches relevant uncertainties, and estimates how well e
 area is defined. Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 Keep answering while discovery works: responses are durably queued and waiting
-answers are batched into the next round. Expand **Processing & queue** to inspect
-the questions and submitted answers being processed, waiting, or completed in **Activity**.
+answers are batched into the next round. Oversized batches are automatically divided
+into smaller revision-linked working groups, with exact human evidence retained and
+completed groups checkpointed. Expand **Processing & queue** to inspect the questions
+and submitted answers being processed, waiting, or completed in **Activity**.
 The default **Questions** view uses compact expandable rows with feature/category
 context. Use **Previous answers** or **Submitted** to edit responses, including
 waiting answers. **Project map** groups requirements under expandable features;
@@ -37,8 +40,10 @@ npm run app
 ```
 
 Open **http://127.0.0.1:4317**. Existing CLI projects appear automatically when using
-the same default data directory. Discovery uses your OpenCode ChatGPT connection.
-If needed, connect it first with `opencode auth login`.
+the same default data directory. Open **Settings → AI connections** to sign in with
+ChatGPT, select an account/model, and test the connection. Save the selection for an
+existing project, or use it when creating a new one. Existing OpenCode selections
+continue to work; connect that route with `opencode auth login` if needed.
 
 See the [browser workspace guide](docs/browser-workspace.md) for research controls,
 epic organization, scoring, context management, verification, and current limitations.
@@ -67,6 +72,12 @@ See the [runtime spike guide and results](docs/runtime-spike.md) for prerequisit
 commands, tested versions, native structured-output failures, and remaining checks.
 
 ## Project documents
+
+Direct ChatGPT connection management is available in Settings and through the
+independent compatibility runner: `npm run provider -- --help`. See
+[direct providers](docs/direct-providers.md) for sign-in, model selection, commands,
+and migration status. Direct discovery/help are implemented but live subscription
+access is not yet verified; direct research remains follow-on work.
 
 - [Product specification](docs/product-specification.md): scope, requirements,
   acceptance criteria, and release readiness.

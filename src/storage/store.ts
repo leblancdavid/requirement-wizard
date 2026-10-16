@@ -356,7 +356,34 @@ export class ProjectStore {
             item.checks.some((check) => check.evidenceIDs.some((id) => !id.startsWith("new:") && !job.context!.includedIDs.includes(id))))) {
             throw new Error("Assessment cites evidence or areas outside the detailed working context. Run a focused round instead.");
           }
+          if (job.context) {
+            const detailed = new Set(job.context.includedIDs);
+            const areas = new Set(job.context.epicIDs);
+            const existingAreaOutside = (id: string | undefined) => id && !id.startsWith("new:") && job.context!.epicIDs && !areas.has(id);
+            if ([...result.questions, ...result.requirements, ...(result.researchFindings ?? [])].some((r) => existingAreaOutside(r.epicID))) {
+              throw new Error("Cannot add proposals to an area outside this round's context.");
+            }
+            if (result.retireQuestions.some((q) => !detailed.has(q.questionID))) throw new Error("Cannot retire a question outside this round's detailed context.");
+            for (const op of result.organization ?? []) {
+              const epicIDs = op.type === "merge" ? [...op.epicIDs, op.targetEpicID]
+                : op.type === "split" ? [op.epicID, ...op.destinations.map((d) => d.epicID)] : [op.epicID];
+              if (epicIDs.some(existingAreaOutside)) throw new Error("Cannot organize areas outside this round's context.");
+              const ids = op.type === "move" ? [op.recordID] : op.type === "split" ? op.destinations.flatMap((d) => d.recordIDs) : [];
+              if (ids.some((id) => !id.startsWith("new:") && !detailed.has(id))) throw new Error("Cannot organize records outside this round's detailed context.");
+              if (op.type === "split" || op.type === "merge") {
+                const areas = new Set(op.type === "split" ? [op.epicID] : op.epicIDs);
+                const records = [...project.questions, ...project.requirements, ...project.research, ...project.sources.filter((s) => s.kind === "note")];
+                if (records.some((r) => areas.has(r.epicID) && !detailed.has(r.id))) throw new Error("Cannot split or merge an area with omitted records.");
+              }
+            }
+          }
+          if (job.context?.partial && ((result.organization?.length ?? 0) || (result.assessments?.length ?? 0))) {
+            throw new Error("Partial task passes cannot reorganize areas or replace whole-area assessments.");
+          }
+          const interpretation = job.context?.partial ? { summary: project.summary, analysisRevision: project.analysisRevision,
+            goals: project.goals, actors: project.actors, assumptions: project.assumptions, scopeAssessment: project.scopeAssessment } : undefined;
           applyRound(project, result, randomUUID, job.researchEvidence);
+          if (interpretation) Object.assign(project, interpretation);
         });
         job.status = "completed";
       }

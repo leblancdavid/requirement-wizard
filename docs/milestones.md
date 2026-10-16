@@ -39,6 +39,23 @@ Exit checks:
 Deliverables: runnable spike, versioned runtime notes, capability report, and updated
 technical decisions. Do not commit to full UI infrastructure before reviewing the result.
 
+### M1 direct-provider migration follow-up (DEC-015)
+
+App-owned direct ChatGPT OAuth/catalog/streaming, browser Settings connection UI/API,
+and direct discovery/help dispatch are implemented under `src/providers/` and `src/ui/`.
+Deterministic service/API/browser checks and native Windows credential protection pass;
+live sign-in, inference, refresh, revocation, and reconnect remain unverified.
+Legacy selections still require OpenCode; direct selections do not launch it.
+Direct research remains unsupported. This does not complete M1.
+See [direct-providers.md](direct-providers.md).
+
+- Confirm distribution eligibility and exercise the direct live compatibility checks.
+- Qualify the implemented connection/catalog operations and direct discovery adapter.
+- Broaden terminal selection controls; browser auth/model selection is implemented
+  and existing snapshots retain their explicit legacy route.
+- Replace research/tool execution and qualify provenance, budgets, and cancellation.
+- Remove required OpenCode discovery execution after end-to-end verification.
+
 ## M2 — Shared engine and terminal vertical slice
 
 Progress: project/evidence/proposal schemas, SQLite revision snapshots, durable jobs,
@@ -103,7 +120,9 @@ Exit checks:
 
 Progress: opt-in source-backed webfetch was verified live; nine-area epic assessments,
 deterministic coverage scoring, split/merge/move operations, confirmed-organization
-review, map undo, and bounded revision-aware context are implemented. Websearch and
+review, map undo, bounded revision-aware task context, and automatic saved-response
+grouping on overflow are implemented. Partial passes preserve global interpretation
+and whole-area assessments. Websearch and
 adversarial tool-budget/permission checks still need live qualification. Full scenario
 review, conflict resolution, release baselines, and readiness gates remain pending.
 

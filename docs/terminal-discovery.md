@@ -7,7 +7,14 @@ workflow and an authenticated local API. See [browser-workspace.md](browser-work
 
 ## Start a project
 
-Requires Node.js 20.11+, npm, and OpenCode for model calls. `better-sqlite3` 11.10.0
+Requires Node.js 20.11+ and npm. Legacy selections require OpenCode for model calls;
+projects switched to a direct connection in browser Settings use that same protected
+account from the terminal, without launching OpenCode. Custom data directories use
+their own `providers` subdirectory. Direct research is currently unsupported, and
+direct live access remains unqualified; see [direct-providers.md](direct-providers.md).
+The `new` and `model` commands accept `--connection <account-id|opencode>`.
+Model changes retain the project's existing connection unless explicitly changed.
+`better-sqlite3` 11.10.0
 is pinned for this Node baseline; its Windows native module installed successfully
 on the development machine. Provider connection instructions are in
 [runtime-spike.md](runtime-spike.md).

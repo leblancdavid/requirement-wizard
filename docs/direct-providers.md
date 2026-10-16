@@ -1,0 +1,163 @@
+# Direct provider migration
+
+Status, October 15, 2026: app-owned browser connection management and direct
+discovery/question help are implemented, alongside the independent CLI spike.
+Deterministic checks and Windows credential protection pass. Direct live sign-in,
+subscription inference, refresh, remote revocation, and cancellation/reconnection
+have **not** been exercised. Existing project selections keep using OpenCode until
+explicitly changed; direct selections require no OpenCode executable.
+
+## Direction
+
+DEC-015 approves staged migration to app-owned connections and model selection,
+starting with direct ChatGPT-plan compatibility. It does not establish the app's
+distribution/license or prove eligibility for OpenAI's preview.
+
+OpenAI currently documents Sign in with ChatGPT plan usage for open-source,
+locally hosted apps. Paid/remotely hosted apps have a separate interest process.
+Confirm distribution requirements before adopting the direct flow for release.
+No OpenCode credentials are read, imported, or reused.
+
+## Connect in the app
+
+Run `npm run app`, open the printed address, and choose **Settings → AI connections**.
+Settings is available before creating a project as well as inside a project.
+
+1. Select **Continue with ChatGPT**, authorize in the new browser tab, and return.
+   If the popup is blocked, use **Open sign-in tab**. Pending sign-in has a three-minute
+   bound and a **Cancel sign-in** action. Reloading the same tab can recover its
+   pending attempt; restarting the service requires a fresh attempt.
+2. Select the saved account and choose a model from its account-specific catalog.
+   Use **Refresh models** after account/model availability changes.
+3. Optionally choose **Test connection**: one bounded inference request that uses
+   plan allowance. **Stop test** cancels it locally. Catalog browsing is not inference.
+4. In an existing project choose **Save model**; for a new project, the selection is
+   used by **Create & explore**. Project connection references are revisioned and
+   contain no tokens. Saving does not automatically start inference.
+5. **Reconnect** reauthorizes the selected identity. **Disconnect** revokes the saved
+   renewable session before removing the connection and stops this service's active
+   requests for it. Projects retain the missing selection and do not fall back.
+
+The header identifies direct-plan use. Settings shows the active selected account,
+plan usage, a usage-management link, and a first-sign-in confirmation remembered by
+this browser. Credentials never enter browser storage; only the pending attempt ID,
+confirmation preference, and ordinary project selection state live there.
+
+Direct discovery and question help use the shared context and result-validation
+pipeline. Direct research is not implemented: browser controls show it unavailable,
+and direct adapter requests explicitly asking for research fail before inference.
+Legacy OpenCode selections retain their existing research profile. Switching model
+or account does not silently change provider or billing route.
+
+Browser and terminal discovery both dispatch on the saved optional `connectionID`.
+Old snapshots without it remain valid OpenCode selections. Imported references need
+an explicit selection of a connection on the new device. OpenCode SDK code remains
+installed for the legacy adapter; its executable is not launched for direct requests.
+
+The app/terminal store credentials in a `providers` directory beside `projects.sqlite`.
+With `npm run app -- --data-dir .wizard-state`, the equivalent spike argument is
+`--data-dir .wizard-state/providers`. Default paths match the independent spike.
+
+## Try the independent spike
+
+Use Node 20.11+ and installed npm dependencies. These commands do not require
+OpenCode. The login command prints a one-time authorization link; open it in your
+system browser and return to the terminal for the validated result.
+
+```powershell
+npm run provider -- --help
+npm run provider -- login
+npm run provider -- accounts
+# Use the account registration ID printed by login/accounts:
+npm run provider -- models --account "registration-id"
+# Only this command performs inference and consumes allowance:
+npm run provider -- probe --account "registration-id" --model "exact-catalog-id"
+npm run provider -- probe --account "registration-id" --model "exact-catalog-id" --cancel-after-ms 1000
+npm run provider -- logout --account "registration-id"
+```
+
+`--timeout-ms` bounds the entire command (default 180000, maximum 300000).
+Ctrl+C cancels pending login/network/stream work. Probe sends only a fixed connection
+check, never project context. It requires an account-listed model and a completed
+SSE response containing exactly `{"ok":true}`; malformed, incomplete, failed,
+interrupted, oversized, or different-model responses fail. Cancellation closes the
+local response stream; remote cessation/billing is not asserted.
+
+Login uses a stable per-install host ID, dynamic registration, a loopback callback,
+fresh state/nonce/PKCE, and issued-client token exchange. ID tokens are verified
+against the fixed OpenAI JWKS with issuer/audience/expiry/nonce checks. Returning
+login (`login --account ...`) must match the selected identity and issued client.
+Multiple registrations are separate even if their email addresses match.
+
+Credentials default to `%LOCALAPPDATA%\requirement-wizard\providers` on Windows,
+or `~/.local/share/requirement-wizard/providers` elsewhere. `--data-dir .provider-state`
+uses an ignored development directory; apply it consistently to each command.
+
+Windows uses DPAPI CurrentUser encryption via Windows PowerShell, with secrets
+passed only on stdin. Other platforms use owner-only directory/file permissions,
+not encryption at rest. The spike writes atomically and serializes credential
+reads/refresh/write across processes with a directory lock. An expired access
+token is refreshed before model listing/probing; rotated tokens are saved together.
+If a process crashes while holding the lock, close all direct-provider commands
+before manually removing `credentials.lock` inside this credential directory.
+Locks are never automatically stolen from a possibly live owner.
+
+Logout first revokes the renewable session, then removes the spike's saved
+registration. On revocation failure it retains credentials so the command can be
+retried. Full account management should retain a disconnected identity/client
+mapping without tokens; that lifecycle is still follow-on work. Users can manage
+plan limits and disconnect the app at https://chatgpt.com/settings/usage.
+
+## Verification recorded
+
+- `npm run check`: passed on Node 20.11.0 / Windows.
+- `npm test`: 75 tests passed, including OAuth callback integration, direct discovery,
+  stale-result rejection, cancellation/retry, and authenticated connection API checks.
+- `npm run test:browser`: passed with deterministic provider fixtures. Covers sign-in
+  and cancellation, account/model selection, test/cancel/retry, project selection
+  persistence, disconnect, existing discovery workflows, and mobile overflow.
+  Screenshots: `.wizard-state/browser-connections{,-mobile}.png`.
+- `npm run provider -- --help`: passed without runtime startup or provider calls.
+- Existing spike/terminal help commands and `npm run build:ui`: passed.
+- `git diff --check`: passed.
+- Native Windows DPAPI seal/unseal: passed using temporary test state.
+- OAuth callback/state, signed OIDC validation, scope grants, identity mismatch,
+  token rotation, catalog visibility/order, fragmented SSE, cancellation, late
+  failure, malformed JSON, failed writes, and serialized storage: deterministic checks.
+- Official OpenID discovery metadata was retrieved; this is metadata inspection,
+  not a successful login or inference check.
+- No live login, token refresh/revocation, or model inference was performed.
+
+## Follow-on implementation
+
+1. Run live sign-in, account catalog, JSON probe, cancellation/fresh-call, refresh,
+   restart, and revocation checks. Record actual results without tokens or auth URLs.
+2. Broaden the implemented ChatGPT connection service into a multi-provider registry
+   with API-key connections and local endpoints. Add disconnected registration metadata,
+   richer connection health, and connection-reference mapping for portable imports.
+3. Add richer terminal connection presentation. Terminal discovery respects saved
+   connections; new/model accept `--connection <account-id|opencode>`, and model-only
+   changes retain the existing route. Independent provider commands remain available
+   for login and catalog/probe work.
+4. Further separate shared prompt builders from the legacy runtime module, and
+   qualify live direct discovery/help quality and usage reporting.
+5. Replace OpenCode-provided research with application-owned, capability-aware
+   search/fetch tools, enforce budgets before execution, and retain retrieval evidence.
+6. Qualify the complete workflow before changing the default from legacy OpenCode
+   or removing its adapter/dependency. Future coding/handoff integration remains independent.
+
+The direct HTTP preview requires `store:false`, `stream:true`, full required context
+in input, and instructions/developer messages rather than explicit system items.
+It currently rejects options such as `temperature` and `max_output_tokens`; tool
+support is also constrained. The spike uses only supported text fields. It does
+not assume OpenCode's structured-output observations transfer to this route.
+
+## Official documentation consulted
+
+- [Plan usage overview](https://developers.openai.com/siwc/token-sharing-open-source)
+- [Registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+- [Accounts and refresh](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
+- [Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+- [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+- [UI guidelines](https://developers.openai.com/siwc/ui-ux-guidelines)
+- [OpenID discovery](https://auth.openai.com/.well-known/openid-configuration)

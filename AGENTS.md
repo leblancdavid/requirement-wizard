@@ -41,6 +41,8 @@ Executable application code now includes:
 - `src/storage/store.ts` — SQLite revisions, expected-revision writes, and durable jobs.
 - `src/service/discovery.ts` — in-process orchestration and adapter contract.
 - `src/runtime/` — owned OpenCode server, provider validation, and JSON-text discovery.
+- `src/providers/` — app-owned ChatGPT OAuth/credentials, browser connection management,
+  account catalogs/probes, and selection-routed direct discovery/help.
 - `src/terminal/cli.ts` — persistent project commands and readline interview menu.
 - `src/web/server.ts` — token-authenticated loopback browser API and job lifecycle.
 - `src/ui/` — React browser workspace; `vite.config.ts` builds it to ignored `dist/web`.
@@ -109,13 +111,21 @@ Observed behavior is documented in `docs/runtime-spike.md`:
 These are dated observations, not permanent capability guarantees. Record new
 checks accurately; do not label blocked or unexecuted checks as passing.
 
-Let OpenCode own provider credentials and supported authentication flows. Never
-copy credentials into project records, logs, fixtures, or exports. Inspect only
+For the OpenCode adapter, let OpenCode own credentials and supported authentication
+flows. Never copy credentials into project records, logs, fixtures, or exports. Inspect only
 necessary configuration fields and redact diagnostics. Do not silently switch
 provider, model, or output format after an error.
 
-The spike owns its server and uses ignored `.spike-workspace/` state. Preserve that
-lifecycle boundary; do not terminate unrelated OpenCode processes. Discovery tool
+Direct-provider migration is approved under DEC-015. `src/providers/` contains a
+ChatGPT OAuth/catalog/streaming implementation with app-owned protected credentials,
+browser Settings UI/API, and direct discovery/help dispatch. It never reads OpenCode
+credentials. See `docs/direct-providers.md` for commands and verification gaps;
+direct live access is not yet qualified. Old selections retain OpenCode; direct
+selections do not launch it and currently reject research. Keep tokens out of project snapshots/exports
+and serialize rotating-token refreshes across processes.
+
+The OpenCode spike owns its server and uses ignored `.spike-workspace/` state.
+Preserve that lifecycle boundary; do not terminate unrelated OpenCode processes. Discovery tool
 permissions and later coding execution are separate profiles requiring verification.
 
 ## Verification
