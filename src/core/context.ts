@@ -7,7 +7,10 @@ export class ContextBudgetError extends Error {
   constructor(readonly manifest: ContextPack["manifest"]) {
     const largest = Object.entries(manifest.sectionCharacters ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 3)
       .map(([name, size]) => `${name}: ${size.toLocaleString("en-US")}`).join(", ");
-    const compacted = manifest.compaction ? ` Explanatory metadata and duplicate labels were already compacted from ${manifest.compaction.originalCharacters.toLocaleString("en-US")} characters.` : "";
+    const compacted = (manifest.compaction ? ` Explanatory metadata and duplicate labels were already compacted from ${manifest.compaction.originalCharacters.toLocaleString("en-US")} characters.` : "")
+      + (manifest.losslessCompaction ? ` Repeated exact evidence text was already shared losslessly from ${manifest.losslessCompaction.originalCharacters.toLocaleString("en-US")} characters.` : "")
+      + (manifest.identifierCompaction ? ` Repeated identifiers were already shared losslessly from ${manifest.identifierCompaction.originalCharacters.toLocaleString("en-US")} characters.` : "")
+      + (manifest.structureCompaction ? ` Repeated record structure was already shared losslessly from ${manifest.structureCompaction.originalCharacters.toLocaleString("en-US")} characters.` : "");
     super(`Project context exceeds the bounded input budget (${manifest.characters.toLocaleString("en-US")} / ${manifest.budget.toLocaleString("en-US")} characters; ${manifest.epicIDs?.length ?? 0} areas included).${largest ? ` Largest sections (characters): ${largest}.` : ""}${compacted}${manifest.partial ? " The task and its mandatory human constraints still exceed the limit after automatic working-set planning. Review the selected area's cross-cutting notes and dependency scope, or split its work." : " Automatic queue processing can divide saved responses into smaller working groups. A single oversized group may need a smaller dependency scope or split."} No model call was made; saved responses are retained.`);
   }
 }

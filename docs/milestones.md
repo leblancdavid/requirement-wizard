@@ -158,7 +158,9 @@ Exit checks:
 Workspace foundation (DEC-016, RW-023–024) implemented ahead of full planning:
 per-project folder bindings, automatic requirements/progress artifacts, conflict/retry
 and interruption recovery, browser/CLI controls, and manual requirement-linked build
-tracking. Deterministic storage/API and browser flows are verified; see
+tracking. DEC-021 adds stable per-feature definitions, shared evidence, unchanged-file
+publication, versioned layout migration, and on-demand combined terminal specifications.
+Deterministic storage/API and browser flows are verified; see
 [project-workspaces.md](project-workspaces.md). This provides local outputs and
 destination handling, but does not complete baseline-bound phase packages or M5 exit
 criteria. Integrated OpenCode execution remains M6.

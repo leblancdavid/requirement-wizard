@@ -434,7 +434,14 @@ the deterministic task planner switches to an explicitly partial working set:
 
 - Pin current input records, all current human sources in selected discovery areas
   (including project-wide and transitive dependency decisions), non-proposed
-  requirements, related proposals, and exact recursively linked evidence.
+  requirements, related proposals, and exact task/requirement evidence.
+- For historical answered questions pulled in by retained human answers, keep exact
+  wording, options, answer links, and provenance links, but make workspace excerpts
+  that only motivated those questions optional. A task question (or its current
+  answer source) still pins its files; included requirements still pin their source
+  files. Human evidence links continue to resolve. `tasks-v3` packages explicitly
+  list omitted historical question/file links and prohibit citing those omitted
+  files or claiming their implementation was reviewed.
 - Keep question wording, options, status, and answer links exact. Remove generated
   concept annotations and `whyItMatters` outside task questions. Human text is never
   summarized or truncated. Previous assessments and organization proposals stay saved.
@@ -448,6 +455,8 @@ the deterministic task planner switches to an explicitly partial working set:
 - Split saved-response batches greedily into fitting groups, including within one
   epic when its task-specific detail is too large. Each group commits independently;
   the next one replans against the latest revision. Only its submissions are completed.
+  When even one response needs mandatory-only compaction/fallback, grouping uses that
+  same package/bound for candidates, so fitting responses can share one background.
 
 This continues finite submitted work, without autonomously generating discovery
 rounds beyond the queue. After compaction and queue grouping, a discovery task whose
@@ -458,8 +467,35 @@ the job manifest with a visible progress message. Before rejecting a package abo
 that hard bound, discovery also removes task questions' AI-generated `whyItMatters`
 explanations. The package lists affected question IDs and the manifest records the
 omission; exact question wording, options, answers, and linked evidence remain.
-Saved question help remains available in the UI. Question help and scan planning
-keep their separate bounds. Mandatory evidence beyond 96,000 characters still fails
+Saved question help remains available in the UI. Lossless sharing now targets the
+normal **48,000-character** bound for oversized mandatory-only discovery packages,
+even if they already fit below 96,000. A compacted package that fits keeps the normal
+budget and does not refill the recovered space with optional detail. Discovery shares
+repeated text fields and exact repeated lines of at
+least 80 characters (including ordinary short requirement review statements)
+through a `sharedText` table. This lossless wire encoding also handles wording embedded
+in saved review snapshots: records retain their IDs and links, and text fields use
+references or ordered literal/reference parts. Expanding them reproduces the exact
+text, including whitespace. The prompt explains the encoding and requires citations
+to record IDs, never text-table keys. `tasks-v2` manifests record original/final sizes,
+shared-text/reference counts, and final section sizes. The table is used only when
+it reduces the package size; saved records and UI text remain intact.
+If repeated text is insufficient to reach the normal target, another pass shares repeated record and
+scope IDs through `identifierTable`. Integer values in identifier fields (`id`,
+names ending in `ID`/`IDs` except `sharedTextID`, and `dependencies`, including array
+elements) reference the table's exact original strings. Other numbers and human
+prose are unchanged. The prompt requires expanded original string IDs in all output
+and citations; validation and manifests retain original IDs. `tasks-v4` manifests
+record identifier/reference counts and pre/post sizes. This pass is retained only
+when it saves space and does not raise the hard bound.
+If the package is still above the normal target, `tasks-v5` replaces repeated field
+names with record tables: ordered `columns` and `rows`, plus `absent` coordinates
+for missing fields. Source/question/requirement records and nested options can use
+these tables. Values, whitespace, record order, and provenance are preserved exactly;
+the prompt requires table expansion before resolving ID/text references. Both each
+table and the complete pass must save space. Manifests record table/row counts and
+original/final sizes. Stored/UI data keep their original object representation.
+Question help and scan planning keep their separate bounds. Mandatory evidence beyond 96,000 characters still fails
 before inference and may require a scope/dependency split.
 Omitted records and excerpted indexes are explicitly reported; references to evidence
 outside the working set are rejected. Each job records a versioned context manifest,
@@ -474,6 +510,15 @@ This is a conservative working-data character budget, not an exact model tokeniz
 total prompt-size limit (instructions/schema are additional), or dynamic provider
 context-window calculation. Persisted source records remain authoritative;
 epic descriptions and AI interpretations do not replace them.
+
+Partial passes also use a smaller task-specific prompt and response schema. They
+return fixed valid placeholders for global summary/scope and empty global arrays,
+whose values are not applied to the project. Full organization/coverage instructions
+and schemas stay available to complete passes. Research-disabled calls require empty
+research findings, and a zero-question budget has no question-item payload schema.
+App-authored table explanations define lossless decoding without duplicating all
+those instructions in every prompt. These changes reduce input/output overhead while
+storage independently enforces scope, evidence, and stale-revision rules.
 
 ## Research
 
@@ -577,6 +622,69 @@ October 15, 2026:
 - Live webfetch is verified. Websearch exposure/extraction is implemented but live
   websearch, adversarial permission enforcement, and over-budget cancellation have
   not yet been live-qualified. No claim of a general tool sandbox is made.
+
+Historical-question evidence follow-up (2026-10-16): read-only planning against the
+reported saved batch `3f545e12` at revision 75 reproduced the 105,552-character
+failure even after shared-text compaction. Eight workspace excerpts were included
+only through historical answered-question motivation, with no links from included
+requirements. Making that motivation optional reduced this exact task package to
+78,576 / 96,000 characters, retaining human decisions, questions/options, requirements,
+and required file evidence. This was local planning only, with no inference or changes
+to saved project/submission state. Regression coverage also checks that making an old
+question or its answer the current task restores mandatory file evidence.
+`npm run check`, all 141 deterministic tests, and `npm run build:desktop` passed.
+The rebuilt desktop planner was also checked read-only against this same saved batch;
+all previously included human sources and requirements, plus question wording/options/
+answer links, were verified exact. The saved requirement remains accepted; its failed
+AI follow-up awaits explicit resume. The build emitted Node engine warnings under
+the available Node 20.11 host; Node 22.12+ remains the development baseline.
+
+Prompt/planning optimization follow-up (2026-10-16): on saved batch `0418c5e0` at
+revision 108, the full discovery prompt shrank from 100,237 to **93,457 characters**
+while the evidence package remained exactly 82,048 characters. Instructions/schema
+overhead fell from 18,189 to 11,409 characters. Read-only warm planning samples were
+roughly 33 ms before versus 14–16 ms after incremental index sizing; this is a local
+microbenchmark, not a model-latency claim. Partial response placeholders are checked
+against the normal Analysis contract and preserve global interpretation in storage.
+New checks cover no-research/zero-question schemas and exact escaped/Unicode index
+size accounting. Live token usage, model interpretation, and output-latency savings
+remain unverified; no inference or queue retry was performed.
+`npm run check`, 46 targeted core/service/research/API tests, desktop TypeScript
+compilation, and `git diff --check` passed. The compiled desktop prompt was also
+checked read-only at the same 93,457-character total.
+
+Proactive compaction follow-up (2026-10-16): the same saved batch at revision 108
+now plans at **82,048 / 96,000 characters**, down from 104,810 before lossless sharing
+and 87,994 with text/ID sharing alone. Tables save a further 5,946 characters; exact
+source, requirement, question/options/evidence-link, and task-ID reconstruction was
+verified read-only, with no model call. Deterministic coverage also verifies early
+compaction within the normal budget and five saved responses sharing a mandatory-heavy
+background in one call. Large-context live use of record tables remains unverified.
+`npm run check`, 43 targeted core/service/API tests, and desktop TypeScript compilation
+passed. The compiled desktop planner also produced 82,048 characters in the read-only
+saved-batch check. No inference or queue retry was performed.
+
+Identifier-sharing follow-up (2026-10-16): read-only planning against saved batch
+`0418c5e0` at revision 108 reproduced its 102,952-character shared-text package
+(104,810 before text sharing). Lossless identifier sharing reduced it to
+87,994 / 96,000 characters. Decoding both tables reproduced the included sources,
+requirements, exact question wording/options/answer/evidence links, and task IDs.
+Saved project state was unchanged; no model call or automatic queue retry was made.
+`npm run check` and 30 targeted working-set/discovery/help tests passed, including a
+synthetic package that exceeds the hard bound after text sharing alone and exact
+round-trip coverage for both encodings together. `npm run build:desktop` passed
+after closing the running app to release its native SQLite file lock; the rebuilt
+desktop planner also produced 87,994 characters for this saved batch in a read-only
+check. The Node 20.11 host emitted engine warnings; Node 22.12+ remains the baseline.
+Large-context live output quality
+and successful model use of the new identifier encoding remain unverified.
+
+Lossless context-sharing verification (2026-10-16): `npm run check` and all 140
+deterministic tests passed. Regression coverage includes a 105,552-character mandatory
+package, exact reconstruction of shared review/requirement evidence, unchanged stored
+records, adapter/prompt delivery, persisted diagnostics, and a genuinely oversized
+unique-evidence package that still stops before inference. No live model call or
+verification against the reported project's saved data was performed.
 
 Automatic context management verification (2026-10-15): `npm run check` and all
 62 deterministic tests passed, including a 50,777-character post-compaction fixture,

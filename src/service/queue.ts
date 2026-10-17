@@ -130,8 +130,17 @@ export class DiscoveryQueue {
         catch (error) {
           if (!(error instanceof ContextBudgetError)) throw error;
           batch = saved.slice(0, 1);
+          let expandMandatory = false;
+          try { planContext(project, task(batch)); }
+          catch (firstError) {
+            if (!(firstError instanceof ContextBudgetError)) throw firstError;
+            // If even one response requires mandatory-only optimization/fallback,
+            // measure subsequent groups using the same package the service sends.
+            // Otherwise every response repeats that large background separately.
+            expandMandatory = true;
+          }
           for (const item of saved.slice(1)) {
-            try { planContext(project, task([...batch, item])); batch.push(item); }
+            try { planContext(project, { ...task([...batch, item]), expandMandatory }); batch.push(item); }
             catch (candidateError) { if (!(candidateError instanceof ContextBudgetError)) throw candidateError; }
           }
         }

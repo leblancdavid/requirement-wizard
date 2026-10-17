@@ -94,6 +94,44 @@ test("model prompt includes current records, provenance, and structured output i
   } finally { store.close(); }
 });
 
+test("partial prompts omit inapplicable global work and use a smaller compatible response contract", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = store.create("Jobs", "  Preserve the exact idea\n", { providerID: "openai", modelID: "fixture" });
+    const complete = buildContext(project);
+    const fullPrompt = discoveryPrompt(project, complete);
+    const partial = { data: { ...(complete.data as Record<string, unknown>), partial: true },
+      manifest: { ...complete.manifest, partial: true } };
+    const prompt = discoveryPrompt(project, partial);
+    assert.ok(prompt.length < fullPrompt.length - 3000, "partial work should not carry full organization/coverage instructions and schema");
+    assert.ok(prompt.includes(JSON.stringify(partial.data)), "exact context stays in the prompt");
+    assert.match(prompt, /Global interpretation is unchanged/);
+    assert.match(prompt, /Never retire an answered question/);
+    assert.match(prompt, /Delegation is permission within a scope/);
+    assert.doesNotMatch(prompt, /assess all nine dimensions/);
+    assert.doesNotMatch(prompt, /A split must assign every source record/);
+    assert.doesNotMatch(prompt, /The app's sharedText/);
+    assert.match(fullPrompt, /assess all nine dimensions/);
+    assert.match(fullPrompt, /A split must assign every source record/);
+    const schema = JSON.parse(prompt.split("Schema: ")[1]!.split("\nWorking context revision")[0]!) as {
+      properties: Record<string, { const?: string; maxItems?: number }>; required: string[];
+    };
+    assert.equal(schema.properties.summary!.const, "Task-sized pass");
+    for (const field of ["goals", "actors", "assumptions", "organization", "assessments"]) {
+      assert.equal(schema.properties[field]!.maxItems, 0);
+      assert.ok(schema.required.includes(field));
+    }
+    assert.equal(schema.properties.researchFindings!.maxItems, 0);
+    const researched = discoveryPrompt(project, partial, true);
+    const researchSchema = JSON.parse(researched.split("Schema: ")[1]!.split("\nWorking context revision")[0]!) as typeof schema;
+    assert.equal(researchSchema.properties.researchFindings!.maxItems, 6, "opt-in research keeps its normal output contract");
+    assert.ok(!JSON.stringify(schema).includes("archive-feature"), "partial output cannot request whole-feature archival");
+    const proposal = analysisSchema.parse({ ...result(project), summary: "Task-sized pass", goals: [], actors: [], assumptions: [],
+      organization: [], assessments: [], scopeAssessment: { confidence: "low", explanation: "Global scope unchanged." } });
+    assert.equal(proposal.requirements[0]!.sourceIDs[0], project.sources[0]!.id);
+  } finally { store.close(); }
+});
+
 test("focused discovery budgets hidden pending questions and only detailed pending retirements", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -106,8 +144,9 @@ test("focused discovery budgets hidden pending questions and only detailed pendi
     assert.match(prompt, /5 pending across the ENTIRE project, including 5 outside/);
     assert.match(prompt, /0 slots available without retirements/);
     assert.match(prompt, /Only these detailed pending IDs can free slots: \[\]/);
-    const schema = (text: string) => JSON.parse(text.split("Schema: ")[1]!.split("\nWorking context revision")[0]!) as { properties: { questions: { maxItems: number } } };
+    const schema = (text: string) => JSON.parse(text.split("Schema: ")[1]!.split("\nWorking context revision")[0]!) as { properties: { questions: { maxItems: number; items?: unknown } } };
     assert.equal(schema(prompt).properties.questions.maxItems, 0);
+    assert.deepEqual(schema(prompt).properties.questions.items, [], "zero-slot schema omits an unusable question payload");
 
     project.questions[0]!.epicID = "project";
     prompt = discoveryPrompt(project, buildContext(project, "project"));

@@ -8,12 +8,14 @@ import { implementationNeedsReview } from "../core/implementation.js";
 export { requirementFingerprint } from "../core/implementation.js";
 
 export const workspaceFolder = ".requirement-wizard";
-const artifacts = ["requirements.md", "requirements.json", "progress.md", "progress.json", "manifest.json"] as const;
+const legacyArtifacts = ["requirements.md", "requirements.json", "progress.md", "progress.json", "manifest.json"];
 export type Workspace = {
   bindingID?: string;
   path: string; status: "saved" | "pending" | "conflict" | "unavailable";
   savedRevision: number | null; diagnostic: string | null;
   hashes: Record<string, string>; pendingHashes: Record<string, string[]>;
+  formatVersion?: number;
+  pendingRemovals?: string[];
 };
 export function hash(content: string) { return createHash("sha256").update(content).digest("hex"); }
 export function canonicalDirectory(path: string, create = false) {
@@ -40,6 +42,16 @@ export function managedDirectory(path: string) {
   return managed;
 }
 export function readArtifact(directory: string, name: string): string | null {
+  validateArtifactName(name);
+  // Check every ancestor, including junctions, before reading or creating nested output.
+  let parent = directory;
+  for (const segment of name.split("/").slice(0, -1)) {
+    parent = join(parent, segment);
+    try {
+      const stat = lstatSync(parent);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Workspace conflict: ${name} must have regular directories.`);
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  }
   const path = join(directory, name);
   // lstat also catches dangling links, which existsSync deliberately follows.
   try {
@@ -48,57 +60,116 @@ export function readArtifact(directory: string, name: string): string | null {
     return readFileSync(path, "utf8");
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
+export function validateArtifactName(name: string) {
+  const segment = "(?:[a-z0-9_-]{1,80}|~[a-f0-9]{64})";
+  const nested = new RegExp(`^(?:features/${segment}/requirements\\.(?:md|json)|evidence/(?:index\\.json|(?:sources|research|scans)/[a-f0-9]{64}\\.json))$`);
+  if (![...legacyArtifacts, "project.json"].includes(name) && !nested.test(name)) throw new Error("Workspace conflict: invalid managed artifact path.");
+  if (name.split("/").some((part) => /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part))) throw new Error("Workspace conflict: reserved managed artifact path.");
+}
+function featurePath(id: string) {
+  // Mixed-case IDs are hashed too, so distinct engine IDs cannot alias on Windows.
+  const safe = /^[a-z0-9_-]{1,80}$/.test(id) && !/^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/.test(id);
+  return `features/${safe ? id : `~${hash(id)}`}/requirements`;
+}
+function json(value: unknown) { return JSON.stringify(value, null, 2) + "\n"; }
+function interpretation(project: Project) {
+  return ["## Interpretation (AI proposal)", project.summary || "Not yet assessed.",
+    "## Candidate goals", ...project.goals.map((item) => `- ${item}`), "## Candidate actors", ...project.actors.map((item) => `- ${item}`),
+    "## Unconfirmed assumptions", ...project.assumptions.map((item) => `- ${item}`)];
+}
+function requirementMarkdown(items: Project["requirements"], evidenceLink: (id: string) => string) {
+  return items.flatMap((item) => [`### ${item.id} — ${item.status}`, item.statement, `Rationale: ${item.rationale}`,
+    "Acceptance criteria:", ...item.acceptance.map((criterion) => `- ${criterion}`),
+    `Sources: ${item.sourceIDs.map(evidenceLink).join(", ")}`, ...(item.reviewNote ? [`Review: ${item.reviewNote}`] : [])]);
+}
+function questionMarkdown(items: Project["questions"]) {
+  return ["## Open questions", ...items.filter((q) => ["pending", "deferred", "delegated"].includes(q.status)).map((q) => `- [${q.status}] ${q.id}: ${q.text}`)];
+}
+// Explicit single-document exports include exact evidence, but are not maintained on every save.
+export function renderCombinedSpecification(project: Project) {
+  const markdown = [`# ${project.name}`, `Project: ${project.id}\nRevision: ${project.revision}`, ...interpretation(project)];
+  for (const epic of project.epics) markdown.push(`## ${epic.title}${epic.archived ? " (archived)" : ""}`,
+    ...requirementMarkdown(project.requirements.filter((item) => item.epicID === epic.id), (id) => id));
+  markdown.push(...questionMarkdown(project.questions));
+  return { markdown: markdown.join("\n\n") + "\n", json: json({ formatVersion: 1, projectID: project.id, name: project.name, revision: project.revision,
+    summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
+    epics: project.epics, requirements: project.requirements, questions: project.questions, sources: project.sources, research: project.research, scans: project.scans, origin: project.origin }) };
+}
 export function renderWorkspace(project: Project): Record<string, string> {
   const score = coverage(project);
   const progress = project.requirements.map((requirement) => {
     const item = project.implementation.find((entry) => entry.requirementID === requirement.id);
-    return { requirementID: requirement.id, statement: requirement.statement, reviewStatus: requirement.status,
+    return { requirementID: requirement.id, reviewStatus: requirement.status,
       status: item?.status ?? "not-started", notes: item?.notes ?? "", evidence: item?.evidence ?? "",
       needsReview: item ? implementationNeedsReview(project, item) : false, updatedAt: item?.updatedAt ?? null };
   });
-  const title = `# ${project.name}\n\nProject: ${project.id}\nRevision: ${project.revision}\n\nGenerated by Reqwizit. Edit in the app; external edits cause a sync conflict.\n`;
-  const requirements = [title, "## Interpretation (AI proposal)", project.summary || "Not yet assessed.",
-    "## Candidate goals", ...project.goals.map((item) => `- ${item}`), "## Candidate actors", ...project.actors.map((item) => `- ${item}`),
-    "## Unconfirmed assumptions", ...project.assumptions.map((item) => `- ${item}`)];
+  const title = `# ${project.name}\n\nGenerated by Reqwizit. Edit in the app; external edits cause a sync conflict.\n\nSee manifest.json for the published project revision and file hashes.\n`;
+  const files: Record<string, string> = {};
+  const evidence = {
+    sources: project.sources.map((item) => ({ id: item.id, kind: item.kind, path: `evidence/sources/${hash(item.id)}.json` })),
+    research: project.research.map((item) => ({ id: item.id, path: `evidence/research/${hash(item.id)}.json` })),
+    scans: project.scans.map((item) => ({ id: item.id, path: `evidence/scans/${hash(item.id)}.json` })),
+  };
+  for (const [index, item] of project.sources.entries()) files[evidence.sources[index]!.path] = json(item);
+  for (const [index, item] of project.research.entries()) files[evidence.research[index]!.path] = json(item);
+  for (const [index, item] of project.scans.entries()) files[evidence.scans[index]!.path] = json(item);
+  files["evidence/index.json"] = json(evidence);
+  const evidencePaths = new Map([...evidence.sources, ...evidence.research].map((item) => [item.id, item.path]));
+  const features = project.epics.map((epic) => ({ id: epic.id, title: epic.title, archived: epic.archived,
+    markdown: `${featurePath(epic.id)}.md`, data: `${featurePath(epic.id)}.json` }));
+  const requirements = [title, ...interpretation(project), "## Features",
+    "Load the relevant feature and Project-wide requirements first; follow evidence links only as needed.",
+    "Implementation status: [progress.md](progress.md). Evidence directory: [index](evidence/index.json)."];
   for (const epic of project.epics) {
     const items = project.requirements.filter((item) => item.epicID === epic.id);
-    if (!items.length) continue;
-    requirements.push(`## ${epic.title}${epic.archived ? " (archived)" : ""}`);
-    for (const item of items) requirements.push(`### ${item.id} — ${item.status}`, item.statement, `Rationale: ${item.rationale}`,
-      "Acceptance criteria:", ...item.acceptance.map((criterion) => `- ${criterion}`), `Sources: ${item.sourceIDs.join(", ")}`, ...(item.reviewNote ? [`Review: ${item.reviewNote}`] : []));
+    const questions = project.questions.filter((item) => item.epicID === epic.id);
+    const path = featurePath(epic.id);
+    requirements.push(`- [${epic.title.replace(/[\[\]\\]/g, "\\$&")}](${path}.md)${epic.archived ? " (archived)" : ""} — ${items.length} requirements`);
+    const dependencies = epic.dependencies.map((id) => `[${id}](../../${featurePath(id)}.md)`);
+    files[`${path}.md`] = [`# ${epic.title}${epic.archived ? " (archived)" : ""}`, `Feature: ${epic.id}`, epic.purpose,
+      "Generated by Reqwizit. Edit in the app. [Project overview](../../requirements.md); revision and hashes: ../../manifest.json.",
+      `Dependencies: ${dependencies.join(", ") || "None recorded."}`,
+      ...requirementMarkdown(items, (id) => evidencePaths.has(id) ? `[${id}](../../${evidencePaths.get(id)})` : id), ...questionMarkdown(questions)].join("\n\n") + "\n";
+    files[`${path}.json`] = json({ formatVersion: 2, projectID: project.id, feature: epic, requirements: items, questions,
+      evidenceIndex: "../../evidence/index.json" });
   }
-  requirements.push("## Open questions", ...project.questions.filter((q) => ["pending", "deferred", "delegated"].includes(q.status)).map((q) => `- [${q.status}] ${q.id}: ${q.text}`));
-  const files: Record<string, string> = {
-    "requirements.md": requirements.join("\n\n") + "\n",
-    // Portable specification: no connection/account selection or machine-specific paths.
-    "requirements.json": JSON.stringify({ formatVersion: 1, projectID: project.id, name: project.name, revision: project.revision,
-      summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
-       epics: project.epics, requirements: project.requirements, questions: project.questions, sources: project.sources, research: project.research, scans: project.scans, origin: project.origin }, null, 2) + "\n",
-    "progress.json": JSON.stringify({ formatVersion: 1, projectID: project.id, revision: project.revision, discovery: score, implementation: progress }, null, 2) + "\n",
-    "progress.md": [title, `## Discovery\n\nEstimated definition coverage: ${score.percent}%${score.stale ? " (needs review)" : ""}. This is not proof of completeness.`,
+  files["requirements.md"] = requirements.join("\n\n") + "\n";
+  files["project.json"] = json({ formatVersion: 2, projectID: project.id, name: project.name,
+    summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
+    features, origin: project.origin, evidenceIndex: "evidence/index.json" });
+  files["progress.json"] = json({ formatVersion: 2, projectID: project.id, discovery: score, implementation: progress });
+  files["progress.md"] = [title, `## Discovery\n\nEstimated definition coverage: ${score.percent}%${score.stale ? " (needs review)" : ""}. This is not proof of completeness.`,
       `Requirements: ${project.requirements.filter((r) => r.status === "accepted").length} accepted / ${project.requirements.length} total.`,
       "## Implementation\n\nManually recorded status; verification evidence is supplied by the user.",
-      ...progress.map((item) => `### ${item.requirementID} — ${item.status}${item.needsReview ? " · NEEDS REVIEW" : ""}\n\n${item.statement}\n\nRequirements review: ${item.reviewStatus}\n\nNotes: ${item.notes || "—"}\n\nVerification evidence: ${item.evidence || "—"}`)].join("\n\n") + "\n",
-  };
-  files["manifest.json"] = JSON.stringify({ formatVersion: 1, projectID: project.id, revision: project.revision,
+       ...progress.map((item) => {
+         const requirement = project.requirements.find((entry) => entry.id === item.requirementID)!;
+         return `### [${item.requirementID}](${featurePath(requirement.epicID)}.md) — ${item.status}${item.needsReview ? " · NEEDS REVIEW" : ""}\n\nRequirements review: ${item.reviewStatus}\n\nNotes: ${item.notes || "—"}\n\nVerification evidence: ${item.evidence || "—"}`;
+       })].join("\n\n") + "\n";
+  files["manifest.json"] = JSON.stringify({ formatVersion: 2, projectID: project.id, revision: project.revision,
     hashes: Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])) }, null, 2) + "\n";
   return files;
 }
-export function checkWorkspace(workspace: Workspace) {
+export function checkWorkspace(workspace: Workspace, intendedNames: string[] = []) {
   const directory = managedDirectory(workspace.path);
-  for (const name of artifacts) {
+  for (const name of new Set([...legacyArtifacts, ...Object.keys(workspace.hashes), ...Object.keys(workspace.pendingHashes), ...intendedNames])) {
     const content = readArtifact(directory, name);
     const digest = content === null ? null : hash(content);
     const previous = workspace.hashes[name]; const pending = workspace.pendingHashes[name];
-    if (digest === null ? !!previous : digest !== previous && !pending?.includes(digest)) throw new Error(`Workspace conflict: ${name} was changed outside the app. Preserve your edits and restore the generated file, or connect a different folder.`);
+    if (digest === null ? !!previous && !workspace.pendingRemovals?.includes(name) : digest !== previous && !pending?.includes(digest)) throw new Error(`Workspace conflict: ${name} was changed outside the app. Preserve your edits and restore the generated file, or connect a different folder.`);
   }
   return directory;
 }
-export function publishWorkspace(directory: string, files: Record<string, string>) {
+export function publishWorkspace(directory: string, files: Record<string, string>, removals: string[] = []) {
   mkdirSync(directory, { recursive: true });
-  for (const name of artifacts) {
-    const temporary = join(directory, `.reqwizit-${randomUUID()}.tmp`);
+  const write = (name: string) => {
+    if (readArtifact(directory, name) === files[name]) return;
+    const parent = dirname(join(directory, name));
+    mkdirSync(parent, { recursive: true });
+    const temporary = join(parent, `.reqwizit-${randomUUID()}.tmp`);
     try { writeFileSync(temporary, files[name]!, { flag: "wx" }); renameSync(temporary, join(directory, name)); }
     finally { if (existsSync(temporary)) unlinkSync(temporary); }
-  }
+  };
+  for (const name of Object.keys(files).filter((name) => name !== "manifest.json")) write(name);
+  for (const name of removals) { if (readArtifact(directory, name) !== null) unlinkSync(join(directory, name)); }
+  write("manifest.json");
 }

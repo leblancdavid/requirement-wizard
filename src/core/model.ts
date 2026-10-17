@@ -162,6 +162,9 @@ export type Job = {
   context?: { revision: number; focusEpicID: string | null; characters: number; budget: number; includedIDs: string[]; omittedIDs: string[]; epicIDs?: string[]; version?: string; sectionCharacters?: Record<string, number>;
     partial?: boolean; taskRecordIDs?: string[]; indexedIDs?: string[]; selectionReason?: string;
     submissionIDs?: string[];
+    losslessCompaction?: { originalCharacters: number; sharedTexts: number; references: number };
+    identifierCompaction?: { originalCharacters: number; identifiers: number; references: number };
+    structureCompaction?: { originalCharacters: number; tables: number; rows: number };
     compaction?: { originalCharacters: number; omittedQuestionConcepts: number; duplicateIndexEntries: number } };
   researchEvidence?: ResearchEvidence[];
   helpRequest?: QuestionHelpRequest;

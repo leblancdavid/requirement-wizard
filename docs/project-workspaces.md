@@ -27,24 +27,75 @@ Disconnecting retains both generated files and app records.
 my-repo/
   .requirement-wizard/
     manifest.json
-    requirements.md
-    requirements.json
+    requirements.md              # overview and feature links
+    project.json                 # project metadata and feature index
     progress.md
     progress.json
+    features/
+      project/                   # shared, project-wide requirements
+        requirements.md
+        requirements.json
+      <stable-feature-id>/
+        requirements.md
+        requirements.json
+    evidence/
+      index.json                 # IDs mapped to artifact paths
+      sources/<id-hash>.json
+      research/<id-hash>.json
+      scans/<id-hash>.json
 ```
 
-- **requirements.md** groups stable requirement IDs, review statuses, rationales,
-  acceptance criteria, and evidence references under features. Candidate goals,
-  actors, assumptions, and remaining questions are labelled separately.
-- **requirements.json** contains structured specification records, questions,
-  original human sources, and research evidence. It excludes model/account selection,
-  credentials, local bindings, and job diagnostics. Human-entered content is retained
-  as entered; review it as you would any document before sharing a repository.
+- **requirements.md** is the starting point: project interpretation, candidate goals,
+  actors, unconfirmed assumptions, and links to each feature, including archived areas.
+- **project.json** contains project metadata, origin provenance, and the feature index.
+- **features/…/requirements.md/json** contain that feature's stable requirement IDs,
+  review statuses, rationales, acceptance criteria, evidence references and questions.
+  Markdown shows open questions; JSON retains answered/retired questions and options
+  too. Dependencies link to other features. Feature paths use stable IDs, so renames
+  do not move files. Unsafe, mixed-case, or Windows-reserved IDs use a SHA-256-derived
+  directory name to prevent traversal and case collisions.
+- **evidence/** retains original human sources, captured file excerpts, research and
+  scan metadata separately. Each source record is stored once and shared by ID;
+  requirement Markdown links directly to supporting records. `index.json` maps original
+  IDs to paths; evidence filenames are SHA-256 hashes of record IDs, not their contents.
+  Exact human-entered text is retained. Review it before sharing a repository.
 - **progress.md/json** contain estimated discovery coverage and manually recorded
   implementation status, notes, evidence, and review flags for each requirement.
-- **manifest.json** identifies format version 1, project ID, revision, and SHA-256
-  artifact hashes. It is published last. Consumers should verify hashes before
-  treating multiple files as one coherent revision.
+  Requirement statements are referenced rather than copied into progress files.
+- **manifest.json** identifies format version 2, project ID, revision, and SHA-256
+  artifact hashes. It is published last and is the authoritative revision for the
+  entire set; individual artifacts omit the changing revision to avoid unnecessary
+  Git diffs. Consumers must verify hashes before treating files as a coherent revision.
+
+The portable set excludes model/account selection, credentials, local bindings, and
+job diagnostics. Start a coding session with the overview, Project-wide requirements,
+and the feature being built; follow dependencies and evidence links as needed.
+Splitting limits the amount a reader/agent needs to load. It does not discard retained
+evidence or promise a fixed reduction in total disk usage. Unchanged files retain their
+bytes and timestamps, and implementation-only updates do not rewrite feature definitions
+or evidence. SQLite remains the working store with full revision snapshots.
+
+Version 1 folders migrate on startup/sync/reconnection, without creating a project
+revision or making model calls. After checking the old files for external edits, the
+publisher creates the split set and removes the owned root `requirements.json`.
+External edits block migration until restored or a different folder is connected.
+Other files are preserved. Empty retired directories may remain. This is a format
+change: consumers of the old root JSON should use the manifest/feature index, or
+request a combined export.
+
+For a single-document review or sharing, the terminal can print a combined specification
+on demand (no model call), including historical revisions:
+
+```powershell
+npm run --silent reqwizit -- export --project "project-id"
+npm run --silent reqwizit -- export --project "project-id" --json
+npm run --silent reqwizit -- export --project "project-id" --revision 3 --json
+```
+
+Markdown contains the full readable requirements and open questions. Combined JSON
+preserves the version 1 portable specification shape with original sources, research
+and scans. Save it outside the managed output names if desired; it is not maintained
+on every change and is not a complete application backup or a phased build package.
 
 Files update automatically after committed project changes, including completed
 discovery jobs, queued answers applied by the service, reviews, and implementation
@@ -235,9 +286,14 @@ A five-minute SQLite writer lease serializes publishers across app/CLI processes
 sharing the database. A live lease blocks disconnect/rebinding; an expired lease is
 recoverable without repeating inference. A crashed writer may therefore delay saving
 until its lease expires. Intended file hashes are committed before filesystem writes;
-the journal retains recognized intermediate hashes across interrupted retries. Files
+the journal retains recognized intermediate hashes and intended file removals across
+interrupted retries, including legacy-layout migration. Files
 are written to unique same-directory temporary files and renamed individually, with
 the manifest last. The set of files is not a filesystem-wide atomic transaction.
+Only changed files are renamed. Retired owned files are removed before the new manifest
+is published; external edits to those files also block publication. The publisher checks
+both existing managed paths and new output paths before writing. Nested output directories
+must be regular directories, and manifest paths are restricted to the supported layout.
 Filesystem publication runs outside project transactions; an unavailable folder does
 not roll back saved answers or decisions. Temporary files from an abrupt process
 termination may remain, but are not consumed as artifacts.
@@ -281,3 +337,12 @@ Automatic-window continuation is covered by simulated scans exceeding thirty min
 single-worker/one-call-per-batch checks, cancellation at renewal, stale project/folder
 checks and expired-lease rejection. These are deterministic clock/adapter checks;
 live long-running subscription scans remain unverified.
+
+October 16, 2026 split-export verification: `npm run check`, all 138 `npm test` checks,
+`npm run test:browser` (including the UI build), terminal `--help`, and `git diff --check`
+passed. Workspace tests cover exact
+shared evidence, feature rename/move/merge paths, unchanged specification timestamps on
+progress updates, legacy migration and interrupted-removal recovery, edited retired
+files, nested collisions/links, unsafe IDs/manifest paths, and current/historical combined
+terminal exports without account selection. These use deterministic fixtures; no
+real-project storage-size or coding-agent context benchmark is claimed.

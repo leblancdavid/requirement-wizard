@@ -244,6 +244,9 @@ global information, focused epics, dependencies, exact evidence, and omission ma
 - Summaries do not replace original human decisions.
 - Automatically plan smaller task working sets and sequential saved-response groups
   when full detail exceeds the budget; checkpoint completed groups without replaying sources.
+- Apply lossless text, identifier, and structural compaction against the normal
+  target before expanding mandatory-only context. Reuse fitting mandatory-heavy
+  background across batched responses; recovered space need not be filled with optional detail.
 - Partial passes cannot replace global interpretation or whole-area assessments, or
   reorganize areas. Retirements and organization changes require detailed records.
 - Reject oversized calls before inference rather than silently truncating decisions.
@@ -312,6 +315,11 @@ and automatically save revision-linked requirements and progress Markdown/JSON.
   saves without repeating model calls; serialize app/CLI publishers sharing storage.
 - Detect external edits and ownership collisions before replacement. Disconnecting
   retains files and project data. Initial files are app-generated outputs.
+- Split requirements/questions by stable feature ID with a project overview and shared
+  evidence references. Preserve original inputs without embedding them in each feature.
+- Keep unchanged outputs byte-identical without rewriting them, and reference requirement
+  statements from progress. Version the manifest and preserve external edits during
+  migration/retired-file cleanup. Offer a combined specification export on demand (DEC-021).
 
 **RW-024 — Manual implementation progress.** Track not-started, in-progress, blocked,
 implemented, and verified states per requirement independently of requirements review

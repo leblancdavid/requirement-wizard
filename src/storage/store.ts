@@ -71,6 +71,7 @@ export class ProjectStore {
         binding.bindingID = randomUUID();
         this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ?").run(JSON.stringify(binding), row.project_id);
       }
+      if (binding.formatVersion !== 2) this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(row.project_id);
     }
     this.syncWorkspaces();
   }
@@ -94,11 +95,12 @@ export class ProjectStore {
     const directory = managedDirectory(canonical);
     const manifest = readArtifact(directory, "manifest.json");
     if (manifest !== null && !Object.keys(binding.hashes).length && !Object.keys(binding.pendingHashes).length) {
-      let parsed: { revision: number; hashes: Record<string, string> };
-      try { parsed = z.object({ formatVersion: z.literal(1), projectID: z.literal(id), revision: z.number().int().positive(), hashes: z.record(z.string().regex(/^[a-f0-9]{64}$/)) }).parse(JSON.parse(manifest)); }
+      let parsed: { formatVersion: number; revision: number; hashes: Record<string, string> };
+      try { parsed = z.object({ formatVersion: z.union([z.literal(1), z.literal(2)]), projectID: z.literal(id), revision: z.number().int().positive(), hashes: z.record(z.string().regex(/^[a-f0-9]{64}$/)) }).parse(JSON.parse(manifest)); }
       catch { throw new Error("Workspace conflict: existing manifest belongs to another project or has an unsupported format. Choose a different folder."); }
       binding.hashes = { ...parsed.hashes, "manifest.json": hash(manifest) };
       binding.savedRevision = parsed.revision;
+      binding.formatVersion = parsed.formatVersion;
     }
     checkWorkspace(binding);
     this.db.transaction(() => {
@@ -139,15 +141,18 @@ export class ProjectStore {
     try {
       const directory = checkWorkspace(binding);
       const project = this.get(id);
-      if (binding.status === "saved" && binding.savedRevision === project.revision) return binding;
+      if (binding.status === "saved" && binding.savedRevision === project.revision && binding.formatVersion === 2) return binding;
       const files = renderWorkspace(project);
+      checkWorkspace(binding, Object.keys(files));
+      binding.pendingRemovals = [...new Set([...Object.keys(binding.hashes), ...Object.keys(binding.pendingHashes)])].filter((name) => !(name in files));
       // Retain every recognized intermediate write until the whole publication succeeds.
-      binding.pendingHashes = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, [...new Set([...(binding.pendingHashes[name] ?? []), hash(content)])]]));
+      for (const [name, content] of Object.entries(files)) binding.pendingHashes[name] = [...new Set([...(binding.pendingHashes[name] ?? []), hash(content)])];
       binding.status = "pending"; binding.diagnostic = null;
       // Commit the intended hashes before touching files: partial writes can be recovered.
       this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ? AND owner = ?").run(JSON.stringify(binding), id, owner);
-      publishWorkspace(directory, files);
+      publishWorkspace(directory, files, binding.pendingRemovals);
       binding.hashes = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])); binding.pendingHashes = {};
+      binding.pendingRemovals = []; binding.formatVersion = 2;
       binding.savedRevision = project.revision; binding.status = "saved";
       this.db.prepare("UPDATE workspaces SET payload = ?, dirty = CASE WHEN (SELECT revision FROM projects WHERE id = ?) = ? THEN 0 ELSE 1 END WHERE project_id = ? AND owner = ?")
         .run(JSON.stringify(binding), id, project.revision, id, owner);

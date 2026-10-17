@@ -89,6 +89,9 @@ waiting inputs in order, retaining conflicts as needs-attention records. Follow-
 rounds batch saved inputs and require their epic areas in bounded context. Oversized
 batches are greedily divided into fitting groups before inference; each committed
 group records its submission IDs and the next group replans against the new revision.
+If even the first submission's mandatory package exceeds the normal target, grouping
+uses the service's lossless compaction and fallback bound for candidate groups. This
+avoids resending the same large background once per submission when several fit together.
 An optional submission `replaces` ID atomically supersedes an unapplied waiting
 answer for the same question; its exact original payload remains in history with
 status `superseded` and is excluded from application/processing. Already-applied
@@ -213,7 +216,12 @@ The package declares this compaction and the manifest retains original size and
 omission counts; saved records and all decision/evidence fields remain exact.
 If full detail still does not fit, `working-set.ts` pins the task records, current
 human evidence in selected areas and transitive dependencies, non-proposed requirements,
-and recursively linked evidence. It removes generated question help text outside the
+and task/requirement-linked evidence. Historical answered questions retain exact
+wording, options, answers and provenance links, but workspace excerpts that only
+motivated those questions are optional. Current task questions/answers, requirements,
+and human evidence links still resolve fully. `tasks-v3` packages list omitted
+historical question/file links explicitly; omitted files cannot support new claims
+or citations. It removes generated question help text outside the
 task, previous assessments, and other optional AI detail, then adds fitting related
 proposals/open questions/research. A bounded excerpt index provides navigation.
 These `tasks-v1` packages declare partial scope and persist task, indexed, included,
@@ -223,7 +231,7 @@ All rounds reject retirement/organization of unseen records and proposals target
 areas outside their working scope. Exact source records remain authoritative.
 Question help reserves room for its request/history and can fall back to question
 evidence plus project guardrails; omitted help exchanges are explicitly counted.
-Queue grouping retains the normal 48,000-character target. Discovery can expand a
+Queue grouping normally retains the 48,000-character target. Discovery can expand a
 mandatory-only task package to a hard 96,000-character bound after compaction and
 grouping; it adds no optional detail and reports the expanded budget/selection reason
 in the manifest and progress. Advisory help and scan planning retain their own bounds.
@@ -231,19 +239,58 @@ Before rejecting a discovery package above 96,000 characters, a final compaction
 can omit task questions' generated `whyItMatters` explanations, with affected IDs in
 the package and an explicit manifest selection reason. It preserves exact sources,
 question wording/options/answer links, requirements, and stored UI explanations.
+Mandatory-only discovery packages above the normal target use lossless sharing before
+expanding their budget, even if they already fit under 96,000 characters. Compaction
+targets 48,000 and returns without optional-detail refill if it recovers enough room.
+Shared-text encoding (`tasks-v2`) works as follows:
+repeated long text fields/lines, including wording embedded in review snapshots, are
+sent once in a `sharedText` table. Fields reference exact strings or ordered literal/
+reference parts; IDs and evidence closure are unchanged. The prompt specifies expansion
+and citations to owning record IDs. The manifest records pre-sharing size, shared-text
+and reference counts, and actual final section sizes. Encoding is retained only when
+smaller; stored records are untouched. This is not a summary or a larger context bound.
+If text sharing is insufficient, `tasks-v4` packages can also share repeated record
+and scope identifiers through `identifierTable`. Integers in identifier fields
+(`id`, names ending in `ID`/`IDs` except `sharedTextID`, and `dependencies`, including
+array elements) index the table's original strings. Human prose and other numbers
+remain untouched. Output must use expanded original IDs, and validation/manifests
+continue to use those original IDs. This pass is also retained only if smaller,
+and its pre-sharing size and identifier/reference counts are recorded separately.
+If the package still exceeds the normal target, `tasks-v5` shares repeated field
+names in ordered record tables (including nested options). Each table has `columns`
+and `rows`; optional `absent` cell coordinates distinguish missing fields from null.
+The prompt specifies table expansion before interpreting identifier/text references.
+Tables are selected only where smaller, and the whole pass must save space including
+its explanation. The manifest records input size, table/row counts, and final section
+sizes. Stored records and evidence closure stay unchanged.
 Mandatory evidence beyond the hard bound fails before inference; evidence
 outside the detailed working set cannot justify generated requirements/assessments.
 The character bound is not an exact tokenizer/model-window estimate. See the browser
 guide for the implemented rubric and limitations.
+Navigation-index trimming computes the package's serialized size once, then subtracts
+each removed item's exact JSON length and comma. It preserves the same selection and
+counts without repeatedly serializing the entire package for every label.
+The runtime specializes partial-pass instructions and output schemas: organization
+and assessments are empty tuples, ignored global fields use fixed valid Analysis
+placeholders, and review changes exclude whole-feature archival. Full passes keep
+their organization/coverage contract. No-research calls use an empty research output
+tuple; zero-question-slot calls omit the unusable question item schema. Serialization
+instructions are emitted only for encoded contexts and refer to the app's existing
+table explanations. Independent storage validation still enforces partial scope.
 
 ## Storage and revisions
 
 The shared `ProjectStore` also owns local workspace bindings and dirty-save journals;
 `src/storage/workspace.ts` renders and publishes revision-linked Markdown/JSON artifacts.
+Format 2 uses a project overview/index, stable per-feature requirement files, and separate
+ID-referenced source/research/scan files. The manifest owns the set's revision; unchanged
+files are not rewritten. The terminal `export` command renders a combined specification
+on demand. Version 1 publication migrates without changing the project revision.
 Bindings and writer leases are stored separately from portable project snapshots.
 Every committed specification/progress revision marks the binding dirty in the same
 transaction. Publication runs after commit, with intended hashes committed before
-per-file atomic renames and manifest-last publication. Hash checking preserves external
+per-file atomic renames, journaled owned-file removals, and manifest-last publication.
+New and retired nested paths are checked as well as existing outputs. Hash checking preserves external
 edits and a cross-process lease serializes writers sharing the store. Implementation
 assessments are manual requirement-linked records; a content/review fingerprint flags
 changed requirements without discarding prior evidence. See

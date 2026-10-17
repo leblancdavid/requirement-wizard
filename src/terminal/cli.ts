@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { modelSelection, type ModelSelection, type Project } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
+import { renderCombinedSpecification } from "../storage/workspace.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
 import { safeMessage } from "../runtime/contract.js";
@@ -19,6 +20,7 @@ const help = `Reqwizit — persistent terminal discovery
 npm run reqwizit -- new --name "My app" --idea "Describe the idea" --provider openai --model gpt-6.1-sol
 npm run reqwizit -- list
 npm run reqwizit -- show --project <id> [--revision <n>] [--json]
+npm run reqwizit -- export --project <id> [--revision <n>] [--json]
 npm run reqwizit -- interview --project <id>
 npm run reqwizit -- analyze --project <id> --expected-revision <n>
 npm run reqwizit -- scan --project <id> --expected-revision <n> [--resume-job <scan-job-id>]
@@ -33,6 +35,7 @@ npm run reqwizit -- implementation --project <id> --expected-revision <n> --requ
 
 answer supports --kind answer|delegation|deferral. Delegation text must describe its scope.
 review supports accept|reject. Historical revisions are read-only snapshots.
+export prints a combined Markdown specification, or portable JSON with --json.
 Optional --data-dir <directory> overrides the user-local data location.
 Optional --connection <saved-account-id|opencode> selects the route for new/model.
 new supports --path <absolute-directory> [--create-directory] to connect a workspace.
@@ -109,7 +112,7 @@ async function main() {
   } });
   if (values.help || !positionals.length) { console.log(help); return; }
   const command = positionals[0];
-  if (positionals.length !== 1 || !["new", "list", "show", "model", "answer", "review", "analyze", "scan", "interview", "jobs", "recover", "workspace", "implementation"].includes(command!)) {
+  if (positionals.length !== 1 || !["new", "list", "show", "export", "model", "answer", "review", "analyze", "scan", "interview", "jobs", "recover", "workspace", "implementation"].includes(command!)) {
     throw new Error("Unknown command. See --help.");
   }
   if (command === "interview" && (!stdin.isTTY || !stdout.isTTY)) throw new Error("interview requires an interactive terminal; use analyze/answer/review for scripting.");
@@ -146,6 +149,10 @@ async function main() {
     } else {
       const id = required(values.project, "project");
       if (command === "show") print(store.get(id, values.revision ? revision(values.revision) : undefined));
+      else if (command === "export") {
+        const exported = renderCombinedSpecification(store.get(id, values.revision ? revision(values.revision) : undefined));
+        stdout.write(values.json ? exported.json : exported.markdown);
+      }
       else if (command === "scan") {
         console.error("Scanning sends eligible source files to the saved AI connection and consumes allowance. Ctrl+C cancels.");
         store.pauseQueue(id, true);

@@ -17,6 +17,10 @@ area is defined. Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 Connect a local folder for each project to automatically save versionable requirements
 and progress files. Choose it during creation or use **Settings → Project workspace**.
+Generated requirements are split by stable feature ID with a linked overview and shared
+evidence files; unchanged outputs are not rewritten. Existing folders migrate on sync.
+Use `npm run --silent reqwizit -- export --project "your-project-id" [--json]` for a
+combined specification on demand.
 Folder scans process small sequential batches and save checkpoints; **Resume scan**
 continues interrupted work using the saved file snapshot without repeating completed batches.
 Track manual implementation status and verification evidence under **Project map →
