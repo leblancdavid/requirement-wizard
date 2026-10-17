@@ -27,7 +27,23 @@ every technical detail proposed in the planning documents.
 | DEC-018 | Bring source-folder initialization forward: offer it during creation and after workspace selection, plus explicit rescanning. Generate reviewable definitions/requirements before gap discovery. Existing specification documents are evidence alongside code/tests, not structured imports. | User requested initialization/rescan, selected review first and existing definitions as evidence, then approved implementation |
 | DEC-019 | Explicitly distinguish New idea from Existing project. For existing projects, choose the folder first and suggest editable name/description from local metadata/documents, then initialize before gap discovery. Add unrelated-question cleanup and evidence-based replacements; improve Godot/source capture and incomplete-initialization recovery. | User reported irrelevant questions for Rust Grind Galaxy, requested existing-project identity autofill, then approved the combined implementation |
 | DEC-020 | Add a dedicated Review tab with approve/reject, optional addenda, auto-advance and durable AI follow-up. Carry out clearly requested wider changes, including feature removal, preserving history; ask about ambiguous scope. Revised wording returns to review. This explicit-request path is an exception to DEC-010's additional organization-review step. | User requested a question-like review workflow, chose automatic application of explicit requests, and approved implementation |
+| DEC-021 | Process queued AI follow-up one submission at a time, each with its own focused revision-linked context. Do not combine the queue or include unrelated feature history solely because it shares an area. Retain exact target evidence and explicit guardrails; preserve omitted records and request wider context when needed. | User requested individual processing/contexts after repeated queue-size blockers |
 | DEC-021 | Split generated requirements by stable feature ID, keep original evidence in shared referenced files, and avoid rewriting unchanged outputs. Retain an on-demand combined specification export. | User reported large generated files and confirmed both reading/coding-agent context and disk/Git efficiency as goals after the feature-based export recommendation |
+
+## Requirement refinement (DEC-022)
+
+Requirements remain detailed at the behavioral/product level. Discovery
+refines implementation-heavy wording and incidental tuning values, including in
+previously approved requirements. Show separate cleanup proposals and preserve active
+wording until replacement approval; preserve IDs, sources and history. An explicit
+refinement action supports already-extracted projects. Confirmed by the user's
+requirement-cleanup request and approval, including approved requirements.
+
+Implemented: shared scan/discovery writing policy, persistent cleanup proposals,
+bounded discovery/refinement-only passes, Review before/after comparison and
+approve/dismiss actions, stale checks and unchanged-target repeat suppression.
+Deterministic tests verify the lifecycle and browser interaction; actual model cleanup
+quality has not been live-qualified.
 
 ## Proposed implementation defaults
 

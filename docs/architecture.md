@@ -70,6 +70,29 @@ personal workspace, not a hosted multi-user service.
 
 ## Engine workflow
 
+Requirement refinement is part of discovery and is also available as a bounded
+refinement-only pass. `src/core/refinement.ts` stores suggestions separately from
+active requirements: original snapshot/fingerprint, replacement statement/rationale/
+scenarios, reason, status and creation revision. Model output cannot approve or apply
+one. Storage checks detailed target/evidence scope, expected revisions and human review
+conflicts; explicit approval replaces wording under the same ID and records human
+confirmation. Dismissal retains the suggestion and suppresses repeats for that target
+fingerprint. Approval uses the existing implementation fingerprint to flag old progress
+for re-review and invalidates assessments citing the changed requirement. Refinement-only
+passes preserve global interpretation and cannot add gaps, organization or assessments.
+Both provider routes share the behavior-focused writing policy and proposal schema.
+
+Explicit cleanup runs enumerate eligible requirements in the selected feature or all
+areas, then process isolated individual requirement tasks. Target evidence closes fully;
+project/dependency guardrails and feature notes stay exact, while unrelated feature
+approvals/requirements do not become mandatory. Each task uses a fresh revision and
+saves its result independently. `refinementTarget` in the job context records the target
+fingerprint and a context key derived from applicable evidence/guardrails. Completed
+checks, including no-change outcomes, are skipped on explicit retry/restart while that
+key matches. Errors/cancellation stop the finite run and preserve previous results;
+there is no automatic replay after restart. A single oversized target still blocks
+before model inference. Normal gap discovery retains its existing working-set policy.
+
 ```text
 Analyze → Identify gaps → Research when needed → Propose questions
     → Await answers → Propose record changes → Review → Repeat
@@ -86,12 +109,26 @@ Submission IDs deduplicate retries; exact question text and previous source IDs 
 against conflicting answers without rejecting unrelated project changes. Queued inputs
 do not mutate an active round's snapshot. At round boundaries a transaction applies
 waiting inputs in order, retaining conflicts as needs-attention records. Follow-up
-rounds batch saved inputs and require their epic areas in bounded context. Oversized
-batches are greedily divided into fitting groups before inference; each committed
-group records its submission IDs and the next group replans against the new revision.
-If even the first submission's mandatory package exceeds the normal target, grouping
-uses the service's lossless compaction and fallback bound for candidate groups. This
-avoids resending the same large background once per submission when several fit together.
+rounds process exactly one saved input per job and replan against each committed
+revision. Queued follow-up sets `isolatedTask`: it skips the full-area planner and
+retains the target's exact evidence closure, current project/dependency guardrails,
+feature notes and directly source-linked requirements. Sharing the same feature does
+not make every historical answer, review or requirement mandatory. Omitted history
+is explicitly counted and may appear in a bounded navigation index; it cannot justify
+new decisions or changes to omitted records. No optional-detail refill is performed.
+These are partial passes: global interpretation, organization, whole-area assessment
+and feature archival remain unavailable without a wider detailed discovery context.
+Plain discovery without a queued submission retains the broader planning path.
+Before starting a queued AI job, each indivisible candidate is checked against the
+service's compacted mandatory package. If it cannot fit, the submission remains applied
+but becomes `needs-attention` with `contextBlock`: revision, usage/budget, selected areas
+and section sizes, plus a durable diagnostic. No job/model call is created for that
+preflight failure. Fitting submissions continue, including past a blocked first item.
+After fitting work finishes, remaining blockers pause the queue. Explicit resume
+replans against the current revision, so unchanged over-budget retries create no failed
+jobs; a scope change can release a blocker without reapplying its input. Block metadata
+clears when the response passes preflight. Direct non-queued service calls retain the
+existing attempted-job manifest and publication/revision guards.
 An optional submission `replaces` ID atomically supersedes an unapplied waiting
 answer for the same question; its exact original payload remains in history with
 status `superseded` and is excluded from application/processing. Already-applied
@@ -216,12 +253,22 @@ The package declares this compaction and the manifest retains original size and
 omission counts; saved records and all decision/evidence fields remain exact.
 If full detail still does not fit, `working-set.ts` pins the task records, current
 human evidence in selected areas and transitive dependencies, non-proposed requirements,
-and task/requirement-linked evidence. Historical answered questions retain exact
+and task/unconfirmed-requirement evidence. Historical answered questions retain exact
 wording, options, answers and provenance links, but workspace excerpts that only
-motivated those questions are optional. Current task questions/answers, requirements,
-and human evidence links still resolve fully. `tasks-v3` packages list omitted
+motivated those questions are optional. Current task questions/answers, unconfirmed
+requirements, and human evidence links still resolve fully. `tasks-v3` packages list omitted
 historical question/file links explicitly; omitted files cannot support new claims
-or citations. It removes generated question help text outside the
+or citations. `tasks-v6` additionally makes workspace-only motivation optional for
+accepted background requirements with a current, owning human confirmation. Exact
+requirement text, scenarios, source links, and all human evidence remain included.
+Explicit task requirements/reviews and requirements directly motivating the current
+question (including cited review sources) still pin their files. Needs-review,
+unconfirmed, superseded-approval, or mismatched-confirmation records cannot use this
+omission. `omittedRequirementWorkspaceEvidence` lists every omitted requirement/file
+link and forbids citing those file contents or claiming verified implementation.
+Files independently required elsewhere remain detailed. This avoids an approval
+turning baseline workspace excerpts into mandatory input for every later answer.
+It removes generated question help text outside the
 task, previous assessments, and other optional AI detail, then adds fitting related
 proposals/open questions/research. A bounded excerpt index provides navigation.
 These `tasks-v1` packages declare partial scope and persist task, indexed, included,
@@ -263,6 +310,16 @@ The prompt specifies table expansion before interpreting identifier/text referen
 Tables are selected only where smaller, and the whole pass must save space including
 its explanation. The manifest records input size, table/row counts, and final section
 sizes. Stored records and evidence closure stay unchanged.
+If exact encoded evidence still exceeds 96,000 characters, `tasks-v7` retries the
+same closure with explicitly listed generated-background omissions: rationales of
+currently human-confirmed background requirements and consequences of unselected
+historical options. Only an answered question with a current answer matching exactly
+one option label qualifies; freeform/ambiguous/superseded answers and current-task-linked
+questions keep all consequences. All human sources, option labels and selected
+consequences, requirement wording/scenarios/links, and current-task/unconfirmed
+rationales remain exact. The smaller candidate is encoded and measured again; no
+optional context is added and no stored records change. The omission notice forbids
+inference from missing explanations. Advisory help does not use this fallback.
 Mandatory evidence beyond the hard bound fails before inference; evidence
 outside the detailed working set cannot justify generated requirements/assessments.
 The character bound is not an exact tokenizer/model-window estimate. See the browser

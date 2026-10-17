@@ -37,6 +37,12 @@ const connections: Connections = {
   cancelTest() { cancelTest?.(); }, async disconnect() { connected = false; }, async close() { cancelTest?.(); },
 };
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(project, options) {
+  if (project.name === "Cleanup fixture") {
+    assert.equal(options.context.manifest.refinementOnly, true);
+    return analysisSchema.parse({ summary: "Unchanged", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
+      refinements: project.requirements.map((r, index) => ({ requirementID: r.id, statement: index ? "The player can aim within a forward-facing arc." : "The player can jump briefly after stepping off a ledge.",
+        rationale: "Observable gameplay behavior.", acceptance: [index ? "Aiming stays within the forward arc." : "Pressing jump immediately after leaving a ledge initiates a jump."], reason: "Abstracted code identifiers and tuning values." })).filter((r) => r.requirementID === options.context.manifest.refinementTarget?.requirementID) });
+  }
   if (project.name === "Review workflow fixture") {
     await new Promise<void>((accept) => { reviewReleases.push(accept); options.signal.addEventListener("abort", () => accept(), { once: true }); });
     const sources = project.sources.filter((s) => options.context.manifest.taskRecordIDs?.includes(s.id) && ["confirmation", "rejection"].includes(s.kind));
@@ -463,7 +469,7 @@ try {
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
   await page.getByRole("tab", { name: "Activity", exact: true }).click();
   await page.locator(".queue-panel > summary").click();
-   await expect(page.locator(".queue-panel summary")).toContainText("2 processing · 1 waiting");
+   await expect(page.locator(".queue-panel summary")).toContainText("1 processing · 1 waiting");
   await expect(page.locator(".queue-panel")).toContainText("Corrected job details");
   await expect(page.locator(".queue-item .badge.superseded")).toHaveCount(1);
   await expect(details).toHaveCount(0);
@@ -492,7 +498,7 @@ try {
   releases[1]!();
   await expect.poll(() => releases.length).toBe(3);
   releases[2]!();
-   await expect(page.locator(".queue-item .badge.completed")).toHaveCount(4);
+   await expect(page.locator(".queue-item .badge.completed")).toHaveCount(3);
   await page.getByRole("tab", { name: /^Questions/ }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
@@ -607,7 +613,56 @@ try {
    await reviewPanel.getByRole("button", { name: /To review/ }).click();
    await expect(reviewPanel).toContainText("Export jobs as CSV");
    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Review must fit mobile width");
-   await page.screenshot({ path: ".reqwizit-state/browser-review.png", fullPage: true });
-   assert.deepEqual(errors, []);
+    await page.screenshot({ path: ".reqwizit-state/browser-review.png", fullPage: true });
+    // Oversized follow-up must preserve an approval and show a durable preflight
+    // blocker instead of starting another predictably failing discovery batch.
+    reviewProject = store.get(reviewProject.id);
+    for (let i = 0; i < 8; i++) reviewProject = store.note(reviewProject.id, reviewProject.revision, String.fromCharCode(97 + i).repeat(12000), "project");
+    const reviewJobs = store.jobs(reviewProject.id).length;
+    await page.reload();
+    await page.getByRole("tab", { name: /Review/ }).click();
+    await reviewPanel.getByRole("button", { name: /To review/ }).click();
+    await expect(reviewPanel).toContainText("Export jobs as CSV");
+    await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect.poll(() => store.submissions(reviewProject.id).some((s) => s.contextBlock && s.status === "needs-attention")).toBe(true);
+    assert.equal(store.get(reviewProject.id).requirements.find((r) => r.statement === "Export jobs as CSV")!.status, "accepted");
+    assert.equal(store.jobs(reviewProject.id).length, reviewJobs);
+    assert.equal(reviewReleases.length, 0);
+    await expect(page.locator(".round-status")).toContainText("AI follow-up blocked by context size");
+    await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
+    await expect(reviewPanel).toContainText("Context blocked");
+    await expect(reviewPanel).toContainText("Your decision is retained");
+    await page.reload();
+    await expect(page.locator(".round-status")).toContainText("AI follow-up blocked by context size");
+    await page.locator(".queue-panel summary").click();
+    await page.getByRole("button", { name: "Resume discovery", exact: true }).click();
+    await expect(page.locator(".round-status")).toContainText("AI follow-up blocked by context size");
+    assert.equal(store.jobs(reviewProject.id).length, reviewJobs, "retrying unchanged context must not append a failed batch");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Context diagnostics must fit mobile width");
+     await page.screenshot({ path: ".reqwizit-state/browser-context-blocked.png", fullPage: true });
+     let cleanup = store.create("Cleanup fixture", "Jump and aim", { providerID: "openai", modelID: "fixture" });
+     const cleanupSeed = store.beginJob(cleanup.id, cleanup.revision).job; store.claimJob(cleanupSeed.id, Date.now() + 60000);
+     store.finishJob(cleanupSeed.id, { summary: "Game", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Jump() sets velocity to 420 for 0.15 seconds", "AimPivot.Update() clamps rotation to 60 degrees"].map((statement) => ({ statement, rationale: "Static implementation", sourceIDs: [cleanup.sources[0]!.id], acceptance: ["The method uses the constant"] })) });
+     cleanup = store.get(cleanup.id);
+     for (const r of cleanup.requirements) cleanup = store.review(cleanup.id, cleanup.revision, r.id, "accepted", "");
+     await page.reload();
+     await page.locator(".sidebar").getByRole("button", { name: /Cleanup fixture/ }).click();
+     await page.getByRole("tab", { name: /Review/ }).click();
+     await reviewPanel.getByRole("button", { name: "Refine requirements", exact: true }).click();
+     await expect(reviewPanel.getByRole("button", { name: "Approve replacement", exact: true })).toHaveCount(2);
+     assert.equal(store.get(cleanup.id).requirements[0]!.statement, cleanup.requirements[0]!.statement);
+     await page.reload();
+     await page.getByRole("tab", { name: /Review/ }).click();
+     await expect(reviewPanel).toContainText("Current wording (approved)");
+     await reviewPanel.getByRole("button", { name: "Approve replacement", exact: true }).first().click();
+     await expect.poll(() => store.get(cleanup.id).refinements.filter((p) => p.status === "accepted").length).toBe(1);
+     assert.equal(store.get(cleanup.id).requirements[0]!.id, cleanup.requirements[0]!.id);
+     assert.equal(store.get(cleanup.id).requirements[0]!.status, "accepted");
+     await expect(reviewPanel.getByRole("button", { name: "Dismiss cleanup", exact: true })).toHaveCount(1);
+     await reviewPanel.getByRole("button", { name: "Dismiss cleanup", exact: true }).click();
+     await expect.poll(() => store.get(cleanup.id).refinements.filter((p) => p.status === "dismissed").length).toBe(1);
+     assert.equal(store.get(cleanup.id).requirements[1]!.statement, cleanup.requirements[1]!.statement);
+     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Cleanup comparison must fit mobile width");
+     assert.deepEqual(errors, []);
   console.log("Browser checks passed: appearance presets, custom colors, fonts/text size, persistence, cross-tab sync, reset, contrast hints, keyboard dropdowns and mobile sizing; local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation; explicit existing-project entry, local identity autofill, preserved manual edits across folders, initialization failure/retry, review-first project map, manual rescan, retained IDs, question dismissal and evidence-grounded replacements, reload and mobile width. Screenshots: .reqwizit-state/appearance-{dark,mobile,dropdown}.png and browser-{connections,connections-mobile,desktop,mobile,help-mobile,map,scan}.png");
 } finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); await rm(scanDirectory, { recursive: true, force: true }); }

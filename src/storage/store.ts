@@ -6,6 +6,7 @@ import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, rea
 import { dirname } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
+import { reviewRefinement } from "../core/refinement.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
 import { reviewFingerprint, answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
@@ -598,6 +599,14 @@ export class ProjectStore {
     }).immediate();
   }
 
+  reviewRefinement(id: string, revision: number, proposalID: string, accept: boolean) {
+    return this.mutate(id, revision, "Human reviewed requirement cleanup", (project) => {
+      const proposal = project.refinements.find((p) => p.id === proposalID);
+      if (accept && this.submissions(id).some((s) => s.input.type === "review" && s.input.requirementID === proposal?.requirementID && ["queued", "saved", "processing"].includes(s.status))) throw new Error("Process the pending human review before approving cleanup.");
+      reviewRefinement(project, proposalID, accept, randomUUID);
+    });
+  }
+
   finishJob(id: string, raw: unknown): Job {
     const result = analysisSchema.parse(raw);
     return this.db.transaction(() => {
@@ -613,6 +622,12 @@ export class ProjectStore {
       } else {
         this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
           const reviews = this.submissions(project.id).filter((s) => s.applied && s.input.type === "review" && job.context?.submissionIDs?.includes(s.id));
+          if (job.context?.refinementOnly && (result.questions.length || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length || result.researchFindings?.length)) throw new Error("Refinement-only passes may only propose requirement cleanup.");
+          for (const proposal of result.refinements ?? []) {
+            if (job.context?.refinementTarget && proposal.requirementID !== job.context.refinementTarget.requirementID) throw new Error("Refinement cannot change a requirement outside its individual task.");
+            const target = project.requirements.find((r) => r.id === proposal.requirementID);
+            if (!job.context?.includedIDs.includes(proposal.requirementID) || target?.sourceIDs.some((sourceID) => !job.context!.includedIDs.includes(sourceID))) throw new Error("Refinement requires the detailed requirement and all supporting evidence.");
+          }
           const authorized = (sourceID: string, changes = false) => reviews.some((s) => s.appliedSourceID === sourceID && s.input.type === "review" && (!changes || !!s.input.note.trim()) &&
             !project.sources.some((source) => source.supersedes === sourceID));
           for (const response of result.reviewResponses ?? []) if (!authorized(response.sourceID)) throw new Error("Review response must reference a current review in this batch.");
@@ -658,9 +673,10 @@ export class ProjectStore {
           if (job.context?.partial && ((result.organization?.length ?? 0) || (result.assessments?.length ?? 0))) {
             throw new Error("Partial task passes cannot reorganize areas or replace whole-area assessments.");
           }
-          const interpretation = job.context?.partial ? { summary: project.summary, analysisRevision: project.analysisRevision,
+          const interpretation = job.context?.partial || job.context?.refinementOnly ? { summary: project.summary, analysisRevision: project.analysisRevision,
             goals: project.goals, actors: project.actors, assumptions: project.assumptions, scopeAssessment: project.scopeAssessment } : undefined;
           applyRound(project, result, randomUUID, job.researchEvidence);
+          if (job.context?.refinementOnly) project.roundChanges.push(`Requirement refinement (bounded working set): ${result.summary}`);
           if (interpretation) Object.assign(project, interpretation);
         });
         job.status = "completed";

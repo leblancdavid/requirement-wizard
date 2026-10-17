@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildContext, ContextBudgetError } from "./context.js";
 import { planContext } from "./working-set.js";
-import { analysisSchema, type Analysis, type Project } from "./model.js";
+import { analysisSchema, reviewFingerprint, type Analysis, type Project } from "./model.js";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { DiscoveryQueue } from "../service/queue.js";
@@ -169,19 +169,24 @@ test("partial passes preserve global interpretation and reject assessments, unre
   } finally { store.close(); }
 });
 
-test("single large area is processed in multiple finite groups including manually resumed non-auto submissions", async () => {
+test("queued answers run one at a time in isolated contexts, including manually resumed non-auto submissions", async () => {
   const store = new ProjectStore(":memory:");
   const project = seed(store);
   const submitted = corrections(store, project);
   const contexts: NonNullable<import("./model.js").Job["context"]>[] = [];
   const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
     contexts.push(options.context.manifest);
-    for (const q of snapshot.questions) assert.ok(options.context.manifest.includedIDs.includes(q.sourceID!));
+    const manifest = options.context.manifest;
+    assert.equal(manifest.submissionIDs!.length, 1);
+    assert.equal(manifest.isolatedTask, true);
+    const item = store.submissions(project.id).find((s) => s.id === manifest.submissionIDs![0])!;
+    assert.ok(manifest.includedIDs.includes(item.appliedSourceID!));
+    for (const q of snapshot.questions) if (q.sourceID !== item.appliedSourceID) assert.ok(manifest.omittedIDs.includes(q.sourceID!));
     return empty();
   } }));
   try {
     queue.resume(project.id, { focusEpicID: "inbox", research: false }); await idle(queue, project.id);
-    assert.equal(contexts.length, 2);
+    assert.equal(contexts.length, 5);
     assert.ok(contexts.every((c) => c.partial && c.characters <= c.budget));
     assert.ok(contexts[1]!.revision > contexts[0]!.revision);
     assert.deepEqual(new Set(contexts.flatMap((c) => c.submissionIDs!)), new Set(submitted.map((s) => s.id)));
@@ -189,6 +194,59 @@ test("single large area is processed in multiple finite groups including manuall
     assert.equal(store.get(project.id).sources.length, project.sources.length + 5);
     assert.equal(store.get(project.id).summary, project.summary);
   } finally { await queue.close(); store.close(); }
+});
+
+test("twelve saved reviews use twelve independent contexts instead of carrying their feature's entire history", async () => {
+  const store = new ProjectStore(":memory:");
+  let queue: DiscoveryQueue | undefined;
+  try {
+    let project = seed(store);
+    const historyAnswerIDs = new Set<string>();
+    for (let group = 0; group < 3; group++) {
+      const job = store.beginJob(project.id, project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+      store.finishJob(job.id, { ...empty(),
+        questions: Array.from({ length: 4 }, (_, j) => ({ epicID: "inbox", text: `Historical question ${group * 4 + j}?`, whyItMatters: "Old context",
+          options: [{ label: "A", consequence: "First" }, { label: "B", consequence: "Second" }] })),
+        requirements: Array.from({ length: 4 }, (_, j) => ({ epicID: "inbox", statement: `Retain effect behavior ${group * 4 + j}`,
+          rationale: `Evidence for behavior ${group * 4 + j}`, acceptance: [`Behavior ${group * 4 + j} has a concrete scenario`], sourceIDs: [project.sources[0]!.id] })),
+      });
+      project = store.get(project.id);
+      for (const [j, q] of project.questions.slice(-4).entries()) {
+        const i = group * 4 + j;
+        project = store.answer(project.id, project.revision, q.id, { kind: "answer", text: `Exact historical answer ${i}\r\n${String.fromCharCode(65 + i).repeat(11000)}` });
+        historyAnswerIDs.add(project.questions.find((item) => item.id === q.id)!.sourceID!);
+      }
+    }
+    const submitted = project.requirements.map((r) => store.enqueue(project.id, { id: crypto.randomUUID(), auto: false, research: false,
+      input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "" } }));
+    store.applyQueued(project.id);
+    project = store.get(project.id);
+    assert.throws(() => planContext(project, { recordIDs: [project.requirements[0]!.id], focusEpicID: "inbox", expandMandatory: true }), ContextBudgetError);
+    let calls = 0, lastRevision = project.revision - 1;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
+      const manifest = options.context.manifest;
+      assert.deepEqual(manifest.submissionIDs, [submitted[calls]!.id]);
+      calls++;
+      assert.equal(manifest.isolatedTask, true); assert.equal(manifest.partial, true);
+      assert.ok(manifest.characters < 48000); assert.ok(snapshot.revision > lastRevision); lastRevision = snapshot.revision;
+      const item = store.submissions(project.id).find((s) => s.id === manifest.submissionIDs![0])!;
+      assert.equal(item.input.type, "review");
+      if (item.input.type !== "review") throw new Error("Expected review");
+      const requirementID = item.input.requirementID;
+      const decoded = decodeContext<{ requirements: Project["requirements"]; sources: Project["sources"]; submissionScope: unknown }>(options.context.data);
+      assert.ok(decoded.submissionScope);
+      assert.deepEqual(decoded.requirements, snapshot.requirements.filter((r) => r.id === requirementID));
+      assert.ok(decoded.sources.some((s) => s.id === item.appliedSourceID));
+      assert.ok(!decoded.sources.some((s) => historyAnswerIDs.has(s.id)));
+      assert.equal(store.submissions(project.id).filter((s) => s.status === "processing").length, 1);
+      return { ...empty(), reviewResponses: [{ sourceID: item.appliedSourceID!, text: "Approval recorded; no addendum to apply." }] };
+    } }));
+    queue.resume(project.id); await idle(queue, project.id);
+    assert.equal(calls, 12);
+    assert.ok(store.submissions(project.id).every((s) => s.status === "completed" && !!s.response));
+    assert.equal(store.jobs(project.id).filter((j) => j.context?.isolatedTask).length, 12);
+    assert.deepEqual(store.get(project.id).sources, project.sources);
+  } finally { await queue?.close(); store.close(); }
 });
 
 test("a later group failure preserves completed groups and resume does not replay their sources", async () => {
@@ -205,14 +263,14 @@ test("a later group failure preserves completed groups and resume does not repla
     assert.ok(completed.length > 0 && completed.length < 5);
     const sources = store.get(project.id).sources;
     queue.resume(project.id); await idle(queue, project.id);
-    assert.equal(calls, 3);
+    assert.equal(calls, 6);
     assert.ok(store.submissions(project.id).every((s) => s.status === "completed"));
     assert.deepEqual(store.get(project.id).sources, sources);
     assert.ok(store.jobs(project.id).at(-1)!.context!.submissionIDs!.every((id) => !completed.includes(id)));
   } finally { await queue.close(); store.close(); }
 });
 
-test("mandatory-heavy queues batch saved responses using the compacted service package", async () => {
+test("mandatory-heavy queues retain exact project guardrails separately for each submission", async () => {
   const store = new ProjectStore(":memory:");
   let queue: DiscoveryQueue | undefined;
   try {
@@ -222,16 +280,17 @@ test("mandatory-heavy queues batch saved responses using the compacted service p
     let calls = 0;
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
       calls++;
-      assert.equal(options.context.manifest.submissionIDs!.length, submissions.length);
+      assert.equal(options.context.manifest.submissionIDs!.length, 1);
       assert.equal(options.context.manifest.budget, 96000);
       assert.ok(options.context.manifest.characters <= 96000);
       const data = decodeContext<{ sources: Project["sources"] }>(options.context.data);
-      const currentAnswers = snapshot.questions.map((q) => q.sourceID!);
-      assert.deepEqual(data.sources.filter((s) => currentAnswers.includes(s.id)), snapshot.sources.filter((s) => currentAnswers.includes(s.id)));
+      const item = store.submissions(project.id).find((s) => s.id === options.context.manifest.submissionIDs![0])!;
+      const guardrails = snapshot.sources.filter((s) => s.kind === "note" && s.epicID === "project" || s.kind === "initial" || s.id === item.appliedSourceID);
+      assert.deepEqual(data.sources, guardrails);
       return empty();
     } }));
     queue.resume(project.id); await idle(queue, project.id);
-    assert.equal(calls, 1, "mandatory background is not resent once per saved response");
+    assert.equal(calls, submissions.length, "every response has its own inference and context");
     assert.ok(store.submissions(project.id).every((s) => s.status === "completed"));
   } finally { await queue?.close(); store.close(); }
 });
@@ -481,7 +540,7 @@ test("104,810-character packages retain exact decisions and links through combin
         text: i === 0 ? `Accepted requirement:\n${repeated}\nNo addendum` : `Accepted requirement ${i}. No addendum` });
     }
     const padding = Array.from({ length: 4 }, (_, i) => ({ id: crypto.randomUUID(), kind: "note" as const,
-      epicID: "project", text: String.fromCharCode(97 + i).repeat(6000) }));
+      epicID: "project", text: String.fromCharCode(97 + i).repeat(5000) }));
     project.sources.push(...padding);
     const task = { focusEpicID: "inbox", recordIDs: [project.requirements[19]!.id, project.sources.at(-5)!.id] };
     let size = 0;
@@ -513,6 +572,60 @@ test("104,810-character packages retain exact decisions and links through combin
     assert.ok(pack.manifest.includedIDs.every((id) => typeof id === "string"));
     assert.match(discoveryPrompt(project, pack), /Always use the expanded string IDs/);
     assert.deepEqual(project, before);
+  } finally { store.close(); }
+});
+
+test("hard-bound review fallback omits only generated background explanations and keeps exact decisions", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    for (let i = 0; i < 25; i++) {
+      const questionID = `historical-${i}`, answerID = `answer-${i}`, requirementID = `accepted-${i}`, approvalID = `approval-${i}`;
+      const options = Array.from({ length: 5 }, (_, choice) => ({ label: `Choice ${i}/${choice}`,
+        consequence: `Consequence ${i}/${choice}: ${String.fromCharCode(65 + choice).repeat(400)}` }));
+      // Include freeform, ambiguous, superseded and task-linked cases: none may
+      // lose alternative consequences just because it looks like old history.
+      if (i === 2) options[1]!.label = options[0]!.label;
+      project.questions.push({ id: questionID, sourceID: answerID, status: "answered", epicID: "inbox", category: "rules",
+        text: `Question ${i}?`, whyItMatters: "Generated question help", options });
+      project.sources.push({ id: answerID, questionID, kind: "answer", epicID: "inbox",
+        text: i === 1 ? "An exact freeform human decision\r\n" : `  ${options[0]!.label}\n` });
+      project.requirements.push({ id: requirementID, epicID: "inbox", status: "accepted", statement: `Retain behavior ${i}`,
+        rationale: `Generated rationale ${i}: ${"r".repeat(1100)}`, acceptance: [`Exact scenario ${i}`], sourceIDs: [approvalID, answerID] });
+      project.sources.push({ id: approvalID, requirementID, kind: "confirmation", epicID: "inbox", text: `Human approved ${i}.\r\n` });
+    }
+    project.sources.push({ id: "newer-answer", supersedes: "answer-3", kind: "answer", epicID: "inbox", text: "Newer human constraint" });
+    project.sources.push({ id: "newer-review", supersedes: "approval-5", kind: "rejection", epicID: "inbox", text: "Superseded approval" });
+    project.requirements.push({ id: "unconfirmed", epicID: "inbox", status: "needs-review", statement: "Unconfirmed behavior",
+      rationale: "Unconfirmed rationale must remain", acceptance: ["Scenario"], sourceIDs: ["answer-0"] });
+    for (let i = 0; i < 5; i++) project.sources.push({ id: `guardrail-${i}`, kind: "note", epicID: "project", text: `${i}:${String.fromCharCode(97 + i).repeat(8000)}` });
+    const before = structuredClone(project);
+    const task = { focusEpicID: "inbox", recordIDs: ["approval-4", "accepted-4"] };
+    assert.throws(() => planContext(project, task), ContextBudgetError);
+    const pack = planContext(project, { ...task, expandMandatory: true });
+    assert.equal(pack.manifest.version, "tasks-v7");
+    assert.ok(pack.manifest.characters <= 96000);
+    assert.equal(pack.manifest.characters, JSON.stringify(pack.data).length);
+    const decoded = decodeContext<{ sources: Project["sources"]; requirements: Array<Omit<Project["requirements"][number], "rationale"> & { rationale?: string }>;
+      questions: Array<{ id: string; text: string; sourceID?: string; options: { label: string; consequence?: string }[] }>;
+      omittedBackgroundExplanations: { requirementIDs: string[]; questionOptions: { questionID: string; optionIndexes: number[] }[] } }>(pack.data);
+    assert.deepEqual(decoded.sources, project.sources.filter((s) => pack.manifest.includedIDs.includes(s.id)));
+    for (const r of project.requirements) {
+      const detail = decoded.requirements.find((item) => item.id === r.id)!;
+      const omitted = decoded.omittedBackgroundExplanations.requirementIDs.includes(r.id);
+      const { rationale, ...rest } = r;
+      assert.deepEqual(detail, omitted ? rest : r);
+      assert.equal(omitted, r.status === "accepted" && !["accepted-4", "accepted-5"].includes(r.id));
+    }
+    for (const q of project.questions) {
+      const detail = decoded.questions.find((item) => item.id === q.id)!;
+      assert.equal(detail.text, q.text); assert.equal(detail.sourceID, q.sourceID);
+      const omitted = decoded.omittedBackgroundExplanations.questionOptions.find((item) => item.questionID === q.id);
+      assert.deepEqual(detail.options, q.options.map((option, index) => omitted?.optionIndexes.includes(index) ? { label: option.label } : option));
+      if (["historical-1", "historical-2", "historical-3", "historical-4"].includes(q.id)) assert.equal(omitted, undefined);
+    }
+    assert.deepEqual(project, before);
+    for (const [section, value] of Object.entries(pack.data as object)) assert.equal(pack.manifest.sectionCharacters![section], JSON.stringify(value).length);
   } finally { store.close(); }
 });
 
@@ -575,13 +688,155 @@ test("requirement review omits only historical answered-question file motivation
     assert.deepEqual(new Set(omitted), new Set(files.slice(1).map((s) => s.id)));
     for (const id of omitted) { assert.ok(pack.manifest.omittedIDs.includes(id)); assert.ok(!pack.manifest.includedIDs.includes(id)); }
     assert.match(discoveryPrompt(project, pack), /omitted file IDs as reviewed evidence/);
+    const isolated = planContext(project, { focusEpicID: "inbox", recordIDs: ["approval", "reviewed"], isolatedTask: true, expandMandatory: true });
+    assert.ok(isolated.manifest.includedIDs.includes(files[0]!.id));
+    assert.deepEqual(decodeContext<{ requirements: unknown }>(isolated.data).requirements, project.requirements);
+    for (const q of project.questions) assert.ok(isolated.manifest.omittedIDs.includes(q.id));
     // When the old question/answer itself is the task, all its exact file
     // evidence is required again, even if that makes the package indivisible.
     for (const recordID of [project.questions[0]!.id, project.questions[0]!.sourceID!]) {
       assert.throws(() => planContext(project, { focusEpicID: "inbox", recordIDs: [recordID], expandMandatory: true }), ContextBudgetError);
+      assert.throws(() => planContext(project, { focusEpicID: "inbox", recordIDs: [recordID], expandMandatory: true, isolatedTask: true }), ContextBudgetError);
     }
     assert.deepEqual(project, before);
   } finally { store.close(); }
+});
+
+test("approval history keeps exact decisions without pinning unrelated accepted requirements' file motivation", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    const files = Array.from({ length: 5 }, (_, i) => ({ id: `workspace:review-file-${i}`, kind: "workspace" as const,
+      epicID: "inbox", text: String.fromCharCode(65 + i).repeat(8000) }));
+    project.sources.push(...files);
+    for (let i = 0; i < 5; i++) {
+      const requirementID = `approved-background-${i}`, sourceID = `approval-background-${i}`;
+      const statement = `Preserve reviewed behavior ${i}`;
+      const acceptance = [`Reviewed scenario ${i}`];
+      project.requirements.push({ id: requirementID, epicID: "inbox", status: "accepted", statement,
+        rationale: `Captured static behavior ${i}`, acceptance, reviewNote: "",
+        sourceIDs: [files[i]!.id, sourceID] });
+      project.sources.push({ id: sourceID, epicID: "inbox", kind: "confirmation", requirementID,
+        text: `Requirement ${requirementID}: ${statement}\nAcceptance scenarios: ${JSON.stringify(acceptance)}\nHuman decision: accepted\nAddendum: ` });
+    }
+    for (let i = 0; i < 6; i++) project.sources.push({ id: `guardrail-${i}`, kind: "note", epicID: "project",
+      text: String.fromCharCode(97 + i).repeat(10000) });
+    project.questions[0]!.evidenceIDs = [files[0]!.id, project.requirements[1]!.id];
+    const task = { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id, project.questions[0]!.sourceID!], expandMandatory: true };
+    const before = structuredClone(project);
+    const pack = planContext(project, task);
+    assert.equal(pack.manifest.version, "tasks-v6");
+    assert.ok(pack.manifest.characters <= 96000);
+    assert.equal(pack.manifest.characters, JSON.stringify(pack.data).length);
+    const data = decodeContext<{ sources: Project["sources"]; requirements: Project["requirements"]; questions: Project["questions"];
+      omittedRequirementWorkspaceEvidence: { requirements: Array<{ requirementID: string; sourceIDs: string[] }> } }>(pack.data);
+    assert.deepEqual(data.requirements, project.requirements);
+    for (const source of project.sources.filter((s) => s.kind !== "workspace")) assert.deepEqual(data.sources.find((s) => s.id === source.id), source);
+    for (const q of project.questions) {
+      const detail = data.questions.find((item) => item.id === q.id)!;
+      assert.equal(detail.text, q.text); assert.deepEqual(detail.options, q.options);
+      assert.equal(detail.sourceID, q.sourceID); assert.deepEqual(detail.evidenceIDs, q.evidenceIDs);
+    }
+    for (const file of files.slice(0, 2)) assert.ok(pack.manifest.includedIDs.includes(file.id), "direct task files and task-motivating requirements retain their full file evidence");
+    assert.deepEqual(data.omittedRequirementWorkspaceEvidence.requirements, files.slice(2).map((file, index) => ({
+      requirementID: project.requirements[index + 2]!.id, sourceIDs: [file.id],
+    })));
+    for (const file of files.slice(2)) {
+      assert.ok(pack.manifest.omittedIDs.includes(file.id));
+      assert.ok(!pack.manifest.includedIDs.includes(file.id));
+      assert.ok(!JSON.stringify(pack.data).includes(file.text));
+    }
+    assert.match(discoveryPrompt(project, pack), /Human approval does not verify the original files/);
+    // Explicitly reviewing a background requirement, or asking about its approval,
+    // restores its file motivation. A question citing that approval does too.
+    for (const recordID of [project.requirements[2]!.id, "approval-background-2", files[2]!.id]) {
+      const focused = planContext(project, { ...task, recordIDs: [recordID] });
+      assert.ok(focused.manifest.includedIDs.includes(files[2]!.id));
+    }
+    const linkedApproval = structuredClone(project);
+    linkedApproval.questions[0]!.evidenceIDs!.push("approval-background-2");
+    assert.ok(planContext(linkedApproval, task).manifest.includedIDs.includes(files[2]!.id));
+    // Status alone, a superseded approval, or a confirmation belonging to another
+    // requirement cannot justify omitting file evidence.
+    for (const variant of ["needs-review", "superseded", "wrong-owner"] as const) {
+      const candidate = structuredClone(project);
+      if (variant === "needs-review") candidate.requirements[2]!.status = "needs-review";
+      if (variant === "superseded") candidate.sources.push({ id: "new-rejection", kind: "rejection", epicID: "inbox",
+        requirementID: candidate.requirements[2]!.id, supersedes: "approval-background-2", text: "No longer approved" });
+      if (variant === "wrong-owner") candidate.sources.find((s) => s.id === "approval-background-2")!.requirementID = candidate.requirements[3]!.id;
+      assert.ok(planContext(candidate, task).manifest.includedIDs.includes(files[2]!.id));
+    }
+    const unconfirmed = structuredClone(project);
+    for (const source of unconfirmed.sources) if (source.kind === "confirmation") source.kind = "note";
+    assert.throws(() => planContext(unconfirmed, task), ContextBudgetError, "unconfirmed baseline files remain mandatory even when oversized");
+    assert.deepEqual(project, before);
+  } finally { store.close(); }
+});
+
+test("queue preflight isolates oversized responses, persists blockers, and resumes after scope changes without failed jobs", async () => {
+  const store = new ProjectStore(":memory:");
+  let queue: DiscoveryQueue | undefined;
+  try {
+    let project = seed(store);
+    const setup = store.beginJob(project.id, project.revision); store.claimJob(setup.job.id, Date.now() + 60000);
+    store.finishJob(setup.job.id, { ...empty(), organization: [{ type: "upsert", epicID: "new:small", title: "Small feature", purpose: "Independent", dependencies: [] }],
+      questions: [{ epicID: "new:small", text: "Small feature choice?", whyItMatters: "Independent choice",
+        options: [{ label: "A", consequence: "First" }, { label: "B", consequence: "Second" }] }] });
+    project = store.get(project.id);
+    const largeQuestion = project.questions[0]!, smallQuestion = project.questions.at(-1)!;
+    for (let i = 0; i < 8; i++) project = store.note(project.id, project.revision, String.fromCharCode(97 + i).repeat(12000), "inbox");
+    const notes = project.sources.filter((s) => s.kind === "note");
+    const large = store.enqueue(project.id, { id: crypto.randomUUID(), auto: false, research: false,
+      input: { type: "answer", questionID: largeQuestion.id, questionText: largeQuestion.text, sourceID: largeQuestion.sourceID,
+        answer: { kind: "answer", text: "  Retain this blocked answer exactly\r\n" } } });
+    const small = store.enqueue(project.id, { id: crypto.randomUUID(), auto: false, research: false,
+      input: { type: "answer", questionID: smallQuestion.id, questionText: smallQuestion.text, sourceID: null,
+        answer: { kind: "answer", text: "A" } } });
+    let calls = 0;
+    const adapter = { async analyze(_snapshot: Project, options: Parameters<import("../service/discovery.js").DiscoveryAdapter["analyze"]>[1]) {
+      calls++;
+      assert.deepEqual(options.context.manifest.submissionIDs, [calls === 1 ? small.id : large.id]);
+      return empty();
+    } };
+    queue = new DiscoveryQueue(new DiscoveryService(store, adapter));
+    const jobsBefore = store.jobs(project.id).length;
+    queue.resume(project.id); await idle(queue, project.id);
+    assert.equal(calls, 1, "the blocked first response cannot starve a fitting response");
+    assert.equal(store.jobs(project.id).length, jobsBefore + 1);
+    assert.equal(store.submissions(project.id).find((s) => s.id === small.id)!.status, "completed");
+    const blocked = store.submissions(project.id).find((s) => s.id === large.id)!;
+    assert.equal(blocked.status, "needs-attention");
+    assert.ok(blocked.applied && blocked.contextBlock);
+    assert.ok(blocked.contextBlock.characters > blocked.contextBlock.budget);
+    assert.equal(blocked.contextBlock.budget, 96000);
+    assert.ok(blocked.contextBlock.sectionCharacters!.sources! > 0);
+    assert.equal(blocked.jobID, undefined);
+    assert.match(blocked.diagnostic!, /before a batch was started/);
+    assert.equal(store.queuePaused(project.id), true);
+    const savedSources = store.get(project.id).sources;
+    assert.equal(savedSources.find((s) => s.id === blocked.appliedSourceID)!.text, "  Retain this blocked answer exactly\r\n");
+    await queue.close();
+    queue = new DiscoveryQueue(new DiscoveryService(store, adapter));
+    assert.deepEqual(store.submissions(project.id).find((s) => s.id === large.id)!.contextBlock, blocked.contextBlock);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      queue.resume(project.id, { focusEpicID: "inbox" }); await idle(queue, project.id);
+      assert.equal(calls, 1);
+      assert.equal(store.jobs(project.id).length, jobsBefore + 1, "unchanged over-budget retries must not create failed jobs");
+      assert.deepEqual(store.get(project.id).sources, savedSources);
+    }
+    project = store.get(project.id);
+    project = store.organize(project.id, project.revision, [
+      { type: "upsert", epicID: "separate", title: "Separate scope", purpose: "Explicit human scope change", dependencies: [] },
+      ...notes.map((note) => ({ type: "move" as const, recordID: note.id, epicID: "separate" })),
+    ]);
+    queue.resume(project.id, { focusEpicID: "inbox" }); await idle(queue, project.id);
+    assert.equal(calls, 2);
+    const completed = store.submissions(project.id).find((s) => s.id === large.id)!;
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.contextBlock, undefined);
+    assert.equal(completed.diagnostic, undefined);
+    assert.equal(store.get(project.id).sources.filter((s) => s.questionID === largeQuestion.id && s.text === "  Retain this blocked answer exactly\r\n").length, 1);
+  } finally { await queue?.close(); store.close(); }
 });
 
 test("indivisible mandatory human constraints beyond the fallback fail before inference and retain the attempted manifest", async () => {
@@ -620,7 +875,7 @@ test("cancellation in a later group and worker restart preserve progress until e
     assert.equal(calls, 2); assert.equal(restarted.isActive(project.id), false);
     assert.equal(store.queuePaused(project.id), true);
     restarted.resume(project.id); await idle(restarted, project.id);
-    assert.equal(calls, 3); assert.deepEqual(store.get(project.id).sources, sources);
+    assert.equal(calls, 6); assert.deepEqual(store.get(project.id).sources, sources);
     assert.ok(store.submissions(project.id).every((s) => s.status === "completed"));
     assert.ok(store.jobs(project.id).at(-1)!.context!.submissionIDs!.every((id) => !completed.includes(id)));
   } finally { await queue.close(); await restarted?.close(); store.close(); }
@@ -636,12 +891,14 @@ test("task fallback pins cross-cutting decisions, transitive dependency decision
       { id: "dependency-rule", epicID: "dependency", kind: "note", text: "  Retain audit events\n" });
     project.requirements.push({ id: "accepted", epicID: "dependency", statement: "Retain audit events", rationale: "Confirmed", status: "accepted",
       sourceIDs: ["dependency-rule"], acceptance: ["Audit events survive restart"] });
-    const pack = planContext(project, { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id] });
-    assert.equal(pack.manifest.partial, true);
-    assert.ok(pack.manifest.epicIDs!.includes("dependency"));
-    for (const id of ["guardrail", "dependency-rule", "accepted"]) assert.ok(pack.manifest.includedIDs.includes(id));
-    const data = pack.data as { requirements: unknown[] };
-    assert.deepEqual(data.requirements, project.requirements);
+    for (const isolatedTask of [false, true]) {
+      const pack = planContext(project, { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id], isolatedTask });
+      assert.equal(pack.manifest.partial, true);
+      assert.ok(pack.manifest.epicIDs!.includes("dependency"));
+      for (const id of ["guardrail", "dependency-rule", "accepted"]) assert.ok(pack.manifest.includedIDs.includes(id));
+      const data = pack.data as { requirements: unknown[] };
+      assert.deepEqual(data.requirements, project.requirements);
+    }
     project.questions[0]!.epicID = "dependency";
     const moved = planContext(project, { focusEpicID: "dependency", budget: 6000 });
     assert.equal(moved.manifest.partial, true);

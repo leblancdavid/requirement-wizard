@@ -202,7 +202,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, { cancelled: !!work }); return;
       }
       if (action === "analyze") {
-        const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional() }).strict().parse(raw);
+        const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional() }).strict().parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();
         if (queue.isActive(id)) {
           json(res, 409, { error: "This project already has an active discovery job." }); return;
@@ -231,6 +231,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (action === "review") {
         const input = z.object({ revision, requirementID: z.string(), action: z.enum(["accepted", "rejected"]), note: z.string().max(12000).default("") }).strict().parse(raw);
         json(res, 200, options.store.review(id, input.revision, input.requirementID, input.action, input.note)); return;
+      }
+      if (action === "refinement-review") {
+        const input = z.object({ revision, proposalID: z.string(), accept: z.boolean() }).strict().parse(raw);
+        json(res, 200, options.store.reviewRefinement(id, input.revision, input.proposalID, input.accept)); return;
       }
       if (action === "model") {
         const input = z.object({ revision, model: modelSelection }).strict().parse(raw);

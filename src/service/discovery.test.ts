@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DiscoveryService, type DiscoveryAdapter } from "./discovery.js";
 import { ProjectStore } from "../storage/store.js";
-import { analysisSchema, type Analysis, type Project } from "../core/model.js";
+import { analysisSchema, reviewFingerprint, type Analysis, type Project } from "../core/model.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 import { buildContext } from "../core/context.js";
 
@@ -12,6 +12,117 @@ function result(project: Project): Analysis {
       { label: "Yes", consequence: "Local storage and synchronization" }, { label: "No", consequence: "Requires connectivity" },
     ] }], requirements: [{ statement: "Persist jobs", rationale: "Track work", sourceIDs: [project.sources[0]!.id], acceptance: ["Saved jobs survive restart"] }] };
 }
+
+test("review prompts authorize only current batch sources, excluding historical and waiting reviews", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = store.create("Review scope", "Track jobs", { providerID: "openai", modelID: "fixture" });
+    await new DiscoveryService(store, { async analyze(snapshot) {
+      const output = result(snapshot);
+      output.requirements.push({ ...output.requirements[0]!, statement: "Export jobs" });
+      return output;
+    } }).analyze(project.id, project.revision);
+    project = store.get(project.id);
+    project = store.review(project.id, project.revision, project.requirements[0]!.id, "accepted", "Historical approval");
+    const submissions = project.requirements.map((requirement) => store.enqueue(project.id, {
+      id: crypto.randomUUID(), auto: false, research: false,
+      input: { type: "review", requirementID: requirement.id, requirementText: requirement.statement,
+        fingerprint: reviewFingerprint(requirement), action: "accepted", note: "" },
+    }));
+    store.applyQueued(project.id);
+    project = store.get(project.id);
+    const currentID = store.submissions(project.id).find((item) => item.id === submissions[0]!.id)!.appliedSourceID!;
+    const adapter: DiscoveryAdapter = { async analyze(snapshot, options) {
+      const ids = options.context.manifest.reviewSourceIDs!;
+      const prompt = discoveryPrompt(snapshot, options.context, false);
+      const schema = JSON.parse(prompt.split("Schema: ")[1]!.split("\nWorking context revision")[0]!);
+      if (options.context.manifest.submissionIDs?.length) {
+        assert.deepEqual(ids, [currentID]);
+        assert.deepEqual(schema.properties.reviewResponses.items.properties.sourceID.enum, [currentID]);
+        assert.equal(schema.properties.reviewResponses.minItems, 1);
+        assert.equal(schema.properties.reviewResponses.maxItems, 1);
+        assert.deepEqual(options.context.manifest.reviewChangeSourceIDs, []);
+        assert.equal(schema.properties.reviewChanges.maxItems, 0);
+        assert.ok(prompt.includes(`ONLY authorized review sourceIDs for THIS submission batch are ${JSON.stringify(ids)}`));
+      } else {
+        assert.deepEqual(ids, []);
+        assert.equal(schema.properties.reviewResponses.maxItems, 0);
+        assert.equal(schema.properties.reviewChanges.maxItems, 0);
+      }
+      return { ...result(snapshot), questions: [], requirements: [],
+        reviewResponses: ids.map((sourceID) => ({ sourceID, text: "Approval recorded." })) };
+    } };
+    const service = new DiscoveryService(store, adapter);
+    const job = await service.analyze(project.id, project.revision, {
+      recordIDs: [currentID, project.requirements[0]!.id], submissionIDs: [submissions[0]!.id],
+    });
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.deepEqual(job.context!.reviewSourceIDs, [currentID]);
+    project = store.get(project.id);
+    const manual = await service.analyze(project.id, project.revision);
+    assert.equal(manual.status, "completed", manual.diagnostic);
+    project = store.get(project.id);
+    const invalid = await new DiscoveryService(store, { async analyze(snapshot) {
+      return { ...result(snapshot), questions: [], requirements: [], reviewResponses: [{ sourceID: currentID, text: "Repeat" }] };
+    } }).analyze(project.id, project.revision);
+    assert.equal(invalid.status, "failed");
+    assert.match(invalid.diagnostic!, /current review in this batch/);
+    assert.deepEqual(store.get(project.id), project);
+  } finally { store.close(); }
+});
+
+test("wider-change prompts distinguish real batch addenda from empty or whitespace review notes", async () => {
+  for (const note of ["", "  \n", "  Also support offline job recording.  "]) {
+    const store = new ProjectStore(":memory:");
+    try {
+      let project = store.create("Addenda", "Track jobs", { providerID: "openai", modelID: "fixture" });
+      await new DiscoveryService(store, { async analyze(snapshot) { return result(snapshot); } }).analyze(project.id, project.revision);
+      project = store.get(project.id);
+      const requirement = project.requirements[0]!;
+      const submission = store.enqueue(project.id, { id: crypto.randomUUID(), auto: false, research: false,
+        input: { type: "review", requirementID: requirement.id, requirementText: requirement.statement,
+          fingerprint: reviewFingerprint(requirement), action: "accepted", note } });
+      store.applyQueued(project.id);
+      project = store.get(project.id);
+      const sourceID = store.submissions(project.id)[0]!.appliedSourceID!;
+      const changes: NonNullable<Analysis["reviewChanges"]> = [{ type: "revise", sourceID, requirementID: requirement.id,
+        statement: "Record jobs offline", rationale: "Requested offline support", acceptance: ["Jobs save without connectivity"], reason: "Human addendum" }];
+      const scope = { submissionIDs: [submission.id], recordIDs: [sourceID, requirement.id] };
+      const service = new DiscoveryService(store, { async analyze(snapshot, options) {
+        assert.deepEqual(options.context.manifest.reviewChangeSourceIDs, note.trim() ? [sourceID] : []);
+        for (const partial of [false, true]) {
+          const context = { ...options.context, manifest: { ...options.context.manifest, partial } };
+          const prompt = discoveryPrompt(snapshot, context, false);
+          const schema = JSON.parse(prompt.split("Schema: ")[1]!.split("\nWorking context revision")[0]!);
+          if (note.trim()) {
+            const variants = schema.properties.reviewChanges.items.anyOf;
+            assert.equal(variants.length, partial ? 2 : 3);
+            for (const variant of variants) assert.deepEqual(variant.properties.sourceID.enum, [sourceID]);
+          } else {
+            assert.equal(schema.properties.reviewChanges.maxItems, 0);
+          }
+          assert.ok(prompt.includes(`may appear in reviewChanges: ${JSON.stringify(note.trim() ? [sourceID] : [])}`));
+        }
+        return { ...result(snapshot), requirements: [], questions: [],
+          reviewResponses: [{ sourceID, text: note.trim() ? "Proposed offline wording for review." : "Approval already saved." }],
+          reviewChanges: note.trim() ? changes : [] };
+      } });
+      const job = await service.analyze(project.id, project.revision, scope);
+      assert.equal(job.status, "completed", job.diagnostic);
+      project = store.get(project.id);
+      assert.equal(project.requirements[0]!.status, note.trim() ? "needs-review" : "accepted");
+      if (!note.trim()) {
+        const invalid = await new DiscoveryService(store, { async analyze(snapshot) {
+          return { ...result(snapshot), requirements: [], questions: [], reviewChanges: changes,
+            reviewResponses: [{ sourceID, text: "Unauthorized rewrite" }] };
+        } }).analyze(project.id, project.revision, scope);
+        assert.equal(invalid.status, "failed");
+        assert.match(invalid.diagnostic!, /current review addendum in this batch/);
+        assert.deepEqual(store.get(project.id), project);
+      }
+    } finally { store.close(); }
+  }
+});
 
 test("analysis is a proposal, links runtime session, and preserves user review on subsequent rounds", async () => {
   const store = new ProjectStore(":memory:");

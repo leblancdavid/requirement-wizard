@@ -6,9 +6,10 @@ export function pendingReviews(project: Project, submissions: Submission[]) {
   return project.requirements.filter((r) => ["proposed", "needs-review"].includes(r.status) && !waiting.has(r.id) && project.epics.some((e) => e.id === r.epicID && !e.archived));
 }
 
-export function ReviewQueue({ project, submissions, epicID, sending, submit }: {
+export function ReviewQueue({ project, submissions, epicID, sending, submit, disabled, refine, reviewRefinement }: {
   project: Project; submissions: Submission[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
+  disabled: boolean; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => void;
 }) {
   const [filter, setFilter] = useState<"pending" | "submitted" | "reviewed">("pending");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -22,6 +23,22 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit }: {
   const visible = filter === "pending" ? pending : filter === "reviewed" ? reviewed : [];
   const active = visible.some((r) => r.id === expanded) ? expanded : filter === "pending" ? visible[0]?.id : null;
   return <section aria-label="Requirement review">
+    <section className="insight-card" aria-label="Requirement cleanup">
+      <h3>Requirement cleanup</h3><p>Refine technical wording into observable behavior, including approved requirements. Current wording stays active until you approve a replacement. Requirements in the selected scope are checked individually; completed checks are saved, and another run continues unchecked work.</p>
+      <button className="secondary" disabled={disabled} onClick={refine}>Refine requirements</button>
+      {project.refinements.filter((p) => p.status === "pending" && scoped(p.requirementID)).map((p) => {
+        const target = project.requirements.find((r) => r.id === p.requirementID);
+        const stale = !target || reviewFingerprint(target) !== p.fingerprint || !project.epics.some((e) => e.id === target.epicID && !e.archived);
+        return <article className="requirement-card" key={p.id}>
+          <span className="badge">Cleanup proposal{stale ? " · Outdated" : ""}</span><p>{p.reason}</p>
+          <h4>Current wording ({p.original.status === "accepted" ? "approved" : p.original.status})</h4><p>{p.original.statement}</p><ul>{p.original.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul>
+          <h4>Proposed wording</h4><p>{p.statement}</p><ul>{p.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><p>{p.rationale}</p>
+          <details><summary>Supporting evidence</summary>{p.original.sourceIDs.map((id) => <p className="source-excerpt" key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
+          {stale && <p role="status">The requirement changed. Dismiss this outdated suggestion and run refinement again for current wording.</p>}
+          <div className="button-row"><button className="primary" disabled={disabled || stale || submissions.some((s) => s.input.type === "review" && s.input.requirementID === p.requirementID && ["queued", "saved", "processing"].includes(s.status))} onClick={() => reviewRefinement(p.id, true)}>Approve replacement</button><button className="secondary" disabled={disabled} onClick={() => reviewRefinement(p.id, false)}>Dismiss cleanup</button></div>
+        </article>;
+      })}
+    </section>
     <p className="view-intro">Approve or reject each requirement. Add an optional note to request changes, related features, or new questions. Clearly requested scope changes are applied with history retained; revised wording comes back for review.</p>
     <div className="filter-row" aria-label="Review filters">{([ ["pending", "To review", pending.length], ["submitted", "Submitted", submitted.length], ["reviewed", "Reviewed", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { setFilter(key); setExpanded(null); }}>{label} <span>{count}</span></button>)}</div>
     {message && <p className="save-notice" role="status">{message}</p>}
@@ -54,7 +71,7 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit }: {
     {(filter === "submitted" ? submitted : filter === "reviewed" ? reviews.filter((s) => s.status === "completed") : []).slice().reverse().map((s) => {
       if (s.input.type !== "review") return null;
       const response = s.response;
-      return <article className="requirement-card" key={s.id}><span className={`badge ${s.status}`}>{s.status}</span><h3>{s.input.requirementText}</h3><p>{s.input.action === "accepted" ? "Approved" : "Rejected"}{s.input.note ? ` — ${s.input.note}` : ""}</p>{response && <p><strong>AI response:</strong> {response}</p>}{s.status === "completed" && !response && <p>Follow-up saved. See Latest changes and the Project map.</p>}{s.status === "saved" && <p>Decision saved. Use Explore next gaps to process follow-up.</p>}{s.diagnostic && <p role="status">{s.diagnostic} {s.conflict ? "Return to To review or Reviewed to submit against the current requirement." : "Use Resume discovery to retry follow-up; your decision is retained."}</p>}</article>;
+      return <article className="requirement-card" key={s.id}><span className={`badge ${s.status}`}>{s.status === "needs-attention" && s.contextBlock ? "Context blocked" : s.status}</span><h3>{s.input.requirementText}</h3><p>{s.input.action === "accepted" ? "Approved" : "Rejected"}{s.input.note ? ` — ${s.input.note}` : ""}</p>{response && <p><strong>AI response:</strong> {response}</p>}{s.status === "completed" && !response && <p>Follow-up saved. See Latest changes and the Project map.</p>}{s.status === "saved" && <p>Decision saved. Use Explore next gaps to process follow-up.</p>}{s.diagnostic && <p role="status">{s.diagnostic} {s.conflict ? "Return to To review or Reviewed to submit against the current requirement." : s.contextBlock ? "Review the feature's context scope in Project map, then resume to recheck. Your decision is retained." : "Use Resume discovery to retry follow-up; your decision is retained."}</p>}</article>;
     })}
   </section>;
 }

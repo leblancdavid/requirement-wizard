@@ -159,6 +159,10 @@ workflows, requirements, decisions, questions, sources, scenarios, and work pack
 - Distinguish human statements, human selections, delegated choices, AI proposals,
   and research findings.
 - Research alone cannot establish a user's product preference.
+- State requirements and acceptance scenarios as detailed observable behavior. Keep
+  code identifiers, internal architecture and incidental tuning values in supporting
+  evidence rather than product commitments. Preserve explicit human constraints,
+  meaningful numeric product rules and quality/compatibility obligations.
 
 **RW-012 — Reviewable revisions.** Show material changes after an interview round
 and allow editing, accepting, or rejecting proposed requirements.
@@ -172,6 +176,19 @@ and allow editing, accepting, or rejecting proposed requirements.
 - Apply clearly requested wider changes from review addenda with linked provenance;
   ask targeted questions when scope is ambiguous. Revised wording returns to review,
   and removed features retain their records/history (DEC-020).
+- Discovery includes requirement refinement, with an explicit refinement action for
+  existing projects. Proposed and approved requirements are eligible; rejected or
+  archived requirements are excluded. Cleanup is a separate pending proposal showing
+  original/replacement wording, acceptance scenarios and the reason (DEC-022).
+- Preserve active wording and approval until the replacement is explicitly approved.
+  Keep IDs, sources and revision history. Reject stale approvals, retain dismissals,
+  and suppress repeated suggestions for the same unchanged requirement. Refinement
+  may use only detailed requirements with their full supporting evidence in context;
+  missing intent needs clarification, not an invented rule.
+- Explicit cleanup processes requirements individually with their exact linked evidence
+  and applicable human guardrails. Save each completed check, including no-change
+  results, and resume unfinished work on explicit retry without repeating unchanged
+  completed checks. Never discard mandatory constraints to fit an individual task.
 
 **RW-013 — Coverage and conflicts.** Review applicable areas such as goals, workflows,
 data lifecycle, permissions, integrations, quality constraints, and operations.
@@ -242,14 +259,22 @@ show a deterministic project aggregate with explanations and evidence.
 global information, focused epics, dependencies, exact evidence, and omission manifests.
 
 - Summaries do not replace original human decisions.
-- Automatically plan smaller task working sets and sequential saved-response groups
-  when full detail exceeds the budget; checkpoint completed groups without replaying sources.
+- Accepted background requirements retain exact decisions and human approval evidence;
+  their original workspace-only motivation may be explicitly omitted from partial
+  tasks. Current task and unconfirmed requirement files remain pinned. Omitted file
+  links must be reported and cannot support claims or citations.
+- Process queued responses individually, with one revision-linked AI job and focused
+  context per submission. Preserve target evidence and project/dependency guardrails;
+  explicitly omit unrelated same-feature history and checkpoint each completed item.
 - Apply lossless text, identifier, and structural compaction against the normal
-  target before expanding mandatory-only context. Reuse fitting mandatory-heavy
-  background across batched responses; recovered space need not be filled with optional detail.
+  target before expanding mandatory-only context. Single-submission follow-up must not
+  refill recovered space with unrelated feature records or combine waiting responses.
 - Partial passes cannot replace global interpretation or whole-area assessments, or
   reorganize areas. Retirements and organization changes require detailed records.
 - Reject oversized calls before inference rather than silently truncating decisions.
+- Preflight queued follow-up before creating an AI job. Persist indivisible budget
+  blockers on saved submissions, let fitting responses proceed, and recheck scope on
+  explicit resume without duplicating human sources or failed jobs for unchanged input.
 - Reject generated references outside the detailed working set; support focused rounds.
 - Record the context revision, selection, budget, and usage metadata available from the runtime.
 

@@ -3,6 +3,35 @@
 Status: first playable local browser application. It shares the existing SQLite
 projects with the terminal client. No desktop installation is required.
 
+## Requirement cleanup
+
+Use **Review → Refine requirements** to check existing requirements, including approved
+ones, for code-level wording or incidental gameplay tuning. Discovery also checks the
+requirements in its detailed working set. The feature filter scopes the explicit
+cleanup run; All project areas selects all eligible requirements. The run processes
+one requirement at a time with its linked evidence and applicable human constraints,
+instead of loading an entire feature's approval history. Completed checks (including
+no-change outcomes) are saved as revision-linked jobs. After failure, stop or restart,
+click **Refine requirements** again to continue unchecked work. Completed unchanged
+tasks are skipped; changed requirements or applicable constraints permit a new check.
+A genuinely oversized individual task still stops before inference, retaining earlier
+results. Suggestions remain subject to review; this is not proof of completeness.
+
+Cleanup cards show original and proposed wording/scenarios, supporting evidence, and
+the reason. **Approve replacement** makes the new wording approved under the same ID;
+**Dismiss cleanup** keeps the current wording and remembers the dismissal. A pending
+human review must finish before replacement approval. Changed/archived targets cannot
+accept stale suggestions; dismiss the old suggestion and refine the current wording.
+Current exports continue using active wording until approval. Implementation progress
+linked to the older requirement fingerprint then needs review.
+
+Verified with deterministic service/API tests and the browser fixture: approved-target
+proposals, reload, replacement approval, dismissal and mobile width. Prompt rules retain
+explicit constraints and meaningful numeric product rules; live model cleanup quality
+has not been qualified.
+
+## Existing-project initialization
+
 Source-folder initialization is available during creation: choose **Existing project**,
 select a folder first, review editable local name/description/type suggestions, and
 choose **Create & initialize existing project**. Preview uses no AI calls. Connected projects also offer **Initialize from
@@ -124,7 +153,7 @@ layout, folder browsing, reconnect/retry, conflict resolution, and recovery beha
    Only one question is expanded at a time; unsaved answer drafts survive switching
    questions and background polling within the current page. No IDs are needed.
 4. By default, submitted responses queue a follow-up organization/discovery round.
-   Keep answering while discovery runs; waiting answers are batched into the next round.
+   Keep answering while discovery runs; waiting answers are processed individually after the active job.
    In **Settings**, disable **Automatically explore queued answers** to save without starting another
    round, then choose **Explore next gaps** when ready.
    Research and automatic-follow-up preferences are retained in this browser.
@@ -148,7 +177,7 @@ An optional **Anything to add?** note is retained verbatim with the reviewed wor
 and acceptance scenarios. Drafts survive tab changes and polling within the page;
 submitted decisions survive reload/restart. Unsaved drafts are not persisted on reload.
 
-Reviews use the answer queue, batching, automatic-processing preference, cancellation,
+Reviews use the answer queue, single-submission follow-up, automatic-processing preference, cancellation,
 and explicit resume. While discovery runs, reviews wait for the next revision-bound
 round without mutating its snapshot. An exact requirement fingerprint rejects changed
 wording, acceptance, membership, evidence or status; unrelated project revisions do
@@ -156,6 +185,14 @@ not invalidate a review. A conflicting review retains its decision/note for resu
 An applied decision survives failed AI follow-up and is not duplicated on retry.
 
 Each current review receives an AI response describing changes or remaining uncertainty.
+Discovery prompts explicitly list the current batch's authorized review source IDs,
+and their response schema restricts review responses to that list. Historical reviews
+remain evidence but do not request another response; rounds without queued reviews
+require an empty review-response list. Publication independently validates the batch.
+Wider changes have a separate allowlist containing only current-batch reviews with
+nonempty addenda. Their schema restricts change source IDs to that list, or requires
+`reviewChanges: []` when no addenda exist. Approval/rejection is already saved before
+AI follow-up and must not be replayed as a wider change.
 With a nonempty addendum, discovery can revise an existing requirement (same ID,
 **Needs review**), reject explicitly unwanted related requirements, or archive an
 explicitly removed feature with its requirements rejected and open questions retired.
@@ -230,6 +267,9 @@ In **Activity → Revisions & processing**, expand **Processing & queue** to see
 - **Replaced responses**: superseded waiting answers retained only for history.
 - **Needs attention**: unsuccessful batches or responses whose question/previous
   answer changed before application. Original submitted text remains available.
+- **Context blocked**: applied input whose compacted follow-up cannot fit even as a
+  single response. Its answer/approval is saved; preflight records the revision,
+  characters/budget, selected areas and largest sections without starting an AI job.
 
 Questions and notes remain usable while discovery runs. Submitted questions move out
 of the main question list and previous-answer forms while queued/processing; their
@@ -238,9 +278,16 @@ the remaining questions to answer. Other question drafts survive polling and
 background round completion. Completed answers return to the previous-answer view;
 responses needing attention become available for review again. Submitted responses
 can be edited from the Submitted filter even while a round is active.
-The queue and active-batch view survive page reload. A fitting working group is
-analyzed together; oversized batches are divided automatically before inference.
-Progress reports the current group's response count and how many are waiting.
+The queue and active-job view survive page reload. Each saved response receives its
+own AI job, processed sequentially with fresh context at the latest committed revision.
+Context includes the target and its linked evidence, project/dependency guardrails and
+feature notes. Unrelated same-feature answers/reviews/requirements are explicitly
+omitted or indexed; they are not pulled in just because they share an area. These
+partial follow-ups cannot assess/reorganize the whole feature or change omitted records.
+Progress reports one active response and how many are waiting.
+An indivisible oversized response is isolated so fitting responses can continue.
+The round status and Review submission history distinguish context-blocked follow-up
+from a failed model call. After fitting work completes, blockers keep the queue paused.
 
 Stop, a failed/stale round, or interruption pauses automatic processing. Expand the
 queue and choose **Resume discovery** (or **Explore next gaps**) to explicitly retry
@@ -248,16 +295,18 @@ applied responses and include waiting inputs, without adding duplicate human sou
 Conflicting unapplied responses need review and resubmission against the current
 question; a retired question's retained response can be copied into a note. Restart
 retains pending submissions and requires explicit resume rather than repeating model
-calls. Context planning uses no model calls. Completed groups stay completed when
-a later group fails; resume retries only unfinished work and reuses saved sources.
+calls. Context planning uses no model calls. Completed items stay completed when
+a later item fails; resume retries only unfinished work and reuses saved sources.
 
 A focused resume applies and analyzes only that area's queued/saved responses, in
-multiple working groups when necessary. Other areas stay pending, and the queue
+one response at a time. Other areas stay pending, and the queue
 pauses again if unrelated work remains. Select **All project areas** to let the
-planner group remaining responses across areas automatically. An indivisible task
-whose mandatory human constraints still exceed the budget stops before inference
-with its attempted manifest retained; review that area's notes/dependency scope or
-split its work. Saved human input is preserved.
+queue process remaining responses across areas sequentially. An indivisible queued
+task whose mandatory human constraints still exceed the budget stops at preflight
+with its budget summary retained on the submission; review that area's notes/dependency
+scope or split its work, then resume to recheck. Unchanged retries do not create failed
+batches, and corrected scope reuses the existing human source. Saved human input is
+preserved. Direct service jobs still retain attempted manifests for oversized contexts.
 
 ## Epic organization
 
@@ -434,32 +483,40 @@ the deterministic task planner switches to an explicitly partial working set:
 
 - Pin current input records, all current human sources in selected discovery areas
   (including project-wide and transitive dependency decisions), non-proposed
-  requirements, related proposals, and exact task/requirement evidence.
+  requirements, related proposals, and exact task/unconfirmed-requirement evidence.
 - For historical answered questions pulled in by retained human answers, keep exact
   wording, options, answer links, and provenance links, but make workspace excerpts
   that only motivated those questions optional. A task question (or its current
-  answer source) still pins its files; included requirements still pin their source
+  answer source) still pins its files; unconfirmed requirements still pin their source
   files. Human evidence links continue to resolve. `tasks-v3` packages explicitly
   list omitted historical question/file links and prohibit citing those omitted
   files or claiming their implementation was reviewed.
+- An accepted background requirement with current human confirmation keeps its exact
+  statement, acceptance scenarios, provenance links and all human evidence, while
+  workspace excerpts used only to motivate it are optional. `tasks-v6` packages list
+  those links in `omittedRequirementWorkspaceEvidence`; omitted files cannot be cited
+  or treated as reviewed/current implementation. A requirement/review being processed
+  now, or cited directly as motivation by the current question, still pins its files.
+  Any other included evidence needing a file pins it too. Needs-review/unconfirmed
+  requirements and missing, superseded or mismatched approvals keep full file evidence.
+  Approvals still persist and receive queued follow-up; this changes evidence selection.
 - Keep question wording, options, status, and answer links exact. Remove generated
   concept annotations and `whyItMatters` outside task questions. Human text is never
   summarized or truncated. Previous assessments and organization proposals stay saved.
-- Fill remaining space with fitting related proposals, open questions, and research.
+- Broad discovery can fill remaining space with fitting related proposals, open questions,
+  and research. Isolated queued follow-up does not refill unrelated feature detail.
   A separate index of up to 60 excerpted labels is navigation only. Its oldest
   labels are dropped as needed to fit exact evidence and optional detail; an
   oversized navigation index cannot cause a mandatory-evidence budget failure.
 - Preserve project summary, goals, actors, assumptions, scope confidence, and existing
   assessments when applying partial results. Partial passes cannot perform organization
   operations or replace whole-area coverage assessments.
-- Split saved-response batches greedily into fitting groups, including within one
-  epic when its task-specific detail is too large. Each group commits independently;
-  the next one replans against the latest revision. Only its submissions are completed.
-  When even one response needs mandatory-only compaction/fallback, grouping uses that
-  same package/bound for candidates, so fitting responses can share one background.
+- Process each queued submission with its own exact evidence closure and guardrails,
+  regardless of how many other responses could fit. Each commits independently and
+  the next replans at the latest revision. No job claims multiple submissions.
 
 This continues finite submitted work, without autonomously generating discovery
-rounds beyond the queue. After compaction and queue grouping, a discovery task whose
+rounds beyond the queue. After context selection and compaction, a discovery task whose
 mandatory evidence exceeds 48,000 characters can use a **96,000-character hard
 fallback bound**. This fallback retains exact human constraints and linked evidence,
 adds no optional detail, and records the expanded budget and selection reason in
@@ -639,6 +696,36 @@ answer links, were verified exact. The saved requirement remains accepted; its f
 AI follow-up awaits explicit resume. The build emitted Node engine warnings under
 the available Node 20.11 host; Node 22.12+ remains the development baseline.
 
+Queue preflight guards (2026-10-16): `npm run check`, 49 targeted core/storage/API
+tests, `npm run test:browser` and `npm run build:desktop` passed. Regression coverage
+isolates an oversized first answer while a second feature completes, retains blockers
+across queue restart, verifies repeated unchanged resumes create no failed jobs, and
+checks successful scoped recovery without duplicated human input. The browser check
+approves a requirement against oversized unique guardrails and verifies that acceptance
+is saved, Review/round/queue show the context blocker, reload preserves it, repeated
+resume adds no job, and diagnostics fit mobile width. Screenshot:
+`.reqwizit-state/browser-context-blocked.png`. The desktop build succeeded after closing
+the app to release SQLite's native file lock; the Node 20.11 host emitted engine warnings
+and Node 22.12+ remains the development baseline. A compiled-desktop queue fixture
+also verified two unchanged over-budget resumes create zero jobs/model calls and only
+one copy of the human source. No live model call was made.
+
+Review-related context follow-up (2026-10-16): read-only planning against failed
+answer batch `c3ee3fb3` at revision 118 identified 22 accepted requirements pulling
+five workspace excerpts (32,566 characters of file text) into later task context.
+Making only confirmed background requirements' workspace motivation optional reduced
+the package from **98,165 to 86,032 / 96,000 characters**. Two excerpts were omitted;
+three remained required by the current question and its motivating requirement.
+All previously included human sources, requirement records and question wording/options/
+answer/evidence links were reconstructed exactly. The saved answer “Adopt 3D graphics
+for this release” remains intact. No inference, retry or project/submission mutation
+was performed. New regression coverage checks current review/requirement/approval-linked
+question file restoration and retention for unconfirmed, superseded or wrong-owner
+approval evidence. Live response quality remains unverified.
+`npm run check`, all 147 deterministic tests, desktop TypeScript compilation, and
+`git diff --check` passed. The compiled desktop planner also produced 86,032 characters
+for this batch in a read-only check.
+
 Prompt/planning optimization follow-up (2026-10-16): on saved batch `0418c5e0` at
 revision 108, the full discovery prompt shrank from 100,237 to **93,457 characters**
 while the evidence package remained exactly 82,048 characters. Instructions/schema
@@ -678,6 +765,42 @@ desktop planner also produced 87,994 characters for this saved batch in a read-o
 check. The Node 20.11 host emitted engine warnings; Node 22.12+ remains the baseline.
 Large-context live output quality
 and successful model use of the new identifier encoding remain unverified.
+
+Single-submission queue correction (2026-10-16, DEC-021): queue inference now processes
+one submission per job, with isolated context from the start rather than grouping
+saved responses or importing unrelated feature history. Read-only checks against
+revision 264 reproduced all 12 saved blockers individually at roughly 96,100–96,400
+characters under the old planner: grouping alone was not the cause. The isolated
+planner fits each at **45,839–46,627 / 48,000 characters**. Exact included sources,
+requirements and question wording/options/links were verified, and other waiting
+review sources were excluded. The compiled desktop planner produced the same bounds.
+The database was unchanged and no live inference or queue retry was performed.
+`npm run check`, all 152 deterministic tests, `npm run test:browser` (including the UI
+build), desktop TypeScript compilation and `git diff --check` passed. Regression
+coverage includes 12 separate review jobs, serial processing across reloads, fresh
+revisions, guardrail/file retention, blocked-item skipping, failure/cancellation,
+explicit restart/resume and no replay of completed work. Earlier grouping/compaction
+measurements below describe their dated implementations, not current queue policy.
+
+Hard-bound review fallback (2026-10-16): read-only planning reproduced the spark-emitter
+review submission `cdaf000e` at revision 261 at **120,493 / 96,000 characters** after
+lossless sharing. A final `tasks-v7` pass explicitly omits generated rationales for
+currently human-confirmed background requirements and unselected historical option
+consequences, reducing this package to **95,544 / 96,000 characters**. It retains exact
+human sources, requirement wording/scenarios/links, question wording, all option labels
+and selected consequences. Option consequences are omitted only for a unique exact
+current answer-label match; freeform, ambiguous, superseded and current-task-linked
+answers retain all consequences. Current task requirements and unconfirmed requirements
+retain their rationales. This pass runs only after the encoded mandatory package still
+exceeds 96,000 characters; the cap remains unchanged and oversized human evidence still
+blocks inference. Omissions are named in context and must not justify new decisions.
+No model call, queue retry, or project/submission mutation was performed.
+
+Verification: `npm run check`, all 151 deterministic tests, and desktop TypeScript
+compilation passed. Read-only decoding of this saved package verified 87 source
+records exactly, 57 requirements with only the named background-rationale omissions,
+and 28 questions with only the named unselected-consequence omissions. The spark-emitter
+task's full requirement remains present. Project and submission payloads were unchanged.
 
 Lossless context-sharing verification (2026-10-16): `npm run check` and all 140
 deterministic tests passed. Regression coverage includes a 105,552-character mandatory

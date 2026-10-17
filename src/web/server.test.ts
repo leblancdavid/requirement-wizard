@@ -53,6 +53,39 @@ async function until(check: () => boolean) {
   assert.fail("Timed out waiting for background work");
 }
 
+test("refinement action creates separate approved-requirement proposals and reviews them through authenticated revision checks", async () => {
+  const store = new ProjectStore(":memory:");
+  let project = store.create("Cleanup API", "Jump from ledges", { providerID: "openai", modelID: "fixture" });
+  const seed = store.beginJob(project.id, project.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+  store.finishJob(seed.id, { summary: "Game", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [{
+    statement: "Jump() sets velocity to 420", rationale: "Code", sourceIDs: [project.sources[0]!.id], acceptance: ["Method sets the velocity"],
+  }] });
+  project = store.get(project.id); project = store.review(project.id, project.revision, project.requirements[0]!.id, "accepted", "");
+  const app = await startApp({ store, port: 0, adapter: { async analyze(snapshot, options) {
+    assert.equal(options.context.manifest.refinementOnly, true); assert.equal(options.research, false);
+    return { summary: "Must not replace summary", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], refinements: [{
+      requirementID: snapshot.requirements[0]!.id, statement: "The player can jump.", rationale: "Observable capability", acceptance: ["Pressing jump from a supported surface starts a jump."], reason: "Abstracted velocity tuning and method name.",
+    }] };
+  } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const post = (action: string, body: unknown, authenticated = true) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers: authenticated ? headers : { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  try {
+    assert.equal((await post("analyze", { revision: project.revision, refinementOnly: true })).status, 202);
+    await until(() => store.get(project.id).refinements.length === 1);
+    let current = store.get(project.id);
+    assert.deepEqual(current.requirements, project.requirements);
+    assert.equal(current.summary, project.summary);
+    const proposalID = current.refinements[0]!.id;
+    assert.equal((await post("refinement-review", { revision: current.revision, proposalID, accept: true }, false)).status, 403);
+    assert.equal((await post("refinement-review", { revision: project.revision, proposalID, accept: true })).status, 409);
+    assert.equal((await post("refinement-review", { revision: current.revision, proposalID, accept: true })).status, 200);
+    current = store.get(project.id);
+    assert.equal(current.requirements[0]!.statement, "The player can jump.");
+    assert.equal(current.requirements[0]!.status, "accepted");
+    assert.equal(current.refinements[0]!.status, "accepted");
+  } finally { await app.close(); store.close(); }
+});
+
 test("shutdown cancels discovery, help, and connections together, rejects new work, and is idempotent", async () => {
   const store = new ProjectStore(":memory:");
   let project = store.create("Quit", "Preserve answers", { providerID: "openai", modelID: "fixture" });
@@ -224,7 +257,7 @@ test("browser job survives request completion, exposes progress, and applies a f
   } finally { release(); await app.close(); store.close(); }
 });
 
-test("queued responses preserve the active revision, batch across epics, survive reload, and expose processing questions", async () => {
+test("queued responses preserve the active revision and run serial isolated jobs across epics and reloads", async () => {
   const store = new ProjectStore(":memory:");
   let project = store.create("Queue", "Track work", { providerID: "openai", modelID: "fixture" });
   const seed = store.beginJob(project.id, 1); store.claimJob(seed.job.id, Date.now() + 60000);
@@ -261,12 +294,18 @@ test("queued responses preserve the active revision, batch across epics, survive
     releases[0]!();
     await until(() => calls.length === 2);
     assert.equal(calls[1]!.questions.filter((q) => q.status === "answered").length, 3);
-    for (const q of calls[1]!.questions.slice(1)) assert.ok(contexts[1]!.includes(q.sourceID!), "Every batched answer must be in detailed context even when automatic focus selects another epic");
+    assert.ok(contexts[1]!.includes(calls[1]!.questions[1]!.sourceID!));
+    assert.ok(!contexts[1]!.includes(calls[1]!.questions[2]!.sourceID!), "a waiting response must not enter the active response's context");
     const processing = (await get()).submissions.filter((s) => s.status === "processing");
-    assert.equal(processing.length, 2); assert.equal(new Set(processing.map((s) => s.jobID)).size, 1);
+    assert.equal(processing.length, 1);
+    assert.equal((await get()).submissions.filter((s) => s.status === "saved").length, 1);
     releases[1]!();
+    await until(() => calls.length === 3);
+    assert.ok(contexts[2]!.includes(calls[2]!.questions[2]!.sourceID!));
+    assert.ok(!contexts[2]!.includes(calls[2]!.questions[1]!.sourceID!));
+    releases[2]!();
     await until(() => store.submissions(project.id).every((s) => s.status === "completed"));
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
     assert.equal(store.jobs(project.id).some((j) => j.status === "stale"), false);
   } finally { await app.close(); store.close(); }
 });
@@ -355,12 +394,12 @@ test("shutdown preserves the active batch and waiting queue; restart waits for e
     assert.equal(store.submissions(project.id)[1]!.applied, false);
     await post("analyze", { revision: store.get(project.id).revision });
     await until(() => store.submissions(project.id).every((s) => s.status === "completed"));
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
     assert.deepEqual(store.get(project.id).sources.filter((s) => s.kind === "note").map((s) => s.text), ["First", "Second"]);
   } finally { await app.close(); store.close(); }
 });
 
-test("oversized batches automatically process smaller revision-linked groups without duplicating responses", async () => {
+test("saved submissions each receive a revision-linked job and scoped resume leaves unrelated work waiting", async () => {
   const store = new ProjectStore(":memory:");
   let project = store.create("Large queue", "Track work", { providerID: "openai", modelID: "fixture" });
   project = store.organize(project.id, project.revision, ["area-a", "area-b"].map((epicID) => ({
@@ -396,9 +435,9 @@ test("oversized batches automatically process smaller revision-linked groups wit
   };
   try {
     assert.equal((await post()).status, 202); await idle();
-    assert.equal(contexts.length, 2);
-    assert.ok(contexts.every((c) => c.characters <= c.budget && c.submissionIDs?.length === 4));
-    assert.ok(contexts[1]!.revision > contexts[0]!.revision, "each group replans against the committed revision");
+    assert.equal(contexts.length, 8);
+    assert.ok(contexts.every((c) => c.characters <= c.budget && c.submissionIDs?.length === 1 && c.isolatedTask));
+    assert.ok(contexts.every((c, i) => !i || c.revision > contexts[i - 1]!.revision), "each response replans against the committed revision");
     assert.ok(store.submissions(project.id).every((s) => s.status === "completed" && s.applied));
     assert.equal(store.jobs(project.id).filter((j) => j.status === "failed").length, 0);
     const sources = store.get(project.id).sources;
@@ -408,7 +447,7 @@ test("oversized batches automatically process smaller revision-linked groups wit
     assert.equal((await post("missing")).status, 400);
     assert.equal(store.queuePaused(project.id), false);
     assert.equal((await post("area-a")).status, 202); await idle();
-    assert.equal(contexts.length, 3);
+    assert.equal(contexts.length, 9);
     assert.equal(contexts[0]!.focusEpicID, "area-a");
     const submissions = store.submissions(project.id);
     assert.ok(submissions.slice(0, 4).every((s) => s.status === "completed"));
@@ -416,14 +455,14 @@ test("oversized batches automatically process smaller revision-linked groups wit
     assert.equal(submissions.find((s) => s.id === extra.id)!.status, "queued");
     assert.equal(store.queuePaused(project.id), true, "other areas wait for explicit resume");
     assert.deepEqual(store.get(project.id).sources, sources, "applied notes must not be duplicated");
-    for (const source of sources.filter((s) => s.epicID === "area-a")) assert.ok(contexts[0]!.includedIDs.includes(source.id));
+    for (const source of sources.filter((s) => s.epicID === "area-a")) assert.ok(contexts[8]!.includedIDs.includes(source.id));
     for (const source of sources.filter((s) => s.epicID === "area-b")) assert.ok(contexts[0]!.omittedIDs.includes(source.id));
     const answered = store.get(project.id).questions;
-    assert.ok(contexts[0]!.includedIDs.includes(answered.find((q) => q.epicID === "area-a")!.sourceID!));
+    assert.ok(contexts[8]!.includedIDs.includes(answered.find((q) => q.epicID === "area-a")!.sourceID!));
     assert.ok(contexts[0]!.omittedIDs.includes(answered.find((q) => q.epicID === "area-b")!.sourceID!));
 
     assert.equal((await post("area-b")).status, 202); await idle();
-    assert.equal(contexts.length, 4);
+    assert.equal(contexts.length, 10);
     assert.ok(store.submissions(project.id).every((s) => s.status === "completed"));
     assert.equal(store.get(project.id).sources.length, sources.length + 1);
     assert.equal(store.queuePaused(project.id), false);

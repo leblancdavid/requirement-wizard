@@ -1,4 +1,5 @@
 import { affectsConfirmed, organize, requireOrganizationRecord, type Organization } from "./epics.js";
+import { proposeRefinements } from "./refinement.js";
 import { validConcepts, validateAnalysisReferences, type Project, type Analysis, type ResearchEvidence } from "./model.js";
 
 export function applyRound(project: Project, result: Analysis, newID: () => string, research: ResearchEvidence[] = []) {
@@ -123,6 +124,8 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
     }
   }
   for (const response of result.reviewResponses ?? []) project.roundChanges.push(response.text);
+  if (result.refinements?.some((r) => changed.has(r.requirementID))) throw new Error("Cannot refine and change the same requirement in one round.");
+  proposeRefinements(project, result.refinements ?? [], newID);
   if (newFindings.length) project.roundChanges.push(`Saved ${newFindings.length} source-backed research findings.`);
   const evidence = new Set([...project.sources, ...project.questions, ...project.requirements, ...project.research].map((item) => item.id));
   const seen = new Set<string>();

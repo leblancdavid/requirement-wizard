@@ -1,4 +1,4 @@
-import { analysisSchema, type QuestionHelpRequest, type Job, type Project, type Telemetry, type ResearchEvidence } from "../core/model.js";
+import { analysisSchema, reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Telemetry, type ResearchEvidence } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
 import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
@@ -6,6 +6,7 @@ import { planContext } from "../core/working-set.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
 import { prepareScanAnalysis } from "../core/scan.js";
+import { refinementContextKey } from "./refinement-tasks.js";
 import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanWindowTimeout, scanLeaseDuration } from "./scan-batches.js";
 
 export interface DiscoveryAdapter {
@@ -168,7 +169,7 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; research?: boolean; helpRequest?: QuestionHelpRequest;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; helpRequest?: QuestionHelpRequest;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
     if (!options.helpRequest) this.assertCanDiscover(projectID);
@@ -180,14 +181,30 @@ export class DiscoveryService {
     const abort = () => controller.abort();
     options.signal?.addEventListener("abort", abort, { once: true });
     const timer = setTimeout(abort, 300_000);
+    const refinementTarget = options.refinementOnly ? project.requirements.find((r) => options.recordIDs?.length
+      ? options.recordIDs.includes(r.id) : !options.focusEpicID || r.epicID === options.focusEpicID) : undefined;
     try {
       options.onJob?.(job);
       const question = options.helpRequest ? project.questions.find((q) => q.id === options.helpRequest!.questionID)! : undefined;
-      const context = planContext(project, { focusEpicID: question?.epicID ?? options.focusEpicID,
-        requiredEpicIDs: options.requiredEpicIDs, recordIDs: question ? [question.id] : options.recordIDs,
+      if (options.refinementOnly && !refinementTarget) throw new Error("No requirement available for refinement in this scope.");
+      const context = planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
+        requiredEpicIDs: options.requiredEpicIDs, recordIDs: question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs,
+        isolatedTask: options.refinementOnly || options.isolatedTask,
         budget: options.helpRequest ? 36000 : 48000, advisory: !!options.helpRequest, expandMandatory: !options.helpRequest });
       context.manifest.submissionIDs = options.submissionIDs;
+      context.manifest.refinementOnly = options.refinementOnly;
+      if (refinementTarget) context.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
+      // Detailed context can include historical reviews. Only the job's current
+      // submission batch authorizes review follow-up, matching publication checks.
+      const batchReviews = this.store.submissions(projectID)
+        .filter((item) => item.applied && item.input.type === "review" && options.submissionIDs?.includes(item.id)
+          && item.appliedSourceID && !project.sources.some((source) => source.supersedes === item.appliedSourceID));
+      context.manifest.reviewSourceIDs = batchReviews.map((item) => item.appliedSourceID!);
+      context.manifest.reviewChangeSourceIDs = batchReviews
+        .filter((item) => item.input.type === "review" && !!item.input.note.trim())
+        .map((item) => item.appliedSourceID!);
       if (context.manifest.partial) options.onProgress?.(`Using a smaller task working set (${context.manifest.characters.toLocaleString("en-US")} characters); exact human guardrails retained. Whole-area assessments are deferred.`);
+      if (context.manifest.version === "tasks-v7") options.onProgress?.("Omitted generated background rationales and unselected historical option explanations to fit the hard context bound. Exact human input, requirement wording/scenarios and selected-option consequences are retained.");
       if (context.manifest.budget > 48000) options.onProgress?.(`Mandatory evidence requires ${context.manifest.characters.toLocaleString("en-US")} characters; using the bounded 96,000-character fallback after task planning. Exact human evidence is retained; no optional detail was added.`);
       if (context.manifest.compaction) options.onProgress?.(`Context overhead reduced from ${context.manifest.compaction.originalCharacters.toLocaleString("en-US")} to ${context.manifest.characters.toLocaleString("en-US")} characters; exact decisions and evidence retained.`);
       if (options.helpRequest) {
@@ -215,7 +232,7 @@ export class DiscoveryService {
         onProgress: options.onProgress ?? (() => {}),
         onTelemetry: (telemetry) => this.store.attachTelemetry(job.id, telemetry),
         context,
-        research: options.helpRequest ? false : options.research ?? false,
+        research: options.helpRequest || options.refinementOnly ? false : options.research ?? false,
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
       const output = options.helpRequest ? await this.adapter.clarify!(project, options.helpRequest, adapterOptions)
@@ -225,6 +242,8 @@ export class DiscoveryService {
     } catch (error) {
       if (error instanceof ContextBudgetError) {
         error.manifest.submissionIDs = options.submissionIDs;
+        error.manifest.refinementOnly = options.refinementOnly;
+        if (refinementTarget) error.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
         this.store.attachContext(job.id, error.manifest);
       }
       const cancelled = controller.signal.aborted;

@@ -60,11 +60,21 @@ export const researchEvidenceSchema = z.object({
 });
 export type ResearchEvidence = z.infer<typeof researchEvidenceSchema>;
 
+export const refinementProposalSchema = z.object({
+  requirementID: z.string().min(1), statement: text, rationale: text,
+  acceptance: z.array(text).min(1).max(8), reason: text,
+}).strict();
+const refinementSchema = refinementProposalSchema.extend({
+  id: z.string(), fingerprint: z.string(), original: requirement,
+  status: z.enum(["pending", "accepted", "dismissed"]), createdAtRevision: z.number().int(),
+});
+
 export const projectSchema = z.object({
   id: z.string(), name: text, revision: z.number().int().positive(),
   analysisRevision: z.number().int().positive().nullable().default(null),
   model: modelSelection, sources: z.array(source), questions: z.array(question),
   requirements: z.array(requirement), summary: z.string(), goals: z.array(text),
+  refinements: z.array(refinementSchema).default([]),
   actors: z.array(text), assumptions: z.array(text),
   origin: z.object({ mode: z.literal("existing"), preview: folderPreviewSchema, descriptionEdited: z.boolean(), nameEdited: z.boolean() }).optional(),
   epics: z.array(epicSchema).default(initialEpics),
@@ -104,6 +114,7 @@ export const analysisSchema = z.object({
   scopeAssessment: z.object({ confidence: z.enum(["low", "medium", "high"]), explanation: text }).strict().optional(),
   researchFindings: z.array(z.object({ localID: z.string().optional(), url: z.string().url(), title: text, finding: text, epicID: z.string() }).strict()).max(6).optional(),
   reviewResponses: z.array(z.object({ sourceID: z.string(), text }).strict()).max(30).optional(),
+  refinements: z.array(refinementProposalSchema).max(10).optional(),
   reviewChanges: z.array(z.discriminatedUnion("type", [
     z.object({ type: z.literal("revise"), sourceID: z.string(), requirementID: z.string(), statement: text, rationale: text, acceptance: z.array(text).min(1).max(8), reason: text }).strict(),
     z.object({ type: z.literal("reject"), sourceID: z.string(), requirementID: z.string(), reason: text }).strict(),
@@ -143,6 +154,8 @@ export type Submission = z.infer<typeof submissionSchema> & {
   projectID: string; status: "queued" | "saved" | "processing" | "completed" | "needs-attention" | "superseded";
   applied: boolean; appliedSourceID?: string; conflict?: boolean; submittedAt: string; jobID?: string; diagnostic?: string;
   response?: string;
+  /** Durable preflight result; input/approval is already saved, inference not started. */
+  contextBlock?: Pick<NonNullable<Job["context"]>, "revision" | "characters" | "budget" | "epicIDs" | "sectionCharacters">;
 };
 
 export const telemetrySchema = z.object({
@@ -161,7 +174,12 @@ export type Job = {
   diagnostic?: string; sessionID?: string; result?: Analysis; telemetry?: Telemetry;
   context?: { revision: number; focusEpicID: string | null; characters: number; budget: number; includedIDs: string[]; omittedIDs: string[]; epicIDs?: string[]; version?: string; sectionCharacters?: Record<string, number>;
     partial?: boolean; taskRecordIDs?: string[]; indexedIDs?: string[]; selectionReason?: string;
+    isolatedTask?: boolean;
+    refinementOnly?: boolean;
+    refinementTarget?: { requirementID: string; fingerprint: string; contextKey?: string };
     submissionIDs?: string[];
+    reviewSourceIDs?: string[];
+    reviewChangeSourceIDs?: string[];
     losslessCompaction?: { originalCharacters: number; sharedTexts: number; references: number };
     identifierCompaction?: { originalCharacters: number; identifiers: number; references: number };
     structureCompaction?: { originalCharacters: number; tables: number; rows: number };

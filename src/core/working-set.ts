@@ -5,6 +5,8 @@ export type ContextTask = {
   focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; budget?: number;
   advisory?: boolean;
   expandMandatory?: boolean;
+  /** One queued submission: detailed target/evidence plus explicit guardrails. */
+  isolatedTask?: boolean;
 };
 
 /** Lossless wire representation only; stored records and evidence IDs stay intact. */
@@ -140,21 +142,23 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   const sourceArea = (source: Project["sources"][number]) =>
     (source.questionID ? questionAreas.get(source.questionID) : undefined)
     ?? (source.requirementID ? requirementAreas.get(source.requirementID) : undefined) ?? source.epicID;
-  try {
-    const pack = buildContext(project, task.focusEpicID, budget, task.requiredEpicIDs);
-    const mandatory = project.sources.filter((s) => s.kind === "initial" || (s.kind !== "workspace" && !superseded.has(s.id)
-      && pack.manifest.epicIDs?.includes(sourceArea(s))));
-    if ([...(task.recordIDs ?? []), ...mandatory.map((s) => s.id)].every((id) => pack.manifest.includedIDs.includes(id))) {
-      if (task.recordIDs?.length) {
-        pack.data = { ...(pack.data as Record<string, unknown>), taskRecordIDs: task.recordIDs };
-        pack.manifest.taskRecordIDs = task.recordIDs;
-        pack.manifest.characters = JSON.stringify(pack.data).length;
-        pack.manifest.sectionCharacters!.taskRecordIDs = JSON.stringify(task.recordIDs).length;
+  if (!task.isolatedTask) {
+    try {
+      const pack = buildContext(project, task.focusEpicID, budget, task.requiredEpicIDs);
+      const mandatory = project.sources.filter((s) => s.kind === "initial" || (s.kind !== "workspace" && !superseded.has(s.id)
+        && pack.manifest.epicIDs?.includes(sourceArea(s))));
+      if ([...(task.recordIDs ?? []), ...mandatory.map((s) => s.id)].every((id) => pack.manifest.includedIDs.includes(id))) {
+        if (task.recordIDs?.length) {
+          pack.data = { ...(pack.data as Record<string, unknown>), taskRecordIDs: task.recordIDs };
+          pack.manifest.taskRecordIDs = task.recordIDs;
+          pack.manifest.characters = JSON.stringify(pack.data).length;
+          pack.manifest.sectionCharacters!.taskRecordIDs = JSON.stringify(task.recordIDs).length;
+        }
+        if (pack.manifest.characters <= budget) return pack;
       }
-      if (pack.manifest.characters <= budget) return pack;
+    } catch (error) {
+      if (!(error instanceof ContextBudgetError)) throw error;
     }
-  } catch (error) {
-    if (!(error instanceof ContextBudgetError)) throw error;
   }
 
   const active = project.epics.filter((e) => !e.archived);
@@ -167,24 +171,46 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
     ?? active.find((e) => !["project", "inbox"].includes(e.id))?.id ?? "project";
   const selected = new Set(["project", focus, ...(task.requiredEpicIDs ?? [])]);
   for (const record of allRecords) if (taskIDs.has(record.id)) selected.add("kind" in record && "text" in record ? sourceArea(record) : record.epicID);
+  const taskAreas = new Set(selected);
   const dependencies = (id: string) => {
     const epic = active.find((e) => e.id === id);
     if (!epic) throw new Error("Context task area is no longer active.");
     for (const dependency of epic.dependencies) if (!selected.has(dependency)) { selected.add(dependency); dependencies(dependency); }
   };
   for (const id of [...selected]) dependencies(id);
+  const guardrailArea = (id: string) => id === "project" || selected.has(id) && !taskAreas.has(id);
 
   const included = new Set(taskIDs);
   const workspaceIDs = new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id));
   const taskEvidenceIDs = new Set([...taskIDs, ...project.questions.filter((q) => taskIDs.has(q.id)).flatMap((q) => q.sourceID ? [q.sourceID] : [])]);
-  // Advisory help can use a question-sized scope. Discovery must retain every
-  // current human constraint in the selected areas, including dependencies.
+  // A current question can cite a reviewed requirement as motivation. Its files
+  // remain task evidence, just as when that requirement/review itself is the task.
+  const taskRequirementIDs = new Set(project.requirements.filter((r) => taskIDs.has(r.id)).map((r) => r.id));
+  const directlyLinked = new Set(taskIDs);
+  for (const q of project.questions) if (taskIDs.has(q.id) || q.sourceID && taskIDs.has(q.sourceID)) {
+    for (const id of q.evidenceIDs ?? []) {
+      directlyLinked.add(id);
+      if (requirementAreas.has(id)) taskRequirementIDs.add(id);
+    }
+  }
+  for (const source of project.sources) if (directlyLinked.has(source.id) && source.requirementID) taskRequirementIDs.add(source.requirementID);
+  const confirmations = new Map(project.sources.filter((s) => s.kind === "confirmation" && !superseded.has(s.id)).map((s) => [s.id, s]));
+  const backgroundAccepted = new Set(project.requirements.filter((r) => r.status === "accepted" && !taskRequirementIDs.has(r.id)
+    && r.sourceIDs.some((id) => {
+      const source = confirmations.get(id);
+      return source && (!source.requirementID || source.requirementID === r.id);
+    })).map((r) => r.id));
+  // Submission follow-up keeps target evidence, project/dependency guardrails
+  // and feature notes. Unrelated feature answers/reviews do not become mandatory
+  // merely because they share the target's area. Broad discovery keeps its scope.
   for (const source of project.sources) {
     if (source.kind === "initial" || (source.kind !== "workspace" && !superseded.has(source.id) && selected.has(sourceArea(source))
+      && (!task.isolatedTask || guardrailArea(sourceArea(source)) || source.kind === "note")
       && (!task.advisory || sourceArea(source) === "project"))) included.add(source.id);
   }
   for (const requirement of project.requirements) {
-    if (selected.has(requirement.epicID) && (!task.advisory || requirement.epicID === "project"
+    if (selected.has(requirement.epicID) && (!task.isolatedTask || guardrailArea(requirement.epicID)
+      || requirement.sourceIDs.some((id) => taskEvidenceIDs.has(id))) && (!task.advisory || requirement.epicID === "project"
       || requirement.sourceIDs.some((id) => taskEvidenceIDs.has(id))) && (requirement.status !== "proposed"
       || requirement.sourceIDs.some((id) => taskEvidenceIDs.has(id)))) included.add(requirement.id);
   }
@@ -206,7 +232,13 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
           ids.add(evidenceID);
         }
       }
-      for (const r of project.requirements) if (ids.has(r.id)) for (const id of r.sourceIDs) ids.add(id);
+      for (const r of project.requirements) if (ids.has(r.id)) for (const id of r.sourceIDs) {
+        // Human-reviewed background already carries exact normative wording,
+        // scenarios and approval. Historical static file motivation is not a
+        // further human constraint. All human links still close transitively.
+        if (backgroundAccepted.has(r.id) && workspaceIDs.has(id)) continue;
+        ids.add(id);
+      }
       for (const s of project.sources) if (ids.has(s.id)) {
         if (s.questionID) ids.add(s.questionID);
         if (s.requirementID) ids.add(s.requirementID);
@@ -216,12 +248,27 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   };
   closeEvidence(included);
 
-  const render = (ids: Set<string>, omitTaskExplanations = false) => {
+  const protectedQuestionIDs = new Set(project.questions.filter((q) => taskIDs.has(q.id)
+    || !!q.sourceID && taskIDs.has(q.sourceID)
+    || project.requirements.some((r) => taskRequirementIDs.has(r.id)
+      && r.sourceIDs.some((id) => id === q.id || id === q.sourceID))).map((q) => q.id));
+  const render = (ids: Set<string>, omitTaskExplanations = false, omitBackgroundExplanations = false) => {
+    const omittedConsequences: { questionID: string; optionIndexes: number[] }[] = [];
     const questions = project.questions.filter((q) => ids.has(q.id)).map((q) => {
       // Exact question wording/options and answer links remain. Only generated
       // help text is removed; task explanations get a last-resort omission pass
       // only when discovery would otherwise exceed its hard fallback bound.
       const { concepts: _, whyItMatters, ...evidence } = q;
+      if (omitBackgroundExplanations && q.status === "answered" && !protectedQuestionIDs.has(q.id)) {
+        const answer = project.sources.find((s) => s.id === q.sourceID && s.kind === "answer" && !superseded.has(s.id));
+        const matches = q.options.flatMap((option, index) => answer && option.label.trim() === answer.text.trim() ? [index] : []);
+        // Freeform/index-only/ambiguous answers retain every consequence. Only
+        // exact unique label choices establish which generated alternatives lost.
+        if (matches.length === 1) {
+          omittedConsequences.push({ questionID: q.id, optionIndexes: q.options.flatMap((_, index) => index !== matches[0] ? [index] : []) });
+          return { ...evidence, options: q.options.map((option, index) => index === matches[0] ? option : { label: option.label }) };
+        }
+      }
       return taskIDs.has(q.id) && !omitTaskExplanations ? { ...evidence, whyItMatters } : evidence;
     });
     const index = [...project.questions, ...project.requirements].filter((r) => !ids.has(r.id)).slice(-60)
@@ -231,32 +278,54 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       const evidenceIDs = (q.evidenceIDs ?? []).filter((id) => workspaceIDs.has(id) && !ids.has(id));
       return evidenceIDs.length ? [{ questionID: q.id, evidenceIDs }] : [];
     });
+    const omittedRequirementWorkspaceEvidence = project.requirements.filter((r) => ids.has(r.id)).flatMap((r) => {
+      const sourceIDs = r.sourceIDs.filter((id) => workspaceIDs.has(id) && !ids.has(id));
+      return sourceIDs.length ? [{ requirementID: r.id, sourceIDs }] : [];
+    });
     return {
       id: project.id, name: project.name, revision: project.revision, focusEpicID: focus,
       projectOrigin: project.origin ?? null,
       workspaceEvidence: project.scans.length ? { snapshotID: project.scans.at(-1)!.id, capturedAt: project.scans.at(-1)!.capturedAt, limitation: "Only detailed included source excerpts can support claims about existing behavior." } : null,
       retiredQuestionGuidance: project.questions.filter((q) => q.status === "retired").slice(-20).map((q) => ({ text: q.text, reason: q.retirementReason })),
       taskRecordIDs: [...taskIDs], partial: true,
+      ...(task.isolatedTask ? { submissionScope: {
+        taskRecordIDs: [...taskIDs], omittedRecords: allRecords.filter((r) => !ids.has(r.id)).length,
+        explanation: "One queued submission only. Detail is limited to its target and linked evidence, project-wide and dependency guardrails, and current feature notes. Unrelated feature answers, reviews and requirements are omitted or indexed, even within the same area. This is not a whole-feature review. Preserve all existing decisions; do not infer preferences from missing records, change omitted requirements, or use indexed/omitted evidence for proposals. Follow up only on this submission. Request focused discovery if wider decisions or evidence are needed.",
+      } } : {}),
       ...(omittedQuestionWorkspaceEvidence.length ? { omittedQuestionWorkspaceEvidence: {
         questions: omittedQuestionWorkspaceEvidence,
         explanation: "These file links explain why historical answered questions were asked. Their contents are omitted unless independently needed by the current task or included requirements. Exact question wording, options, answer links, and human answers remain. Do not treat omitted file IDs as reviewed evidence, cite them, or infer current implementation from them.",
       } } : {}),
+      ...(omittedRequirementWorkspaceEvidence.length ? { omittedRequirementWorkspaceEvidence: {
+        requirements: omittedRequirementWorkspaceEvidence,
+        explanation: "These workspace sources motivated accepted background requirements with current human confirmation. Their file contents are omitted unless independently needed by the current task or other included evidence. Exact requirement wording, acceptance scenarios, source links, and all human evidence are retained. Human approval does not verify the original files or current implementation. Do not cite omitted file IDs, claim to have reviewed their contents, or change requirements based on those omitted files. Request focused follow-up when file evidence is needed.",
+      } } : {}),
       ...(omitTaskExplanations ? { omittedTaskQuestionExplanations: {
         questionIDs: questions.filter((q) => taskIDs.has(q.id)).map((q) => q.id),
         explanation: "AI-generated whyItMatters explanations are omitted to fit the mandatory package. Exact question wording, options, answer links, and human evidence are retained.",
+      } } : {}),
+      ...(omitBackgroundExplanations ? { omittedBackgroundExplanations: {
+        requirementIDs: project.requirements.filter((r) => ids.has(r.id) && backgroundAccepted.has(r.id)).map((r) => r.id),
+        questionOptions: omittedConsequences,
+        explanation: "Last-resort omission of AI-generated rationales for human-confirmed background requirements and consequences of unselected historical options. All exact human sources, question wording, option labels, selected consequences, requirement statements, acceptance scenarios and links remain. Only a unique exact answer-label match permits alternative-consequence omission; freeform or ambiguous answers keep all options. Current task requirements and linked questions retain their detail. Omitted explanations are not evidence; do not infer their contents or use omissions to change decisions. Request focused follow-up if needed.",
       } } : {}),
       previousInterpretation: { summary: project.summary.slice(0, 1000), summaryIsExcerpt: project.summary.length > 1000,
         generatedAtRevision: project.analysisRevision, advisoryOnly: true },
       epicMap: active.map((e) => ({ id: e.id, title: e.title, dependencies: e.dependencies })),
       focusedEpics: active.filter((e) => selected.has(e.id)).map((e) => ({ id: e.id, title: e.title })),
       sources: project.sources.filter((s) => ids.has(s.id)), questions,
-      requirements: project.requirements.filter((r) => ids.has(r.id)), research: project.research.filter((r) => ids.has(r.id)),
+      requirements: project.requirements.filter((r) => ids.has(r.id)).map((r) => {
+        if (!omitBackgroundExplanations || !backgroundAccepted.has(r.id)) return r;
+        const { rationale: _, ...evidence } = r; return evidence;
+      }), research: project.research.filter((r) => ids.has(r.id)),
       recordIndex: index, movableRecordIDs: [], assessments: [], pendingOrganization: [],
-      limitations: "Partial task pass. All current human evidence in selected discovery areas and exact task/requirement evidence are retained; advisory help includes only task evidence and project guardrails. Historical answered questions' workspace motivation, question help text, previous assessments, and other AI detail may be omitted. Index labels are navigation only. Do not cite omitted or indexed-only records. Return empty organization and assessments; do not retire questions outside this package. This pass cannot replace global interpretation or scope confidence. Do not claim whole-area review or completeness.",
+      limitations: task.isolatedTask
+        ? "Isolated submission pass; see submissionScope for exact boundaries and omissions. Project/dependency human guardrails, feature notes and target evidence remain exact. Feature membership alone does not include every answer, review or requirement. Do not claim whole-feature review, infer omitted decisions, change omitted requirements, or cite index-only records. Return empty organization and assessments. Global interpretation is unchanged. Request focused discovery for wider work."
+        : "Partial task pass. All current human evidence in selected discovery areas, exact task evidence, and unconfirmed requirement evidence are retained; advisory help includes only task evidence and project guardrails. Historical answered-question and human-confirmed background-requirement workspace motivation, question help text, previous assessments, and other AI detail may be omitted. Accepted background requirements retain exact wording, scenarios and human evidence; acceptance does not verify implementation. Index labels are navigation only. Do not cite omitted or indexed-only records. Return empty organization and assessments; do not retire questions outside this package. This pass cannot replace global interpretation or scope confidence. Do not claim whole-area review or completeness.",
     };
   };
-  const pack = (ids: Set<string>, omitTaskExplanations = false): ContextPack => {
-    const data = render(ids, omitTaskExplanations);
+  const pack = (ids: Set<string>, omitTaskExplanations = false, omitBackgroundExplanations = false): ContextPack => {
+    const data = render(ids, omitTaskExplanations, omitBackgroundExplanations);
     // Navigation labels are optional, even for the initial mandatory package.
     // Prefer recent labels and reclaim their space for every candidate's exact
     // evidence closure before deciding that human constraints cannot fit.
@@ -270,17 +339,19 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       removed++;
     }
     if (removed) data.recordIndex.splice(0, removed);
-    return { data, manifest: { version: data.omittedQuestionWorkspaceEvidence ? "tasks-v3" : "tasks-v1", revision: project.revision, focusEpicID: focus,
+    return { data, manifest: { version: data.omittedRequirementWorkspaceEvidence ? "tasks-v6" : data.omittedQuestionWorkspaceEvidence ? "tasks-v3" : "tasks-v1", revision: project.revision, focusEpicID: focus,
       characters, budget, includedIDs: [...ids],
       omittedIDs: allRecords.filter((r) => !ids.has(r.id)).map((r) => r.id),
       indexedIDs: data.recordIndex.map((r) => r.id), epicIDs: [...selected], partial: true, taskRecordIDs: [...taskIDs],
-      selectionReason: "Budget-aware task pass; exact human guardrails and task/requirement evidence pinned before optional AI detail."
-        + (data.omittedQuestionWorkspaceEvidence ? " Historical answered-question workspace motivation is explicitly omitted where not otherwise required." : ""),
+      isolatedTask: !!task.isolatedTask,
+      selectionReason: (task.isolatedTask ? "Isolated single-submission pass; exact target evidence, project/dependency guardrails and feature notes retained. Unrelated feature history explicitly omitted." : "Budget-aware task pass; exact human guardrails, task evidence and unconfirmed requirement evidence pinned before optional AI detail.")
+        + (data.omittedQuestionWorkspaceEvidence ? " Historical answered-question workspace motivation is explicitly omitted where not otherwise required." : "")
+        + (data.omittedRequirementWorkspaceEvidence ? " Historical workspace motivation for confirmed background requirements is explicitly omitted where not otherwise required." : ""),
       sectionCharacters: Object.fromEntries(Object.entries(data).map(([key, value]) => [key, JSON.stringify(value).length])) } };
   };
   let result = pack(included);
   if (result.manifest.characters > budget) {
-    // Queue grouping still plans against the preferred bound. A single discovery
+    // Queued follow-up first plans against the preferred bound. A single discovery
     // task may expand only after compaction and evidence closure, without adding
     // optional detail or dropping exact human guardrails. Help/scans stay bounded
     // by their own budgets. This is an application input cap, not a model claim.
@@ -295,42 +366,54 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       if ((result.data as ReturnType<typeof render>).omittedTaskQuestionExplanations) {
         result.manifest.selectionReason += " Task question explanations omitted as AI-generated UI metadata.";
       }
-      if (result.manifest.characters > budget) {
-        const shared = shareRepeatedText(result.data);
-        const characters = JSON.stringify(shared.data).length;
-        if (characters < result.manifest.characters) {
-          result.manifest.losslessCompaction = { originalCharacters: result.manifest.characters,
-            sharedTexts: shared.sharedTexts, references: shared.references };
-          result.data = shared.data;
-          result.manifest.characters = characters;
-          result.manifest.sectionCharacters = Object.fromEntries(Object.entries(shared.data).map(([key, value]) => [key, JSON.stringify(value).length]));
-          result.manifest.version = result.manifest.version === "tasks-v3" ? "tasks-v3" : "tasks-v2";
-          result.manifest.selectionReason += " Repeated exact text is shared losslessly through the package's sharedText table.";
+      const compactEvidence = (result: ContextPack) => {
+        if (result.manifest.characters > budget) {
+          const shared = shareRepeatedText(result.data);
+          const characters = JSON.stringify(shared.data).length;
+          if (characters < result.manifest.characters) {
+            result.manifest.losslessCompaction = { originalCharacters: result.manifest.characters,
+              sharedTexts: shared.sharedTexts, references: shared.references };
+            result.data = shared.data;
+            result.manifest.characters = characters;
+            result.manifest.sectionCharacters = Object.fromEntries(Object.entries(shared.data).map(([key, value]) => [key, JSON.stringify(value).length]));
+            result.manifest.version = ["tasks-v3", "tasks-v6"].includes(result.manifest.version ?? "") ? result.manifest.version : "tasks-v2";
+            result.manifest.selectionReason += " Repeated exact text is shared losslessly through the package's sharedText table.";
+          }
         }
-      }
-      if (result.manifest.characters > budget) {
-        const shared = shareRepeatedIdentifiers(result.data);
-        const characters = JSON.stringify(shared.data).length;
-        if (characters < result.manifest.characters) {
-          result.manifest.identifierCompaction = { originalCharacters: result.manifest.characters,
-            identifiers: shared.identifiers, references: shared.references };
-          result.data = shared.data;
-          result.manifest.characters = characters;
-          result.manifest.sectionCharacters = Object.fromEntries(Object.entries(shared.data).map(([key, value]) => [key, JSON.stringify(value).length]));
-          result.manifest.version = "tasks-v4";
-          result.manifest.selectionReason += " Repeated record/scope identifiers are shared losslessly through identifierTable; original IDs remain in the manifest and must be used in output.";
+        if (result.manifest.characters > budget) {
+          const shared = shareRepeatedIdentifiers(result.data);
+          const characters = JSON.stringify(shared.data).length;
+          if (characters < result.manifest.characters) {
+            result.manifest.identifierCompaction = { originalCharacters: result.manifest.characters,
+              identifiers: shared.identifiers, references: shared.references };
+            result.data = shared.data;
+            result.manifest.characters = characters;
+            result.manifest.sectionCharacters = Object.fromEntries(Object.entries(shared.data).map(([key, value]) => [key, JSON.stringify(value).length]));
+            if (result.manifest.version !== "tasks-v6") result.manifest.version = "tasks-v4";
+            result.manifest.selectionReason += " Repeated record/scope identifiers are shared losslessly through identifierTable; original IDs remain in the manifest and must be used in output.";
+          }
         }
-      }
-      if (result.manifest.characters > budget) {
-        const shared = shareRecordStructure(result.data);
-        const characters = JSON.stringify(shared.data).length;
-        if (characters < result.manifest.characters) {
-          result.manifest.structureCompaction = { originalCharacters: result.manifest.characters, tables: shared.tables, rows: shared.rows };
-          result.data = shared.data;
-          result.manifest.characters = characters;
-          result.manifest.sectionCharacters = Object.fromEntries(Object.entries(shared.data).map(([key, value]) => [key, JSON.stringify(value).length]));
-          result.manifest.version = "tasks-v5";
-          result.manifest.selectionReason += " Repeated record field names are shared losslessly through record tables.";
+        if (result.manifest.characters > budget) {
+          const shared = shareRecordStructure(result.data);
+          const characters = JSON.stringify(shared.data).length;
+          if (characters < result.manifest.characters) {
+            result.manifest.structureCompaction = { originalCharacters: result.manifest.characters, tables: shared.tables, rows: shared.rows };
+            result.data = shared.data;
+            result.manifest.characters = characters;
+            result.manifest.sectionCharacters = Object.fromEntries(Object.entries(shared.data).map(([key, value]) => [key, JSON.stringify(value).length]));
+            if (result.manifest.version !== "tasks-v6") result.manifest.version = "tasks-v5";
+            result.manifest.selectionReason += " Repeated record field names are shared losslessly through record tables.";
+          }
+        }
+        return result;
+      };
+      result = compactEvidence(result);
+      if (result.manifest.characters > 96000) {
+        const compact = compactEvidence(pack(included, true, true));
+        if (compact.manifest.characters < result.manifest.characters) {
+          result = compact;
+          result.manifest.version = "tasks-v7";
+          result.manifest.selectionReason += " AI-generated confirmed-background rationales and unselected historical option consequences explicitly omitted after exact evidence exceeded the hard bound.";
         }
       }
       // Optimize against the normal target, even when the unencoded mandatory
@@ -343,6 +426,7 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
     throw new ContextBudgetError(result.manifest);
   }
   // Prefer related proposals and open questions, then recent optional detail.
+  if (task.isolatedTask) return result;
   const candidates = [...project.requirements.filter((r) => r.sourceIDs.some((id) => taskIDs.has(id))),
     ...project.questions.filter((q) => q.status === "pending"), ...project.requirements.slice().reverse(),
     ...project.research.slice().reverse(),

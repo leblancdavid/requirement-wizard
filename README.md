@@ -25,15 +25,27 @@ Folder scans process small sequential batches and save checkpoints; **Resume sca
 continues interrupted work using the saved file snapshot without repeating completed batches.
 Track manual implementation status and verification evidence under **Project map →
 Implementation progress**. See [local project workspaces](docs/project-workspaces.md).
-Keep answering while discovery works: responses are durably queued and waiting
-answers are batched into the next round. Oversized batches are automatically divided
-into smaller revision-linked working groups, with exact human evidence retained and
-completed groups checkpointed. Expand **Processing & queue** to inspect the questions
+Keep answering while discovery works: responses are durably queued and processed
+one at a time, each in its own revision-linked context. Each follow-up includes its
+target and supporting evidence, project/dependency guardrails and feature notes;
+unrelated feature history is explicitly omitted. Completed items stay completed.
+Expand **Processing & queue** to inspect the questions
 and submitted answers being processed, waiting, or completed in **Activity**.
+Context preflight checks queued follow-up before starting an AI batch. Responses that
+still cannot fit are marked **Context blocked** with their answers/approvals saved;
+fitting responses can continue, and unchanged retries create no failed batches.
 **Review** beside Questions shows requirements awaiting approval, with optional notes,
 auto-advance, durable background follow-up, and submitted/reviewed history. AI can
 propose additional requirements/questions, revise wording for another review, or
 archive features when explicitly requested in a review note.
+**Review → Refine requirements** proposes behavior-focused replacements for technical
+wording and incidental tuning constants, including in approved requirements. Discovery
+also checks for cleanup opportunities. Compare original/proposed wording and scenarios,
+then approve the replacement or dismiss it. Active requirements stay unchanged until
+approval; IDs, original evidence and revision history are retained. Cleanup checks
+requirements individually across the selected scope; select a feature to limit it.
+Completed checks are saved, including checks needing no changes, so retrying after an
+interruption continues unfinished work without replaying unchanged completed tasks.
 The default **Questions** view uses compact expandable rows with feature/category
 context. Use **Previous answers** or **Submitted** to edit responses, including
 waiting answers. **Project map** groups requirements under expandable features;
