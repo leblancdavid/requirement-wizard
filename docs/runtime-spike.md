@@ -41,6 +41,35 @@ Choose ChatGPT subscription login for current development. The runner never
 reads the runtime's credential file. Existing credentials were used for these checks;
 fresh sign-in and an embedded onboarding flow have not been exercised.
 
+### Owned execution skills (2026-10-19)
+
+The implementation/assessment profiles now register app-bundled native skills. Run
+the following metadata-only check with the installed pinned OpenCode 1.18.32:
+
+```powershell
+npm run runtime:skills
+```
+
+Both profiles passed registration/body/tool checks, session permission create/update/
+get and temporary-file cleanup. OpenCode appends permission updates, so the adapter
+appends a restrictive role profile only when the existing final rules do not match.
+The assessment role permits only its named skill; the coding role adds its existing
+coding tools. Discovery profiles are unchanged. These checks do not establish
+adversarial permission enforcement.
+
+An optional live check requires explicit opt-in and an exact model selection:
+
+```powershell
+npm run runtime:skills -- --live-assessment --provider openai --model gpt-6.1-sol
+```
+
+This consumes provider allowance for one minimal assessment, bounded to 90 seconds.
+On 2026-10-19 it successfully loaded the matching assessment skill and returned a
+validated complete result for a tiny supplied code excerpt. It made no source changes,
+performed no Git delivery and did not test coding-model skill use. See
+[implementation skills](implementation-workspace.md#bundled-opencode-skills) for the
+state, context-budget and cache-identity contracts.
+
 ### Model probes
 
 Choose exact IDs from `providers`. These calls send the idea to the provider and may

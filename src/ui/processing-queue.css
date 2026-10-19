@@ -3,6 +3,8 @@
 .queue-trigger .status-copy { flex: 1; }
 .queue-trigger .status-copy strong, .queue-trigger .status-copy small { display: block; }
 .queue-trigger .queue-chevron { margin-left: auto; flex-shrink: 0; }
+.topbar .queue-trigger { position: relative; padding-bottom: 15px; }
+.queue-trigger > .activity-bar { position: absolute; bottom: 4px; left: 12px; width: calc(100% - 24px); }
 .queue-drawer { position: fixed; inset: 0 0 0 auto; width: min(560px, 100%); height: 100dvh; max-height: 100dvh; max-width: 100%; margin: 0; padding: 0; border: 0; border-left: 1px solid var(--border); background: var(--background); color: var(--text); box-shadow: -12px 0 45px #0003; overflow-y: auto; overflow-wrap: anywhere; }
 .queue-drawer::backdrop { background: #0007; }
 .queue-drawer-heading { position: sticky; top: 0; z-index: 1; display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 22px; border-bottom: 1px solid var(--border); background: var(--background); }

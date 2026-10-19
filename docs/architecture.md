@@ -25,6 +25,11 @@ implemented under `src/`. See [decisions.md](decisions.md),
   closure, focused captured-source windows, bounded evidence requests, app-owned prompt/
   schema/agent/history preflight and explicit context blockers. Requirement sessions
   remain isolated even when verified commits share an epic delivery branch.
+- `src/core/execution-skills.ts` and `src/runtime/skills.ts`: versioned assessment/coding
+  workflows, temporary native OpenCode skill registration, role-scoped permissions,
+  content-aware context budgeting and cache invalidation. SQLite retains per-scope
+  assessment checkpoints independently of active attempts; incremental and forced
+  checks share the same orchestration and validation.
 - `src/runtime/`: shared owned-server lifecycle, provider validation, and discovery adapter.
 - `src/providers/`: app-owned protected ChatGPT credentials, OAuth attempt lifecycle,
   connection service, account catalog/probe, and direct/legacy discovery dispatch.

@@ -9,6 +9,8 @@ import { themes } from "../ui/appearance.js";
 import { planContext } from "../core/working-set.js";
 import { command } from "../service/git-delivery.js";
 import { requirementFingerprint } from "../core/implementation.js";
+import { assessmentContextFingerprint } from "../core/execution-context.js";
+import { assessmentCurrent } from "../core/execution.js";
 
 // Deterministic UI exercise: no model inference, provider credentials, or billing.
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -187,6 +189,8 @@ try {
   await connectionPanel.getByRole("button", { name: "Continue with ChatGPT" }).click();
   const cancelledPopup = await firstPopup;
   await expect(connectionPanel.getByText("Waiting for ChatGPT sign-in…", { exact: true })).toBeVisible();
+  await expect(page.locator(".header-activity").getByRole("progressbar")).toBeVisible();
+  await expect(connectionPanel.getByRole("progressbar", { name: "Account authorization progress" })).toBeVisible();
   await connectionPanel.getByRole("button", { name: "Cancel sign-in" }).click();
   await cancelledPopup.close();
   const secondPopup = page.waitForEvent("popup");
@@ -439,13 +443,14 @@ try {
   const progressFile = resolve(workspaceDirectory, ".requirement-wizard/progress.json");
   await expect.poll(async () => JSON.parse(await readFile(progressFile, "utf8")).implementation[0].status).toBe("verified");
   await page.screenshot({ path: ".reqwizit-state/browser-map.png", fullPage: true });
-  await page.getByRole("tab", { name: /Implementation/ }).click();
+   await page.getByRole("tab", { name: /Implement/ }).click();
   const implementationPanel = page.locator(".implementation-tab");
-  await expect(page.getByRole("tab", { name: /Implementation/ })).toContainText("1");
+   await expect(page.getByRole("tab", { name: /Implement/ })).toContainText("1");
   await expect(implementationPanel.getByRole("button", { name: /Continue implementation/ })).toBeDisabled();
-  await expect(implementationPanel.getByRole("button", { name: "Assess project", exact: true })).toBeDisabled();
+  await expect(implementationPanel.getByRole("button", { name: "Check implementation", exact: true })).toBeDisabled();
+  await expect(implementationPanel.getByRole("button", { name: "Verify main & refresh delivery", exact: true })).toHaveCount(0);
   await expect(implementationPanel.getByRole("status", { name: "Implementation availability" })).toContainText("Save implementation settings below before assessing");
-  await expect(implementationPanel.getByRole("button", { name: "Assess project", exact: true })).toHaveAttribute("aria-describedby", "implementation-action-reason");
+  await expect(implementationPanel.getByRole("button", { name: "Check implementation", exact: true })).toHaveAttribute("aria-describedby", "implementation-action-reason");
   await expect(implementationPanel.locator(".feature-group")).toHaveCount(1);
   await expect(implementationPanel.getByLabel("GitHub repository", { exact: true })).toHaveValue("fixture/browser-sample");
   await expect(implementationPanel.getByText("Detected from workspace origin: fixture/browser-sample", { exact: true })).toBeVisible();
@@ -466,7 +471,28 @@ try {
   await expect(implementationPanel.getByLabel("Verification commands · one per line", { exact: true })).toHaveValue("npm run check\nnpm run test");
   await implementationPanel.getByRole("button", { name: "Save implementation settings", exact: true }).click();
   await expect(implementationPanel.getByRole("button", { name: /Continue implementation/ })).toBeEnabled();
-  await expect(implementationPanel.getByRole("button", { name: "Assess project", exact: true })).toBeEnabled();
+   await expect(implementationPanel.getByRole("button", { name: "Check implementation", exact: true })).toBeEnabled();
+   const featureFilter = page.getByRole("combobox", { name: "Filter by feature", exact: true });
+   const forcedFeature = await featureFilter.inputValue();
+   assert.notEqual(forcedFeature, "all", "Earlier feature selection is retained in the implementation view");
+   await featureFilter.selectOption("all");
+   let implementationCheckRequest: { operation: string; revision: number; force?: boolean; requirementID?: string; epicID?: string } | undefined;
+  await page.route("**/api/projects/*/execution-start", async (route) => {
+    implementationCheckRequest = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+   }, { times: 4 });
+  await implementationPanel.getByRole("button", { name: "Check implementation", exact: true }).click();
+  await expect.poll(() => implementationCheckRequest?.operation).toBe("check");
+   assert.equal(typeof implementationCheckRequest?.revision, "number");
+   assert.equal(implementationCheckRequest?.force, undefined, "Normal check is incremental");
+   await implementationPanel.getByRole("button", { name: "Reassess all", exact: true }).click();
+   await expect.poll(() => implementationCheckRequest?.force).toBe(true);
+   assert.equal(implementationCheckRequest?.requirementID, undefined); assert.equal(implementationCheckRequest?.epicID, undefined);
+   await featureFilter.selectOption(forcedFeature);
+   await implementationPanel.getByRole("button", { name: "Reassess feature", exact: true }).click();
+   await expect.poll(() => implementationCheckRequest?.epicID).toBe(forcedFeature);
+   assert.equal(implementationCheckRequest?.force, true);
+   await featureFilter.selectOption("all");
   await expect(implementationPanel.getByRole("status", { name: "Implementation availability" })).toHaveCount(0);
   await expect(implementationPanel.locator(".implementation-settings > summary")).toContainText("fixture/browser-sample");
   await implementationPanel.locator(".implementation-settings > summary").click();
@@ -481,7 +507,10 @@ try {
   await implementationPanel.locator(".feature-group > summary").click();
   await expect(implementationPanel.getByRole("button", { name: "Implement epic", exact: true })).toBeVisible();
   await implementationPanel.locator(".requirement-detail > summary").click();
-  await expect(implementationPanel.getByRole("button", { name: "Implement", exact: true })).toBeEnabled();
+   await expect(implementationPanel.getByRole("button", { name: "Implement", exact: true })).toBeEnabled();
+   await implementationPanel.getByRole("button", { name: "Reassess", exact: true }).click();
+   await expect.poll(() => typeof implementationCheckRequest?.requirementID).toBe("string");
+   assert.equal(implementationCheckRequest?.force, true); assert.equal(implementationCheckRequest?.epicID, undefined);
   await expect(implementationPanel.locator(".requirement-detail .badge")).toHaveText("Not assessed");
   await page.screenshot({ path: ".reqwizit-state/browser-implementation.png", fullPage: true });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -539,6 +568,9 @@ try {
   await expect(headerStatus.locator("strong")).toHaveText("Processing 1 response");
   await expect(headerStatus.locator("small")).toContainText("Reviewing your response:");
   await expect(headerStatus.locator("small")).toContainText("Organizing sample project");
+  await expect(headerStatus.locator(".activity-spinner")).toBeVisible();
+  await expect(headerStatus.getByRole("progressbar", { name: "Background task progress" })).toBeVisible();
+  assert.equal(await headerStatus.getByRole("progressbar").getAttribute("aria-valuenow"), null, "Unknown duration is indeterminate");
   await expect(page.locator(".round-status")).toHaveCount(1);
   const header = page.locator(".topbar");
   const sidebarBounds = await page.locator(".sidebar").boundingBox();
@@ -558,6 +590,7 @@ try {
     await headerStatus.click();
     const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
     await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole("progressbar")).toBeVisible();
     await expect(drawer.getByRole("button", { name: "Stop", exact: true })).toBeInViewport();
     await expect(drawer.getByRole("button", { name: "Close processing queue" })).toBeFocused();
     await page.keyboard.press("Shift+Tab");
@@ -573,6 +606,12 @@ try {
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => window.scrollTo(0, 0));
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(headerStatus.locator(".activity-spinner")).toHaveCSS("animation-name", "none");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(headerStatus.getByRole("progressbar")).toBeVisible();
+  await page.getByRole("button", { name: "Back to workspace" }).click();
   const details = page.getByRole("textbox", { name: "Your answer to What job details should be saved?", exact: true });
   const offline = page.getByRole("textbox", { name: "Your answer to What should happen offline?", exact: true });
   const detailsCard = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "What job details should be saved?", exact: true }) });
@@ -600,14 +639,14 @@ try {
   await expect(page.locator(".queue-item .badge.superseded")).toHaveCount(1);
   await expect(details).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: "Questions" })).toContainText("1");
+   await expect(page.getByRole("tab", { name: "Design" })).toContainText("1");
   // A round result and polling must not replace another question's draft.
   releases[0]!();
   await expect.poll(() => releases.length).toBe(2);
   await expect(page.locator(".queue-drawer-heading")).toContainText("1 processing · 0 waiting");
   await expect(details).toHaveCount(0);
   await page.getByRole("button", { name: "Close processing queue" }).click();
-  await page.getByRole("tab", { name: /^Questions/ }).click();
+   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByRole("button", { name: /To answer/ }).click();
   await expect(offline).toHaveValue("An unfinished offline draft");
   await offline.fill("Keep offline work locally");
@@ -630,7 +669,7 @@ try {
   await expect(page.locator(".queue-item .badge.completed")).toHaveCount(3);
   await page.mouse.click(10, 10);
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
-  await page.getByRole("tab", { name: /^Questions/ }).click();
+   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
   await page.setViewportSize({ width: 390, height: 844 });
@@ -716,7 +755,7 @@ try {
    const reviewPanel = page.getByRole("region", { name: "Requirement review", exact: true });
    const addendum = reviewPanel.getByLabel("Anything to add? (optional)");
    await addendum.fill("Also export jobs");
-   await page.getByRole("tab", { name: "Questions" }).click();
+    await page.getByRole("tab", { name: "Design" }).click();
    await page.getByRole("tab", { name: /Review/ }).click();
    await expect(addendum).toHaveValue("Also export jobs");
    await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
@@ -847,16 +886,26 @@ try {
       const listingState = store.execution(listing.id);
       for (const [index, status] of (["partial", "partial", "missing"] as const).entries()) {
         const r = listing.requirements[index]!;
-        listingState.assessments[r.id] = { status, fingerprint: index === 1 ? "previous requirement wording" : requirementFingerprint(r), explanation: "Deterministic browser evidence", evidenceIDs: [], scenarios: [], files: [], omissions: 0, verified: false, scope: "workspace", head: "fixture-head", capturedAt: new Date().toISOString() };
+         listingState.assessments[r.id] = { status, fingerprint: index === 1 ? "previous requirement wording" : requirementFingerprint(r), contextFingerprint: assessmentContextFingerprint(listing, r.id), specificationRevision: listing.revision, explanation: "Deterministic browser evidence", evidenceIDs: [], scenarios: [], files: [], omissions: 0, verified: false, scope: "workspace", head: "fixture-head", capturedAt: new Date().toISOString() };
       }
       store.saveExecution(listing.id, listingState);
       await page.reload(); await page.locator(".sidebar").getByRole("button", { name: /Implementation list fixture/ }).click();
-      await page.getByRole("tab", { name: /Implementation/ }).click();
+       await page.getByRole("tab", { name: /Implement/ }).click();
       const listPanel = page.locator(".implementation-tab"), search = listPanel.getByRole("searchbox", { name: "Search epics and requirements", exact: true });
       await expect(listPanel.getByRole("status", { name: "Implementation availability" })).toContainText("Connect the repository’s local root folder in Settings");
       await expect(listPanel.locator(".feature-group")).toHaveCount(2);
-      await expect(listPanel.locator(".feature-group[open]")).toHaveCount(0);
-      await expect(listPanel.getByRole("status", { name: "Implementation results" })).toContainText("Showing 4 of 4 requirements in 2 epics");
+       await expect(listPanel.locator(".feature-group[open]")).toHaveCount(0);
+        await expect(listPanel.getByRole("status", { name: "Implementation results" })).toContainText("Showing 4 of 4 requirements in 2 epics");
+        await expect(listPanel.locator(".feature-group > summary").first()).toContainText("1 / 2 assessed locally · 0 complete locally · 1 partial · 0 missing · 0 unknown · 0 not assessed · 1 need reassessment");
+        await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 verified on main");
+       await expect(listPanel.locator(".requirement-detail > summary").first()).toContainText("Assessed · partial");
+       await expect(listPanel.locator(".implementation-row-status").first()).toContainText("Coding: not started");
+       await listPanel.getByRole("button", { name: "Assessed", exact: true }).click();
+       await expect(listPanel.locator(".requirement-detail")).toHaveCount(2);
+       await expect(listPanel.locator(".feature-group > summary").first()).toContainText("1 / 2 assessed");
+       await listPanel.getByRole("button", { name: "Unknown", exact: true }).click();
+       await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
+       await listPanel.getByRole("button", { name: "All approved", exact: true }).click();
       await search.fill("ACCESS"); await expect(listPanel.locator(".feature-group")).toHaveCount(1);
       await expect(listPanel.locator(".requirement-detail")).toHaveCount(2);
       await expect(listPanel.locator(".feature-group[open]")).toHaveCount(0);
@@ -895,12 +944,13 @@ try {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Implementation search and filters fit mobile width");
       await page.screenshot({ path: ".reqwizit-state/browser-implementation-search.png", fullPage: true });
       const assessedListing = store.execution(listing.id), receipt = listing.requirements[3]!;
-      assessedListing.assessments[receipt.id] = { status: "complete", fingerprint: requirementFingerprint(receipt), explanation: "Existing receipt download is present in captured code", evidenceIDs: [], scenarios: [], files: [], omissions: 0, verified: false, scope: "workspace", head: "fixture-head", capturedAt: new Date().toISOString() };
+       assessedListing.assessments[receipt.id] = { status: "complete", fingerprint: requirementFingerprint(receipt), contextFingerprint: assessmentContextFingerprint(listing, receipt.id), specificationRevision: listing.revision, explanation: "Existing receipt download is present in captured code", evidenceIDs: [], scenarios: [], files: [], omissions: 0, verified: false, scope: "workspace", head: "fixture-head", capturedAt: new Date().toISOString() };
       assessedListing.assessmentStatus = "Main verification failed: 0/4 requirements assessed. Fixture check failed before assessment.";
       assessedListing.assessmentRuns = [{ id: "fixture-failed-assessment", operation: "verify-main", revision: listing.revision, bindingID: "fixture", status: "failed", stage: "Running verification: fixture-check", requirementIDs: listing.requirements.map((r) => r.id), completedIDs: [], reused: 0,
         startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), diagnostic: "Fixture check failed before assessment", checks: [{ command: "fixture-check", exitCode: 3, output: "VERIFY_FIXTURE_FAILURE: executable unavailable", at: new Date().toISOString() }], progress: ["Checking repository", "Running verification: fixture-check"] }];
-      store.saveExecution(listing.id, assessedListing);
-      await page.reload(); await page.getByRole("tab", { name: /Implementation/ }).click();
+       store.saveExecution(listing.id, assessedListing);
+       assert.equal(assessmentCurrent(store.get(listing.id), store.execution(listing.id), receipt.id), true, "Browser fixture receipt assessment matches its current task context");
+       await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
       await expect(listPanel.getByRole("alert", { name: "Assessment outcome" })).toContainText("0/4 requirements assessed");
       const assessmentRun = listPanel.getByRole("region", { name: "Assessment run" });
       await expect(assessmentRun).toContainText("No requirements were assessed in this run. This is not a finding");
@@ -921,7 +971,7 @@ try {
       blockedState.assessmentRuns!.push({ ...blockedState.assessmentRuns![0]!, id: "fixture-context-block", operation: "assess", status: "blocked", stage: "Requirement context preflight", diagnostic: "Context blocked before inference; mandatory human decisions were retained.", checks: [],
         contextBlock: { ...requirementContext, characters: 52000, promptCharacters: 44000 }, contexts: { [receipt.id]: requirementContext }, sessions: { [receipt.id]: ["requirement-window-session"] } });
       store.saveExecution(listing.id, blockedState);
-      await page.reload(); await page.getByRole("tab", { name: /Implementation/ }).click();
+       await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
       await expect(listPanel.getByRole("alert", { name: "Assessment outcome" })).toContainText("Context blocked before inference");
       const blockedRun = listPanel.getByRole("region", { name: "Assessment run" });
       await blockedRun.getByText("Assessment details", { exact: true }).click();
@@ -930,7 +980,117 @@ try {
       await expect(blockedRun).toContainText("37,000 / 48,000 characters");
       await expect(blockedRun).toContainText("1 independent evidence-window sessions");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Per-requirement context blockers fit mobile width");
-      await page.screenshot({ path: ".reqwizit-state/browser-requirement-context.png", fullPage: true });
-      assert.deepEqual(errors, []);
+       await page.screenshot({ path: ".reqwizit-state/browser-requirement-context.png", fullPage: true });
+       // Shared processing feedback uses the real snapshot endpoint with deterministic
+       // worker state overlays; no model, verification command or GitHub call runs.
+       const queueState = structuredClone(blockedState);
+       const queueAssessment = queueState.assessmentRuns!.at(-1)!;
+       queueAssessment.status = "running"; queueAssessment.stage = "Assessing requirement 2/4: Reset a forgotten password";
+       queueAssessment.completedIDs = [listing.requirements[0]!.id]; queueAssessment.currentRequirementID = listing.requirements[1]!.id;
+       let queueImplementationActive = true, queueHelpActive = true;
+       const snapshotRoute = `**/api/projects/${listing.id}`;
+       await page.route(snapshotRoute, async (route) => {
+         const response = await route.fetch();
+         await route.fulfill({ response, json: { ...await response.json(), execution: queueState, implementationActive: queueImplementationActive, implementationOperation: "check",
+           helpJobs: [{ id: "queue-help-fixture", projectID: listing.id, expectedRevision: listing.revision, model: listing.model, leaseUntil: null, status: queueHelpActive ? "running" : "cancelled" }] } });
+       });
+       await page.route(`**/api/projects/${listing.id}/cancel-help`, async (route) => {
+         assert.deepEqual(route.request().postDataJSON(), { jobID: "queue-help-fixture" });
+         queueHelpActive = false; await route.fulfill({ json: { cancelled: true } });
+       });
+       await page.route(`**/api/projects/${listing.id}/execution-stop`, async (route) => {
+         assert.deepEqual(route.request().postDataJSON(), {});
+         queueImplementationActive = false; queueAssessment.status = "interrupted"; queueAssessment.diagnostic = "Assessment stopped; earlier results retained.";
+         await route.fulfill({ json: { stopping: true } });
+       });
+         await page.reload();
+         await page.getByRole("tab", { name: /Implement/ }).click();
+         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("1 / 2 assessed locally · 0 complete locally · 1 partial");
+         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 verified on main");
+        await listPanel.locator(".feature-group > summary").first().click();
+        await expect(listPanel.locator(".requirement-detail > summary").nth(1)).toContainText("Assessing workspace");
+        // Publish a per-requirement checkpoint through the polling snapshot, including
+        // a reused result and an unknown result, without reloading the browser.
+        const liveRequirement = listing.requirements[1]!;
+        queueState.assessments[liveRequirement.id] = { ...queueState.assessments[liveRequirement.id]!, fingerprint: requirementFingerprint(liveRequirement), status: "unknown" };
+        queueAssessment.completedIDs.push(liveRequirement.id); queueAssessment.reused = 1; queueAssessment.currentRequirementID = listing.requirements[2]!.id;
+         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("2 / 2 assessed locally · 0 complete locally · 1 partial · 0 missing · 1 unknown");
+         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 verified on main");
+          await expect(listPanel.getByRole("region", { name: "Assessment run" })).toContainText("2 / 4 requirements assessed · 1 unchanged results reused");
+          await expect(listPanel.getByRole("progressbar", { name: "Requirements assessed", exact: true })).toHaveAttribute("aria-valuenow", "50");
+         queueAssessment.force = true; queueAssessment.freshIDs = [liveRequirement.id];
+         await expect(listPanel.getByRole("region", { name: "Assessment run" })).toContainText("1 freshly assessed · Forced reassessment");
+        await expect(listPanel.locator(".requirement-detail > summary").nth(1)).toContainText("Assessed · unknown");
+         await expect(listPanel.locator(".implementation-row-status").nth(1)).toContainText("Coding: not started");
+         await headerProgress.click();
+         const implementationProgress = progressDialog.locator(".progress-stage").nth(2);
+         await implementationProgress.locator("summary").click();
+         await expect(implementationProgress.getByRole("meter", { name: "Local code completeness", exact: true })).toHaveAttribute("aria-valuenow", "25");
+         await expect(implementationProgress.getByRole("meter", { name: "Local code completeness: Account access", exact: true })).toHaveAttribute("aria-valuenow", "0");
+         await expect(implementationProgress.getByRole("meter", { name: "Implementation progress", exact: true })).toHaveAttribute("aria-valuenow", "0");
+         // A complete local checkpoint appears in both views through polling while the run continues.
+         const completedLocal = listing.requirements[0]!;
+         queueState.assessments[completedLocal.id] = { ...queueState.assessments[completedLocal.id]!, status: "complete" };
+         await expect(implementationProgress.getByRole("meter", { name: "Local code completeness", exact: true })).toHaveAttribute("aria-valuenow", "50");
+         await expect(implementationProgress.getByRole("meter", { name: "Local code completeness: Account access", exact: true })).toHaveAttribute("aria-valuenow", "50");
+         await expect(implementationProgress.getByRole("meter", { name: "Implementation progress", exact: true })).toHaveAttribute("aria-valuenow", "0");
+         await expect(implementationProgress.getByRole("group", { name: "Local code assessment", exact: true })).toContainText("4 / 4 assessed locally · 2 complete locally · 0 partial · 1 missing · 1 unknown");
+         await page.setViewportSize({ width: 390, height: 844 });
+         assert.equal(await progressDialog.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Local and main progress breakdowns fit mobile width");
+         await page.screenshot({ path: ".reqwizit-state/browser-local-assessment-progress.png" });
+         await progressDialog.getByRole("button", { name: "Close progress", exact: true }).click();
+         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("2 / 2 assessed locally · 1 complete locally · 0 partial · 0 missing · 1 unknown");
+         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 verified on main");
+        await listPanel.getByRole("button", { name: "Unknown", exact: true }).click();
+        await expect(listPanel.locator(".requirement-detail")).toHaveCount(1);
+         await expect(listPanel.locator(".requirement-detail > summary")).toContainText(liveRequirement.statement);
+         await expect(listPanel.locator(".feature-group > summary")).toContainText("2 / 2 assessed locally · 1 complete locally");
+        await listPanel.getByRole("button", { name: "Assessed", exact: true }).click();
+        await expect(listPanel.locator(".requirement-detail")).toHaveCount(4);
+        queueAssessment.completedIDs = [listing.requirements[0]!.id];
+        const sharedQueueTrigger = page.locator(".queue-trigger");
+       await expect(sharedQueueTrigger).toContainText("2 tasks processing");
+       await sharedQueueTrigger.click();
+       const sharedQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+       await expect(sharedQueue.getByRole("region", { name: "Checking implementation", exact: true })).toContainText("1 / 4 requirements assessed");
+       await expect(sharedQueue.getByRole("region", { name: "Question help", exact: true })).toBeVisible();
+       await sharedQueue.getByRole("button", { name: "Stop question help", exact: true }).click();
+       await expect(sharedQueue.getByRole("region", { name: "Question help", exact: true })).toHaveCount(0);
+        await expect(sharedQueueTrigger).toContainText("Checking implementation");
+        await expect(sharedQueueTrigger.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+       queueAssessment.operation = "verify-main"; queueAssessment.stage = "Running verification: fixture-check"; queueAssessment.completedIDs = [];
+       await expect(sharedQueue.getByRole("region", { name: "Main verification", exact: true })).toContainText("Running verification: fixture-check");
+       await expect(sharedQueue.getByRole("button", { name: "Stop implementation", exact: true })).toHaveCount(1);
+       assert.equal(await sharedQueue.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Shared task feedback fits mobile width");
+       await page.screenshot({ path: ".reqwizit-state/queue-implementation-mobile.png" });
+       await page.keyboard.press("Escape");
+       await page.reload(); await expect(sharedQueueTrigger).toContainText("Main verification");
+       await sharedQueueTrigger.click(); await sharedQueue.getByRole("button", { name: "Stop implementation", exact: true }).click();
+       await expect(sharedQueue.getByRole("button", { name: "Stop implementation", exact: true })).toHaveCount(0);
+        await expect(sharedQueueTrigger).toContainText("Main verification · interrupted");
+        await expect(sharedQueueTrigger.getByRole("progressbar")).toHaveCount(0);
+        await expect(sharedQueueTrigger.locator(".activity-spinner")).toHaveCount(0);
+       await sharedQueue.getByText(/^Recent background work/).click();
+       await expect(sharedQueue).toContainText("Assessment stopped; earlier results retained.");
+       queueAssessment.status = "failed"; queueAssessment.diagnostic = "Verification command failed; local assessment retained.";
+       await expect(sharedQueueTrigger).toContainText("Main verification · failed");
+       await expect(sharedQueue).toContainText("Verification command failed; local assessment retained.");
+       queueAssessment.status = "completed"; queueAssessment.diagnostic = "Verified main assessment finished.";
+       await expect(sharedQueueTrigger).toContainText("Main verification · completed");
+       await page.keyboard.press("Escape");
+       await page.unroute(snapshotRoute);
+       await page.unroute(`**/api/projects/${listing.id}/cancel-help`);
+        await page.unroute(`**/api/projects/${listing.id}/execution-stop`);
+        // Relevant human context can change without changing requirement wording.
+        // Current badges, filters and evidence must all invalidate consistently.
+        listing = store.note(listing.id, listing.revision, "New global acceptance constraint", "project");
+        await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
+        await expect(listPanel).toContainText("You can keep answering questions during assessment");
+        await listPanel.getByRole("button", { name: "Needs reassessment", exact: true }).click();
+        await expect(listPanel.locator(".requirement-detail")).toHaveCount(4);
+        await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 assessed");
+        await listPanel.getByRole("button", { name: "Complete in code", exact: true }).click();
+        await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
+        assert.deepEqual(errors, []);
    console.log("Browser checks passed: appearance presets, custom colors, fonts/text size, persistence, cross-tab sync, reset, contrast hints, keyboard dropdowns and mobile sizing; local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; Implementation tab count/actions, four delivery strategies, saved settings, matching dark theme and mobile layout; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation; explicit existing-project entry, local identity autofill, preserved manual edits across folders, initialization failure/retry, review-first project map, manual rescan, retained IDs, question dismissal and evidence-grounded replacements, reload and mobile width. Screenshots include .reqwizit-state/browser-implementation{,-dark,-mobile}.png");
 } finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); await rm(scanDirectory, { recursive: true, force: true }); }

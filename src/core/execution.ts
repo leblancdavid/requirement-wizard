@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { Project } from "./model.js";
 import { requirementFingerprint } from "./implementation.js";
-import type { ExecutionContextManifest } from "./execution-context.js";
+import { assessmentContextFingerprint, executionContextPolicy, type ExecutionContextManifest } from "./execution-context.js";
+import { assessmentSkill } from "./execution-skills.js";
 
 const branch = z.string().trim().min(1).max(200).refine((s) => !s.startsWith("-") && !/[\s~^:?*\[\\]|\.\.|@\{|\/\/|\/$|\.$/.test(s), "Invalid branch name");
 export const executionConfigSchema = z.object({
@@ -30,13 +31,15 @@ export type Assessment = z.infer<typeof assessmentOutputSchema> & {
   files: { path: string; hash: string; startLine: number; endLine: number }[];
   omissions: number; verified: boolean;
   captureFingerprint?: string; specificationRevision?: number; model?: { providerID: string; modelID: string };
-  contextPolicy?: string;
+  contextPolicy?: string; contextFingerprint?: string;
+  skill?: { name: string; version: string };
 };
 export type CheckResult = { command: string; exitCode: number; output: string; at: string };
 export type AssessmentRun = {
   id: string; operation: "assess" | "verify-main"; revision: number; bindingID: string;
   status: "running" | "completed" | "failed" | "interrupted" | "blocked";
   stage: string; requirementIDs: string[]; completedIDs: string[]; reused: number;
+  force?: boolean; freshIDs?: string[];
   currentRequirementID?: string; head?: string; directory?: string; sessionID?: string;
   startedAt: string; finishedAt?: string; diagnostic?: string; checks: CheckResult[]; progress: string[];
   contexts?: Record<string, ExecutionContextManifest>; contextBlock?: ExecutionContextManifest; sessions?: Record<string, string[]>;
@@ -60,9 +63,10 @@ export type ExecutionRun = {
   units: DeliveryUnit[]; status: "running" | "paused" | "awaiting-merge" | "completed" | "failed" | "interrupted";
   diagnostic?: string; progress: string[]; createdAt: string;
 };
-export type MainDelivery = { fingerprint: string; main: string; at: string; repository: string; checks: CheckResult[] };
+export type MainDelivery = { fingerprint: string; contextFingerprint?: string; main: string; at: string; repository: string; checks: CheckResult[] };
 export type ExecutionState = {
   version: number; config?: ExecutionConfig; assessments: Record<string, Assessment>;
+  workspaceAssessments?: Record<string, Assessment>; mainAssessments?: Record<string, Assessment>;
   delivered: Record<string, MainDelivery>; deliveryHistory?: (MainDelivery & { requirementID: string })[];
   run?: ExecutionRun; history: ExecutionRun[]; assessmentStatus?: string;
   assessmentRuns?: AssessmentRun[];
@@ -78,7 +82,34 @@ export function eligibleRequirements(project: Project) {
 }
 export function deliveredRequirement(project: Project, state: ExecutionState, id: string) {
   const r = eligibleRequirements(project).find((r) => r.id === id), d = state.delivered[id];
-  return !!r && !!d && d.fingerprint === requirementFingerprint(r) && d.repository === state.config?.repository;
+  return !!r && !!d && d.fingerprint === requirementFingerprint(r) && d.repository === state.config?.repository
+    && (!d.contextFingerprint || contextMatches(project, id, d.contextFingerprint, state.config?.dependencies));
+}
+function contextMatches(project: Project, id: string, fingerprint: string, dependencies?: Record<string, string[]>) {
+  try { return fingerprint === assessmentContextFingerprint(project, id, dependencies); }
+  catch { return false; } // Removed/unapproved targets or unresolved dependencies cannot be current.
+}
+export function assessmentCurrent(project: Project, state: ExecutionState, id: string, assessment: Assessment | undefined = state.assessments[id]) {
+  return assessmentFreshness(project, state, id, assessment).status === "current";
+}
+export function assessmentFreshness(project: Project, state: ExecutionState, id: string, assessment: Assessment | undefined = state.assessments[id]): {
+  status: "not-assessed" | "current" | "needs-reassessment";
+  reason?: "requirement" | "decisions" | "policy" | "model" | "code";
+  message: string;
+} {
+  if (!assessment) return { status: "not-assessed", message: "No saved assessment." };
+  const stale = (reason: "requirement" | "decisions" | "policy" | "model" | "code", message: string) => ({ status: "needs-reassessment" as const, reason, message });
+  const r = eligibleRequirements(project).find((r) => r.id === id);
+  if (!r || assessment.fingerprint !== requirementFingerprint(r)) return stale("requirement", "Requirement or approval changed.");
+  if (assessment.contextPolicy && (assessment.contextPolicy !== executionContextPolicy || !assessment.skill)
+    || assessment.skill && (assessment.skill.name !== assessmentSkill.name || assessment.skill.version !== assessmentSkill.version)) return stale("policy", "Assessment workflow or skill changed.");
+  if (assessment.contextFingerprint ? !contextMatches(project, id, assessment.contextFingerprint, state.config?.dependencies) : assessment.specificationRevision !== project.revision)
+    return stale("decisions", "Supporting decisions, guardrails or assessment skill changed.");
+  if (assessment.model && state.config && (assessment.model.providerID !== state.config.providerID || assessment.model.modelID !== state.config.modelID))
+    return stale("model", "Selected assessment model changed.");
+  const evidence = [...state.assessmentRuns ?? []].reverse().find((run) => run.operation === (assessment.scope === "main" ? "verify-main" : "assess") && run.capture && run.head);
+  if (evidence && (assessment.head !== evidence.head || assessment.captureFingerprint !== evidence.capture!.fingerprint)) return stale("code", "Code snapshot changed since this assessment.");
+  return { status: "current", message: "Current against saved decisions and the latest checked code snapshot; filesystem changes are detected by Check implementation." };
 }
 export function prerequisiteOnBranch(project: Project, state: ExecutionState, id: string): string | undefined {
   if (state.config?.strategy !== "branch") return;

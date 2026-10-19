@@ -2,6 +2,9 @@ import type { ExecutionConfig } from "../core/execution.js";
 import { checkExecutionContext, executionPrompt, type ExecutionContextManifest } from "../core/execution-context.js";
 import { startRuntime } from "./server.js";
 import { selectModel, safeMessage } from "./contract.js";
+import { resolve } from "node:path";
+import { executionSkill } from "../core/execution-skills.js";
+import { codingTools, executionPermissions, executionPermissionsCurrent } from "./skills.js";
 
 export type ExecutionRequest = {
   directory: string; config: ExecutionConfig; prompt: string; coding: boolean;
@@ -35,7 +38,7 @@ export class OpenCodeExecution implements ExecutionAdapter {
       const model = selectModel(catalog, config.providerID, config.modelID);
       if (sessionID) {
         // Lookup must succeed. Never silently create a replacement for a missing session.
-        await runtime.client.session.get({ sessionID }, { signal });
+        const savedSession = (await runtime.client.session.get({ sessionID }, { signal })).data;
         const messages = (await runtime.client.session.messages({ sessionID }, { signal })).data ?? [];
         if (request.requirementID) for (const message of messages.filter((m) => m.info.role === "user")) for (const part of message.parts) if (part.type === "text") {
           const owner = /^Reqwizit task [^/\n]+\/([^/\n]+)\//.exec(part.text)?.[1];
@@ -51,13 +54,11 @@ export class OpenCodeExecution implements ExecutionAdapter {
         }
         const context = checkExecutionContext(request.prompt, coding, request.requirementID, JSON.stringify(messages).length);
         request.onContext?.(context);
+        if (!executionPermissionsCurrent(savedSession?.permission ?? [], coding))
+          await runtime.client.session.update({ sessionID, permission: executionPermissions(coding) }, { signal });
         request.onProgress("Resuming the saved OpenCode session after repository reconciliation.");
       } else {
-        sessionID = (await runtime.client.session.create({ title: `Reqwizit ${coding ? "implementation" : "assessment"}${request.requirementID ? ` · ${request.requirementID}` : ""}`, permission: [
-          { permission: "*", pattern: "*", action: "deny" },
-          ...(coding ? ["read", "glob", "grep", "list", "edit", "write", "patch", "apply_patch", "bash"].map((permission) => ({ permission, pattern: "*", action: "allow" as const })) : []),
-          { permission: "external_directory", pattern: "*", action: "deny" },
-        ] }, { signal })).data?.id;
+        sessionID = (await runtime.client.session.create({ title: `Reqwizit ${coding ? "implementation" : "assessment"}${request.requirementID ? ` · ${request.requirementID}` : ""}`, permission: executionPermissions(coding) }, { signal })).data?.id;
         if (!sessionID) throw new Error("OpenCode did not create a session.");
         request.onSession(sessionID);
       }
@@ -70,15 +71,24 @@ export class OpenCodeExecution implements ExecutionAdapter {
           }
         } } catch { if (!stream.signal.aborted) request.onProgress("Progress stream interrupted; awaiting request result."); }
       })();
-      const allowed = new Set(coding ? ["read", "glob", "grep", "list", "edit", "write", "patch", "apply_patch", "bash"] : []);
+      const skill = executionSkill(coding), catalogSkills = (await runtime.client.app.skills({}, { signal })).data ?? [];
+      const registered = catalogSkills.find((s) => s.name === skill.name);
+      if (!registered || !runtime.skillPath || resolve(registered.location) !== resolve(runtime.skillPath) || !registered.content.includes(skill.body.trim())) throw new Error("The bundled Reqwizit skill was not registered correctly. Restart the app before retrying.");
+      const allowed = new Set(["skill", ...(coding ? codingTools : [])]);
       const tools = (await runtime.client.tool.ids({}, { signal })).data ?? [];
+      if (!tools.includes("skill")) throw new Error("This OpenCode runtime does not expose the required skill tool. No prompt was sent.");
       const response = (await runtime.client.session.prompt({ sessionID, model, agent: coding ? "reqwizit-implementation" : "reqwizit-assessment",
         tools: Object.fromEntries(tools.map((id) => [id, allowed.has(id)])),
         parts: [{ type: "text", text: executionPrompt(request.prompt, coding) }],
       }, { signal: requestSignal })).data;
+      requestSignal.throwIfAborted();
       if (!response) throw new Error("OpenCode returned no result.");
       if (response.info.error) throw new Error(safeMessage(response.info.error.data.message));
       if (response.info.providerID !== model.providerID || response.info.modelID !== model.modelID) throw new Error("OpenCode returned a different provider/model.");
+      const messages = (await runtime.client.session.messages({ sessionID }, { signal: requestSignal })).data ?? [];
+      const loaded = messages.some((m) => m.parts.some((p) => p.type === "tool" && p.tool === "skill" && p.state.status === "completed"
+        && p.state.input.name === skill.name && p.state.output.includes(skill.body.trim())));
+      if (!loaded) throw new Error(`OpenCode did not load the required ${skill.name} skill. No task completion was accepted.`);
       return response.parts.filter((p) => p.type === "text").map((p) => p.text).join("");
     } finally {
       signal.removeEventListener("abort", cancel); await abort; stream.abort(); await events; await runtime.close();

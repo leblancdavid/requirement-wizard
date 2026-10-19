@@ -4,23 +4,29 @@ import { OpenCodeExecution, type ExecutionRequest } from "./execution.js";
 import type { startRuntime } from "./server.js";
 import { executionConfigSchema } from "../core/execution.js";
 import { ExecutionContextError } from "../core/execution-context.js";
+import { assessmentSkill, executionSkill, implementationSkill } from "../core/execution-skills.js";
+import { resolve } from "node:path";
+import { executionPermissions } from "./skills.js";
 
 const config = executionConfigSchema.parse({ repository: "fixture/repository", strategy: "requirement-pr", branch: "build", providerID: "openai", modelID: "fixture", checks: ["npm test"] });
 function request(extra: Partial<ExecutionRequest> = {}): ExecutionRequest {
   return { directory: "unused", config, coding: true, requirementID: "r1", prompt: "Reqwizit task r1/attempt\nImplement only r1", signal: new AbortController().signal, onSession: () => {}, onProgress: () => {}, ...extra };
 }
-function runtime(messages: unknown[] = []) {
-  const calls = { starts: 0, prompts: 0, creates: 0, closes: 0 };
+function runtime(messages: unknown[] = [], options: { coding?: boolean; missing?: boolean; loaded?: boolean; versionMismatch?: boolean; permissions?: ReturnType<typeof executionPermissions> } = {}) {
+  const skill = executionSkill(options.coding ?? true), skillPath = resolve("fixture-skills", skill.name, "SKILL.md");
+  const calls = { starts: 0, prompts: 0, creates: 0, closes: 0, permissions: [] as unknown[], toolMaps: [] as Record<string, boolean>[], updates: 0 };
   const factory = async () => {
     calls.starts++;
-    return { directory: "unused", close: async () => { calls.closes++; }, client: {
+    return { directory: "unused", skillPath, close: async () => { calls.closes++; }, client: {
+      app: { skills: async () => ({ data: options.missing ? [] : [{ ...skill, location: skillPath, content: options.versionMismatch ? "Old skill" : skill.body }] }) },
       provider: { list: async () => ({ data: { connected: ["openai"], all: [{ id: "openai", models: { fixture: {} } }] } }) },
       session: {
-        get: async () => ({ data: { id: "saved-session" } }), messages: async () => ({ data: messages }),
-        create: async () => ({ data: { id: `session-${++calls.creates}` } }),
-        prompt: async () => { calls.prompts++; return { data: { info: { providerID: "openai", modelID: "fixture" }, parts: [{ type: "text", text: '{"outcome":"complete","summary":"Done"}' }] } }; },
+        get: async () => ({ data: { id: "saved-session", permission: options.permissions ?? [] } }), messages: async () => ({ data: [...messages, ...(calls.prompts && options.loaded !== false ? [{ parts: [{ type: "tool", tool: "skill", state: { status: "completed", input: { name: skill.name }, output: skill.body } }] }] : [])] }),
+        update: async () => { calls.updates++; return {}; },
+        create: async (input: { permission: unknown }) => { calls.permissions.push(input.permission); return { data: { id: `session-${++calls.creates}` } }; },
+        prompt: async (input: { tools: Record<string, boolean> }) => { calls.toolMaps.push(input.tools); calls.prompts++; return { data: { info: { providerID: "openai", modelID: "fixture" }, parts: [{ type: "text", text: '{"outcome":"complete","summary":"Done"}' }] } }; },
       },
-      event: { subscribe: async () => ({ stream: (async function* () {})() }) }, tool: { ids: async () => ({ data: [] }) },
+      event: { subscribe: async () => ({ stream: (async function* () {})() }) }, tool: { ids: async () => ({ data: ["skill", "read", "bash", "task", "webfetch"] }) },
     } };
   };
   return { calls, adapter: new OpenCodeExecution(factory as unknown as typeof startRuntime) };
@@ -60,4 +66,26 @@ test("a saved session containing another requirement's task marker cannot be res
   const { calls, adapter } = runtime([{ info: { role: "user" }, parts: [{ type: "text", text: "Reqwizit task run/r-other/attempt\nAn unrelated task" }] }]);
   await assert.rejects(adapter.perform(request({ sessionID: "foreign-session" })), /belongs to another requirement/);
   assert.equal(calls.prompts, 0); assert.equal(calls.creates, 0); assert.equal(calls.closes, 1);
+});
+
+test("skills are role-scoped, assessment gains no source/tools access, and missing or unconsumed skills cannot complete", async () => {
+  for (const coding of [false, true]) {
+    const { calls, adapter } = runtime([], { coding });
+    await adapter.perform(request({ coding }));
+    const name = coding ? implementationSkill.name : assessmentSkill.name;
+    assert.ok((calls.permissions[0] as { permission: string; pattern: string; action: string }[]).some((p) => p.permission === "skill" && p.pattern === name && p.action === "allow"));
+    assert.deepEqual(calls.toolMaps[0], { skill: true, read: coding, bash: coding, task: false, webfetch: false });
+  }
+  for (const options of [{ missing: true }, { versionMismatch: true }, { loaded: false }]) {
+    const { calls, adapter } = runtime([], options);
+    await assert.rejects(adapter.perform(request()), /skill/);
+    assert.equal(calls.prompts, options.loaded === false ? 1 : 0);
+    assert.equal(calls.closes, 1);
+  }
+  const resumed = runtime();
+  await resumed.adapter.perform(request({ sessionID: "saved-session" }));
+  assert.equal(resumed.calls.updates, 1, "Resuming a pre-skill session explicitly refreshes its permissions");
+  const alreadyScoped = runtime([], { permissions: executionPermissions(true) });
+  await alreadyScoped.adapter.perform(request({ sessionID: "saved-session" }));
+  assert.equal(alreadyScoped.calls.updates, 0, "Repeated resumes do not append duplicate permission profiles");
 });

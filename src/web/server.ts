@@ -159,7 +159,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? coverage(options.store.get(id, lastRound.expectedRevision)).percent : null;
         const helpJobs = options.store.jobs(id).filter((j) => j.helpRequest).map(({ result: _, researchEvidence: __, ...job }) => job);
-        json(res, 200, { project, workspace: options.store.syncWorkspace(id), coverage: coverage(project), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id) }); return;
+        json(res, 200, { project, workspace: options.store.syncWorkspace(id), coverage: coverage(project), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) }); return;
       }
       if (req.method === "GET" && action === "history") { json(res, 200, options.store.history(id)); return; }
       if (req.method === "GET" && action === "execution-repository") {
@@ -175,12 +175,12 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, implementation.configure(id, input.revision, input.config, input.version)); return;
       }
       if (action === "execution-start") {
-        const input = z.object({ revision, operation: z.enum(["assess", "verify-main", "continue"]), requirementID: z.string().min(1).optional(), epicID: z.string().min(1).optional() }).strict().parse(raw);
+        const input = z.object({ revision, operation: z.enum(["check", "assess", "verify-main", "continue"]), requirementID: z.string().min(1).optional(), epicID: z.string().min(1).optional(), force: z.boolean().optional() }).strict().parse(raw);
         if (queue.isActive(id)) throw new Error("Stop discovery before starting implementation work.");
         if (input.requirementID && input.epicID) throw new Error("Choose a requirement or an epic scope.");
         if (input.requirementID && !project.requirements.some((r) => r.id === input.requirementID && r.status === "accepted")) throw new Error("Choose an accepted requirement.");
         if (input.epicID && !project.epics.some((e) => e.id === input.epicID && !e.archived)) throw new Error("Choose an active epic.");
-        implementation.start(id, input.revision, input.operation, { requirementID: input.requirementID, epicID: input.epicID });
+        implementation.start(id, input.revision, input.operation, { requirementID: input.requirementID, epicID: input.epicID }, { force: input.force });
         json(res, 202, { started: true }); return;
       }
       if (action === "execution-stop") { z.object({}).strict().parse(raw); implementation.stop(id); json(res, 200, { stopping: true }); return; }

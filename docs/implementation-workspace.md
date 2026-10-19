@@ -8,16 +8,16 @@ assessment and real GitHub delivery/installer integration remain unqualified.
 
 ## Browser workflow
 
-**Assess project** currently requires a connected workspace and saved Implementation
-settings (OpenCode model, delivery strategy and at least one verification command),
-even though the static assessment does not execute those commands. Detecting the
+**Check implementation** requires a connected workspace and saved Implementation
+settings (OpenCode model, delivery strategy and at least one verification command).
+The local phase does not execute those commands; the main phase does. Detecting the
 repository fills the form but does not save it. When an action is disabled, a message
 below the buttons identifies missing settings, active discovery/implementation work,
 an in-progress save or a changed repository for delivery. Local assessment does not
 fetch origin or require remote-main access. Dependency-order errors block execution
 planning but do not prevent an otherwise configured assessment.
 
-**Implementation** sits beside **Review**, using the existing tabs, feature filter,
+**Implement** sits beside **Review** in the **Design → Review → Implement** workflow, using the existing tabs, feature filter,
 compact expandable rows, feature groups, buttons, themes, fonts and text sizes.
 Its badge counts accepted requirements in active epics without current verified
 delivery to `main`. Manual assessments do not reduce this count. Tabs wrap on mobile.
@@ -30,6 +30,33 @@ status filters (including missing, not assessed and needs reassessment). Group h
 show matching counts; empty results offer **Clear search and status filter**. Stale
 assessments do not appear as current partial/missing work. Filtering changes the list,
 not the scope of **Implement epic** or the saved execution plan.
+
+Epic headers show **assessed locally**, **complete locally**, partial/missing/unknown,
+not-assessed and needs-reassessment counts, plus a separate **verified on main** fraction.
+They cover all of the epic's approved requirements even while filtering visible rows.
+Local counts use working-folder results (including legacy aggregate results explicitly
+scoped to the workspace), not a stronger result found only on main. Current unknown
+and reused results count as assessed locally; stale results do not count as current
+completions. **Assessed** and **Unknown** row filters retain their best-supported
+local/main behavior. Counts and requirement badges update as checkpoints arrive during a run. Freshness
+also checks the relevant supporting answers, feature/project notes and dependency
+guardrails, so unchanged requirement wording alone cannot keep an outdated result current. Rows label
+coding activity explicitly (**Coding: not started** can coexist with a saved code
+assessment), and identify the requirement currently being assessed or verified.
+
+**Overall progress → Implementation** also shows local completeness counts and meters
+for the project and each epic, alongside verified-main delivery. Local percentages use
+approved requirements; the delivery score still includes all non-rejected requirements.
+These views update through snapshot polling during assessment, without waiting for an
+entire epic or the main phase to finish. The overall percentage continues to use the
+delivery score. Local code findings do not establish verified-main completion.
+
+Local-summary verification (2026-10-19): type checking, 20 targeted progress/workspace
+tests, the UI build and Playwright checks passed. Tests cover all result categories,
+stale exclusion, local/main separation, active/approved scope, legacy local records,
+filter-independent epic totals and live polling into both the epic and open progress
+dialog. Mobile layout was checked at 390px; screenshot:
+`.reqwizit-state/browser-local-assessment-progress.png`. No model inference was used.
 
 1. Connect the Git repository root in Settings. Execution and main verification require
    `origin` to match the configured GitHub `owner/repository`, with an existing remote
@@ -47,14 +74,24 @@ not the scope of **Implement epic** or the saved execution plan.
    retained on redetection; **Use suggested commands** explicitly replaces the draft.
    Add
    requirement prerequisites where needed; existing epic dependencies also apply.
-3. **Assess project** captures bounded file evidence from the working folder and
+3. **Check implementation** captures bounded file evidence from the working folder and
    assesses approved requirements sequentially. It does not execute checks or establish
    main delivery. Each scenario needs evidence; omitted scope stays unknown. A real
    run reports its stage, selected/completed counts and code-status summary. Empty
    approved scopes are rejected rather than reported as successful zero-item scans.
-4. **Verify main & refresh delivery** fetches main, creates a detached worktree, runs
-   configured checks and assesses requirements. It can recognize existing implementation
-   predating Reqwizit's coding runs.
+4. The same action then fetches main, creates a detached worktree, runs configured
+   checks and assesses the same requirements. It can recognize existing implementation
+   predating Reqwizit's coding runs. Local and main evidence are saved separately;
+   the strongest supported code status is displayed, and only complete verified main
+   receives **Implemented** status. A remote/tooling failure retains local results and
+   previous dated delivery evidence, with a diagnostic rather than a missing-code claim.
+   Both phases share one worker lease and cancellation control; **Assessment details**
+   and previous runs retain each phase's scope, commit, counts and check output.
+   The header's **Processing & queue** also shows both phases, their current stage,
+   requirement and assessed/selected count from any workspace tab. Its
+   **Stop implementation** cancels the same worker. Coding, verification and delivery
+   also appear there alongside discovery/scans and concurrent question help. Recent
+   background work retains outcomes and diagnostics after processing stops.
 5. Use **Implement**, **Implement epic** or **Continue implementation**. Individual/epic
    actions freeze that scope. Continue resumes it; after completion, another Continue
    plans remaining approved requirements.
@@ -64,6 +101,31 @@ not the scope of **Implement epic** or the saved execution plan.
    worktrees and sessions and permits new settings/scope.
 
 ### Assessment results, errors and retry
+
+**Check implementation** is incremental: current saved results are reused, including
+missing, partial and unknown results. **Reassess all** bypasses reuse for every approved
+requirement; with a Feature filter selected it becomes **Reassess feature**. Each
+requirement also has **Reassess** for a forced local/main check of that requirement only.
+These actions share the same lease, cancellation and evidence checks as normal checks.
+Force never bypasses approval, source validation or main verification and is rejected
+for coding execution. Main verification commands still run on every check.
+
+Requirement approval, assessment freshness, assessment result, the active attempt and
+Git delivery remain separate state dimensions. **Assessed** means a persisted current
+result; it does not mean the requirement is complete. **Needs reassessment** gives a
+reason: changed requirement/approval, supporting decisions/guardrails, workflow/skill,
+model or code snapshot. Freshness uses the latest captured snapshot for each scope;
+it is not live filesystem monitoring. A capture change is conservatively broad and may
+invalidate requirements whose previously cited files did not change. The next Check
+detects such code changes. New unrelated implementations can matter too, so reuse is
+not based solely on previously cited file hashes.
+
+Run details distinguish reused and freshly assessed requirements and record whether
+the action was forced. Each completed requirement is checkpointed immediately in
+SQLite, surviving app restarts. Failed/cancelled forced attempts retain older dated
+results; normal retry can reuse already completed fresh checkpoints. A failed attempt
+with newer captured code can still make older results stale. It does not replace the
+old result with a missing-code claim.
 
 **Complete in code** and **Implemented** are distinct filters. Existing local features
 can assess as complete without new coding/commits, while main completion still requires
@@ -78,23 +140,59 @@ cannot reconstruct command output that the previous version did not save.
 
 A bounded source capture is reused within the run. Each requirement receives a focused
 window prioritized by explicit provenance, referenced paths and relevant terms, not
-the entire capture. Selected excerpts remain byte-exact. Omitted-path inventories stay
+the entire capture. Provenance-linked files are prioritized rather than forced into
+every window; they can be indexed and requested in a later window. Selected excerpts
+remain byte-exact. Omitted-path inventories stay
 in the saved run; the model receives reason counts and a bounded sample instead of
 thousands of repeated excluded paths. Short `file:N` handles resolve back to captured provenance. Source
 hashes and HEAD are checked before accepting results; excluded binaries/cache files
 are not reread to validate source evidence. Over-budget genuine evidence/requirements
 still block explicitly rather than being silently truncated.
 
+Assessment freezes the specification and selected approved requirements when the action
+starts; both local and main phases use that same revision. You can keep answering
+questions while it runs. Unrelated answers do not interrupt assessment or invalidate
+unchanged results. Changes to relevant answers, feature/project notes, requirements or
+dependency guardrails mark affected results **Needs reassessment**; they cannot establish
+current main delivery. Results retain their original specification revision, and the
+completion summary reports outdated results. Run **Check implementation** again to
+assess current decisions; assessment does not require archiving a coding run.
+
 Completed requirement assessments are checkpointed individually. Running the same
-action again reuses results only when specification revision, requirement fingerprint,
-model, HEAD, scope, context-policy version and captured-source/omission fingerprint match. Changed inputs need
-fresh inference. Cancellation/failures retain valid earlier results. Verification is
+action again reuses results only when relevant task-context identity, requirement fingerprint,
+model, HEAD, scope, context-policy version and captured-source/omission fingerprint match.
+Unrelated revision changes allow reuse; changed relevant inputs need fresh inference.
+Older assessments without task-context identity remain revision-bound (undated ones
+need reassessment). Context identity is local cache metadata, excluded from portable
+progress artifacts. New delivery evidence carries the same context identity so later
+relevant decisions invalidate its current credit while retaining dated evidence.
+Cancellation/failures retain valid earlier results. Verification is
 rerun on each main-verification request. Tooling failures keep previous dated
 assessment/delivery evidence; they do not certify current main anew.
 
+Workspace reconnection, HEAD changes and captured-source changes still stop assessment
+with an assessment-specific diagnostic. Coding execution retains strict revision checks
+and requires archiving/replanning after specification changes.
+
+Concurrent-assessment verification (2026-10-19): all 210 deterministic tests passed.
+After normalizing context identity across object-property order, type checking and
+36 targeted context/service/workspace tests passed, as did the UI build and Playwright
+browser checks. Fixtures exercise answers during inference and between phases,
+unrelated-answer reuse, relevant-decision freshness/delivery invalidation, repository
+changes and strict coding revision checks. Browser checks cover stale badges, counts
+and filters after a global decision changes without changing requirement wording.
+No live model or GitHub delivery calls were made.
+
 If a suggested command fails (for example `godot` is not on PATH), inspect its output
 and set the actual executable path or fix project/toolchain errors before retrying
-main verification. Working-folder assessment runs independently of those commands.
+the implementation check. Its local phase completes before main verification runs
+those commands.
+
+Unified-check verification (2026-10-19): type checking, all 202 deterministic tests,
+the UI build and Playwright browser checks passed. Local Git fixtures cover selected
+scope, independent local/main results, reuse, unavailable main, failed commands,
+delivery credit and detached-worktree cleanup. Browser checks cover the single action
+and its `check` request. No live model or real GitHub delivery was exercised.
 
 ### One requirement per task and context
 
@@ -109,12 +207,75 @@ and foreign requirement task markers are rejected. Completed matching responses 
 recovered without replaying inference. Assessment uses a fresh session per evidence
 window, with no previous model conversations or other requirements' build logs.
 
+### Bundled OpenCode skills
+
+`src/core/execution-skills.ts` is the shared source of two versioned workflows:
+`reqwizit-assess-requirement` and `reqwizit-implement-requirement`. The owned runtime
+materializes the applicable workflow as `<temporary-directory>/<skill-name>/SKILL.md`,
+registers it using OpenCode's `skills.paths`, and removes it when the runtime closes,
+including startup failures. Project/worktree configuration files are not needed.
+The workflow content is compiled into the application, including the staged desktop.
+
+Agent instructions require loading the corresponding skill. Before prompting,
+the adapter checks the registered name, location and exact body and requires the native
+skill tool. After prompting, persisted session messages must contain a completed load
+of that skill with its matching content before task completion is accepted. Existing
+matching completed coding responses can still be recovered without another model call.
+Resuming an unfinished session refreshes its session permissions explicitly when the
+required restrictive profile is not already the final ruleset. OpenCode 1.18.32 appends
+updates rather than replacing permissions; each profile begins with deny-all before
+its exact grants, and identical final profiles are not appended on every resume.
+
+The runtime, agent, session and request tool allowlists grant only the role's named
+skill. Assessment gains no file-reading, shell, research or delegation tools; coding
+retains its existing focused coding tools and no delegation. External Claude/Agents
+skill discovery is disabled for these owned execution runtimes; other project/global
+skills are not granted by the role's skill permission. Permission setup/fixture checks
+do not establish adversarial sandbox enforcement.
+
+The full skill document is included in character-budget preflight, with name/version/
+size recorded in task context manifests. Assessments also save the skill name/version;
+the exact assessment skill content participates in context identity, so material edits
+invalidate reuse even if its version label was accidentally left unchanged. Pre-skill
+workflow results need a fresh check. Reqwizit still owns requirement state, scheduling,
+freshness, validation, checkpoints and all Git delivery operations.
+
+`npm run runtime:skills` checks both profiles against the installed runtime without
+provider inference: registration, exact body, native skill tool, session permission
+create/update/get and temporary-file cleanup. OpenCode 1.18.32 passed this metadata check
+on 2026-10-19. Deterministic adapter tests cover role tool maps, required-load validation
+and idempotent resumed permissions. An explicit, 90-second-bounded live assessment
+with `openai/gpt-6.1-sol` loaded the matching assessment skill and returned a validated
+complete scenario result for a tiny supplied code excerpt. No source edits or delivery
+occurred. Coding-model skill use and adversarial permission behavior remain unqualified.
+Restart the app after updating bundled skills so new owned runtimes load the update;
+already-running instances retain their loaded configuration.
+
+Incremental/skills verification (2026-10-19): type checking, all 212 deterministic tests,
+the UI build/Playwright checks and desktop TypeScript compilation passed. Following
+the native append-semantics finding, the six runtime adapter tests, type check and
+desktop compilation passed again with idempotent resume handling. Browser checks cover
+normal versus forced API requests, whole-project/feature/requirement scopes, and fresh/
+reused counts. SQLite fixtures cover reopening, unknown-result reuse, failed forced
+attempts, interrupted per-requirement checkpoints and normal retry without replay.
+
+### Requirement context boundaries
+
 Context contains one approved target, its exact acceptance scenarios/supporting human
 decisions, relevant feature notes, and necessary approved project/dependency guardrails
 (including transitive prerequisites). Sharing an epic or original source does not pull
 in sibling requirements or their review history. Background AI rationales, UI tooltips
 and historical file motivation may be omitted explicitly; normative human input is
-never silently truncated. Historical workspace evidence cannot prove current behavior.
+never silently truncated. Question explanations and clearly unselected options are
+omitted from execution/assessment prompts. Exact option-label answers retain the
+selected consequence, including all retained historical selections. Custom, ambiguous,
+delegated or unresolved responses retain every option. Saved questions and source
+records remain intact. This uses context policy `requirement-isolation-v3`, invalidating
+assessment reuse from the previous policy. Oversized assessment decision context first
+tries discovery's lossless shared-text and identifier tables: repeated approval wording
+and IDs are stored once with explicit expansion instructions. Human evidence is not
+summarized, and current file excerpts/handles stay unencoded. Historical workspace
+evidence cannot prove current behavior.
 
 Both coding and assessment use a 48,000-character full-request preflight. This includes
 the app-owned prompt/instructions, assessment JSON schema, saved session history on
@@ -129,9 +290,22 @@ The assessment index lists only bounded captured-excerpt metadata. It is navigat
 not inspected evidence. A model can request up to eight indexed excerpts in another
 fresh, bounded window for the same requirement. There are at most three windows total;
 requests beyond that leave the result unknown. Only currently detailed excerpts may
-be cited. Required target evidence and explicitly requested excerpts are indivisible;
-if they cannot fit with human constraints, the task becomes **Context blocked**.
+be cited. Exact target requirements/human decisions are indivisible; if they cannot
+fit after lossless compaction, the task becomes **Context blocked**. Requested excerpt
+batches are packed into bounded windows without cutting file bytes. Deferred IDs are
+explicit in the prompt and carried forward by the service, even if the model claims
+completion. After three windows, outstanding requested scope forces an unknown result.
+If no requested excerpt fits with retained decisions, the service records unknown
+without another model call and continues assessing the remaining requirements. Historical
+file links alone do not make all matching current excerpts mandatory in each window.
 Earlier windows do not accumulate in the next prompt.
+
+Follow-up budget verification (2026-10-19): type checking and 29 targeted context,
+runtime, storage and implementation tests passed. A read-only local-project exercise
+built 832 initial/simulated follow-up windows across 287 approved requirements within
+48,000 characters. Five simulated follow-ups had no individually fitting requested
+excerpt and retained unknown scope instead of blocking the action. This exercised
+context construction with saved decisions/current capture, not live model responses.
 
 Coding context blockers pause execution before advancing to another requirement.
 Assessment blockers stop that action while preserving completed results. Per-task

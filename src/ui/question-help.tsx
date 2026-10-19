@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Concept, Job, QuestionHelpRequest } from "../core/model.js";
+import { ActivityFeedback, useActivity } from "./activity.js";
 
 function ConceptTip({ concept }: { concept: Concept }) {
   const id = useId();
@@ -100,6 +101,7 @@ export function QuestionHelp({ questionID, help, reveal = 0, requesting = false 
   const jobs = help.jobs.filter((j) => j.helpRequest?.questionID === questionID);
   const active = jobs.find((j) => ["pending", "running"].includes(j.status));
   const disabled = sending || requesting || help.busy;
+  useActivity(sending || requesting, "Requesting question help…");
   async function request(action: QuestionHelpRequest["action"]) {
     const submitted = message;
     setSending(true); setError("");
@@ -120,7 +122,7 @@ export function QuestionHelp({ questionID, help, reveal = 0, requesting = false 
         <strong>{actionLabel(job.helpRequest!.action)}</strong><small>Context revision {job.expectedRevision}{job.expectedRevision !== help.revision ? " · Earlier project context" : ""}</small>
         {job.helpRequest?.message && <blockquote className="source-excerpt">{job.helpRequest.message}</blockquote>}
         {job.helpResponse ? <><p className="source-excerpt">{job.helpResponse.explanation}</p>{job.helpResponse.assumptions.length > 0 && <><b>Assumptions to check</b><ul>{job.helpResponse.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></>}{job.helpResponse.followUp && <p><b>Something to consider:</b> {job.helpResponse.followUp}</p>}<small>AI guidance · No answer selected or requirement confirmed.</small></>
-          : <p role="status" className="help-loading">{["pending", "running"].includes(job.status) ? <><span className="help-spinner" aria-hidden="true" /> Preparing clarification…</> : `${job.status}: ${job.diagnostic ?? "Request help again to retry."}`}</p>}
+          : ["pending", "running"].includes(job.status) ? <ActivityFeedback label="Preparing clarification…" /> : <p role="status">{job.status}: {job.diagnostic ?? "Request help again to retry."}</p>}
       </section>)}
     </div>
     {active && <button type="button" className="quiet" onClick={() => void help.cancel(active.id).catch((error: Error) => setError(error.message))}>Stop clarification</button>}

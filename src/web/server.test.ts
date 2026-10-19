@@ -79,6 +79,8 @@ test("implementation API authenticates actions, rejects stale settings and malfo
     assert.equal((await post("execution-config", input)).status, 400);
     assert.equal((await post("execution-start", { revision: project.revision, operation: "continue" })).status, 400);
     assert.equal((await post("execution-start", { revision: project.revision, operation: "continue", requirementID: "invented" })).status, 400);
+    assert.equal((await post("execution-start", { revision: project.revision, operation: "check", force: "true" })).status, 400);
+    assert.equal((await post("execution-start", { revision: project.revision, operation: "continue", force: true })).status, 400);
     assert.equal((await post("execution-archive", { version: 0 })).status, 400);
     const snapshot = await (await fetch(`${app.origin}/api/projects/${project.id}`, { headers })).json() as { execution: { delivered: object; config: { repository: string } }; implementationActive: boolean };
     assert.deepEqual(snapshot.execution.delivered, {}); assert.equal(snapshot.implementationActive, false);

@@ -4,7 +4,9 @@ import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { runtimeFetch } from "./http.js";
-import { implementationAgentPrompt, assessmentAgentPrompt } from "../core/execution-context.js";
+import { executionAgentPrompt } from "../core/execution-context.js";
+import { executionSkill } from "../core/execution-skills.js";
+import { codingTools, stageExecutionSkill } from "./skills.js";
 
 // Use the native Windows executable rather than invoking a PowerShell npm shim.
 function executable(): string {
@@ -20,17 +22,21 @@ export async function startRuntime(model?: string, workspace = ".spike-workspace
   signal?.throwIfAborted();
   const directory = resolve(workspace);
   await mkdir(directory, { recursive: true });
+  const stagedSkill = coding || assessment ? await stageExecutionSkill(coding) : undefined;
   const permission = { "*": "deny", ...(research ? { websearch: "allow", webfetch: "allow" } : {}),
-    ...(coding ? Object.fromEntries(["read", "glob", "grep", "list", "edit", "write", "patch", "apply_patch", "bash"].map((id) => [id, "allow"])) : {}), external_directory: "deny" };
+    ...(coding ? Object.fromEntries(codingTools.map((id) => [id, "allow"])) : {}),
+    ...(stagedSkill ? { skill: { "*": "deny", [executionSkill(coding).name]: "allow" } } : {}), external_directory: "deny" };
   const config = {
+    $schema: "https://opencode.ai/config.json",
     share: "disabled",
     autoupdate: false,
     permission,
+    ...(stagedSkill ? { skills: { paths: [stagedSkill.directory] } } : {}),
     ...(model ? { model, small_model: model } : {}),
     agent: {
       ...(coding ? { "reqwizit-implementation": { mode: "primary", description: "Implement one approved requirement", permission,
-        prompt: implementationAgentPrompt } } : {}),
-      ...(assessment ? { "reqwizit-assessment": { mode: "primary", description: "Assess one approved requirement", permission, prompt: assessmentAgentPrompt } } : {}),
+        prompt: executionAgentPrompt(true) } } : {}),
+      ...(assessment ? { "reqwizit-assessment": { mode: "primary", description: "Assess one approved requirement", permission, prompt: executionAgentPrompt(false) } } : {}),
       "requirements-spike": {
         mode: "primary", description: "Requirements discovery compatibility probe",
         prompt: `Interpret the supplied idea and propose questions. Do not inspect files or execute commands. ${research ? "Use only websearch/webfetch for targeted research within the request budget." : "Do not perform research."} Return the requested structured output.`,
@@ -40,14 +46,14 @@ export async function startRuntime(model?: string, workspace = ".spike-workspace
   };
   const child = spawn(executable(), ["serve", "--hostname=127.0.0.1", "--port=0"], {
     cwd: directory,
-    env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
+    env: { ...process.env, ...(stagedSkill ? { OPENCODE_DISABLE_EXTERNAL_SKILLS: "1", OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1" } : {}), OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     detached: coding && process.platform !== "win32",
   });
   // Drain output, but never forward runtime logs or configuration containing credentials.
   child.stderr.resume();
-  const close = async () => {
+  const stop = async () => {
     if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
     if (coding && process.platform === "win32") {
       await new Promise<void>((done) => {
@@ -63,6 +69,8 @@ export async function startRuntime(model?: string, workspace = ".spike-workspace
       stop("SIGTERM");
     });
   };
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= stop().finally(() => stagedSkill?.close());
   try {
     const url = await new Promise<string>((accept, reject) => {
       let buffer = "";
@@ -95,7 +103,7 @@ export async function startRuntime(model?: string, workspace = ".spike-workspace
       baseUrl: url, directory, headers, throwOnError: true,
       fetch: runtimeFetch,
     });
-    return { client, directory, close };
+    return { client, directory, close, skillPath: stagedSkill?.path };
   } catch (error) {
     await close();
     throw error;

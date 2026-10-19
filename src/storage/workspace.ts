@@ -142,9 +142,10 @@ export function renderWorkspace(project: Project, execution?: ExecutionState): R
     const unit = [...(execution.run?.units ?? []), ...execution.history.flatMap((h) => h.units)].find((u) => u.items.some((i) => i.requirementID === r.id));
     const item = unit?.items.find((i) => i.requirementID === r.id);
     const assessment = execution.assessments[r.id];
-    const { model: _model, captureFingerprint: _cache, ...portableAssessment } = assessment ?? {};
+    const { model: _model, captureFingerprint: _cache, contextFingerprint: _context, ...portableAssessment } = assessment ?? {};
+    const { contextFingerprint: _deliveryContext, ...portableDelivery } = execution.delivered[r.id] ?? {};
     return { requirementID: r.id, implemented: deliveredRequirement(project, execution, r.id), assessment: assessment ? portableAssessment : null,
-      execution: item?.status ?? "not-started", git: unit?.delivery ?? "none", commit: item?.commit ?? null, pr: unit?.pr ?? null, delivery: execution.delivered[r.id] ?? null };
+      execution: item?.status ?? "not-started", git: unit?.delivery ?? "none", commit: item?.commit ?? null, pr: unit?.pr ?? null, delivery: execution.delivered[r.id] ? portableDelivery : null };
   }) : undefined;
   files["progress.json"] = json({ formatVersion: 2, projectID: project.id, discovery: score, implementation: progress, ...(delivery ? { implementationDelivery: delivery } : {}) });
   files["progress.md"] = [title, `## Discovery\n\nEstimated definition coverage: ${score.percent}%${score.stale ? " (needs review)" : ""}. This is not proof of completeness.`,

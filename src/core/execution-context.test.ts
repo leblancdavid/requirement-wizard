@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectSchema } from "./model.js";
-import { checkExecutionContext, executionPrompt, executionContextBudget, runtimeContextReserve, implementationAgentPrompt, ExecutionContextError, requirementTaskContext } from "./execution-context.js";
+import { assessmentContextFingerprint, checkExecutionContext, executionPrompt, executionContextBudget, runtimeContextReserve, executionAgentPrompt, ExecutionContextError, requirementTaskContext } from "./execution-context.js";
+import { implementationSkill, skillDocument } from "./execution-skills.js";
+import { assessmentCurrent, assessmentFreshness, deliveredRequirement, emptyExecution, executionConfigSchema } from "./execution.js";
+import { requirementFingerprint } from "./implementation.js";
 
 function project() {
   return projectSchema.parse({ id: "project", name: "Context fixture", revision: 1, model: { providerID: "openai", modelID: "fixture" }, summary: "", goals: [], actors: [], assumptions: [],
@@ -24,6 +27,58 @@ function project() {
     ],
   });
 }
+
+test("assessment freshness follows relevant answers, notes and dependency guardrails rather than project revision", () => {
+  const p = project(), state = emptyExecution(), fingerprint = assessmentContextFingerprint(p, "target");
+  state.config = executionConfigSchema.parse({ repository: "fixture/repository", strategy: "main", providerID: "openai", modelID: "fixture", checks: ["npm test"] });
+  state.assessments.target = { status: "complete", explanation: "Evidence", evidenceIDs: [], scenarios: [], fingerprint: requirementFingerprint(p.requirements[0]!),
+    contextFingerprint: fingerprint, specificationRevision: p.revision, head: "head", scope: "main", capturedAt: "now", files: [], omissions: 0, verified: true };
+  state.delivered.target = { fingerprint: state.assessments.target.fingerprint, contextFingerprint: fingerprint, main: "head", at: "now", repository: "fixture/repository", checks: [] };
+  // Repository equality is checked independently of context freshness.
+  assert.equal(assessmentCurrent(p, state, "target"), true);
+  const reordered = JSON.parse(JSON.stringify(p), (_key, value: unknown) => value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).reverse()) : value) as typeof p;
+  assert.equal(assessmentContextFingerprint(reordered, "target"), fingerprint, "Object key order across storage/browser serialization is irrelevant");
+  p.revision++;
+  p.sources.push({ id: "unrelated-answer", kind: "answer", epicID: "feature", text: "Unrelated sibling answer" });
+  p.requirements[1]!.statement = "Changed sibling behavior";
+  assert.equal(assessmentContextFingerprint(p, "target"), fingerprint);
+  assert.equal(assessmentCurrent(p, state, "target"), true);
+  for (const change of [
+    (next: typeof p) => { next.sources.find((s) => s.id === "feature-note")!.text = "New feature constraint"; },
+    (next: typeof p) => { next.sources.find((s) => s.id === "project-note")!.text = "New project constraint"; },
+    (next: typeof p) => { next.requirements.find((r) => r.id === "dependency-r")!.acceptance = ["New dependency guardrail"]; },
+    (next: typeof p) => { next.questions[0]!.sourceID = "new-answer"; next.sources.push({ id: "new-answer", kind: "answer", questionID: "question-target", epicID: "feature", text: "All", supersedes: "answer-target" }); },
+  ]) {
+    const next = structuredClone(p); change(next);
+    assert.equal(assessmentCurrent(next, state, "target"), false);
+    assert.equal(deliveredRequirement(p, state, "target"), true);
+    assert.equal(deliveredRequirement(next, state, "target"), false);
+  }
+  assert.equal(assessmentCurrent(p, state, "target", { ...state.assessments.target, contextFingerprint: undefined }), false, "Legacy caches are revision-bound");
+  state.assessments.target.specificationRevision = p.revision;
+  assert.equal(assessmentCurrent(p, state, "target", { ...state.assessments.target, contextFingerprint: undefined }), true);
+  p.requirements[0]!.status = "needs-review";
+  assert.equal(assessmentCurrent(p, state, "target"), false);
+});
+
+test("freshness explains code/model/workflow invalidation separately from result and failed attempts", () => {
+  const p = project(), state = emptyExecution();
+  state.config = executionConfigSchema.parse({ repository: "fixture/repository", strategy: "main", providerID: "openai", modelID: "fixture", checks: ["npm test"] });
+  assert.equal(assessmentFreshness(p, state, "target").status, "not-assessed");
+  state.assessments.target = { status: "missing", explanation: "Missing", evidenceIDs: [], scenarios: [], fingerprint: requirementFingerprint(p.requirements[0]!),
+    contextFingerprint: assessmentContextFingerprint(p, "target"), head: "head", captureFingerprint: "capture", scope: "workspace", capturedAt: "now", files: [], omissions: 0, verified: false };
+  const a = state.assessments.target;
+  assert.equal(assessmentFreshness(p, state, "target").status, "current", "Missing is an assessed result, not a pending attempt");
+  assert.equal(assessmentFreshness(p, state, "target", { ...a, model: { providerID: "openai", modelID: "old-model" } }).reason, "model");
+  assert.equal(assessmentFreshness(p, state, "target", { ...a, contextPolicy: "old-policy" }).reason, "policy");
+  assert.equal(assessmentFreshness(p, state, "target", { ...a, skill: { name: "reqwizit-assess-requirement", version: "0" } }).reason, "policy");
+  state.assessmentRuns = [{ id: "new-check", operation: "assess", revision: 1, bindingID: "binding", status: "failed", stage: "Model failed", requirementIDs: ["sibling"],
+    completedIDs: [], reused: 0, head: "new-head", startedAt: "now", progress: [], checks: [], capture: { fingerprint: "new-capture", capturedAt: "now", files: 1, excerpts: 1, omissions: 0, traversalLimited: false, omitted: [] } }];
+  assert.equal(assessmentFreshness(p, state, "target").reason, "code", "A newer capture invalidates dated evidence even if another scoped attempt failed");
+  assert.equal(state.assessments.target.status, "missing", "The dated result remains available");
+  assert.equal(assessmentFreshness(p, state, "target", { ...a, head: "new-head", captureFingerprint: "new-capture" }).status, "current");
+});
 
 test("one requirement context retains exact target/guardrail decisions without sibling history or background file payloads", () => {
   const p = project(), coding = requirementTaskContext(p, "target", ["dependency-r"]);
@@ -48,8 +103,9 @@ test("one requirement context retains exact target/guardrail decisions without s
 });
 
 test("the full request budget includes wrappers, agent instructions, schema, runtime reserve and resumed history", () => {
-  const exact = "x".repeat(executionContextBudget - runtimeContextReserve - implementationAgentPrompt.length);
+  const exact = "x".repeat(executionContextBudget - runtimeContextReserve - executionAgentPrompt(true).length - skillDocument(implementationSkill).length);
   assert.equal(checkExecutionContext(exact, true, "target").characters, executionContextBudget);
+  assert.equal(checkExecutionContext(exact, true, "target").skill?.characters, skillDocument(implementationSkill).length);
   assert.throws(() => checkExecutionContext(exact + "x", true, "target"), ExecutionContextError);
   assert.throws(() => checkExecutionContext("small prompt", true, "target", executionContextBudget), (error) => error instanceof ExecutionContextError && error.context.historyCharacters === executionContextBudget);
   assert.ok(executionPrompt("payload", false).includes("requestEvidenceIDs"), "Assessment schema is part of the checked request");
@@ -57,4 +113,40 @@ test("the full request budget includes wrappers, agent instructions, schema, run
   const mandatory = requirementTaskContext(p, "target").data;
   assert.throws(() => checkExecutionContext(JSON.stringify(mandatory), true, "target"), ExecutionContextError);
   assert.equal(p.sources.find((s) => s.id === "project-note")!.text, "HUMAN_".repeat(10000), "Indivisible human constraints remain intact");
+});
+
+test("question context omits unselected proposals but retains exact selected consequences and historical answers", () => {
+  const p = project(), q = p.questions[0]!;
+  p.sources.find((s) => s.id === "answer-target")!.text = "Selected";
+  q.whyItMatters = "NON_NORMATIVE_EXPLANATION".repeat(100);
+  q.options[1]!.consequence = "UNSELECTED_PROPOSAL".repeat(1000);
+  const before = structuredClone(p);
+  for (const coding of [true, false]) {
+    const context = requirementTaskContext(p, "target", [], coding).data;
+    assert.deepEqual(context.questions[0]!.options, [q.options[0]]);
+    assert.equal(context.questions[0]!.omittedUnselectedOptions, 1);
+    assert.equal(JSON.stringify(context).includes("UNSELECTED_PROPOSAL"), false);
+    assert.equal(JSON.stringify(context).includes("NON_NORMATIVE_EXPLANATION"), false);
+    assert.equal(context.evidence.find((s) => s.id === "answer-target")!.text, "Selected");
+  }
+  assert.deepEqual(p, before, "Prompt projection never edits saved questions or decisions");
+  p.sources.push({ id: "old-answer", kind: "answer", epicID: "feature", questionID: q.id, text: "All" });
+  p.sources.find((s) => s.id === "answer-target")!.supersedes = "old-answer";
+  const history = requirementTaskContext(p, "target").data;
+  assert.deepEqual(history.questions[0]!.options, q.options);
+  assert.equal(history.evidence.find((s) => s.id === "old-answer")!.text, "All");
+});
+
+test("custom, delegated and unresolved question responses retain all option context", () => {
+  for (const kind of ["answer", "delegation", "deferral"] as const) {
+    const p = project(), q = p.questions[0]!;
+    const response = p.sources.find((s) => s.id === "answer-target")!;
+    response.kind = kind;
+    response.text = kind === "answer" ? "The second option, with exceptions" : "Selected";
+    assert.deepEqual(requirementTaskContext(p, "target").data.questions[0]!.options, q.options);
+  }
+  const p = project(), q = p.questions[0]!;
+  p.sources.find((s) => s.id === "answer-target")!.text = "Selected";
+  q.status = "pending";
+  assert.deepEqual(requirementTaskContext(p, "target").data.questions[0]!.options, q.options);
 });

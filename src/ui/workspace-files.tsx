@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import type { Project, Job } from "../core/model.js";
 import { implementationNeedsReview } from "../core/implementation.js";
 import type { Workspace } from "../storage/workspace.js";
+import { ActivityFeedback, Spinner, useActivity } from "./activity.js";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
 type Directories = { path: string; parent: string | null; directories: string[] };
@@ -11,6 +12,7 @@ export function WorkspacePicker({ path, create, onChange, request, disabled, exi
 }) {
   const [listing, setListing] = useState<Directories | null>(null);
   const [error, setError] = useState(""); const [loading, setLoading] = useState(false);
+  useActivity(loading, "Browsing local folders…");
   async function browse(directory?: string) {
     setLoading(true); setError("");
     try {
@@ -24,8 +26,9 @@ export function WorkspacePicker({ path, create, onChange, request, disabled, exi
   }
   return <div className="workspace-picker">
     <label>Local workspace directory<input value={path} maxLength={4096} disabled={disabled} onChange={(event) => onChange(event.target.value, create)} placeholder="D:\Projects\my-app" /></label>
-    <div className="button-row"><button type="button" className="secondary" disabled={disabled || loading} onClick={() => void browse(path || undefined)}>Browse folders</button>
+    <div className="button-row"><button type="button" className="secondary" disabled={disabled || loading} onClick={() => void browse(path || undefined)}>{loading && <Spinner />}Browse folders</button>
       {!existingOnly && <label><input type="checkbox" checked={create} disabled={disabled} onChange={(event) => onChange(path, event.target.checked)} /> Create directory if needed</label>}</div>
+    {loading && <ActivityFeedback label="Browsing local folders…" />}
     {error && <p role="alert">{error}</p>}
     {listing && <div className="folder-browser" aria-label="Local folders"><strong>{listing.path}</strong><div className="button-row">
       <button type="button" disabled={disabled || loading || !listing.parent} onClick={() => void browse(listing.parent!)}>↑ Parent</button>
@@ -41,11 +44,18 @@ export function WorkspaceConnection({ project, workspace, request, disabled, run
   scanJob?: Job;
 }) {
   const [path, setPath] = useState(workspace?.path ?? ""); const [create, setCreate] = useState(false);
+  const [working, setWorking] = useState(false);
+  useActivity(!working && workspace?.status === "pending", "Saving workspace files…");
   useEffect(() => { setPath(workspace?.path ?? ""); setCreate(false); }, [project.id, workspace?.path]);
-  const action = (body: unknown) => run(async () => { await request(`projects/${project.id}/workspace`, body); });
+  const action = async (body: unknown) => {
+    setWorking(true);
+    try { await run(async () => { await request(`projects/${project.id}/workspace`, body); }); }
+    finally { setWorking(false); }
+  };
   return <section className="workspace-connection" aria-label="Project workspace"><h2>Project workspace</h2>
     <p>{workspace ? `${workspace.status === "saved" ? "Saved" : workspace.status === "pending" ? "Saving" : workspace.status === "conflict" ? "Conflict" : "Unavailable"} · Revision ${workspace.savedRevision ?? "not yet saved"} · ${workspace.path}` : "Connect a local folder to automatically save this project's requirements and progress."}</p>
     {workspace?.diagnostic && <p role="status">{workspace.diagnostic}</p>}
+    {(working || workspace?.status === "pending") && <ActivityFeedback label="Updating workspace files…" />}
     <WorkspacePicker path={path} create={create} onChange={(value, make) => { setPath(value); setCreate(make); }} request={request} disabled={disabled} />
     <div className="button-row"><button className="secondary" disabled={disabled || !path.trim()} onClick={() => void action({ operation: "connect", revision: project.revision, path, create })}>{workspace ? "Reconnect workspace" : "Connect workspace"}</button>
       {workspace && <><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "sync" })}>Retry sync</button><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "disconnect", revision: project.revision })}>Disconnect folder</button></>}</div>
@@ -55,15 +65,23 @@ export function WorkspaceConnection({ project, workspace, request, disabled, run
 }
 
 export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: Project; disabled: boolean; scan: (resumeJobID?: string) => Promise<void>; scanJob?: Job }) {
+  const [starting, setStarting] = useState(false);
+  const active = starting || !!scanJob && ["pending", "running"].includes(scanJob.status);
+  const progress = !starting && scanJob && ["pending", "running"].includes(scanJob.status) ? scanJob.scanProgress : undefined;
+  async function start(resumeJobID?: string) {
+    setStarting(true);
+    try { await scan(resumeJobID); } finally { setStarting(false); }
+  }
   const latest = project.scans.at(-1);
   const incomplete = !latest && (project.origin || scanJob) && !["running", "pending"].includes(scanJob?.status ?? "");
   return <section aria-label="Source initialization" className="insight-card workspace-scan">
     <h3>{latest ? "Folder scan" : "Initialize from existing project"}</h3>
+    {active && <ActivityFeedback label="Scanning project folder…" completed={progress?.completed} total={progress?.total} />}
     {incomplete && <p role="status"><strong>Initialization incomplete.</strong> {scanJob?.diagnostic ?? "Complete the source scan before exploring gaps."} Existing questions are not a reconstructed baseline.</p>}
     <p>Scan documentation, source, configuration and tests to propose feature definitions and requirements. Review the proposals before continuing missing-requirement discovery.</p>
     {scanJob?.scanProgress && <p role="status">{scanJob.scanProgress.completed} of {scanJob.scanProgress.total} batches saved · File snapshot: {new Date(scanJob.scanProgress.capturedAt).toLocaleString()}. Resume uses these captured files; start a new scan to read current files.</p>}
-    {scanJob?.scanProgress?.resumable && <button type="button" disabled={disabled} onClick={() => void scan(scanJob.id)}>Resume scan</button>}
-    <button type="button" className="secondary" disabled={disabled} onClick={() => void scan()}>{scanJob?.scanProgress?.resumable ? "Start new scan" : latest ? "Rescan folder" : incomplete ? "Retry initialization" : "Initialize from folder"}</button>
+    {scanJob?.scanProgress?.resumable && <button type="button" disabled={disabled || active} onClick={() => void start(scanJob.id)}>Resume scan</button>}
+    <button type="button" className="secondary" disabled={disabled || active} onClick={() => void start()}>{active && <Spinner />}{scanJob?.scanProgress?.resumable ? "Start new scan" : latest ? "Rescan folder" : incomplete ? "Retry initialization" : "Initialize from folder"}</button>
     <small>Read-only static inspection. Dependencies, generated files, hidden paths and potentially sensitive files are excluded. Files are sent to the selected AI connection. Scanning does not run tests or confirm requirements.</small>
     {latest && <details><summary>Last scan: {new Date(latest.capturedAt).toLocaleString()} · {new Set(latest.files.map((file) => file.path)).size} files / {latest.files.length} excerpts · {latest.changes.length} changes · {latest.omitted.length} omitted paths</summary>
       <p>Snapshot {latest.id}. {latest.traversalLimited ? "Traversal limit reached; additional paths were not enumerated." : "Inspected scope is listed below; excluded directories are not traversed."}</p>

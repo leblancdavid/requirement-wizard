@@ -1,5 +1,27 @@
 # Browser workspace, epics, and estimated completeness
 
+## Running-work feedback
+
+Active operations show a spinner and a slim progress bar. The header's **Processing
+& queue** control stays visible in Settings as well as the project workspace, and
+its drawer shows separate indicators for concurrent background tasks. Foreground
+work (loading, project creation, saving responses/settings, folder browsing/preview,
+repository inspection and connection operations) also appears beneath the header
+title while it runs. Routine snapshot polling does not trigger activity indicators.
+
+Folder scans use saved batch counts, and assessment/coding bars use assessed or
+verified requirement counts for the current run. These measure that operation's
+work, not delivery to main or overall project completion. Unknown-duration work
+uses an indeterminate bar; concurrent background tasks each retain their own bar
+in the drawer. Stopped, failed, blocked, completed and awaiting-merge tasks do not
+continue animating. Indicators respect the current theme and reduced-motion
+preferences, with accessible progress labels and counts.
+
+Deterministic queue tests cover progress counts and startup/terminal-state behavior.
+Browser checks exercise header/drawer indicators, Settings visibility, measured
+assessment checkpoints, concurrent help/assessment, interrupted-task cleanup,
+sign-in feedback, reduced motion and mobile sizing.
+
 ## Project progress summary
 
 The top-right **Overall progress** card shows a percentage and status. Click it to
@@ -18,7 +40,13 @@ Escape or **Close progress** closes the modal and restores focus to the card.
 - **Implementation** counts current, repository-matching verified delivery to main
   over all non-rejected requirements in active epics. Unapproved requirements remain
   in the denominator. Manual progress, static assessments and unmerged PRs earn no
-  delivery credit. Changed requirement fingerprints invalidate previous delivery.
+  delivery credit. Changed requirement fingerprints invalidate previous delivery;
+  new delivery evidence also checks relevant human context and dependency guardrails.
+  The Implementation breakdown separately shows **local code completeness**, with
+  project/epic meters and counts for complete, partial, missing, unknown, not-assessed
+  and stale working-folder results over approved requirements. These update during
+  assessment; a main-only finding cannot raise local completeness. The stage and overall
+  percentages continue to use verified delivery rather than this local-only measure.
 - **Overall** is an equal-weight average of the three stages. Empty stages count as
   0%; empty epic rows explain their missing scope. Review/implementation percentages
   cannot round up to 100% with outstanding items, and overall is capped at 99% until
@@ -33,7 +61,8 @@ repository/fingerprint invalidation, delivery-only credit and completion gates),
 plus browser dialog expansion, focus restoration, Escape/close and mobile width.
 The mobile screenshot is `.reqwizit-state/project-progress-mobile.png`.
 
-**Implementation**, beside Review, is an integrated local build pilot (DEC-023).
+The main workflow tabs are **Design → Review → Implement**.
+**Implement**, beside Review, is an integrated local build pilot (DEC-023).
 It shares the existing tabs, feature filter, expandable rows/groups and appearance
 preferences. Its badge counts accepted active requirements not verified as delivered
 to main. See [implementation-workspace.md](implementation-workspace.md) for assessment,
@@ -51,6 +80,10 @@ commands; saved commands and edited drafts are preserved. **Use suggested comman
 replaces a draft explicitly. Suggestions identify their source and have not been run.
 
 Implementation epic drawers start closed. Expand one to inspect its requirements.
+Each header shows local assessed/completeness counts plus a separate verified-main
+fraction, updating after each checkpoint. Counts cover the full approved epic even
+while search/status filters hide rows; unknown is assessed, not complete. Stale local
+findings appear as needing reassessment rather than inflating the completion count.
 Search matches epic/requirement text, IDs and acceptance scenarios and combines with
 the Feature selector and status filters. Missing, not assessed and needs-reassessment
 filters help narrow the list; matching counts and a clear-filters empty state are
@@ -60,10 +93,31 @@ Assessment/verification show explicit run state, selected/completed counts, code
 assessment totals and **Assessment details** with command exit codes/output, capture
 scope and progress. Failed or zero-assessed runs do not imply missing implementation.
 **Complete in code** filters existing code separately from confirmed main delivery.
-Local assessment does not fetch origin; main verification retains its remote/check
-requirements. Unchanged completed assessments are reused on explicit retry.
+**Check implementation** performs local assessment followed by remote-main verification
+in one action, automatically choosing the strongest supported status. Local/main
+evidence is retained separately; failed remote access or checks preserve local results
+and previous dated delivery evidence. Only complete, verified main counts as implemented.
+Unchanged assessments are reused independently per scope on explicit retry; main checks
+still run each time.
+This includes missing, partial and unknown results: being assessed is separate from
+being complete. **Reassess all**, **Reassess feature** (with a Feature filter), and the
+per-requirement **Reassess** button bypass reuse explicitly. Run details show reused
+versus freshly assessed counts and forced attempts. Completed checkpoints survive
+restart; failed/cancelled retries retain older dated evidence. Freshness reasons identify
+requirement, decision/guardrail, workflow/skill, model and latest captured-code changes.
+Code snapshot invalidation is conservative across the captured scope, not just cited files.
+You can keep answering questions during assessment: both phases use the same starting
+specification snapshot. Unrelated answers preserve current results and reuse. Changed
+supporting decisions, feature/project notes or dependency guardrails mark affected
+results **Needs reassessment** and invalidate new delivery evidence's current credit,
+even when requirement wording is unchanged. Retry **Check implementation** against
+current decisions; assessment does not require archiving a coding run.
 
 Coding and assessment process one requirement at a time with independent contexts.
+The owned OpenCode profiles now load bundled, versioned role-specific skills; details
+retain the assessment skill version, and context preflight includes its content.
+Assessment still uses only supplied captured evidence; skills do not grant filesystem,
+shell or research tools to that profile. See [bundled skills](implementation-workspace.md#bundled-opencode-skills).
 Even epic PRs use separate coding sessions per requirement. Assessment sends focused
 captured-evidence windows and may request up to two additional bounded windows for the
 same target. Details show per-requirement context/session counts and context blockers.
@@ -130,7 +184,7 @@ batch count. **Stop** retains checkpoints for explicit resume. Interrupted scans
 **Resume scan** to reuse saved batches and the displayed file snapshot, or **Start new
 scan** to read current files. Older failures without checkpoints offer **Retry initialization**.
 Ordinary discovery stays blocked until initialization succeeds. Expanded questions include **Unrelated / dismiss** beside
-**Save response**. **Questions → Bulk question actions & history** provides batch dismissal
+**Save response**. **Design → Bulk question actions & history** provides batch dismissal
 and evidence-grounded replacement, retaining answered/queued input
 and retirement history. Godot project/configuration/scenes and larger source excerpts
 are supported with explicit inspected ranges and omissions.
@@ -194,7 +248,8 @@ OpenCode model ID. There is no automatic provider/model/account fallback.
 The project header spans the available width beside the sidebar and stays pinned to
 the top while scrolling. Between the project title/connection and definition progress,
 it centers a clickable processing summary between equal-width side columns: current task (submitted response/review,
-feature exploration, requirement cleanup, or scan batch), stage, waiting count and
+feature exploration, requirement cleanup, scan batch, implementation check, coding,
+verification, Git delivery or question help), stage, waiting count and
 items needing attention. Clicking opens **Processing & queue** in a right-side modal
 drawer over the workspace; **Stop** is available inside while active. Closing with
 Close, Escape or the backdrop restores focus to the header and leaves work running.
@@ -206,6 +261,24 @@ an AI-generated account of internal reasoning or a completion percentage. The st
 wraps below the title/progress on narrow screens, and completed/stopped/error states
 remain in the header. Progress messages are transient; saved jobs retain their results
 and diagnostics as before.
+
+The drawer aggregates the selected project's background work across all features.
+Concurrent work has separate task cards and cancellation controls; the header reports
+the active task count. Implementation checks show the local assessment followed by
+main verification, with assessed/selected counts, current requirement and saved stage.
+Coding reports its current stage and verified/selected count. Question help is listed
+even when discovery is idle. **Stop implementation** and **Stop question help** target
+their own workers. Discovery pause/resume only affects discovery. Recent background
+work retains assessment/execution/help outcomes and diagnostics; awaiting merge is a
+waiting outcome, not an active worker. Snapshots restore activity after page reload.
+
+Shared-queue verification (2026-10-19): type checking, all 208 deterministic tests,
+the UI build and Chromium browser checks passed; the final queue/implementation
+changes also passed 20 targeted tests. Browser fixtures cover simultaneous assessment
+and help, the local/main phase transition, task-specific cancellation requests,
+reload, interrupted/failed/completed outcomes and mobile width. The mobile capture is
+`.reqwizit-state/queue-implementation-mobile.png`. These fixtures use snapshot overlays;
+they do not qualify live model or GitHub delivery behavior.
 
 Verified with deterministic service/API tests and Chromium at 1440px and 390px:
 task/stage rendering, one status display, full-width header edges, sticky position
@@ -252,7 +325,7 @@ requirements review. See [local project workspaces](project-workspaces.md) for f
 layout, folder browsing, reconnect/retry, conflict resolution, and recovery behavior.
 
 1. Create a named project with an idea; **Create & explore** starts its first round.
-2. Start in **Questions**. Use the feature filter to focus on an area if needed.
+2. Start in **Design**. Use the feature filter to focus on an area if needed.
 3. The first unanswered question opens automatically. Choose an option or type an
    answer, then save; the response moves to Submitted and the next question moves
    to the top and opens automatically. Other compact rows can be opened manually.
@@ -264,7 +337,7 @@ layout, folder browsing, reconnect/retry, conflict resolution, and recovery beha
    round, then choose **Explore next gaps** when ready.
    Research and automatic-follow-up preferences are retained in this browser.
 5. Expand **Add information** for free-form ideas/corrections. Original text is retained.
-6. Open **Review** beside Questions to approve/reject requirements one at a time,
+6. Open **Review** beside Design to approve/reject requirements one at a time,
    optionally adding direction for AI follow-up. **Project map** still exposes acceptance
    scenarios, supporting decisions, and confirmation/rejection controls. Review
    changes to confirmed information before applying reorganization proposals.
@@ -383,7 +456,7 @@ The drawer shows the current task/stage, diagnostics and:
 
 Questions and notes remain usable while discovery runs. Submitted questions move out
 of the main question list and previous-answer forms while queued/processing; their
-full text and responses appear in **Submitted** and **Processing & queue**. The Questions tab counts
+full text and responses appear in **Submitted** and **Processing & queue**. The Design tab counts
 the remaining questions to answer. Other question drafts survive polling and
 background round completion. Completed answers return to the previous-answer view;
 responses needing attention become available for review again. Submitted responses

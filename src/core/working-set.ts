@@ -10,7 +10,7 @@ export type ContextTask = {
 };
 
 /** Lossless wire representation only; stored records and evidence IDs stay intact. */
-function shareRepeatedText(data: unknown) {
+export function shareRepeatedText(data: unknown) {
   const textFields = new Set(["text", "statement", "rationale", "acceptance", "reviewNote", "whyItMatters", "label", "consequence"]);
   // Ordinary review statements are often shorter than 160 characters. They
   // still save space when repeated in the requirement and approval snapshot.
@@ -71,7 +71,7 @@ function shareRepeatedText(data: unknown) {
 }
 
 /** Share repeated identifiers only in explicitly named identifier fields. */
-function shareRepeatedIdentifiers(data: unknown) {
+export function shareRepeatedIdentifiers(data: unknown) {
   const isIdentifier = (field: string) => field !== "sharedTextID"
     && (field === "id" || field.endsWith("ID") || field.endsWith("IDs") || field === "dependencies");
   const counts = new Map<string, number>();

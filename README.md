@@ -27,12 +27,15 @@ Folder scans process small sequential batches and save checkpoints; **Resume sca
 continues interrupted work using the saved file snapshot without repeating completed batches.
 Track manual implementation status and verification evidence under **Project map →
 Implementation progress**. See [local project workspaces](docs/project-workspaces.md).
-**Implementation**, beside Review, adds evidence-backed assessment, dependency order,
+**Implement**, beside Review, adds evidence-backed assessment, dependency order,
 per-requirement/epic execution and resumable local OpenCode runs. Verified work is
 committed automatically using GitHub PR-per-requirement, PR-per-epic, named-branch or
 direct-main delivery. Its count only decreases for verified delivery to main; PRs
 wait for your merge. See the [implementation pilot](docs/implementation-workspace.md)
 for setup, deterministic verification and remaining live-qualification gaps.
+Implementation checks reuse current saved assessments; **Reassess all**, feature and
+individual controls explicitly bypass reuse. Owned OpenCode assessment/coding sessions
+load bundled role-specific skills, while Reqwizit owns state and Git delivery.
 Keep answering while discovery works: responses are durably queued and processed
 one at a time, each in its own revision-linked context. Each follow-up includes its
 target and supporting evidence, project/dependency guardrails and feature notes;
@@ -42,7 +45,7 @@ and submitted answers being processed, waiting, or completed in **Activity**.
 Context preflight checks queued follow-up before starting an AI batch. Responses that
 still cannot fit are marked **Context blocked** with their answers/approvals saved;
 fitting responses can continue, and unchanged retries create no failed batches.
-**Review** beside Questions shows requirements awaiting approval, with optional notes,
+**Review** beside Design shows requirements awaiting approval, with optional notes,
 auto-advance, durable background follow-up, and submitted/reviewed history. AI can
 propose additional requirements/questions, revise wording for another review, or
 archive features when explicitly requested in a review note.
@@ -57,7 +60,7 @@ approval; IDs, original evidence and revision history are retained. Cleanup chec
 requirements individually across the selected scope; select a feature to limit it.
 Completed checks are saved, including checks needing no changes, so retrying after an
 interruption continues unfinished work without replaying unchanged completed tasks.
-The default **Questions** view uses compact expandable rows with feature/category
+The workspace follows **Design → Review → Implement**. The default **Design** view uses compact expandable rows with feature/category
 context. Use **Previous answers** or **Submitted** to edit responses, including
 waiting answers. **Project map** groups requirements under expandable features;
 definition progress and supporting evidence open on demand. Model/research and

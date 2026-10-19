@@ -4,19 +4,20 @@ import { ProjectStore } from "../storage/store.js";
 import { captureWorkspace } from "../storage/scan.js";
 import { assessmentCaptureFingerprint, assessmentContext, assertAssessmentCaptureCurrent, type AssessmentCapture } from "../storage/assessment.js";
 import { requirementFingerprint } from "../core/implementation.js";
-import { executionConfigSchema, eligibleRequirements, implementationPlan, deliveredRequirement, prerequisiteOnBranch, invalidateDelivery, validateAssessment,
+import { executionConfigSchema, eligibleRequirements, implementationPlan, deliveredRequirement, assessmentCurrent, prerequisiteOnBranch, invalidateDelivery, validateAssessment,
   type Assessment, type AssessmentRun, type DeliveryUnit, type ExecutionConfig, type ExecutionRun, type ExecutionState } from "../core/execution.js";
 import { StaleRevisionError, type Project } from "../core/model.js";
 import { OpenCodeExecution, type ExecutionAdapter } from "../runtime/execution.js";
 import { GitDelivery } from "./git-delivery.js";
 import { safeMessage } from "../runtime/contract.js";
 import { directoryKey } from "../storage/workspace.js";
-import { assessmentPrompt, checkExecutionContext, executionContextPolicy, ExecutionContextError, requirementTaskContext, type ExecutionContextManifest } from "../core/execution-context.js";
+import { assessmentPrompt, assessmentContextFingerprint, checkExecutionContext, executionContextPolicy, ExecutionContextError, requirementTaskContext, type ExecutionContextManifest } from "../core/execution-context.js";
+import { assessmentSkill } from "../core/execution-skills.js";
 
 const codeResult = z.object({ outcome: z.enum(["complete", "blocked"]), summary: z.string().min(1).max(12000) }).strict();
 type Scope = { requirementID?: string; epicID?: string };
 export class ImplementationService {
-  private work = new Map<string, { controller: AbortController; promise: Promise<void> }>();
+  private work = new Map<string, { controller: AbortController; promise: Promise<void>; operation: "check" | "assess" | "verify-main" | "continue" }>();
   constructor(private store: ProjectStore, private adapter: ExecutionAdapter = new OpenCodeExecution(),
     private gitFactory = (path: string, config: ExecutionConfig, signal: AbortSignal) => new GitDelivery(path, config, signal)) {}
   snapshot(id: string) {
@@ -54,32 +55,40 @@ export class ImplementationService {
     this.work.get(id)?.controller.abort();
   }
   async close() { for (const work of this.work.values()) work.controller.abort(); await Promise.allSettled([...this.work.values()].map((w) => w.promise)); }
-  start(id: string, revision: number, operation: "assess" | "verify-main" | "continue", scope: Scope = {}) {
+  start(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope = {}, options: { force?: boolean } = {}) {
+    if (options.force && operation === "continue") throw new Error("Force reassessment applies only to assessment, not coding execution.");
     if (this.work.has(id) || this.store.executionActive(id)) throw new Error("Implementation is already active for this project.");
     if (this.store.get(id).revision !== revision) throw new StaleRevisionError();
     if (!this.store.workspace(id)) throw new Error("Connect a local Git workspace first.");
     if (!this.store.execution(id).config) throw new Error("Save implementation settings first.");
     if (operation !== "continue" && !eligibleRequirements(this.store.get(id)).some((r) => (!scope.epicID || r.epicID === scope.epicID) && (!scope.requirementID || r.id === scope.requirementID))) throw new Error("No approved requirements in the selected scope. Approve requirements in Review or choose another feature before assessing.");
     const controller = new AbortController();
-    const promise = this.perform(id, revision, operation, scope, controller.signal);
-    this.work.set(id, { controller, promise });
+    const promise = this.perform(id, revision, operation, scope, controller.signal, options.force ?? false);
+    this.work.set(id, { controller, promise, operation });
     void promise.finally(() => this.work.delete(id)).catch(() => {});
   }
   isActive(id: string) { return this.work.has(id) || this.store.executionActive(id); }
-  private async perform(id: string, revision: number, operation: "assess" | "verify-main" | "continue", scope: Scope, signal: AbortSignal) {
+  operation(id: string) { return this.work.get(id)?.operation; }
+  private async perform(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope, signal: AbortSignal, force: boolean) {
     const owner = randomUUID(); let claimed = false, timer: ReturnType<typeof setInterval> | undefined;
     let state = this.store.execution(id);
     const binding = this.store.workspace(id)!;
     const git = this.gitFactory(binding.path, state.config!, signal);
-    const requirements = eligibleRequirements(this.store.get(id)).filter((r) => (!scope.epicID || r.epicID === scope.epicID) && (!scope.requirementID || r.id === scope.requirementID));
-    const assessmentRun: AssessmentRun | undefined = operation === "continue" ? undefined : {
-      id: randomUUID(), operation, revision, bindingID: binding.bindingID!, status: "running", stage: "Preparing repository", requirementIDs: requirements.map((r) => r.id), completedIDs: [], reused: 0,
-      startedAt: new Date().toISOString(), checks: [], progress: [],
-    };
+    const project = this.store.get(id);
+    const requirements = eligibleRequirements(project).filter((r) => (!scope.epicID || r.epicID === scope.epicID) && (!scope.requirementID || r.id === scope.requirementID));
+    const newAssessmentRun = (phase: AssessmentRun["operation"]): AssessmentRun => ({
+      id: randomUUID(), operation: phase, revision, bindingID: binding.bindingID!, status: "running", stage: "Preparing repository", requirementIDs: requirements.map((r) => r.id), completedIDs: [], reused: 0,
+      startedAt: new Date().toISOString(), checks: [], progress: [], force, freshIDs: [],
+    });
+    let assessmentRun = operation === "continue" ? undefined : newAssessmentRun(operation === "check" ? "assess" : operation);
+    let localSummary = "";
     const save = () => { signal.throwIfAborted(); this.store.saveExecution(id, state, claimed ? owner : undefined); };
     const current = () => {
       signal.throwIfAborted();
-      if (this.store.get(id).revision !== revision || this.store.workspace(id)?.bindingID !== binding.bindingID) throw new Error("Specification or workspace changed. Archive the run and replan against the current revision.");
+      if (this.store.workspace(id)?.bindingID !== binding.bindingID) throw new Error(operation === "continue"
+        ? "Workspace changed. Archive the run and replan against the current workspace."
+        : "Workspace connection changed during assessment. Run Check implementation again against the current workspace.");
+      if (operation === "continue" && this.store.get(id).revision !== revision) throw new Error("Specification changed. Archive the run and replan against the current revision.");
     };
     const progress = (text: string) => {
       if (signal.aborted) return;
@@ -90,7 +99,7 @@ export class ImplementationService {
     try {
       if (assessmentRun) {
         state.assessmentRuns = [...(state.assessmentRuns ?? []).slice(-19), assessmentRun];
-        state.assessmentStatus = `Starting ${operation === "assess" ? "workspace assessment" : "main verification"} for ${requirements.length} approved requirements…`;
+        state.assessmentStatus = `Starting ${assessmentRun.operation === "assess" ? "workspace assessment" : "main verification"} for ${requirements.length} approved requirements…`;
         save();
       }
       // Claim before fetching/creating worktrees. Canonical common-dir serializes linked workspaces too.
@@ -99,52 +108,73 @@ export class ImplementationService {
       if (this.store.execution(id).version !== state.version) throw new Error("Implementation settings changed during startup. Retry.");
       timer = setInterval(() => { try { this.store.renewExecution(id, owner); } catch { this.stop(id); } }, 30_000);
       current();
-      if (operation === "assess") { progress("Checking local Git workspace (no fetch required)…"); await git.localPreflight(); }
-      else { progress("Checking repository and fetching remote main…"); await git.preflight(); }
-      current();
       if (operation !== "continue") {
-        const directory = operation === "verify-main" ? await git.worktree(`assessment-${randomUUID()}`) : binding.path;
-        const target = git.at(directory), head = await target.head();
-        assessmentRun!.directory = directory; assessmentRun!.head = head; save();
-        const checks = operation === "verify-main" ? await target.verification((check) => { assessmentRun!.checks.push(check); save(); }, (command) => progress(`Running verification: ${command}`)) : [];
-        const failed = checks.find((c) => c.exitCode !== 0);
-        if (failed) throw new Error(`Verification command failed (exit ${failed.exitCode}): ${failed.command}. No requirement assessment was performed. See Assessment details for the command output.`);
-        if (operation === "verify-main" && !await target.clean()) throw new Error("Verification changed tracked or untracked files on main. Resolve verification setup before reassessing.");
-        const project = this.store.get(id);
-        progress("Capturing bounded source evidence…");
-        const capture = await captureWorkspace(directory, undefined, signal), fingerprint = assessmentCaptureFingerprint(capture);
-        assessmentRun!.capture = { fingerprint, capturedAt: capture.snapshot.capturedAt, files: new Set(capture.snapshot.files.map((f) => f.path)).size, excerpts: capture.snapshot.files.length,
-          omissions: capture.snapshot.omitted.length, traversalLimited: capture.snapshot.traversalLimited, omitted: capture.snapshot.omitted }; save();
-        for (const r of requirements) {
-          current(); assessmentRun!.currentRequirementID = r.id;
-          const scope = operation === "verify-main" ? "main" : "workspace", previous = state.assessments[r.id];
-          const reusable = previous?.contextPolicy === executionContextPolicy && previous.fingerprint === requirementFingerprint(r) && previous.specificationRevision === revision && previous.head === head && previous.scope === scope && previous.captureFingerprint === fingerprint
-            && previous.model?.providerID === state.config!.providerID && previous.model.modelID === state.config!.modelID;
-          progress(`${reusable ? "Reusing unchanged assessment" : "Assessing requirement"} ${assessmentRun!.completedIDs.length + 1}/${requirements.length}: ${r.statement}`);
-          const assessed = reusable ? structuredClone(previous) : await this.assess(project, r.id, target, scope, signal, progress, capture,
-            (sessionID) => { assessmentRun!.sessionID = sessionID; (assessmentRun!.sessions ??= {})[r.id] = [...(assessmentRun!.sessions?.[r.id] ?? []), sessionID]; save(); },
-            (context) => { (assessmentRun!.contexts ??= {})[r.id] = context; save(); });
-          if (reusable) { assessmentRun!.reused++; await assertAssessmentCaptureCurrent(directory, capture, signal); }
-          current();
-          if (await target.head() !== head) throw new Error("Repository HEAD changed during assessment.");
-          state.assessments[r.id] = assessed;
-          if (operation === "verify-main") {
-            assessed.verified = true;
-            if (assessed.status === "complete") state.delivered[r.id] = { fingerprint: requirementFingerprint(r), main: head, at: new Date().toISOString(), repository: state.config!.repository, checks };
-            else invalidateDelivery(state, r.id);
+        const phases: AssessmentRun["operation"][] = operation === "check" ? ["assess", "verify-main"] : [operation];
+        for (const phase of phases) {
+          if (phase !== assessmentRun!.operation) {
+            assessmentRun = newAssessmentRun(phase);
+            state.assessmentRuns = [...state.assessmentRuns!.slice(-19), assessmentRun];
+            state.assessmentStatus = `${localSummary}Checking remote main…`; save();
           }
-          assessmentRun!.completedIDs.push(r.id); assessmentRun!.currentRequirementID = undefined;
-          state.assessmentStatus = `Assessed ${assessmentRun!.completedIDs.length}/${requirements.length} approved requirements against ${scope === "main" ? "verified main" : "the working folder"}.`;
-          save();
+          if (phase === "assess") { progress("Checking local Git workspace (no fetch required)…"); await git.localPreflight(); }
+          else { progress("Checking repository and fetching remote main…"); await git.preflight(); }
+          current();
+          const directory = phase === "verify-main" ? await git.worktree(`assessment-${randomUUID()}`) : binding.path;
+          try {
+            const target = git.at(directory), head = await target.head();
+            assessmentRun!.directory = directory; assessmentRun!.head = head; save();
+            const checks = phase === "verify-main" ? await target.verification((check) => { assessmentRun!.checks.push(check); save(); }, (command) => progress(`Running verification: ${command}`)) : [];
+            const failed = checks.find((c) => c.exitCode !== 0);
+            if (failed) throw new Error(`Verification command failed (exit ${failed.exitCode}): ${failed.command}. No requirement assessment was performed. See Assessment details for the command output.`);
+            if (phase === "verify-main" && !await target.clean()) throw new Error("Verification changed tracked or untracked files on main. Resolve verification setup before reassessing.");
+            progress("Capturing bounded source evidence…");
+            const capture = await captureWorkspace(directory, undefined, signal), fingerprint = assessmentCaptureFingerprint(capture);
+            assessmentRun!.capture = { fingerprint, capturedAt: capture.snapshot.capturedAt, files: new Set(capture.snapshot.files.map((f) => f.path)).size, excerpts: capture.snapshot.files.length,
+              omissions: capture.snapshot.omitted.length, traversalLimited: capture.snapshot.traversalLimited, omitted: capture.snapshot.omitted }; save();
+            const scope = phase === "verify-main" ? "main" : "workspace";
+            const results = scope === "main" ? (state.mainAssessments ??= {}) : (state.workspaceAssessments ??= {});
+            for (const r of requirements) {
+              current(); assessmentRun!.currentRequirementID = r.id;
+              const previous = results[r.id] ?? (state.assessments[r.id]?.scope === scope ? state.assessments[r.id] : undefined);
+              const reusable = !force && previous?.contextPolicy === executionContextPolicy && previous.skill?.name === assessmentSkill.name && previous.skill.version === assessmentSkill.version
+                && assessmentCurrent(project, state, r.id, previous) && previous.head === head && previous.scope === scope && previous.captureFingerprint === fingerprint
+                && previous.model?.providerID === state.config!.providerID && previous.model.modelID === state.config!.modelID;
+              progress(`${reusable ? "Reusing unchanged assessment" : "Assessing requirement"} ${assessmentRun!.completedIDs.length + 1}/${requirements.length}: ${r.statement}`);
+              const assessed = reusable ? structuredClone(previous) : await this.assess(project, r.id, target, scope, signal, progress, capture,
+                (sessionID) => { assessmentRun!.sessionID = sessionID; (assessmentRun!.sessions ??= {})[r.id] = [...(assessmentRun!.sessions?.[r.id] ?? []), sessionID]; save(); },
+                (context) => { (assessmentRun!.contexts ??= {})[r.id] = context; save(); });
+              if (reusable) { assessmentRun!.reused++; await assertAssessmentCaptureCurrent(directory, capture, signal); }
+              current();
+              if (await target.head() !== head) throw new Error("Repository HEAD changed during assessment.");
+              results[r.id] = assessed;
+              if (!reusable) assessmentRun!.freshIDs!.push(r.id);
+              const strength = { unknown: 0, missing: 1, partial: 2, complete: 3 };
+              if (operation !== "check" || phase === "assess" || !assessmentCurrent(project, state, r.id) || strength[assessed.status] > strength[state.assessments[r.id]!.status]) state.assessments[r.id] = assessed;
+              if (phase === "verify-main") {
+                assessed.verified = true;
+                if (assessed.status === "complete") state.delivered[r.id] = { fingerprint: requirementFingerprint(r), contextFingerprint: assessed.contextFingerprint, main: head, at: new Date().toISOString(), repository: state.config!.repository, checks };
+                else invalidateDelivery(state, r.id);
+              }
+              assessmentRun!.completedIDs.push(r.id); assessmentRun!.currentRequirementID = undefined;
+              state.assessmentStatus = `${localSummary}Assessed ${assessmentRun!.completedIDs.length}/${requirements.length} approved requirements against ${scope === "main" ? "verified main" : "the working folder"}.`;
+              save();
+            }
+            assessmentRun!.status = "completed"; assessmentRun!.finishedAt = new Date().toISOString(); assessmentRun!.stage = "Completed";
+            const counts = { complete: 0, partial: 0, missing: 0, unknown: 0 };
+            for (const r of requirements) counts[results[r.id]!.status]++;
+            const latest = this.store.get(id), outdated = requirements.filter((r) => !assessmentCurrent(latest, state, r.id, results[r.id])).length;
+            const summary = `Assessed ${requirements.length} approved requirements from specification r${revision} against ${phase === "verify-main" ? "verified main" : "the working folder"} at ${head.slice(0, 8)}: ${counts.complete} complete in code, ${counts.partial} partial, ${counts.missing} missing, ${counts.unknown} unknown. ${assessmentRun!.reused} unchanged assessments reused; ${assessmentRun!.freshIDs!.length} freshly assessed${force ? " (forced)" : ""}. ${outdated ? `${outdated} results need reassessment against current inputs. ` : ""}Omitted scope stays unknown.`;
+            state.assessmentStatus = `${localSummary}${summary}${phase === "verify-main" ? ` ${requirements.filter((r) => deliveredRequirement(latest, state, r.id)).length} implemented on main.` : ""}`;
+            if (operation === "check" && phase === "assess") localSummary = `Local check completed. ${summary} `;
+            save();
+          } finally {
+            // Only remove our detached evidence worktree, including after check failures.
+            if (phase === "verify-main") await git.git(["worktree", "remove", directory]).catch(() => {});
+          }
         }
-        if (operation === "verify-main") await git.git(["worktree", "remove", directory]);
-        assessmentRun!.status = "completed"; assessmentRun!.finishedAt = new Date().toISOString(); assessmentRun!.stage = "Completed";
-        const counts = { complete: 0, partial: 0, missing: 0, unknown: 0 };
-        for (const r of requirements) counts[state.assessments[r.id]!.status]++;
-        state.assessmentStatus = `Assessed ${requirements.length} approved requirements against ${operation === "verify-main" ? "verified main" : "the working folder"} at ${head.slice(0, 8)}: ${counts.complete} complete in code, ${counts.partial} partial, ${counts.missing} missing, ${counts.unknown} unknown. ${assessmentRun!.reused} unchanged assessments reused. Omitted scope stays unknown.`; save();
         return;
       }
-      const project = this.store.get(id);
+      progress("Checking repository and fetching remote main…"); await git.preflight(); current();
       const plan = implementationPlan(project, state);
       if (!state.run || state.run.status === "completed") {
         if (state.run) state.history.push(state.run);
@@ -250,7 +280,7 @@ export class ImplementationService {
           state.assessments[requirementID] = assessed; save();
           if (assessed.status !== "complete") { item.status = "blocked"; item.diagnostic = assessed.explanation; save(); throw new Error("Acceptance assessment is incomplete. Review the retained worktree and resolve the blocker."); }
           const changed = await target.git(["status", "--porcelain"]);
-          if (!changed) throw new Error("No requirement-specific changes to commit. Use Verify main to assess existing implementation.");
+          if (!changed) throw new Error("No requirement-specific changes to commit. Use Check implementation to assess existing implementation.");
           if (changed.includes(".requirement-wizard/") || /(?:^|\n).*(?:\.env(?:\.|$)|credentials|secrets?\.|\.pem$|\.key$)/i.test(changed)) throw new Error("Task changed generated workspace artifacts or potentially sensitive files. Review before committing.");
           if (await target.head() !== before) throw new Error("Repository HEAD changed during verification.");
           item.tree = await target.treeDigest(); save(); current();
@@ -278,7 +308,7 @@ export class ImplementationService {
         if (run.config.strategy === "main") {
           await git.preflight(); current();
           if (await git.git(["rev-parse", "origin/main"]) === item.commit) {
-            state.delivered[requirementID] = { fingerprint: item.fingerprint, main: item.commit, at: new Date().toISOString(), repository: run.config.repository, checks: item.checks };
+            state.delivered[requirementID] = { fingerprint: item.fingerprint, contextFingerprint: assessmentContextFingerprint(project, requirementID, run.config.dependencies), main: item.commit, at: new Date().toISOString(), repository: run.config.repository, checks: item.checks };
             unit.delivery = "delivered"; save();
           } else if (!await this.reconcile(project, state, unit, git, signal, progress)) { run.status = "awaiting-merge"; save(); return; }
         }
@@ -291,7 +321,7 @@ export class ImplementationService {
       if (assessmentRun) {
         assessmentRun.status = signal.aborted ? "interrupted" : error instanceof ExecutionContextError ? "blocked" : "failed"; assessmentRun.finishedAt = new Date().toISOString(); assessmentRun.diagnostic = message;
         if (error instanceof ExecutionContextError) assessmentRun.contextBlock = error.context;
-        state.assessmentStatus = `${operation === "assess" ? "Workspace assessment" : "Main verification"} ${assessmentRun.status}: ${assessmentRun.completedIDs.length}/${assessmentRun.requirementIDs.length} requirements assessed. ${message}`;
+        state.assessmentStatus = `${localSummary}${assessmentRun.operation === "assess" ? "Workspace assessment" : "Main verification"} ${assessmentRun.status}: ${assessmentRun.completedIDs.length}/${assessmentRun.requirementIDs.length} requirements assessed. ${message}`;
       }
       if (!claimed) {
         try { if (!assessmentRun) state.assessmentStatus = message; this.store.saveExecution(id, state); } catch { /* Another worker owns publication. */ }
@@ -317,22 +347,39 @@ export class ImplementationService {
     await assertAssessmentCaptureCurrent(git.directory, scan, signal);
     let requested: string[] = [];
     for (let pass = 0; pass < 3; pass++) {
-      const { text, sourceIDs, availableEvidenceIDs, context } = assessmentContext(r, scan, { project, dependencyIDs: git.config.dependencies[id], dependencyGraph: git.config.dependencies, requestEvidenceIDs: requested });
+      const { text, sourceIDs, availableEvidenceIDs, deferredEvidenceIDs, context } = assessmentContext(r, scan, { project, dependencyIDs: git.config.dependencies[id], dependencyGraph: git.config.dependencies, requestEvidenceIDs: requested });
       onContext(context); progress(`Assessing acceptance (${pass + 1}/3 evidence windows): ${r.statement}`);
       const prompt = assessmentPrompt(text);
-      const response = await this.adapter.perform({ directory: git.directory, config: git.config, coding: false, signal, requirementID: id, onSession, onProgress: progress, onContext, prompt });
+      const cannotFit = deferredEvidenceIDs.length > 0 && sourceIDs.size === 0;
+      const unavailable = "Requested evidence excerpts cannot fit alongside the retained decisions; unreviewed requested scope stays unknown.";
+      const response = cannotFit ? JSON.stringify({ status: "unknown", explanation: unavailable, evidenceIDs: [],
+        scenarios: r.acceptance.map((_, index) => ({ index, status: "unknown", explanation: unavailable })) })
+        : await this.adapter.perform({ directory: git.directory, config: git.config, coding: false, signal, requirementID: id, onSession, onProgress: progress, onContext, prompt });
       if (await git.head() !== head) throw new Error("Repository HEAD changed during assessment. Refresh the source snapshot.");
       await assertAssessmentCaptureCurrent(git.directory, scan, signal);
       const result = validateAssessment(JSON.parse(response), r, [...sourceIDs.keys()]);
       const more = result.requestEvidenceIDs ?? [];
       if (more.length) {
         if (result.status !== "unknown" || new Set(more).size !== more.length || more.some((id) => !availableEvidenceIDs.has(id))) throw new Error("Assessment requested invalid, already detailed, or unindexed evidence. No completion was recorded.");
-        if (pass < 2) { requested = more; continue; }
-        progress("Evidence-window limit reached for this requirement; remaining scope stays unknown.");
+      }
+      if (more.length || deferredEvidenceIDs.length) {
+        if (pass < 2 && !cannotFit) {
+          requested = [...new Set([...deferredEvidenceIDs, ...more])];
+          if (deferredEvidenceIDs.length) progress(`Paging ${deferredEvidenceIDs.length} requested evidence excerpts into another bounded window.`);
+          continue;
+        }
+        progress(cannotFit ? unavailable : "Evidence-window limit reached for this requirement; remaining scope stays unknown.");
+        if (deferredEvidenceIDs.length) {
+          const unresolved = cannotFit ? unavailable : `Evidence-window limit reached with ${deferredEvidenceIDs.length} requested excerpts still deferred; unreviewed requested scope stays unknown.`;
+          result.status = "unknown";
+          result.explanation = cannotFit ? unresolved : `${unresolved} ${result.explanation}`.slice(0, 6000);
+          result.scenarios = result.scenarios.map((scenario) => ({ ...scenario, status: "unknown", explanation: unresolved }));
+        }
       }
       result.evidenceIDs = result.evidenceIDs.map((id) => sourceIDs.get(id)!); result.requestEvidenceIDs = undefined;
       return { ...result, fingerprint: requirementFingerprint(r), head, scope, verified: false, capturedAt: scan.snapshot.capturedAt, contextPolicy: executionContextPolicy,
-        captureFingerprint: assessmentCaptureFingerprint(scan), specificationRevision: project.revision, model: { providerID: git.config.providerID, modelID: git.config.modelID },
+        captureFingerprint: assessmentCaptureFingerprint(scan), contextFingerprint: assessmentContextFingerprint(project, id, git.config.dependencies), specificationRevision: project.revision, model: { providerID: git.config.providerID, modelID: git.config.modelID },
+        skill: { name: assessmentSkill.name, version: assessmentSkill.version },
         files: scan.snapshot.files.filter((f) => result.evidenceIDs.includes(f.sourceID)).map((f) => ({ path: f.path, hash: f.hash, startLine: f.startLine ?? 1, endLine: f.endLine ?? f.lines })), omissions: scan.snapshot.omitted.length };
     }
     throw new Error("Assessment evidence window did not resolve.");
@@ -353,10 +400,11 @@ export class ImplementationService {
       const r = project.requirements.find((r) => r.id === item.requirementID)!;
       const assessment = await this.assess(project, item.requirementID, target, "main", signal, progress);
       if (this.store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
-      assessment.verified = true;
+       assessment.verified = true;
+      (state.mainAssessments ??= {})[r.id] = assessment;
       state.assessments[r.id] = assessment;
       if (assessment.status !== "complete") { invalidateDelivery(state, r.id); throw new Error("Merged work does not fully satisfy the current requirement on main."); }
-      state.delivered[r.id] = { fingerprint: item.fingerprint, main: await target.head(), at: new Date().toISOString(), repository: git.config.repository, checks };
+      state.delivered[r.id] = { fingerprint: item.fingerprint, contextFingerprint: assessment.contextFingerprint, main: await target.head(), at: new Date().toISOString(), repository: git.config.repository, checks };
     }
     unit.mergeCommit = pr?.mergeCommit?.oid ?? commit; unit.delivery = "delivered";
     await git.git(["worktree", "remove", directory]); return true;

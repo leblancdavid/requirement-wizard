@@ -126,7 +126,7 @@ discovery and automatic answer processing remain paused until a source scan comp
 This also applies to legacy projects with unsuccessful scan attempts and generic questions.
 
 Use **Unrelated / dismiss** beside **Save response** in an expanded question to dismiss
-it individually. **Questions → Bulk question actions & history** can dismiss all eligible
+it individually. **Design → Bulk question actions & history** can dismiss all eligible
 unanswered questions. **Replace unanswered questions from project evidence** retires
 that batch and starts a new evidence-grounded round after successful initialization.
 Answered questions, saved/queued responses and decisions are protected. Retirement

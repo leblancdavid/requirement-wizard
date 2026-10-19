@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Account, LoginStatus, Model } from "../providers/connections.js";
+import { ActivityBar, ActivityFeedback, Spinner, useActivity } from "./activity.js";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
 export function AIConnections({ request, accountID, modelID, onSelect, children, disabled = false }: {
@@ -22,6 +23,8 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
   const catalogSequence = useRef(0);
   const selection = useRef(accountID); selection.current = accountID;
   const activeLogin = !!login && ["waiting", "validating"].includes(login.status);
+  const activityLabel = testing ? "Testing AI connection…" : activeLogin ? login?.status === "validating" ? "Validating account…" : "Waiting for ChatGPT sign-in…" : loadingModels ? "Loading models…" : !loaded ? "Loading saved connections…" : "Updating AI connection…";
+  useActivity(working || testing || activeLogin || loadingModels || !loaded && !error, activityLabel);
   async function reload() {
     const result = await request<{ available: boolean; accounts: Account[] }>("connections");
     if (mounted.current) { setAccounts(result.accounts); setAvailable(result.available); setLoaded(true); }
@@ -101,12 +104,13 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
   return <section className="ai-connections" aria-label="AI connections">
     <div className="connection-heading"><div><h2>AI connections</h2><p>Connect your ChatGPT plan and choose which account and model this project uses.</p></div><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
     {error && <p role="alert" className="connection-error">{error}</p>}
+    {!activeLogin && (working || testing || loadingModels) && <ActivityFeedback label={activityLabel} />}
     {message && <p role="status" className="connection-notice">{message}</p>}
     {welcome && <div className="connection-notice" role="status"><strong>Your ChatGPT plan is connected</strong><p>Connecting an account does not change this project’s active connection. Choose a model and save the selection, or use it when creating a project. Eligible requests use your plan or credits.</p><button className="secondary" onClick={() => { localStorage.setItem(`reqwizit-plan-confirmed:${welcome}`, "true"); setWelcome(null); }}>Got it</button></div>}
     <div className="connection-card"><div><strong>ChatGPT</strong><p>Sign in in a separate browser tab. Your credentials stay with the local service.</p></div><button className="primary" disabled={!available || busy || activeLogin || testing} onClick={() => signIn()}>Continue with ChatGPT</button></div>
     {loaded && !available && <p>Connection management is unavailable in this server configuration.</p>}
-    {!loaded && <p role="status">Loading saved connections…</p>}
-    {activeLogin && <div className="connection-notice" role="status"><strong>{login.status === "validating" ? "Validating your account…" : "Waiting for ChatGPT sign-in…"}</strong><p>Complete authorization in the other tab, then return here. This attempt expires after three minutes.</p>{authURL && <a href={authURL} target="_blank" rel="noreferrer">Open sign-in tab ↗</a>}<button className="quiet" disabled={busy} onClick={() => void act(async () => { await request("connections/cancel-login", { id: login.id }); setLogin({ ...login, status: "cancelled" }); sessionStorage.removeItem("reqwizit-login"); setAuthURL(""); })}>Cancel sign-in</button></div>}
+    {!loaded && !error && <ActivityFeedback label="Loading saved connections…" />}
+    {activeLogin && <div className="connection-notice" role="status"><strong><Spinner />{login.status === "validating" ? "Validating your account…" : "Waiting for ChatGPT sign-in…"}</strong><ActivityBar label="Account authorization progress" /><p>Complete authorization in the other tab, then return here. This attempt expires after three minutes.</p>{authURL && <a href={authURL} target="_blank" rel="noreferrer">Open sign-in tab ↗</a>}<button className="quiet" disabled={busy} onClick={() => void act(async () => { await request("connections/cancel-login", { id: login.id }); setLogin({ ...login, status: "cancelled" }); sessionStorage.removeItem("reqwizit-login"); setAuthURL(""); })}>Cancel sign-in</button></div>}
     <label>AI connection<select aria-label="AI connection" value={accountID} disabled={busy || testing || activeLogin} onChange={(event) => { onSelect(event.target.value, event.target.value ? "" : "gpt-6.1-sol"); }}>
       <option value="">OpenCode · existing connection</option>
       {accountID && !account && <option value={accountID}>Disconnected account · reconnect or choose another</option>}
@@ -120,7 +124,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
       </select></label>
       <p className="plan-label">Selected: ChatGPT plan · Direct connection · Web research is not available yet.</p>
       <div className="button-row">
-        <button className="secondary" disabled={busy || testing || activeLogin || loadingModels || !account} onClick={() => void catalog(accountID)}>Refresh models</button>
+        <button className="secondary" disabled={busy || testing || activeLogin || loadingModels || !account} onClick={() => void catalog(accountID)}>{loadingModels && <Spinner />}Refresh models</button>
         <button className="secondary" disabled={busy || testing || activeLogin || !account || !models.some((model) => model.id === modelID)} onClick={() => { setTesting(true); void act(async () => { await request("connections/test", { accountID, modelID }); setMessage("Connection test passed. The selected model returned a valid response."); }).finally(() => { if (mounted.current) setTesting(false); }); }}>Test connection</button>
         {testing && <button className="secondary" onClick={() => { void request("connections/cancel-test", {}).catch((error: Error) => setError(error.message)); }}>Stop test</button>}
         {account && <><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => signIn(accountID)}>Reconnect</button><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => void act(async () => { await request("connections/disconnect", { accountID }); await reload(); setModels([]); setMessage("Account disconnected. Projects retain their selection until you change it."); })}>Disconnect</button></>}
