@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import type { Project } from "../core/model.js";
 import { coverage } from "../core/coverage.js";
 import { implementationNeedsReview } from "../core/implementation.js";
+import { deliveredRequirement, type ExecutionState } from "../core/execution.js";
 export { requirementFingerprint } from "../core/implementation.js";
 
 export const workspaceFolder = ".requirement-wizard";
@@ -95,7 +96,7 @@ export function renderCombinedSpecification(project: Project) {
     summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
     epics: project.epics, requirements: project.requirements, questions: project.questions, sources: project.sources, research: project.research, scans: project.scans, origin: project.origin }) };
 }
-export function renderWorkspace(project: Project): Record<string, string> {
+export function renderWorkspace(project: Project, execution?: ExecutionState): Record<string, string> {
   const score = coverage(project);
   const progress = project.requirements.map((requirement) => {
     const item = project.implementation.find((entry) => entry.requirementID === requirement.id);
@@ -137,10 +138,17 @@ export function renderWorkspace(project: Project): Record<string, string> {
   files["project.json"] = json({ formatVersion: 2, projectID: project.id, name: project.name,
     summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
     features, origin: project.origin, evidenceIndex: "evidence/index.json" });
-  files["progress.json"] = json({ formatVersion: 2, projectID: project.id, discovery: score, implementation: progress });
+  const delivery = execution?.version ? project.requirements.map((r) => {
+    const unit = [...(execution.run?.units ?? []), ...execution.history.flatMap((h) => h.units)].find((u) => u.items.some((i) => i.requirementID === r.id));
+    const item = unit?.items.find((i) => i.requirementID === r.id);
+    return { requirementID: r.id, implemented: deliveredRequirement(project, execution, r.id), assessment: execution.assessments[r.id] ?? null,
+      execution: item?.status ?? "not-started", git: unit?.delivery ?? "none", commit: item?.commit ?? null, pr: unit?.pr ?? null, delivery: execution.delivered[r.id] ?? null };
+  }) : undefined;
+  files["progress.json"] = json({ formatVersion: 2, projectID: project.id, discovery: score, implementation: progress, ...(delivery ? { implementationDelivery: delivery } : {}) });
   files["progress.md"] = [title, `## Discovery\n\nEstimated definition coverage: ${score.percent}%${score.stale ? " (needs review)" : ""}. This is not proof of completeness.`,
       `Requirements: ${project.requirements.filter((r) => r.status === "accepted").length} accepted / ${project.requirements.length} total.`,
-      "## Implementation\n\nManually recorded status; verification evidence is supplied by the user.",
+       ...(delivery ? ["## Implementation delivery\n\nImplemented means verified work delivered to main. Assessments are snapshot-based; refresh main to check newer changes.", ...delivery.map((item) => `- ${item.requirementID}: ${item.implemented ? "Implemented on main" : "Not delivered"} · execution ${item.execution} · Git ${item.git}${item.pr ? ` · ${item.pr}` : ""}`)] : []),
+       "## Manual implementation assessments\n\nHistorical/user-supplied status; these assessments do not establish delivery to main.",
        ...progress.map((item) => {
          const requirement = project.requirements.find((entry) => entry.id === item.requirementID)!;
          return `### [${item.requirementID}](${featurePath(requirement.epicID)}.md) — ${item.status}${item.needsReview ? " · NEEDS REVIEW" : ""}\n\nRequirements review: ${item.reviewStatus}\n\nNotes: ${item.notes || "—"}\n\nVerification evidence: ${item.evidence || "—"}`;

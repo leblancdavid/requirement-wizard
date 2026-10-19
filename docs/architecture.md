@@ -15,6 +15,12 @@ implemented under `src/`. See [decisions.md](decisions.md),
   advisory responses; it cannot apply discovery proposals or mutate project decisions.
 - `src/service/queue.ts`: durable-submission orchestration, per-project serial rounds,
   batched follow-ups, pause/resume, and interrupted-batch reconciliation.
+- `src/core/execution.ts`, `src/service/implementation.ts`, `git-delivery.ts` and
+  `src/runtime/execution.ts`: dependency-aware implementation pilot, separate code/
+  execution/delivery state, isolated Git worktrees, sequential OpenCode sessions,
+  verification, automatic commits and GitHub merge barriers. Execution state/CAS/
+  repository leases are independent of specification revisions. See
+  [implementation-workspace.md](implementation-workspace.md) for contracts and gaps.
 - `src/runtime/`: shared owned-server lifecycle, provider validation, and discovery adapter.
 - `src/providers/`: app-owned protected ChatGPT credentials, OAuth attempt lifecycle,
   connection service, account catalog/probe, and direct/legacy discovery dispatch.
@@ -211,7 +217,7 @@ copy its credential file. If embedded auth cannot be supported through the selec
 API, launch the supported connection flow and refresh provider status afterward.
 
 Discovery uses a restricted tool profile: source retrieval and application-controlled
-project operations. The later coding adapter operates against an explicitly selected
+project operations. The coding adapter operates against an explicitly selected
 target workspace. Verify how OpenCode configuration and inherited instructions affect
 these profiles during the spike.
 

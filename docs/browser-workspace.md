@@ -1,5 +1,23 @@
 # Browser workspace, epics, and estimated completeness
 
+**Implementation**, beside Review, is an integrated local build pilot (DEC-023).
+It shares the existing tabs, feature filter, expandable rows/groups and appearance
+preferences. Its badge counts accepted active requirements not verified as delivered
+to main. See [implementation-workspace.md](implementation-workspace.md) for assessment,
+local OpenCode execution, automatic commits, four GitHub strategies and remaining
+live-qualification gaps.
+
+Implementation settings detect the GitHub owner/repository from the connected Git
+root's `origin` remote automatically. Detection is local/read-only, supports HTTPS and
+SSH, and can be refreshed with **Detect again**. Manual edits are retained; detected
+changes to a saved repository require saving settings before starting execution.
+
+Implementation epic drawers start closed. Expand one to inspect its requirements.
+Search matches epic/requirement text, IDs and acceptance scenarios and combines with
+the Feature selector and status filters. Missing, not assessed and needs-reassessment
+filters help narrow the list; matching counts and a clear-filters empty state are
+shown. These controls filter presentation without changing saved execution scope.
+
 Status: first playable local browser application. It shares the existing SQLite
 projects with the terminal client. No desktop installation is required.
 
@@ -17,16 +35,29 @@ tasks are skipped; changed requirements or applicable constraints permit a new c
 A genuinely oversized individual task still stops before inference, retaining earlier
 results. Suggestions remain subject to review; this is not proof of completeness.
 
-Cleanup cards show original and proposed wording/scenarios, supporting evidence, and
-the reason. **Approve replacement** makes the new wording approved under the same ID;
-**Dismiss cleanup** keeps the current wording and remembers the dismissal. A pending
+Refinements are individual expandable review items, alongside new/revised requirements
+under **To review** and in a dedicated **Refinements** filter. The Review count includes
+these pending decisions. A matching pending refinement replaces its original's pending
+row to avoid reviewing the same wording twice; keeping that original wording restores
+its ordinary review row if it still needs approval. Stale suggestions do not hide newer
+requirement wording.
+
+The **Refinement proposed** badge describes the pending work; the current requirement's
+approval status is displayed separately. Expanding an item shows original and proposed
+wording/scenarios, supporting evidence and the reason. **Approve refinement** makes the
+new wording approved under the same ID; **Keep current wording** remembers the dismissal.
+Successful decisions advance and focus the next item; failed saves retain the current
+item. Both outcomes remain under **Reviewed** as expandable comparisons, including after
+reload. **Refine requirements** is a Review toolbar action; processing progress stays in
+the header's **Processing & queue** drawer. A pending
 human review must finish before replacement approval. Changed/archived targets cannot
 accept stale suggestions; dismiss the old suggestion and refine the current wording.
 Current exports continue using active wording until approval. Implementation progress
 linked to the older requirement fingerprint then needs review.
 
-Verified with deterministic service/API tests and the browser fixture: approved-target
-proposals, reload, replacement approval, dismissal and mobile width. Prompt rules retain
+Verified with deterministic service/API/UI tests and the browser fixture: mixed review
+items/counts, feature/refinement filters, expansion, approved-target proposals, reload,
+approval, dismissal, auto-advance/focus, failed-save retention, history and mobile width. Prompt rules retain
 explicit constraints and meaningful numeric product rules; live model cleanup quality
 has not been qualified.
 
@@ -106,6 +137,28 @@ that route, use `opencode auth login` if needed; Settings still accepts an expli
 OpenCode model ID. There is no automatic provider/model/account fallback.
 
 ## Workflow
+
+The project header spans the available width beside the sidebar and stays pinned to
+the top while scrolling. Between the project title/connection and definition progress,
+it centers a clickable processing summary between equal-width side columns: current task (submitted response/review,
+feature exploration, requirement cleanup, or scan batch), stage, waiting count and
+items needing attention. Clicking opens **Processing & queue** in a right-side modal
+drawer over the workspace; **Stop** is available inside while active. Closing with
+Close, Escape or the backdrop restores focus to the header and leaves work running.
+The drawer uses the full screen on narrow viewports and keeps keyboard focus inside.
+OpenCode stages distinguish runtime startup, model/session preparation, awaiting the
+model, receiving output and validation; research reports tool requests. Direct ChatGPT
+reports request/response stages too. These are application/runtime observations, not
+an AI-generated account of internal reasoning or a completion percentage. The status
+wraps below the title/progress on narrow screens, and completed/stopped/error states
+remain in the header. Progress messages are transient; saved jobs retain their results
+and diagnostics as before.
+
+Verified with deterministic service/API tests and Chromium at 1440px and 390px:
+task/stage rendering, one status display, full-width header edges, sticky position
+after scrolling, drawer controls/focus/dismissal and no horizontal overflow. Header and
+drawer screenshots are saved as `.reqwizit-state/{header,queue}-{1440,390}.png`. No live model calls were used
+for these checks; provider streaming remains subject to the runtime's emitted events.
 
 ### Appearance and dropdowns
 
@@ -254,8 +307,10 @@ take a minute or more for detailed assessments/research.
 
 ### Processing and queue
 
-In **Activity → Revisions & processing**, expand **Processing & queue** to see
-(the panel also appears in other views when processing is paused or needs attention):
+Click the processing summary in the project header from any workspace tab to open
+**Processing & queue**. Counts and contents cover all project areas regardless of
+the feature filter. Idle, paused, stopped and attention states remain accessible.
+The drawer shows the current task/stage, diagnostics and:
 
 - **Currently processing**: full question text, exact submitted response, response
   type, submission time, and batch identifier for the active discovery round.
@@ -263,8 +318,10 @@ In **Activity → Revisions & processing**, expand **Processing & queue** to see
   change the active round's revision; they are applied together at its boundary.
 - **Saved · awaiting discovery**: applied answers/notes awaiting a manual round when
   automatic discovery was disabled.
-- **Completed batches**: submissions whose discovery result was successfully applied.
-- **Replaced responses**: superseded waiting answers retained only for history.
+- **Recent completed work**: submissions whose discovery result was successfully applied,
+  collapsed by default.
+- **Replaced responses**: superseded waiting answers retained only for history,
+  collapsed by default.
 - **Needs attention**: unsuccessful batches or responses whose question/previous
   answer changed before application. Original submitted text remains available.
 - **Context blocked**: applied input whose compacted follow-up cannot fit even as a
@@ -289,7 +346,7 @@ An indivisible oversized response is isolated so fitting responses can continue.
 The round status and Review submission history distinguish context-blocked follow-up
 from a failed model call. After fitting work completes, blockers keep the queue paused.
 
-Stop, a failed/stale round, or interruption pauses automatic processing. Expand the
+Stop, a failed/stale round, or interruption pauses automatic processing. Open the
 queue and choose **Resume discovery** (or **Explore next gaps**) to explicitly retry
 applied responses and include waiting inputs, without adding duplicate human sources.
 Conflicting unapplied responses need review and resubmission against the current
@@ -298,8 +355,9 @@ retains pending submissions and requires explicit resume rather than repeating m
 calls. Context planning uses no model calls. Completed items stay completed when
 a later item fails; resume retries only unfinished work and reuses saved sources.
 
-A focused resume applies and analyzes only that area's queued/saved responses, in
-one response at a time. Other areas stay pending, and the queue
+A focused resume applies and analyzes only that area's queued/saved responses,
+one response at a time. The drawer explicitly names the discovery scope inherited
+from the workspace feature filter. Other areas stay pending, and the queue
 pauses again if unrelated work remains. Select **All project areas** to let the
 queue process remaining responses across areas sequentially. An indivisible queued
 task whose mandatory human constraints still exceed the budget stops at preflight

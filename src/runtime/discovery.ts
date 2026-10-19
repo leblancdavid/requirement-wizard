@@ -39,9 +39,11 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
     options.signal.addEventListener("abort", abortRequest, { once: true });
     try {
       options.signal.throwIfAborted();
+      options.onProgress("OpenCode is ready; checking the selected model…");
       const catalog = (await runtime.client.provider.list({}, { signal: options.signal })).data;
       if (!catalog) throw new Error("OpenCode returned no provider catalog.");
       const model = selectModel(catalog, project.model.providerID, project.model.modelID);
+      options.onProgress("Preparing the AI session and progress connection…");
       const session = (await runtime.client.session.create({
         title: "Reqwizit discovery", permission: [{ permission: "*", pattern: "*", action: "deny" },
           ...(options.research ? ["websearch", "webfetch"].map((permission) => ({ permission, pattern: "*", action: "allow" as const })) : [])],
@@ -64,22 +66,30 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
                 }
               }
             }
+            if (event.type === "message.part.updated" && event.properties.part.sessionID === sessionID
+              && ["reasoning", "text"].includes(event.properties.part.type)) {
+              if (Date.now() - lastProgress < 5_000) continue;
+              lastProgress = Date.now();
+              options.onProgress(event.properties.part.type === "reasoning" ? "Analyzing the supplied context…" : "Receiving the AI response…");
+            }
             if (event.type === "message.part.delta" && event.properties.sessionID === sessionID) {
               if (Date.now() - lastProgress < 5_000) continue;
               lastProgress = Date.now();
-              options.onProgress("Generating interview proposals…");
+              options.onProgress("Receiving AI output for the current task…");
             }
           }
         } catch { if (!streamController.signal.aborted) options.onProgress("Progress stream interrupted; awaiting the bounded request result."); }
       })();
       // Opt-in research permits only search/fetch. Coding and filesystem tools stay disabled.
       const registry = (await runtime.client.tool.ids({}, { signal: options.signal })).data ?? [];
+      options.onProgress("Request sent to the selected model; awaiting its response…");
       const response = (await runtime.client.session.prompt({
         sessionID, model, agent: "requirements-spike", tools: Object.fromEntries(registry.map((id) => [id, options.research && ["websearch", "webfetch"].includes(id)])),
         parts: [{ type: "text", text: prompt }],
       }, { signal: request.signal })).data;
       if (budgetExceeded) throw new Error("Research exceeded the four-tool request budget or attempted a disallowed tool. No discovery proposals were applied.");
       if (!response) throw new Error("OpenCode returned no discovery output.");
+      options.onProgress("Response received; checking model identity and research activity…");
       options.onTelemetry({ actualModel: { providerID: response.info.providerID, modelID: response.info.modelID },
         usage: response.info.tokens, runtimeReportedCost: response.info.cost ?? null });
       if (response.info.error) throw new Error(`${response.info.error.name}: ${safeMessage(response.info.error.data.message)}`);

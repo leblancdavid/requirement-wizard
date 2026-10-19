@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { z } from "zod";
+import { emptyExecution, type ExecutionState } from "../core/execution.js";
 import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace } from "./workspace.js";
 import { dirname } from "node:path";
 import { workspaceScanKey } from "./scan.js";
@@ -64,6 +65,12 @@ export class ProjectStore {
         payload TEXT NOT NULL, dirty INTEGER NOT NULL DEFAULT 1,
         owner TEXT, lease_until INTEGER
       );
+      CREATE TABLE IF NOT EXISTS execution_state (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id), version INTEGER NOT NULL, payload TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS execution_leases (
+        resource TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), owner TEXT NOT NULL, lease_until INTEGER NOT NULL
+      );
       PRAGMA user_version = 1;
     `);
     for (const row of this.db.prepare("SELECT project_id, payload FROM workspaces").all() as { project_id: string; payload: string }[]) {
@@ -78,6 +85,40 @@ export class ProjectStore {
   }
 
   close() { this.syncWorkspaces(); this.db.close(); }
+
+  execution(id: string): ExecutionState {
+    this.get(id);
+    const row = this.db.prepare("SELECT payload FROM execution_state WHERE project_id = ?").get(id) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) as ExecutionState : emptyExecution();
+  }
+
+  saveExecution(id: string, state: ExecutionState, owner?: string) {
+    this.db.transaction(() => {
+      const live = this.db.prepare("SELECT owner FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()) as { owner: string } | undefined;
+      if (live && live.owner !== owner || owner && !live) throw new Error("Implementation worker lease changed or expired.");
+      if (this.execution(id).version !== state.version) throw new Error("Implementation state changed. Refresh before continuing.");
+      const next = { ...state, version: state.version + 1 };
+      this.db.prepare("INSERT INTO execution_state VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET version = excluded.version, payload = excluded.payload")
+        .run(id, next.version, JSON.stringify(next));
+      this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(id);
+      state.version = next.version;
+    }).immediate();
+  }
+
+  claimExecution(id: string, resource: string, owner: string) {
+    this.db.transaction(() => {
+      if (this.db.prepare("SELECT 1 FROM execution_leases WHERE (resource = ? OR project_id = ?) AND lease_until > ?").get(resource, id, Date.now())) throw new Error("This project or repository already has an active implementation worker.");
+      this.db.prepare("DELETE FROM execution_leases WHERE resource = ? OR project_id = ?").run(resource, id);
+      this.db.prepare("INSERT INTO execution_leases VALUES (?, ?, ?, ?)").run(resource, id, owner, Date.now() + 120_000);
+    }).immediate();
+  }
+
+  renewExecution(id: string, owner: string) {
+    if (!this.db.prepare("UPDATE execution_leases SET lease_until = ? WHERE project_id = ? AND owner = ? AND lease_until > ?").run(Date.now() + 120_000, id, owner, Date.now()).changes) throw new Error("Implementation worker lease expired.");
+  }
+
+  releaseExecution(id: string, owner: string) { this.db.prepare("DELETE FROM execution_leases WHERE project_id = ? AND owner = ?").run(id, owner); }
+  executionActive(id: string) { return !!this.db.prepare("SELECT 1 FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()); }
 
   workspace(id: string): Workspace | null {
     const row = this.db.prepare("SELECT payload, dirty FROM workspaces WHERE project_id = ?").get(id) as { payload: string; dirty: number } | undefined;
@@ -120,6 +161,7 @@ export class ProjectStore {
   }
 
   private assertWorkspaceIdle(id: string) {
+    if (this.executionActive(id)) throw new Error("Stop implementation before changing the workspace connection.");
     const row = this.db.prepare("SELECT lease_until FROM workspaces WHERE project_id = ?").get(id) as { lease_until: number | null } | undefined;
     if ((row?.lease_until ?? 0) > Date.now()) throw new Error("Workspace is saving. Retry shortly.");
   }
@@ -133,7 +175,7 @@ export class ProjectStore {
   }
 
   syncWorkspace(id: string): Workspace | null {
-    if (this.db.inTransaction) return this.workspace(id);
+    if (this.db.inTransaction || this.executionActive(id)) return this.workspace(id);
     const owner = randomUUID();
     const acquired = this.db.prepare("UPDATE workspaces SET owner = ?, lease_until = ? WHERE project_id = ? AND (owner IS NULL OR lease_until <= ?)")
       .run(owner, Date.now() + 300_000, id, Date.now()).changes;
@@ -143,7 +185,7 @@ export class ProjectStore {
       const directory = checkWorkspace(binding);
       const project = this.get(id);
       if (binding.status === "saved" && binding.savedRevision === project.revision && binding.formatVersion === 2) return binding;
-      const files = renderWorkspace(project);
+      const files = renderWorkspace(project, this.execution(id));
       checkWorkspace(binding, Object.keys(files));
       binding.pendingRemovals = [...new Set([...Object.keys(binding.hashes), ...Object.keys(binding.pendingHashes)])].filter((name) => !(name in files));
       // Retain every recognized intermediate write until the whole publication succeeds.

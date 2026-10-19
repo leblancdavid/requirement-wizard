@@ -2,3 +2,6 @@
 .review-card-heading strong { flex: 1 1 16rem; overflow-wrap: anywhere; }
 .review-card-heading small { flex: 0 1 auto; }
 .review-card .requirement-card { margin: 0; }
+.review-toolbar { display: flex; align-items: start; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.review-toolbar .view-intro { flex: 1 1 22rem; margin: 0; }
+.review-toolbar > button { flex-shrink: 0; }

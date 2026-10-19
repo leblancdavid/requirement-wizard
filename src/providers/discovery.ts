@@ -25,8 +25,10 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
       if (project.model.providerID !== "openai") throw new ProviderError("Select an OpenAI model for this ChatGPT connection.");
       options.onProgress("Generating with your connected ChatGPT plan…");
       return await this.connections.withAccount(project.model.connectionID!, async (account, signal) => {
+        options.onProgress("Request sent to the selected ChatGPT model; awaiting its response…");
         const result = await generate(account, project.model.modelID, "You are Reqwizit's requirements assistant. Follow the supplied task and JSON schema. Do not use tools.", prompt, signal, this.request);
         signal.throwIfAborted();
+        options.onProgress("Response received; checking the returned output…");
         const usage = z.object({ input_tokens: z.number().nonnegative(), output_tokens: z.number().nonnegative(),
           output_tokens_details: z.object({ reasoning_tokens: z.number().nonnegative() }).optional() }).safeParse(result.response.usage);
         options.onTelemetry({ actualModel: { providerID: "openai", modelID: result.response.model }, runtimeReportedCost: null,

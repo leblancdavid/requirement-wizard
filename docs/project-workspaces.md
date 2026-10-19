@@ -99,7 +99,9 @@ on every change and is not a complete application backup or a phased build packa
 
 Files update automatically after committed project changes, including completed
 discovery jobs, queued answers applied by the service, reviews, and implementation
-updates. Git initialization, staging, commits, and pushes remain user-managed.
+updates. Ordinary folder sync does not initialize Git, stage, commit or push. Those
+operations remain user-managed except for the explicitly configured Implementation
+pilot's verified commits and delivery.
 These files are generated outputs, not a two-way editing or project-import format.
 They do not include the entire SQLite history or constitute a complete app backup.
 
@@ -240,6 +242,13 @@ Inspect the actual revision first. This command sends files to the saved AI conn
 and stops for proposal review; run `analyze` explicitly to continue gap discovery.
 
 ## Implementation progress
+
+**Implementation** (DEC-023) tracks assessments, execution and GitHub delivery
+separately; only verified main delivery counts as implemented there. Manual records
+below remain human/historical evidence and do not establish delivery. Automatic Git
+operations require that explicitly configured pilot; normal folder sync/manual
+terminal commands do not commit or push. See
+[implementation-workspace.md](implementation-workspace.md).
 
 Open **Project map → Implementation progress**. The feature filter scopes the list.
 For each requirement, record **Not started**, **In progress**, **Blocked**,

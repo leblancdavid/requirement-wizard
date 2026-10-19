@@ -116,7 +116,7 @@ export class DiscoveryService {
           signal.throwIfAborted();
           raw = await this.adapter.analyze(project, {
             context, scan: true, research: false, signal,
-            onProgress: options.onProgress ?? (() => {}), onSession: (id) => this.store.attachSession(job.id, id),
+            onProgress: (message) => options.onProgress?.(`Scanning batch ${index + 1} of ${work.batches.length} (${sources.length} file excerpts)\n${message}`), onSession: (id) => this.store.attachSession(job.id, id),
             onTelemetry: (value) => this.store.attachTelemetry(job.id, value), onResearch: () => {},
           });
           signal.throwIfAborted();
@@ -128,6 +128,7 @@ export class DiscoveryService {
           }
           throw error;
         } finally { clearTimeout(batchTimer); }
+        options.onProgress?.(`Scanning batch ${index + 1} of ${work.batches.length}\nChecking returned requirements and file references…`);
         const parsed = scanBatchAnalysisSchema.safeParse(raw);
         if (!parsed.success) {
           const missingCitation = parsed.error.issues.find((issue) => issue.code === "too_small" && issue.path[0] === "requirements" && typeof issue.path[1] === "number" && issue.path[2] === "sourceIDs");
@@ -152,6 +153,7 @@ export class DiscoveryService {
         options.onProgress?.(`${work.batches.filter((item) => item.output).length} of ${work.batches.length} batches saved.`);
       }
       controller.signal.throwIfAborted();
+      options.onProgress?.("Saving reconstructed project definitions…");
       return this.store.finishScan(job.id, work.batches.map((batch) => batch.output!));
     } catch (error) {
       const requestTimedOut = error instanceof Error && (error.name === "TimeoutError" || /request timed out/i.test(error.message));
@@ -226,10 +228,20 @@ export class DiscoveryService {
         }
       }
       this.store.attachContext(job.id, context.manifest);
+      const shorten = (text: string) => { const line = text.replace(/\s+/g, " ").trim(); return line.length > 140 ? `${line.slice(0, 137)}…` : line; };
+      const submitted = options.submissionIDs?.map((id) => this.store.submissions(projectID).find((item) => item.id === id))[0];
+      const feature = project.epics.find((epic) => epic.id === options.focusEpicID)?.title;
+      const task = question ? `Explaining: ${shorten(question.text)}`
+        : refinementTarget ? `Refining: ${shorten(refinementTarget.statement)}`
+        : submitted?.input.type === "answer" ? `Reviewing your response: ${shorten(submitted.input.questionText)}`
+        : submitted?.input.type === "review" ? `Following up on your review: ${shorten(submitted.input.requirementText)}`
+        : submitted ? "Reviewing your added information"
+        : feature ? `Exploring gaps in ${shorten(feature)}` : "Exploring project requirements and unanswered decisions";
+      const report = (message: string) => options.onProgress?.(`${task}\n${message}`);
       const adapterOptions: DiscoveryOptions = {
         signal: controller.signal,
         onSession: (sessionID) => this.store.attachSession(job.id, sessionID),
-        onProgress: options.onProgress ?? (() => {}),
+        onProgress: report,
         onTelemetry: (telemetry) => this.store.attachTelemetry(job.id, telemetry),
         context,
         research: options.helpRequest || options.refinementOnly ? false : options.research ?? false,
@@ -238,6 +250,7 @@ export class DiscoveryService {
       const output = options.helpRequest ? await this.adapter.clarify!(project, options.helpRequest, adapterOptions)
         : await this.adapter.analyze(project, adapterOptions);
       controller.signal.throwIfAborted();
+      report("Checking returned proposals and references before saving…");
       return options.helpRequest ? this.store.finishHelp(job.id, output) : this.store.finishJob(job.id, analysisSchema.parse(output));
     } catch (error) {
       if (error instanceof ContextBudgetError) {

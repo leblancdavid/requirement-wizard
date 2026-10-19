@@ -32,6 +32,11 @@ every technical detail proposed in the planning documents.
 
 ## Requirement refinement (DEC-022)
 
+Confirmed review presentation: refinement proposals are individual expandable items
+in the shared Review queue, with a Refinements filter, approve/keep-current actions,
+automatic advance and retained comparisons in Reviewed history. Display pending-work
+status separately from active requirement approval. User approved this layout.
+
 Requirements remain detailed at the behavioral/product level. Discovery
 refines implementation-heavy wording and incidental tuning values, including in
 previously approved requirements. Show separate cleanup proposals and preserve active
@@ -44,6 +49,22 @@ bounded discovery/refinement-only passes, Review before/after comparison and
 approve/dismiss actions, stale checks and unchanged-target repeat suppression.
 Deterministic tests verify the lifecycle and browser interaction; actual model cleanup
 quality has not been live-qualified.
+
+## Integrated implementation (DEC-023)
+
+Confirmed October 18, 2026: add **Implementation (x)** beside Review, matching existing
+tab/row/group/theme styling. Assess approved requirements against file evidence and
+recommend dependency-first order by epic. Implement requirements, epics or Continue
+sequentially through local persistent/resumable OpenCode sessions, stopping on
+failures/blockers. Automatically commit successful verified work with requirement-
+specific titles/details. Support GitHub PR per requirement, PR per epic, named branch
+and direct main. Execution and Git delivery remain independent; only verified main
+delivery counts as implemented. The badge counts accepted active requirements not
+delivered. PR strategies wait for user merge; no auto-merge. OpenCode installation is
+external initially; installer management is a future option. User approved the plan,
+matching style and implementation. The pilot has deterministic checks and a bounded
+live sandbox coding/completed-session continuation pass. In-flight recovery and full
+coding/GitHub delivery remain unqualified. See [implementation-workspace.md](implementation-workspace.md).
 
 ## Proposed implementation defaults
 

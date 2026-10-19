@@ -15,17 +15,20 @@ function executable(): string {
   return "opencode";
 }
 
-export async function startRuntime(model?: string, workspace = ".spike-workspace", signal?: AbortSignal, research = false) {
+export async function startRuntime(model?: string, workspace = ".spike-workspace", signal?: AbortSignal, research = false, coding = false) {
   signal?.throwIfAborted();
   const directory = resolve(workspace);
   await mkdir(directory, { recursive: true });
-  const permission = { "*": "deny", ...(research ? { websearch: "allow", webfetch: "allow" } : {}) };
+  const permission = { "*": "deny", ...(research ? { websearch: "allow", webfetch: "allow" } : {}),
+    ...(coding ? Object.fromEntries(["read", "glob", "grep", "list", "edit", "write", "patch", "apply_patch", "bash"].map((id) => [id, "allow"])) : {}), external_directory: "deny" };
   const config = {
     share: "disabled",
     autoupdate: false,
     permission,
     ...(model ? { model, small_model: model } : {}),
     agent: {
+      ...(coding ? { "reqwizit-implementation": { mode: "primary", description: "Implement one approved requirement", permission,
+        prompt: "Implement only the supplied requirement in this worktree. Respect project instructions and preserve unrelated behavior. Do not commit, push, merge, change branches, configure Git, or create PRs; the application owns delivery. Report blockers explicitly. Return a concise summary and acceptance evidence; never claim checks you did not run." } } : {}),
       "requirements-spike": {
         mode: "primary", description: "Requirements discovery compatibility probe",
         prompt: `Interpret the supplied idea and propose questions. Do not inspect files or execute commands. ${research ? "Use only websearch/webfetch for targeted research within the request budget." : "Do not perform research."} Return the requested structured output.`,
@@ -38,15 +41,24 @@ export async function startRuntime(model?: string, workspace = ".spike-workspace
     env: { ...process.env, OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
+    detached: coding && process.platform !== "win32",
   });
   // Drain output, but never forward runtime logs or configuration containing credentials.
   child.stderr.resume();
   const close = async () => {
     if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+    if (coding && process.platform === "win32") {
+      await new Promise<void>((done) => {
+        const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+        killer.once("error", () => { child.kill(); done(); }); killer.once("exit", () => done());
+      });
+      return;
+    }
     await new Promise<void>((done) => {
-      const timer = setTimeout(() => { child.kill("SIGKILL"); done(); }, 3_000);
+      const stop = (signal: NodeJS.Signals) => { try { if (coding && child.pid) process.kill(-child.pid, signal); else child.kill(signal); } catch { /* Owned process already exited. */ } };
+      const timer = setTimeout(() => { stop("SIGKILL"); done(); }, 3_000);
       child.once("exit", () => { clearTimeout(timer); done(); });
-      child.kill();
+      stop("SIGTERM");
     });
   };
   try {

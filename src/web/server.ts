@@ -20,15 +20,20 @@ import { ConnectionManager, connectionError, type Connections } from "../provide
 import { ProviderError } from "../providers/chatgpt.js";
 import { CredentialStore } from "../providers/credentials.js";
 import { ConnectedDiscovery } from "../providers/discovery.js";
+import { ImplementationService } from "../service/implementation.js";
+import { inspectWorkspaceRepository } from "../service/git-delivery.js";
+import { executionConfigSchema } from "../core/execution.js";
+import type { ExecutionAdapter } from "../runtime/execution.js";
 import type { ModelSelection } from "../core/model.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
 
-export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; connections?: Connections; port?: number; staticDir?: string }) {
+export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; executionAdapter?: ExecutionAdapter; connections?: Connections; port?: number; staticDir?: string }) {
   const token = randomBytes(32).toString("hex");
   const service = new DiscoveryService(options.store, options.adapter);
   const queue = new DiscoveryQueue(service);
+  const implementation = new ImplementationService(options.store, options.executionAdapter);
   const helpWork = new Map<string, { controller: AbortController; promise: Promise<unknown> }>();
   const root = resolve(options.staticDir ?? "dist/web");
   const validateConnection = async (model: ModelSelection) => {
@@ -154,11 +159,32 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? coverage(options.store.get(id, lastRound.expectedRevision)).percent : null;
         const helpJobs = options.store.jobs(id).filter((j) => j.helpRequest).map(({ result: _, researchEvidence: __, ...job }) => job);
-        json(res, 200, { project, workspace: options.store.syncWorkspace(id), coverage: coverage(project), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id) }); return;
+        json(res, 200, { project, workspace: options.store.syncWorkspace(id), coverage: coverage(project), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id) }); return;
       }
       if (req.method === "GET" && action === "history") { json(res, 200, options.store.history(id)); return; }
+      if (req.method === "GET" && action === "execution-repository") {
+        const binding = options.store.workspace(id);
+        const detected = await inspectWorkspaceRepository(binding?.path);
+        if (options.store.workspace(id)?.bindingID !== binding?.bindingID) throw new Error("Workspace changed during repository detection. Detect again.");
+        json(res, 200, detected); return;
+      }
       if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
       const raw = await body(req);
+      if (action === "execution-config") {
+        const input = z.object({ revision, version: z.number().int().nonnegative(), config: executionConfigSchema }).strict().parse(raw);
+        json(res, 200, implementation.configure(id, input.revision, input.config, input.version)); return;
+      }
+      if (action === "execution-start") {
+        const input = z.object({ revision, operation: z.enum(["assess", "verify-main", "continue"]), requirementID: z.string().min(1).optional(), epicID: z.string().min(1).optional() }).strict().parse(raw);
+        if (queue.isActive(id)) throw new Error("Stop discovery before starting implementation work.");
+        if (input.requirementID && input.epicID) throw new Error("Choose a requirement or an epic scope.");
+        if (input.requirementID && !project.requirements.some((r) => r.id === input.requirementID && r.status === "accepted")) throw new Error("Choose an accepted requirement.");
+        if (input.epicID && !project.epics.some((e) => e.id === input.epicID && !e.archived)) throw new Error("Choose an active epic.");
+        implementation.start(id, input.revision, input.operation, { requirementID: input.requirementID, epicID: input.epicID });
+        json(res, 202, { started: true }); return;
+      }
+      if (action === "execution-stop") { z.object({}).strict().parse(raw); implementation.stop(id); json(res, 200, { stopping: true }); return; }
+      if (action === "execution-archive") { const input = z.object({ version: z.number().int().nonnegative() }).strict().parse(raw); json(res, 200, implementation.archive(id, input.version)); return; }
       if (action === "retire-questions") {
         const input = z.object({ revision, questionIDs: z.array(z.string().min(1)).min(1).max(100), reason: z.string().trim().min(1).max(2000), regenerate: z.boolean().optional(), research: z.boolean().optional() }).strict().parse(raw);
         if (input.regenerate) { service.assertCanDiscover(id); if (!project.scans.length) throw new Error("Complete a folder scan before generating evidence-based replacements."); }
@@ -202,6 +228,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, { cancelled: !!work }); return;
       }
       if (action === "analyze") {
+        if (implementation.isActive(id)) throw new Error("Stop implementation before starting discovery.");
         const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional() }).strict().parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();
         if (queue.isActive(id)) {
@@ -211,6 +238,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 202, { started: true }); return;
       }
       if (action === "scan") {
+        if (implementation.isActive(id)) throw new Error("Stop implementation before starting discovery.");
         const input = z.object({ revision, resumeJobID: z.string().uuid().optional() }).strict().parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();
         if (!options.store.workspace(id)) throw new Error("Connect a local workspace before initializing.");
@@ -277,12 +305,12 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
     closePromise = (async () => {
       const cleanup = await Promise.allSettled([
         ...[...helpWork.values()].map((work) => work.promise),
-        queue.close(), options.connections?.close(),
+        implementation.close(), queue.close(), options.connections?.close(),
       ]);
       server.closeAllConnections();
       await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
       // Help failures are already persisted by the service; teardown failures are actionable.
-      for (const result of cleanup.slice(-2)) if (result.status === "rejected") throw result.reason;
+      for (const result of cleanup.slice(-3)) if (result.status === "rejected") throw result.reason;
     })();
     return closePromise;
   } };

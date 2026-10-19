@@ -7,6 +7,7 @@ import type { DiscoveryAdapter } from "../service/discovery.js";
 import { analysisSchema } from "../core/model.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
+import { command } from "../service/git-delivery.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -52,6 +53,47 @@ async function until(check: () => boolean) {
   for (let i = 0; i < 100; i++) { if (check()) return; await new Promise((accept) => setTimeout(accept, 10)); }
   assert.fail("Timed out waiting for background work");
 }
+
+test("implementation API authenticates actions, rejects stale settings and malformed delivery, and separates manual verification from main", async () => {
+  const store = new ProjectStore(":memory:");
+  let project = store.create("Build API", "Persist work", { providerID: "openai", modelID: "fixture" });
+  const job = store.beginJob(project.id, project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { summary: "Build", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [{ statement: "Persist work", rationale: "Required", sourceIDs: [project.sources[0]!.id], acceptance: ["Survives restart"] }] });
+  project = store.get(project.id); project = store.review(project.id, project.revision, project.requirements[0]!.id, "accepted", "");
+  project = store.setImplementation(project.id, project.revision, project.requirements[0]!.id, { status: "verified", notes: "Manual", evidence: "Manual check" });
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { throw new Error("Unexpected inference"); } }, executionAdapter: { async perform() { throw new Error("Unexpected execution"); } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const post = (action: string, input: unknown, authenticated = true) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers: authenticated ? headers : { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+  const config = { repository: "fixture/build", strategy: "requirement-pr", branch: "implementation", providerID: "openai", modelID: "fixture", checks: ["npm test"], dependencies: {} };
+  let detectionRoot: string | undefined;
+  try {
+    const endpoint = `${app.origin}/api/projects/${project.id}/execution-repository`;
+    assert.equal((await fetch(endpoint)).status, 403);
+    assert.equal((await (await fetch(endpoint, { headers })).json()).status, "no-workspace");
+    const input = { revision: project.revision, version: 0, config };
+    assert.equal((await post("execution-config", input, false)).status, 403);
+    assert.equal((await post("execution-config", { ...input, revision: 1 })).status, 409);
+    assert.equal((await post("execution-config", { ...input, config: { ...config, strategy: "force-push" } })).status, 400);
+    assert.equal((await post("execution-config", { ...input, config: { ...config, checks: [] } })).status, 400);
+    assert.equal((await post("execution-config", input)).status, 200);
+    assert.equal((await post("execution-config", input)).status, 400);
+    assert.equal((await post("execution-start", { revision: project.revision, operation: "continue" })).status, 400);
+    assert.equal((await post("execution-start", { revision: project.revision, operation: "continue", requirementID: "invented" })).status, 400);
+    assert.equal((await post("execution-archive", { version: 0 })).status, 400);
+    const snapshot = await (await fetch(`${app.origin}/api/projects/${project.id}`, { headers })).json() as { execution: { delivered: object; config: { repository: string } }; implementationActive: boolean };
+    assert.deepEqual(snapshot.execution.delivered, {}); assert.equal(snapshot.implementationActive, false);
+    assert.equal(snapshot.execution.config.repository, "fixture/build");
+    assert.equal(store.get(project.id).revision, project.revision, "Execution settings do not mutate the specification revision");
+    mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true }); detectionRoot = mkdtempSync(resolve(".reqwizit-state/tests/repository-api-"));
+    for (const args of [["init", "-b", "main"], ["remote", "add", "origin", "https://github.com/fixture/detected.git"]]) assert.equal((await command(detectionRoot, "git", args, AbortSignal.timeout(5000))).code, 0);
+    store.connectWorkspace(project.id, project.revision, detectionRoot);
+    const version = store.execution(project.id).version;
+    const detected = await (await fetch(endpoint, { headers })).json();
+    assert.equal(detected.status, "detected"); assert.equal(detected.repository, "fixture/detected");
+    assert.equal(store.execution(project.id).version, version, "Detection is read-only; saving remains explicit");
+    assert.equal(store.execution(project.id).config?.repository, "fixture/build");
+  } finally { await app.close(); store.close(); if (detectionRoot) rmSync(detectionRoot, { recursive: true, force: true }); }
+});
 
 test("refinement action creates separate approved-requirement proposals and reviews them through authenticated revision checks", async () => {
   const store = new ProjectStore(":memory:");
@@ -249,7 +291,8 @@ test("browser job survives request completion, exposes progress, and applies a f
     const request = () => fetch(`${app.origin}/api/projects/${project.id}/analyze`, { method: "POST", headers, body: JSON.stringify({ revision: 1 }) });
     assert.equal((await request()).status, 202); assert.equal((await request()).status, 409);
     const snapshot = await (await fetch(`${app.origin}/api/projects/${project.id}`, { headers })).json() as { active: boolean; progress: string[] };
-    assert.equal(snapshot.active, true); assert.ok(snapshot.progress.includes("Fixture discovery running"));
+    assert.equal(snapshot.active, true);
+    assert.ok(snapshot.progress.includes("Exploring project requirements and unanswered decisions\nFixture discovery running"));
     release();
     for (let i = 0; i < 30 && store.get(project.id).revision === 1; i++) await new Promise((accept) => setTimeout(accept, 10));
     assert.equal(store.get(project.id).revision, 2);

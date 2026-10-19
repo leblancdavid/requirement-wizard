@@ -1,24 +1,36 @@
 /* Focused workspace: one content column, detail only when requested. */
 .sidebar { width: 185px; padding: 24px 14px; }
 .brand { margin-bottom: 30px; font-size: 15px; }
-main { flex: 1; min-width: 0; max-width: 1180px; padding: 24px 40px; margin: 0 auto; }
-.topbar { padding-bottom: 16px; margin-bottom: 0; align-items: center; }
+main { flex: 1; min-width: 0; max-width: none; padding: 0 40px 24px; margin: 0; }
+main > :not(.topbar) { max-width: 1100px; margin-left: auto; margin-right: auto; }
+.topbar { position: sticky; top: 0; z-index: 20; background: var(--background); border-bottom: 1px solid var(--border); padding: 20px 40px; margin: 0 -40px 16px; align-items: center; }
 .topbar h1 { font-size: 23px; }
 .topbar small { font-size: 12px; }
 .topbar { gap: 20px; flex-wrap: wrap; }
-.topbar > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.topbar > div:first-child { min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
+.topbar .round-status { flex: 2 1 300px; min-width: 0; margin: 0; display: flex; align-items: center; gap: 10px; overflow-wrap: anywhere; }
+.status-copy { min-width: 0; }
+.status-copy strong { font-weight: 600; color: var(--text); }
+.status-copy small { display: block; margin-top: 4px; }
+.round-status > .pulse, .round-status > .connection-dot, .round-status > button { flex-shrink: 0; }
+.round-status > button { margin-left: auto; }
 .header-progress { width: 220px; max-width: 100%; flex-shrink: 0; }
 .header-progress-label { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; font-size: 12px; }
 .header-progress-label strong { font-size: 22px; font-variant-numeric: tabular-nums; }
 .header-progress .meter { margin: 5px 0; }
 .header-progress small { font-size: 11px; }
+@media (min-width: 801px) {
+  .topbar:has(.queue-trigger) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr); }
+  .topbar .queue-trigger { width: 100%; }
+  .topbar:has(.queue-trigger) .header-progress { justify-self: end; }
+}
 .sidebar-tools { margin-top: auto; padding: 20px 0 12px; }
 .settings-toggle { display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; border: 1px solid #476052; border-radius: 8px; color: #e1e7da; }
 .settings-toggle:hover, .settings-toggle.selected { background: #244238; border-color: #91a99a; }
 .sidebar-bottom { margin-top: 0; }
 .workspace { display: block; }
 .discovery-column { min-width: 0; }
-.main-tabs { margin: 0 0 22px; }
+.main-tabs { margin: 0 0 22px; flex-wrap: wrap; }
 .main-tabs button { padding: 12px 16px; }
 .work-heading { margin: 0 0 14px; gap: 16px; align-items: center; }
 .work-heading h2 { font-size: 18px; margin: 0 0 8px; }
@@ -87,7 +99,10 @@ main { flex: 1; min-width: 0; max-width: 1180px; padding: 24px 40px; margin: 0 a
 .history-list { margin-top: 20px; }
 .question-card, .feature-group, .insight-card, .settings-panel { overflow-wrap: anywhere; }
 @media (max-width: 800px) {
-  main { padding: 20px; }
+  main { padding: 0 20px 20px; }
+  .topbar { margin: 0 -20px 16px; padding: 16px 20px; }
+  .topbar .round-status { order: 3; flex-basis: 100%; }
+  .header-progress { width: 180px; }
   .sidebar { width: 155px; }
   .work-heading { align-items: start; }
   .work-heading > .primary { flex-shrink: 0; }
@@ -101,9 +116,11 @@ main { flex: 1; min-width: 0; max-width: 1180px; padding: 24px 40px; margin: 0 a
   .brand { padding-right: 50px; }
   .sidebar-tools { position: absolute; top: 12px; right: 16px; margin: 0; padding: 0; }
   .topbar { gap: 12px; }
-  .header-progress { width: 100%; }
-  main { padding: 16px; }
-  .topbar { margin-bottom: 0; }
+  .header-progress { width: 125px; }
+  .header-progress-label { gap: 6px; }
+  main { padding: 0 16px 16px; }
+  .topbar { margin: 0 -16px 16px; padding: 12px 16px; }
+  .topbar > div:first-child { flex-basis: 120px; }
   .main-tabs button { padding: 11px 9px; font-size: 12px; }
   .work-heading h2 { font-size: 16px; }
   .work-heading .primary { max-width: 120px; padding: 8px; font-size: 11px; }

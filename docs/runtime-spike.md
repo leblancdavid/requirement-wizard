@@ -151,3 +151,16 @@ combines the caller's Request/RequestInit signal with a five-minute prompt or
 90-second metadata deadline. A local HTTP test verifies Request-signal cancellation;
 the research retry completed. Application analysis retains its combined five-minute
 bound and six-minute worker lease.
+
+## Implementation adapter follow-up — October 18, 2026
+
+A bounded live coding check through `OpenCodeExecution` selected
+`openai/gpt-6.1-sol` and SDK 1.18.32. In a disposable temporary sandbox, the first
+turn created an exact text file through `apply_patch`. After stopping/restarting the
+owned runtime, a second turn reused the saved session, read the file and appended
+the requested line. Both JSON results and exact file bytes passed (90-second deadline
+per turn). Session: `ses_eae87af17ffe0uK5dgNAHynFJ5`. No production repository or
+GitHub delivery was involved. Metadata inspection found the new primary coding agent;
+inherited permission rules remain present, so this does not establish effective deny
+enforcement. In-flight interrupted-session recovery and full implementation/delivery
+qualification remain open. See [implementation-workspace.md](implementation-workspace.md).

@@ -25,6 +25,12 @@ Folder scans process small sequential batches and save checkpoints; **Resume sca
 continues interrupted work using the saved file snapshot without repeating completed batches.
 Track manual implementation status and verification evidence under **Project map →
 Implementation progress**. See [local project workspaces](docs/project-workspaces.md).
+**Implementation**, beside Review, adds evidence-backed assessment, dependency order,
+per-requirement/epic execution and resumable local OpenCode runs. Verified work is
+committed automatically using GitHub PR-per-requirement, PR-per-epic, named-branch or
+direct-main delivery. Its count only decreases for verified delivery to main; PRs
+wait for your merge. See the [implementation pilot](docs/implementation-workspace.md)
+for setup, deterministic verification and remaining live-qualification gaps.
 Keep answering while discovery works: responses are durably queued and processed
 one at a time, each in its own revision-linked context. Each follow-up includes its
 target and supporting evidence, project/dependency guardrails and feature notes;
@@ -40,8 +46,11 @@ propose additional requirements/questions, revise wording for another review, or
 archive features when explicitly requested in a review note.
 **Review → Refine requirements** proposes behavior-focused replacements for technical
 wording and incidental tuning constants, including in approved requirements. Discovery
-also checks for cleanup opportunities. Compare original/proposed wording and scenarios,
-then approve the replacement or dismiss it. Active requirements stay unchanged until
+also checks for cleanup opportunities. Refinements appear as individual expandable
+**Refinement proposed** items in **To review**, with a **Refinements** filter. Compare
+original/proposed wording and scenarios, then choose **Approve refinement** or **Keep
+current wording**. Review advances to the next item; both outcomes and their comparisons
+remain under **Reviewed**. Active requirements stay unchanged until
 approval; IDs, original evidence and revision history are retained. Cleanup checks
 requirements individually across the selected scope; select a feature to limit it.
 Completed checks are saved, including checks needing no changes, so retrying after an
@@ -159,8 +168,9 @@ Desktop, browser, and terminal clients share project state. Requirements retain 
 sources, decisions retain their rationale, and build packages reference the exact
 specification revision used to generate them.
 
-The initial release ends with portable build packages. A subsequent integrated
-Build workspace will launch and monitor OpenCode against a target project.
+Portable build packages remain planned. An integrated Implementation workspace pilot
+now launches local OpenCode against isolated repository worktrees; its live runtime
+and GitHub qualification remain outstanding.
 
 Existing-project initialization is available: on **New project**, choose **Existing
 project** and select the folder first. A local metadata/document preview suggests an

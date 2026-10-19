@@ -187,6 +187,17 @@ Exit checks:
 
 ## M6 — Integrated build pilot (follow-on)
 
+DEC-023 authorizes this pilot ahead of M5 portable packages. The Implementation tab,
+assessment/planning, separate execution/delivery state, isolated local OpenCode adapter,
+explicit resume, sequential verification/commits and four GitHub strategies are
+implemented. Tests use real temporary local Git repositories with injected model/
+GitHub responses; browser checks cover settings/actions/themes/responsiveness. Live
+coding permission enforcement/in-flight interrupted recovery, GitHub delivery, merge variants and
+installer dependency management remain unqualified. M6 and M5/readiness exit criteria
+are not complete. A bounded live ChatGPT sandbox check passed file creation and
+same-session continuation after an owned runtime restart. See
+[implementation-workspace.md](implementation-workspace.md).
+
 Dependencies: M5 and an explicit target-workspace/execution design.
 
 Work:

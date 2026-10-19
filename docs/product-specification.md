@@ -30,8 +30,10 @@ state remains available and interrupted work requires explicit resume. See
 DEC-018 brings source-folder initialization and manual rescanning forward from M7.
 Read-only evidence capture produces reviewable definitions before gap discovery.
 Broader existing-project change planning/handoffs and automatic watching remain later work.
-An integrated coding workspace follows the initial release. Hosted collaboration,
-cloud synchronization and autonomous deployment are outside this release.
+DEC-023 brings an integrated Implementation workspace pilot forward independently of
+unfinished portable handoffs/readiness work. Live coding and GitHub delivery remain
+unqualified. Hosted collaboration, cloud synchronization and autonomous deployment
+are outside this release.
 DEC-015 adds staged direct-provider migration: direct ChatGPT discovery/help and
 in-app connection management are implemented alongside legacy OpenCode selections.
 Direct research remains unsupported; direct live verification and distribution
@@ -180,6 +182,11 @@ and allow editing, accepting, or rejecting proposed requirements.
   existing projects. Proposed and approved requirements are eligible; rejected or
   archived requirements are excluded. Cleanup is a separate pending proposal showing
   original/replacement wording, acceptance scenarios and the reason (DEC-022).
+- Present refinements as individual expandable items in Review alongside new/revised
+  requirements, with a dedicated Refinements filter, consistent counts, and clear
+  proposed-work badges separate from the active requirement's approval status.
+  Approve refinement or keep current wording, advance after successful decisions,
+  and retain both outcomes with before/after comparisons in Reviewed history.
 - Preserve active wording and approval until the replacement is explicitly approved.
   Keep IDs, sources and revision history. Reject stale approvals, retain dismissals,
   and suppress repeated suggestions for the same unchanged requirement. Refinement
@@ -357,6 +364,51 @@ and discovery coverage.
 - Apply expected-revision checks, retain history, and save progress into the connected
   workspace. Current progress counts must exclude stale implementation assessments.
 
+### Integrated implementation pilot (DEC-023)
+
+**RW-025 — Evidence-backed implementation workspace.** Add Implementation beside Review,
+matching existing tabs, compact rows, feature groups, theme/appearance and responsive
+behavior. Its badge counts accepted active requirements not delivered to main.
+
+- Assess approved requirements and every acceptance scenario against bounded captured
+  file evidence, preserving hashes, paths/line ranges, HEAD, scope and omissions.
+- Distinguish complete, partial, missing and unknown; omitted scope is not missing.
+  Test definitions/static evidence do not establish executed verification.
+- Group by epic, recommend prerequisite-first order and explain blockers. Validate
+  cycles and unknown dependencies. Offer Implement per requirement/epic and Continue.
+- Start epic drawers collapsed. Search epic names/purposes and requirement text, IDs
+  and acceptance scenarios, combined with feature/status filters. Show matching counts
+  and an actionable empty state; presentation filters do not alter execution scope.
+
+**RW-026 — Sequential local execution and recovery.** Run OpenCode locally in isolated
+repository worktrees with explicit coding model/connection settings, separate from
+discovery. Persist sessions, frozen requirement/revision context and checkpoints.
+
+- Execute one requirement at a time. Stop on failures, blockers, stale context or
+  cancellation; preserve completed work and require explicit resume after interruption.
+- Reconcile repository/session state before more work. Never silently replace a
+  missing session or replay successful commits/PR creation. Retain archived runs.
+- Run configured checks and assess acceptance before automatic commits. Exclude
+  unrelated existing user changes. Commit titles/details identify the requirement,
+  specification revision and verification. Preserve hooks and reject unexpected history.
+- Serialize local workers sharing the project store/repository; preserve other workers'
+  live leases. Closing the app cancels owned work and retains resumable state.
+
+**RW-027 — GitHub delivery and completion.** Support PR per requirement, PR per epic,
+commit/push to a named branch, or commit/push to main.
+
+- Track assessment, execution and delivery independently. Verified branch work is not
+  implemented until confirmed delivered to main for the current requirement fingerprint.
+- PRs wait for user merge before the next delivery unit; no auto-merge. Epic PRs retain
+  sequential requirement-specific commits. Reconcile merge metadata/current main,
+  including squash/rebase cases, and block on closed-unmerged PRs or delivery failures.
+- Recognize already-existing implementation through explicit main verification and
+  assessment. Retain observed main SHA/time; refresh after external changes.
+- Keep credentials/local execution details out of portable progress summaries.
+  Manual RW-024 assessments remain historical evidence, not main-delivery confirmation.
+- Require an installed compatible OpenCode initially; installer dependency management
+  is a future option. Live qualification remains an explicit milestone exit check.
+
 ## 5. Quality expectations
 
 - Windows is the first verified platform; keep the engine portable for future platforms.
@@ -368,7 +420,7 @@ and discovery coverage.
 - Use deterministic fixtures for routine workflow checks and opt-in live checks for
   actual provider compatibility. Fixtures do not prove subscription support.
 - Discovery receives research/project tools appropriate to its task; coding capabilities
-  belong to the later build workflow.
+  belong to the separate Implementation workflow.
 
 ## 6. Release evaluation
 

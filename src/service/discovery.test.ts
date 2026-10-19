@@ -305,3 +305,22 @@ test("discovery sends a compacted focused context and persists the savings witho
     assert.deepEqual(store.get(project.id).questions, project.questions);
   } finally { store.close(); }
 });
+
+test("progress retains the focused task across runtime stages and validation", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = store.create("Progress", "A job app", { providerID: "openai", modelID: "fixture" });
+    const progress: string[] = [];
+    const service = new DiscoveryService(store, { async analyze(_snapshot, options) {
+      options.onProgress("Starting owned OpenCode runtime…");
+      options.onProgress("Request sent to the selected model; awaiting its response…");
+      return { summary: "Reviewed", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] };
+    } });
+    const job = await service.analyze(project.id, project.revision, { focusEpicID: "inbox", onProgress: (message) => progress.push(message) });
+    assert.equal(job.status, "completed");
+    assert.equal(progress.length, 3);
+    assert.ok(progress.every((message) => message.startsWith(`Exploring gaps in ${project.epics.find((e) => e.id === "inbox")!.title}\n`)));
+    assert.match(progress[1]!, /awaiting its response/);
+    assert.match(progress[2]!, /Checking returned proposals and references before saving/);
+  } finally { store.close(); }
+});

@@ -59,7 +59,13 @@ The compatibility spike remains under `src/spike/`:
 
 SQLite, terminal commands, the browser workspace/API, Electron desktop shell, and epic/coverage/context
 loops are implemented. See `docs/desktop.md` for packaging. Richer Ink UI, daemon discovery/CLI attachment,
-readiness baselines, and handoffs remain future work. Milestones remain partially
+readiness baselines, and handoffs remain future work. The integrated Implementation
+pilot (DEC-023) adds separate assessment/execution/delivery state, isolated OpenCode
+worktrees, sequential verification/commits and GitHub strategies. See
+`docs/implementation-workspace.md`; a small live sandbox coding/completed-session
+continuation check passed, but in-flight recovery and full coding/GitHub delivery
+are not yet qualified. Manual progress does not establish delivered-to-main completion.
+Milestones remain partially
 complete where their exit criteria are unverified. The repository is not a monorepo.
 
 This project is independent of the earlier Lykoi research in `D:\Dev\axiom`.

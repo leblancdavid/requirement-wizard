@@ -75,15 +75,15 @@ export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: P
   </section>;
 }
 
-const labels = { "not-started": "Not started", "in-progress": "In progress", blocked: "Blocked", implemented: "Implemented", verified: "Verified" } as const;
+const labels = { "not-started": "Not started", "in-progress": "In progress", blocked: "Blocked", implemented: "Code complete (manual claim)", verified: "Verified (manual assessment)" } as const;
 export function ImplementationProgress({ project, requirements, disabled, save }: {
   project: Project; requirements: Project["requirements"]; disabled: boolean;
   save: (requirementID: string, value: { status: string; notes: string; evidence: string }) => Promise<void>;
 }) {
   const scoped = project.implementation.filter((item) => requirements.some((r) => r.id === item.requirementID));
   const current = scoped.filter((item) => !implementationNeedsReview(project, item));
-  return <details className="implementation-progress"><summary><strong>Implementation progress</strong><span>{current.filter((item) => item.status === "verified").length} verified · {current.filter((item) => item.status === "implemented").length} implemented · {current.filter((item) => item.status === "in-progress").length} in progress · {current.filter((item) => item.status === "blocked").length} blocked · {scoped.length - current.length} need review</span></summary>
-    <p>Manually track build work separately from requirements confirmation. Verified status requires recorded evidence.</p>
+  return <details className="implementation-progress"><summary><strong>Implementation progress · Manual assessments</strong><span>{current.filter((item) => item.status === "verified").length} verified manually · {current.filter((item) => item.status === "implemented").length} code-complete claims · {current.filter((item) => item.status === "in-progress").length} in progress · {current.filter((item) => item.status === "blocked").length} blocked · {scoped.length - current.length} need review</span></summary>
+    <p>Manual assessments preserve your build notes and evidence. They do not establish delivery to main or reduce the Implementation tab count.</p>
     {requirements.map((requirement) => {
       const item = project.implementation.find((entry) => entry.requirementID === requirement.id);
       return <ImplementationEditor key={`${requirement.id}:${item?.updatedAt ?? "new"}`} requirement={requirement} item={item} needsReview={!!item && implementationNeedsReview(project, item)} disabled={disabled} save={save} />;
