@@ -96,6 +96,30 @@ dependency on its compiler or experimental runtime.
 - Keep context bounded and revision-linked. Do not silently truncate human decisions
   or use omitted evidence to justify new requirements/assessments.
 
+## Data compatibility and forward migrations
+
+- For every app change that may affect persisted data, assess upgrade compatibility
+  as part of the change. This includes SQLite tables and JSON payloads, workspace
+  artifacts, settings, saved jobs, assessments/check results, delivery evidence, and
+  fingerprint or freshness rules that could invalidate saved work.
+- Implement any necessary forward migration alongside the change. Preserve original
+  evidence, stable IDs, history, and valid completed work across upgrades. Do not
+  require users to reset data or repeat assessment/model calls solely because an
+  equivalent representation or compatible app workflow changed.
+- Keep schema/migration versions separate from optimistic-concurrency counters.
+  Make migrations ordered, transactional where possible, and safe to reopen or retry
+  after interruption. Reject unsupported future formats without overwriting them.
+- Do not manufacture missing provenance or mark genuinely stale results current.
+  When semantic changes require reassessment, retain previous dated evidence and
+  explain the specific incompatibility.
+- Document the migration plan and implemented behavior in the relevant docs, including
+  source/target formats, compatibility impact, and recovery considerations. Add
+  meaningful upgrade tests using older saved data, covering preservation, repeated
+  startup, and failure recovery as appropriate. Report checks actually run and any
+  remaining upgrade gaps.
+- Maintain `docs/migrations.md` as the forward-migration ledger. Record compatibility
+  decisions there when changing schema versions, assessment semantics or fingerprints.
+
 ## OpenCode integration
 
 The SDK is pinned to `1.18.32`, matching the runtime tested in the spike. Use

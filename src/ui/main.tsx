@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, type FormEvent } from "react";
+import React, { startTransition, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import type { Job, Project, Submission } from "../core/model.js";
 import type { coverage } from "../core/coverage.js";
@@ -11,7 +11,8 @@ import { queueActivities } from "./queue-activity.js";
 import { ImplementationTab } from "./implementation.js";
 import { ProjectProgress } from "./project-progress.js";
 import { ActivityProvider, ActivityFeedback, HeaderActivity, Spinner, useActivity } from "./activity.js";
-import { deliveredRequirement, eligibleRequirements, type ExecutionState, type WorkspaceRepository } from "../core/execution.js";
+import { createExecutionIndex, deliveredRequirement, type ExecutionState, type WorkspaceRepository } from "../core/execution.js";
+import { shareSnapshot } from "./snapshot.js";
 import { reviewFingerprint } from "../core/model.js";
 import { AppearanceSettings } from "./appearance-settings.js";
 import { AnnotatedText, QuestionHelp, wordHelpContext, type HelpControls } from "./question-help.js";
@@ -32,9 +33,9 @@ for (const storage of [localStorage, sessionStorage]) {
   }
 }
 const token = document.querySelector<HTMLMetaElement>('meta[name="reqwizit-token"]')?.content ?? "";
-async function api<T>(path: string, body?: unknown): Promise<T> {
+async function api<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/api/${path}`, { method: body === undefined ? "GET" : "POST",
-    headers: { "X-Reqwizit-Token": token, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    signal, headers: { "X-Reqwizit-Token": token, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error ?? "Request failed.");
@@ -128,10 +129,14 @@ function App() {
     const items = await api<Item[]>("projects"); setProjects(items);
     if (!items.some((item) => item.id === selected.current)) setID(items[0]?.id ?? null);
   }
-  async function load(projectID = selected.current) {
+  async function load(projectID = selected.current, signal?: AbortSignal, background = false) {
     if (!projectID) return;
-    const snapshot = await api<Snapshot>(`projects/${projectID}`);
-    if (selected.current === projectID) setData((previous) => previous && previous.project.id === projectID && (previous.project.revision > snapshot.project.revision || previous.project.revision === snapshot.project.revision && previous.execution.version > snapshot.execution.version) ? previous : snapshot);
+    const snapshot = await api<Snapshot>(`projects/${projectID}`, undefined, signal);
+    if (signal?.aborted) return;
+    const update = () => {
+      if (selected.current === projectID) setData((previous) => previous && previous.project.id === projectID && (previous.project.revision > snapshot.project.revision || previous.project.revision === snapshot.project.revision && previous.execution.version > snapshot.execution.version) ? previous : shareSnapshot(previous, snapshot));
+    };
+    if (background) startTransition(update); else update();
   }
   useEffect(() => { void list().catch((error: Error) => setError(error.message)).finally(() => setLoading(false)); }, []);
   useEffect(() => {
@@ -168,8 +173,15 @@ function App() {
   }, [id]);
   useEffect(() => {
     if (!id) return;
-    const timer = setInterval(() => { void load(id).catch((error: Error) => setError(error.message)); }, 2000);
-    return () => clearInterval(timer);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try { await load(id, controller.signal, true); }
+      catch (error) { if (!controller.signal.aborted) setError((error as Error).message); }
+      finally { if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 2000); }
+    };
+    timer = setTimeout(() => void poll(), 2000);
+    return () => { controller.abort(); clearTimeout(timer); };
   }, [id]);
   useEffect(() => { if (project) { setModel(project.model.modelID); setConnectionID(project.model.connectionID ?? ""); } }, [project?.id, project?.model.modelID, project?.model.connectionID]);
   useEffect(() => {
@@ -241,6 +253,11 @@ function App() {
     ? expandedQuestion : questionFilter === "open" ? visibleQuestions[0]?.id ?? null : null;
   const latestSubmission = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status));
   const requirements = project?.requirements.filter((item) => epicID === "all" || item.epicID === epicID) ?? [];
+  const implementationRemaining = useMemo(() => {
+    if (!project || !data) return 0;
+    const index = createExecutionIndex(project, data.execution);
+    return [...index.requirements.values()].filter((r) => !deliveredRequirement(project, data.execution, r.id, index)).length;
+  }, [project, data?.execution]);
   const lastJob = data?.jobs.at(-1);
   const responseStatus = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status))?.status;
   const saveAnswer = async (question: Project["questions"][number], kind: "answer" | "delegation" | "deferral", text: string) => {
@@ -293,7 +310,7 @@ function App() {
         </form>
       </section> : !project || !summary ? <div className="empty">Loading your workspace…</div> : <>
         <div className="workspace-status" role="status"><span>{data.workspace ? `${data.workspace.status === "saved" ? "Saved" : data.workspace.status === "pending" ? "Saving" : data.workspace.status === "conflict" ? "Conflict" : "Unavailable"} · ${data.workspace.path}${data.workspace.savedRevision ? ` · r${data.workspace.savedRevision}` : ""}` : "No local folder connected"}</span><button className="quiet" onClick={() => navigate("settings")}>{data.workspace ? "Workspace settings" : "Connect workspace"}</button>{data.workspace?.diagnostic && <span>{data.workspace.diagnostic}</span>}</div>
-        <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Review"], ["implementation", "Implement"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}{key === "review" && <span>{reviewItems(project, data.submissions, "pending").length}</span>}{key === "implementation" && <span>{eligibleRequirements(project).filter((r) => !deliveredRequirement(project, data.execution, r.id)).length}</span>}</button>)}</div>
+        <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Review"], ["implementation", "Implement"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}{key === "review" && <span>{reviewItems(project, data.submissions, "pending").length}</span>}{key === "implementation" && <span>{implementationRemaining}</span>}</button>)}</div>
         <section className="workspace">
           <div className="discovery-column">
             <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "review" ? "Review one requirement at a time" : tab === "implementation" ? "Build one requirement at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div>{tab !== "implementation" && <button className="primary" disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(explore, "Starting discovery…")}>{data.active && <Spinner />}{data.active ? "Discovering…" : "Explore next gaps →"}</button>}</div>

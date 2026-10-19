@@ -3,6 +3,7 @@ import type { Project } from "./model.js";
 import { requirementFingerprint } from "./implementation.js";
 import { assessmentContextFingerprint, executionContextPolicy, type ExecutionContextManifest } from "./execution-context.js";
 import { assessmentSkill } from "./execution-skills.js";
+import { assessmentCompatibility, executionSchemaVersion } from "./assessment-identity.js";
 
 const branch = z.string().trim().min(1).max(200).refine((s) => !s.startsWith("-") && !/[\s~^:?*\[\\]|\.\.|@\{|\/\/|\/$|\.$/.test(s), "Invalid branch name");
 export const executionConfigSchema = z.object({
@@ -33,6 +34,7 @@ export type Assessment = z.infer<typeof assessmentOutputSchema> & {
   captureFingerprint?: string; specificationRevision?: number; model?: { providerID: string; modelID: string };
   contextPolicy?: string; contextFingerprint?: string;
   skill?: { name: string; version: string };
+  compatibility?: string; legacyContextFingerprint?: string;
 };
 export type CheckResult = { command: string; exitCode: number; output: string; at: string };
 export type AssessmentRun = {
@@ -63,15 +65,20 @@ export type ExecutionRun = {
   units: DeliveryUnit[]; status: "running" | "paused" | "awaiting-merge" | "completed" | "failed" | "interrupted";
   diagnostic?: string; progress: string[]; createdAt: string;
 };
-export type MainDelivery = { fingerprint: string; contextFingerprint?: string; main: string; at: string; repository: string; checks: CheckResult[] };
+export type MainDelivery = { fingerprint: string; contextFingerprint?: string; legacyContextFingerprint?: string; main: string; at: string; repository: string; checks: CheckResult[] };
 export type ExecutionState = {
-  version: number; config?: ExecutionConfig; assessments: Record<string, Assessment>;
+  schemaVersion: number; version: number; config?: ExecutionConfig; assessments: Record<string, Assessment>;
   workspaceAssessments?: Record<string, Assessment>; mainAssessments?: Record<string, Assessment>;
   delivered: Record<string, MainDelivery>; deliveryHistory?: (MainDelivery & { requirementID: string })[];
   run?: ExecutionRun; history: ExecutionRun[]; assessmentStatus?: string;
   assessmentRuns?: AssessmentRun[];
 };
-export const emptyExecution = (): ExecutionState => ({ version: 0, assessments: {}, delivered: {}, history: [] });
+export const emptyExecution = (): ExecutionState => ({ schemaVersion: executionSchemaVersion, version: 0, assessments: {}, delivered: {}, history: [] });
+export function assessmentWorkflowCompatible(assessment: Assessment) {
+  if (assessment.compatibility !== undefined) return assessment.compatibility === assessmentCompatibility;
+  return (!assessment.contextPolicy || assessment.contextPolicy === executionContextPolicy && !!assessment.skill)
+    && (!assessment.skill || assessment.skill.name === assessmentSkill.name && assessment.skill.version === assessmentSkill.version);
+}
 export function invalidateDelivery(state: ExecutionState, requirementID: string) {
   const previous = state.delivered[requirementID];
   if (previous) (state.deliveryHistory ??= []).push({ requirementID, ...previous });
@@ -80,31 +87,46 @@ export function invalidateDelivery(state: ExecutionState, requirementID: string)
 export function eligibleRequirements(project: Project) {
   return project.requirements.filter((r) => r.status === "accepted" && project.epics.some((e) => e.id === r.epicID && !e.archived));
 }
-export function deliveredRequirement(project: Project, state: ExecutionState, id: string) {
-  const r = eligibleRequirements(project).find((r) => r.id === id), d = state.delivered[id];
-  return !!r && !!d && d.fingerprint === requirementFingerprint(r) && d.repository === state.config?.repository
-    && (!d.contextFingerprint || contextMatches(project, id, d.contextFingerprint, state.config?.dependencies));
+/** Scoped to one immutable snapshot/evaluation, never retained across writes. */
+export function createExecutionIndex(project: Project, state: ExecutionState) {
+  const requirements = new Map(eligibleRequirements(project).map((r) => [r.id, r]));
+  const contexts = new Map<string, string | undefined>();
+  return { requirements, context(id: string) {
+    if (!contexts.has(id)) {
+      try { contexts.set(id, assessmentContextFingerprint(project, id, state.config?.dependencies)); }
+      catch { contexts.set(id, undefined); }
+    }
+    return contexts.get(id);
+  } };
 }
-function contextMatches(project: Project, id: string, fingerprint: string, dependencies?: Record<string, string[]>) {
+export type ExecutionIndex = ReturnType<typeof createExecutionIndex>;
+export function deliveredRequirement(project: Project, state: ExecutionState, id: string, index?: ExecutionIndex) {
+  const r = index ? index.requirements.get(id) : eligibleRequirements(project).find((r) => r.id === id), d = state.delivered[id];
+  return !!r && !!d && d.fingerprint === requirementFingerprint(r) && d.repository === state.config?.repository
+    && (!d.contextFingerprint || contextMatches(project, id, d.contextFingerprint, state.config?.dependencies, index));
+}
+function contextMatches(project: Project, id: string, fingerprint: string, dependencies?: Record<string, string[]>, index?: ExecutionIndex) {
+  if (index) return fingerprint === index.context(id);
   try { return fingerprint === assessmentContextFingerprint(project, id, dependencies); }
   catch { return false; } // Removed/unapproved targets or unresolved dependencies cannot be current.
 }
-export function assessmentCurrent(project: Project, state: ExecutionState, id: string, assessment: Assessment | undefined = state.assessments[id]) {
-  return assessmentFreshness(project, state, id, assessment).status === "current";
+export function assessmentCurrent(project: Project, state: ExecutionState, id: string, assessment: Assessment | undefined = state.assessments[id], index?: ExecutionIndex) {
+  return assessmentFreshness(project, state, id, assessment, index).status === "current";
 }
-export function assessmentFreshness(project: Project, state: ExecutionState, id: string, assessment: Assessment | undefined = state.assessments[id]): {
+export function assessmentFreshness(project: Project, state: ExecutionState, id: string, assessment: Assessment | undefined = state.assessments[id], index?: ExecutionIndex): {
   status: "not-assessed" | "current" | "needs-reassessment";
   reason?: "requirement" | "decisions" | "policy" | "model" | "code";
   message: string;
 } {
   if (!assessment) return { status: "not-assessed", message: "No saved assessment." };
   const stale = (reason: "requirement" | "decisions" | "policy" | "model" | "code", message: string) => ({ status: "needs-reassessment" as const, reason, message });
-  const r = eligibleRequirements(project).find((r) => r.id === id);
+  const r = index ? index.requirements.get(id) : eligibleRequirements(project).find((r) => r.id === id);
   if (!r || assessment.fingerprint !== requirementFingerprint(r)) return stale("requirement", "Requirement or approval changed.");
-  if (assessment.contextPolicy && (assessment.contextPolicy !== executionContextPolicy || !assessment.skill)
-    || assessment.skill && (assessment.skill.name !== assessmentSkill.name || assessment.skill.version !== assessmentSkill.version)) return stale("policy", "Assessment workflow or skill changed.");
-  if (assessment.contextFingerprint ? !contextMatches(project, id, assessment.contextFingerprint, state.config?.dependencies) : assessment.specificationRevision !== project.revision)
-    return stale("decisions", "Supporting decisions, guardrails or assessment skill changed.");
+  if (!assessmentWorkflowCompatible(assessment)) return stale("policy", "Saved assessment workflow is incompatible or lacks required provenance; a fresh assessment is needed. Previous evidence is retained.");
+  if (assessment.contextFingerprint && !assessment.contextFingerprint.startsWith('["decisions-v1",'))
+    return stale("policy", "Saved decision-context format could not be migrated with proven compatibility. A fresh assessment is needed; previous evidence is retained.");
+  if (assessment.contextFingerprint ? !contextMatches(project, id, assessment.contextFingerprint, state.config?.dependencies, index) : assessment.specificationRevision !== project.revision)
+    return stale("decisions", "Supporting decisions or guardrails changed, or legacy revision-bound evidence no longer matches.");
   if (assessment.model && state.config && (assessment.model.providerID !== state.config.providerID || assessment.model.modelID !== state.config.modelID))
     return stale("model", "Selected assessment model changed.");
   const evidence = [...state.assessmentRuns ?? []].reverse().find((run) => run.operation === (assessment.scope === "main" ? "verify-main" : "assess") && run.capture && run.head);
@@ -122,7 +144,7 @@ export function prerequisiteOnBranch(project: Project, state: ExecutionState, id
     }
   }
 }
-export function implementationPlan(project: Project, state: ExecutionState) {
+export function implementationPlan(project: Project, state: ExecutionState, index = createExecutionIndex(project, state)) {
   const requirements = eligibleRequirements(project);
   const edges = new Map<string, string[]>();
   for (const r of requirements) {
@@ -156,8 +178,8 @@ export function implementationPlan(project: Project, state: ExecutionState) {
     ordered.sort((a, b) => epicOrder.indexOf(a.epicID) - epicOrder.indexOf(b.epicID));
   }
   return ordered.map((requirement) => ({ requirement, dependencies: edges.get(requirement.id) ?? [],
-    blockers: (edges.get(requirement.id) ?? []).filter((id) => !deliveredRequirement(project, state, id) && !prerequisiteOnBranch(project, state, id)),
-    delivered: deliveredRequirement(project, state, requirement.id),
+    blockers: (edges.get(requirement.id) ?? []).filter((id) => !deliveredRequirement(project, state, id, index) && !prerequisiteOnBranch(project, state, id)),
+    delivered: deliveredRequirement(project, state, requirement.id, index),
   }));
 }
 export function validateAssessment(raw: unknown, r: Project["requirements"][number], allowedIDs: string[]) {

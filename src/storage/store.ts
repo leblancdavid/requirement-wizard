@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { z } from "zod";
 import { emptyExecution, type ExecutionState } from "../core/execution.js";
+import { executionSchemaVersion } from "../core/assessment-identity.js";
+import { databaseSchemaVersion, migrateDatabase } from "./migrations.js";
 import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace } from "./workspace.js";
 import { dirname } from "node:path";
 import { workspaceScanKey } from "./scan.js";
@@ -40,11 +42,15 @@ export class ProjectStore {
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path);
+    try { this.initialize(); } catch (error) { this.db.close(); throw error; }
+  }
+
+  private initialize() {
     this.db.pragma("busy_timeout = 5000");
     this.db.pragma("foreign_keys = ON");
     this.db.pragma("journal_mode = WAL");
     const version = this.db.pragma("user_version", { simple: true });
-    if (version !== 0 && version !== 1) { this.db.close(); throw new Error("Unsupported project database version."); }
+    if (typeof version !== "number" || version < 0 || version > databaseSchemaVersion) throw new Error("Unsupported project database version.");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS revisions (
@@ -71,8 +77,8 @@ export class ProjectStore {
       CREATE TABLE IF NOT EXISTS execution_leases (
         resource TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), owner TEXT NOT NULL, lease_until INTEGER NOT NULL
       );
-      PRAGMA user_version = 1;
     `);
+    migrateDatabase(this.db);
     for (const row of this.db.prepare("SELECT project_id, payload FROM workspaces").all() as { project_id: string; payload: string }[]) {
       const binding = JSON.parse(row.payload) as Workspace;
       if (!binding.bindingID) {
@@ -93,6 +99,7 @@ export class ProjectStore {
   }
 
   saveExecution(id: string, state: ExecutionState, owner?: string) {
+    if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution data format. Refresh before saving.");
     this.db.transaction(() => {
       const live = this.db.prepare("SELECT owner FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()) as { owner: string } | undefined;
       if (live && live.owner !== owner || owner && !live) throw new Error("Implementation worker lease changed or expired.");

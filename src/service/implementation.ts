@@ -13,6 +13,7 @@ import { safeMessage } from "../runtime/contract.js";
 import { directoryKey } from "../storage/workspace.js";
 import { assessmentPrompt, assessmentContextFingerprint, checkExecutionContext, executionContextPolicy, ExecutionContextError, requirementTaskContext, type ExecutionContextManifest } from "../core/execution-context.js";
 import { assessmentSkill } from "../core/execution-skills.js";
+import { assessmentCompatibility } from "../core/assessment-identity.js";
 
 const codeResult = z.object({ outcome: z.enum(["complete", "blocked"]), summary: z.string().min(1).max(12000) }).strict();
 type Scope = { requirementID?: string; epicID?: string };
@@ -136,7 +137,7 @@ export class ImplementationService {
             for (const r of requirements) {
               current(); assessmentRun!.currentRequirementID = r.id;
               const previous = results[r.id] ?? (state.assessments[r.id]?.scope === scope ? state.assessments[r.id] : undefined);
-              const reusable = !force && previous?.contextPolicy === executionContextPolicy && previous.skill?.name === assessmentSkill.name && previous.skill.version === assessmentSkill.version
+              const reusable = !force && !!previous && previous.compatibility === assessmentCompatibility
                 && assessmentCurrent(project, state, r.id, previous) && previous.head === head && previous.scope === scope && previous.captureFingerprint === fingerprint
                 && previous.model?.providerID === state.config!.providerID && previous.model.modelID === state.config!.modelID;
               progress(`${reusable ? "Reusing unchanged assessment" : "Assessing requirement"} ${assessmentRun!.completedIDs.length + 1}/${requirements.length}: ${r.statement}`);
@@ -377,7 +378,7 @@ export class ImplementationService {
         }
       }
       result.evidenceIDs = result.evidenceIDs.map((id) => sourceIDs.get(id)!); result.requestEvidenceIDs = undefined;
-      return { ...result, fingerprint: requirementFingerprint(r), head, scope, verified: false, capturedAt: scan.snapshot.capturedAt, contextPolicy: executionContextPolicy,
+      return { ...result, compatibility: assessmentCompatibility, fingerprint: requirementFingerprint(r), head, scope, verified: false, capturedAt: scan.snapshot.capturedAt, contextPolicy: executionContextPolicy,
         captureFingerprint: assessmentCaptureFingerprint(scan), contextFingerprint: assessmentContextFingerprint(project, id, git.config.dependencies), specificationRevision: project.revision, model: { providerID: git.config.providerID, modelID: git.config.modelID },
         skill: { name: assessmentSkill.name, version: assessmentSkill.version },
         files: scan.snapshot.files.filter((f) => result.evidenceIDs.includes(f.sourceID)).map((f) => ({ path: f.path, hash: f.hash, startLine: f.startLine ?? 1, endLine: f.endLine ?? f.lines })), omissions: scan.snapshot.omitted.length };

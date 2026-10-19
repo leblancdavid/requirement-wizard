@@ -1,5 +1,5 @@
 import { coverage } from "./coverage.js";
-import { assessmentFreshness, deliveredRequirement, eligibleRequirements, type ExecutionState } from "./execution.js";
+import { assessmentFreshness, createExecutionIndex, deliveredRequirement, eligibleRequirements, type ExecutionIndex, type ExecutionState } from "./execution.js";
 import { reviewFingerprint, type Project } from "./model.js";
 
 export type LocalAssessmentCounts = {
@@ -13,7 +13,7 @@ export type ProgressStage = ProgressScore & {
 };
 
 /** Local evidence only: the strongest aggregate/main result cannot certify the working folder. */
-export function localAssessmentCounts(project: Project, execution: ExecutionState, requirementIDs?: readonly string[]): LocalAssessmentCounts {
+export function localAssessmentCounts(project: Project, execution: ExecutionState, requirementIDs?: readonly string[], index?: ExecutionIndex): LocalAssessmentCounts {
   const selected = requirementIDs ? new Set(requirementIDs) : undefined;
   const requirements = eligibleRequirements(project).filter((r) => !selected || selected.has(r.id));
   const counts: LocalAssessmentCounts = { total: requirements.length, assessed: 0, complete: 0, partial: 0, missing: 0, unknown: 0, notAssessed: 0, stale: 0, completePercent: 0 };
@@ -21,7 +21,7 @@ export function localAssessmentCounts(project: Project, execution: ExecutionStat
     const aggregate = execution.assessments[r.id];
     const assessment = execution.workspaceAssessments?.[r.id] ?? (aggregate?.scope === "workspace" ? aggregate : undefined);
     if (!assessment || assessment.scope !== "workspace") { counts.notAssessed++; continue; }
-    if (assessmentFreshness(project, execution, r.id, assessment).status !== "current") { counts.stale++; continue; }
+    if (assessmentFreshness(project, execution, r.id, assessment, index).status !== "current") { counts.stale++; continue; }
     counts.assessed++; counts[assessment.status]++;
   }
   counts.completePercent = counts.total ? Math.min(counts.complete === counts.total ? 100 : 99, Math.round(100 * counts.complete / counts.total)) : 0;
@@ -33,6 +33,7 @@ export function localAssessmentDetail(counts: LocalAssessmentCounts) {
 }
 
 export function projectProgress(project: Project, execution: ExecutionState, definition = coverage(project)) {
+  const index = createExecutionIndex(project, execution);
   const ratio = (done: number, total: number) => total ? Math.min(done === total ? 100 : 99, Math.round(100 * done / total)) : 0;
   const active = project.epics.filter((epic) => !epic.archived);
   const requirements = project.requirements.filter((r) => active.some((e) => e.id === r.epicID));
@@ -46,12 +47,12 @@ export function projectProgress(project: Project, execution: ExecutionState, def
   };
   const implementationScore = (items: typeof requirements): ProgressScore => {
     const scope = items.filter((r) => r.status !== "rejected");
-    const delivered = scope.filter((r) => deliveredRequirement(project, execution, r.id)).length;
+    const delivered = scope.filter((r) => deliveredRequirement(project, execution, r.id, index)).length;
     const awaitingApproval = scope.filter((r) => r.status !== "accepted").length;
     return { percent: ratio(delivered, scope.length),
       status: !scope.length ? "No implementation scope" : delivered === scope.length ? "Delivered to main" : awaitingApproval === scope.length ? "Awaiting approval" : "Implementation remaining",
       detail: `${delivered} / ${scope.length} delivered to main${awaitingApproval ? ` · ${awaitingApproval} awaiting approval` : ""}`,
-      localAssessment: localAssessmentCounts(project, execution, items.map((r) => r.id)) };
+      localAssessment: localAssessmentCounts(project, execution, items.map((r) => r.id), index) };
   };
   const stages: ProgressStage[] = [
     { id: "definition", title: "Questions / Definition", percent: definition.percent,

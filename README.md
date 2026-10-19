@@ -36,6 +36,9 @@ for setup, deterministic verification and remaining live-qualification gaps.
 Implementation checks reuse current saved assessments; **Reassess all**, feature and
 individual controls explicitly bypass reuse. Owned OpenCode assessment/coding sessions
 load bundled role-specific skills, while Reqwizit owns state and Git delivery.
+Execution data upgrades use transactional forward migrations with original-payload
+backups. Compatible assessment workflow changes preserve saved results; see the
+[migration ledger](docs/migrations.md) for supported formats and recovery behavior.
 Keep answering while discovery works: responses are durably queued and processed
 one at a time, each in its own revision-linked context. Each follow-up includes its
 target and supporting evidence, project/dependency guardrails and feature notes;

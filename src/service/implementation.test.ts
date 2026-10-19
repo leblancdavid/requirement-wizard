@@ -9,6 +9,8 @@ import { assessmentCurrent, emptyExecution, executionConfigSchema, implementatio
 import { requirementFingerprint } from "../core/implementation.js";
 import type { ExecutionAdapter, ExecutionRequest } from "../runtime/execution.js";
 import type { DeliveryUnit, ExecutionConfig } from "../core/execution.js";
+import Database from "better-sqlite3";
+import { legacyAssessmentSkillDocument } from "../storage/fixtures/assessment-skill-v1.js";
 
 function seed(store: ProjectStore, count = 2) {
   let p = store.create("Implementation fixture", "Save and reopen work", { providerID: "openai", modelID: "fixture" });
@@ -266,8 +268,20 @@ test("one implementation check preserves local/main evidence, updates delivery, 
     service.start(p.id, p.revision, "assess", { requirementID: r.id }); await until(service, p.id);
     assert.equal(refreshCalls, 2, "A successfully assessed unknown result is not retried on each check");
     assert.equal(service.snapshot(p.id).assessmentRuns!.at(-1)!.reused, 1);
-    await service.close(); store.close(); store = new ProjectStore(join(directory, "state.sqlite"));
-    service = new ImplementationService(store, { async perform() { assert.fail("Saved unknown assessment must be reused after restart"); } });
+    await service.close(); store.close();
+    // Recreate the shipped pre-migration format, including its original full-skill
+    // context identity. Reopening must upgrade and reuse without another model call.
+    const legacyDB = new Database(join(directory, "state.sqlite"));
+    const saved = JSON.parse((legacyDB.prepare("SELECT payload FROM execution_state WHERE project_id = ?").get(p.id) as { payload: string }).payload);
+    delete saved.schemaVersion;
+    for (const records of [saved.assessments, saved.workspaceAssessments, saved.mainAssessments]) for (const a of Object.values(records ?? {}) as { contextFingerprint?: string; compatibility?: string }[]) {
+      delete a.compatibility;
+      if (a.contextFingerprint) { const [, data, paths] = JSON.parse(a.contextFingerprint); a.contextFingerprint = JSON.stringify([data, paths, legacyAssessmentSkillDocument]); }
+    }
+    legacyDB.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(JSON.stringify(saved), p.id);
+    legacyDB.exec("DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;"); legacyDB.close();
+    store = new ProjectStore(join(directory, "state.sqlite"));
+    service = new ImplementationService(store, { async perform() { assert.fail("Saved unknown assessment must be reused after upgrade"); } });
     service.start(p.id, p.revision, "assess", { requirementID: r.id }); await until(service, p.id);
     assert.equal(service.snapshot(p.id).assessmentRuns!.at(-1)!.reused, 1);
     await service.close();

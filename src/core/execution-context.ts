@@ -1,7 +1,8 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { assessmentOutputSchema } from "./execution.js";
 import type { Project } from "./model.js";
-import { assessmentSkill, executionSkill, skillDocument } from "./execution-skills.js";
+import { executionSkill, skillDocument } from "./execution-skills.js";
+import { decisionIdentity } from "./assessment-identity.js";
 
 export const executionContextPolicy = "requirement-isolation-v3";
 export const executionContextBudget = 48000;
@@ -134,7 +135,5 @@ export function assessmentContextFingerprint(project: Project, requirementID: st
   const { data: { omitted: _omitted, ...data }, referencedWorkspacePaths } = requirementTaskContext(project, requirementID, dependencies[requirementID], false, dependencies);
   // Schema parsing and JSON round trips can reorder object properties without
   // changing their meaning. Preserve array order, canonicalize only object keys.
-  return JSON.stringify([data, [...referencedWorkspacePaths].sort(), skillDocument(assessmentSkill)], (_key, value: unknown) =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value);
+  return decisionIdentity(data, [...referencedWorkspacePaths]);
 }

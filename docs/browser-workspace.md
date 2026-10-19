@@ -1,5 +1,39 @@
 # Browser workspace, epics, and estimated completeness
 
+## Large-project responsiveness
+
+Implementation feature drawers, requirement bodies, assessment details and run history
+mount their contents on expansion rather than constructing hidden evidence/log trees.
+Under **Implementation settings → Requirement prerequisites**, choose one requirement
+to edit its prerequisites. Only that requirement's candidate list is mounted; choices
+for other requirements remain in the settings draft. Closing/reopening the prerequisite
+drawer and assessment polling retain the draft.
+
+Snapshot polling waits for the preceding poll to finish and aborts its outstanding
+request when leaving the project. Equal snapshot sections retain their object identity,
+and unchanged responses do not replace the rendered state. Independent job progress,
+worker interruption and workspace outcomes still update, including changes without a
+specification revision or execution-version increment. Background refreshes use React
+transitions. Implementation plans, freshness summaries and progress scores are memoized
+against their snapshot inputs; evaluation-scoped indexes reuse relevant-decision
+fingerprints without retaining them across changed snapshots.
+
+Compatibility: these are rendering, polling and in-memory evaluation changes. SQLite,
+workspace files, settings/dependency payloads, saved assessments, fingerprints and
+freshness semantics keep their existing formats. No forward migration or reassessment
+is required; existing valid evidence remains valid.
+
+Verification (2026-10-19): type checking, all 215 deterministic tests, the UI build and
+Playwright browser checks passed. The browser fixture covers 500 approved requirements
+across ten features, a collapsed Implementation DOM below 500 elements, one mounted
+prerequisite selector, retained edits across target/drawer changes and polling, lazy
+requirement bodies, checkpoint updates while searching/scrolling, and tab navigation.
+The observed initial Implement tab switch was 87 ms in that run (Playwright wall time,
+not a cross-machine benchmark or a before/after measurement). Existing checks also
+exercise concurrent assessments, relevant-decision invalidation and progress dialogs.
+No live model or GitHub calls were used; the user's running desktop session has not
+been profiled by these checks.
+
 ## Running-work feedback
 
 Active operations show a spinner and a slim progress bar. The header's **Processing
@@ -219,7 +253,8 @@ to `reqwizit-` keys while preserving values already stored under the new name.
 Old snapshots gain
 project-wide and inbox areas on read without losing record IDs, original input,
 or revision history. New fields are saved on subsequent mutations; the SQLite
-table schema remains version 1.
+table schema is now version 2 for transactional execution-data upgrades, with separate
+execution JSON schema versions and retained original payloads. See [migrations.md](migrations.md).
 
 **Settings → AI connections** now supports in-app direct ChatGPT sign-in, saved
 accounts, account-specific model catalogs, explicit connection tests, reconnect,

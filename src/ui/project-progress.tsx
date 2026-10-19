@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Project } from "../core/model.js";
 import type { coverage } from "../core/coverage.js";
@@ -19,7 +19,7 @@ function LocalCodeProgress({ counts, epic }: { counts: LocalAssessmentCounts; ep
 }
 
 export function ProjectProgress({ project, execution, definition }: { project: Project; execution: ExecutionState; definition: ReturnType<typeof coverage> }) {
-  const progress = projectProgress(project, execution, definition);
+  const progress = useMemo(() => projectProgress(project, execution, definition), [project, execution, definition]);
   const [open, setOpen] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null), trigger = useRef<HTMLButtonElement>(null);
   useEffect(() => {

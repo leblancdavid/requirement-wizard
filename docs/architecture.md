@@ -45,6 +45,9 @@ desktop uses 13.0.3 with bundled Node-API prebuilds. Development now requires No
 22.12+ for Electron tooling. See [desktop.md](desktop.md) for verification and packaging.
 SQLite has a versioned schema and WAL mode. Initial records use versioned JSON
 snapshots; dedicated relation tables can be introduced as richer models require them.
+Database schema 2 adds an ordered transactional migration registry and original execution
+payload backups. Execution JSON schema versions, concurrency counters, decision identity
+and assessment semantic compatibility are separate; see [migrations.md](migrations.md).
 
 The service core remains an in-process facade; the browser API wraps it and hosts
 background jobs inside a foreground Node server. CLI processes share SQLite using

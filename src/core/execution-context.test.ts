@@ -3,8 +3,9 @@ import test from "node:test";
 import { projectSchema } from "./model.js";
 import { assessmentContextFingerprint, checkExecutionContext, executionPrompt, executionContextBudget, runtimeContextReserve, executionAgentPrompt, ExecutionContextError, requirementTaskContext } from "./execution-context.js";
 import { implementationSkill, skillDocument } from "./execution-skills.js";
-import { assessmentCurrent, assessmentFreshness, deliveredRequirement, emptyExecution, executionConfigSchema } from "./execution.js";
+import { assessmentCurrent, assessmentFreshness, createExecutionIndex, deliveredRequirement, emptyExecution, executionConfigSchema } from "./execution.js";
 import { requirementFingerprint } from "./implementation.js";
+import { assessmentCompatibility, decisionIdentity } from "./assessment-identity.js";
 
 function project() {
   return projectSchema.parse({ id: "project", name: "Context fixture", revision: 1, model: { providerID: "openai", modelID: "fixture" }, summary: "", goals: [], actors: [], assumptions: [],
@@ -36,6 +37,9 @@ test("assessment freshness follows relevant answers, notes and dependency guardr
   state.delivered.target = { fingerprint: state.assessments.target.fingerprint, contextFingerprint: fingerprint, main: "head", at: "now", repository: "fixture/repository", checks: [] };
   // Repository equality is checked independently of context freshness.
   assert.equal(assessmentCurrent(p, state, "target"), true);
+  const index = createExecutionIndex(p, state);
+  assert.equal(assessmentCurrent(p, state, "target", state.assessments.target, index), true);
+  assert.equal(deliveredRequirement(p, state, "target", index), true);
   const reordered = JSON.parse(JSON.stringify(p), (_key, value: unknown) => value && typeof value === "object" && !Array.isArray(value)
     ? Object.fromEntries(Object.entries(value).reverse()) : value) as typeof p;
   assert.equal(assessmentContextFingerprint(reordered, "target"), fingerprint, "Object key order across storage/browser serialization is irrelevant");
@@ -54,6 +58,9 @@ test("assessment freshness follows relevant answers, notes and dependency guardr
     assert.equal(assessmentCurrent(next, state, "target"), false);
     assert.equal(deliveredRequirement(p, state, "target"), true);
     assert.equal(deliveredRequirement(next, state, "target"), false);
+    const nextIndex = createExecutionIndex(next, state);
+    assert.equal(assessmentCurrent(next, state, "target", state.assessments.target, nextIndex), false);
+    assert.equal(deliveredRequirement(next, state, "target", nextIndex), false);
   }
   assert.equal(assessmentCurrent(p, state, "target", { ...state.assessments.target, contextFingerprint: undefined }), false, "Legacy caches are revision-bound");
   state.assessments.target.specificationRevision = p.revision;
@@ -78,6 +85,18 @@ test("freshness explains code/model/workflow invalidation separately from result
   assert.equal(assessmentFreshness(p, state, "target").reason, "code", "A newer capture invalidates dated evidence even if another scoped attempt failed");
   assert.equal(state.assessments.target.status, "missing", "The dated result remains available");
   assert.equal(assessmentFreshness(p, state, "target", { ...a, head: "new-head", captureFingerprint: "new-capture" }).status, "current");
+});
+
+test("compatible workflow upgrades preserve decisions while semantic incompatibility requires reassessment", () => {
+  const p = project(), state = emptyExecution();
+  const { data, referencedWorkspacePaths } = requirementTaskContext(p, "target", [], false);
+  const { omitted: _omitted, ...inputs } = data;
+  assert.equal(decisionIdentity({ ...inputs, evidencePolicy: "Reworded prompt instructions" }, [...referencedWorkspacePaths]), assessmentContextFingerprint(p, "target"));
+  state.assessments.target = { status: "complete", explanation: "Saved result", evidenceIDs: [], scenarios: [], fingerprint: requirementFingerprint(p.requirements[0]!),
+    contextFingerprint: assessmentContextFingerprint(p, "target"), compatibility: assessmentCompatibility, contextPolicy: "previous-budget-policy",
+    skill: { name: "reqwizit-assess-requirement", version: "previous-compatible-workflow" }, head: "head", scope: "workspace", capturedAt: "then", files: [], omissions: 0, verified: false };
+  assert.equal(assessmentCurrent(p, state, "target"), true);
+  assert.equal(assessmentFreshness(p, state, "target", { ...state.assessments.target, compatibility: "unknown-semantics" }).reason, "policy");
 });
 
 test("one requirement context retains exact target/guardrail decisions without sibling history or background file payloads", () => {

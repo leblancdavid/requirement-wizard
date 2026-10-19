@@ -160,7 +160,7 @@ assess current decisions; assessment does not require archiving a coding run.
 
 Completed requirement assessments are checkpointed individually. Running the same
 action again reuses results only when relevant task-context identity, requirement fingerprint,
-model, HEAD, scope, context-policy version and captured-source/omission fingerprint match.
+model, HEAD, scope, assessment semantic compatibility and captured-source/omission fingerprint match.
 Unrelated revision changes allow reuse; changed relevant inputs need fresh inference.
 Older assessments without task-context identity remain revision-bound (undated ones
 need reassessment). Context identity is local cache metadata, excluded from portable
@@ -234,10 +234,13 @@ skills are not granted by the role's skill permission. Permission setup/fixture 
 do not establish adversarial sandbox enforcement.
 
 The full skill document is included in character-budget preflight, with name/version/
-size recorded in task context manifests. Assessments also save the skill name/version;
-the exact assessment skill content participates in context identity, so material edits
-invalidate reuse even if its version label was accidentally left unchanged. Pre-skill
-workflow results need a fresh check. Reqwizit still owns requirement state, scheduling,
+size recorded in task context manifests. Assessments also save the original skill
+name/version. Assessment semantic compatibility is versioned separately from workflow
+prose and context-budget policy, so compatible upgrades preserve saved findings. Material
+semantic changes require an explicit compatibility decision or reassessment; record them
+in [migrations.md](migrations.md). Known equivalent legacy identities migrate from their
+saved inputs with original identities retained. Pre-skill workflow results still need a
+fresh check. Reqwizit still owns requirement state, scheduling,
 freshness, validation, checkpoints and all Git delivery operations.
 
 `npm run runtime:skills` checks both profiles against the installed runtime without
@@ -270,8 +273,8 @@ never silently truncated. Question explanations and clearly unselected options a
 omitted from execution/assessment prompts. Exact option-label answers retain the
 selected consequence, including all retained historical selections. Custom, ambiguous,
 delegated or unresolved responses retain every option. Saved questions and source
-records remain intact. This uses context policy `requirement-isolation-v3`, invalidating
-assessment reuse from the previous policy. Oversized assessment decision context first
+records remain intact. This uses context policy `requirement-isolation-v3`; older policies
+without proven semantic compatibility still need reassessment. Oversized assessment decision context first
 tries discovery's lossless shared-text and identifier tables: repeated approval wording
 and IDs are stored once with explicit expansion instructions. Human evidence is not
 summarized, and current file excerpts/handles stay unencoded. Historical workspace
@@ -396,6 +399,13 @@ metadata instead of requiring original commit SHAs on main. Closed-unmerged PRs 
 Push/PR failures retain successful coding and commits for explicit recovery.
 
 ## Persistence and recovery
+
+Database schema 2 and execution payload schema 1 migrate on startup before workspace
+publication. Ordered upgrades retain original payloads transactionally, preserve valid
+assessment/delivery evidence and reject active-worker conflicts or unsupported future
+formats. The execution concurrency counter remains separate and advances once for
+migrated rows, rejecting pre-upgrade readers. See [migrations.md](migrations.md) for the
+supported legacy identity conversion, compatibility limits and failure recovery.
 
 SQLite execution state stores configuration, assessments, delivery evidence, current
 and archived runs independently of specification revisions. CAS protects settings;
