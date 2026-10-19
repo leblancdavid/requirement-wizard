@@ -111,6 +111,162 @@ async function until(service: ImplementationService, id: string) {
   assert.fail("Implementation did not finish");
 }
 
+test("workspace assessment skips remote preflight, compacts omission metadata, reuses results, and retains failed main-check output", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = await mkdtemp(resolve(".reqwizit-state/tests/assessment-run-")), root = join(directory, "repo"), remote = join(directory, "remote.git");
+  await mkdir(root);
+  const signal = new AbortController().signal;
+  const git = async (cwd: string, args: string[]) => { const result = await command(cwd, "git", args, signal); assert.equal(result.code, 0, result.output); return result.output; };
+  const store = new ProjectStore(":memory:"); let service: ImplementationService | undefined;
+  let calls = 0, fetches = 0;
+  class FixtureGit extends GitDelivery {
+    override async preflight() { fetches++; await this.git(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]); return this.git(["rev-parse", "--git-common-dir"]); }
+  }
+  try {
+    await git(directory, ["init", "--bare", remote]); await git(root, ["init", "-b", "main"]);
+    await writeFile(join(root, "README.md"), "Records are persisted and reopened after restarting the application.\n");
+    await writeFile(join(root, ".gitignore"), ".requirement-wizard/\nassets/\n");
+    await mkdir(join(root, "assets"));
+    await Promise.all(Array.from({ length: 1700 }, (_, index) => writeFile(join(root, "assets", `large-omission-metadata-${index}-${"x".repeat(70)}.png`), "image")));
+    await git(root, ["add", "."]);
+    await git(root, ["-c", "user.name=Reqwizit Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Assessment baseline"]);
+    await git(root, ["remote", "add", "origin", remote]); await git(root, ["push", "origin", "main"]);
+    const p = seed(store, 1), r = p.requirements[0]!; store.connectWorkspace(p.id, p.revision, root);
+    service = new ImplementationService(store, { async perform(request) {
+      calls++; assert.equal(request.coding, false);
+      const context = JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"requirement"') + 1));
+      assert.ok(request.prompt.length < 240000); assert.ok(context.omissions.count >= 1700);
+      assert.equal(context.omissions.examples.length, 8); request.onSession("assessment-session"); request.onProgress("Reviewing exact captured evidence…");
+      return JSON.stringify({ status: "complete", explanation: "Persisted records are supported by captured evidence", evidenceIDs: [context.evidence[0].id], scenarios: [{ index: 0, status: "complete", explanation: "Restart behavior is supported" }] });
+    } }, (path, config, signal) => new FixtureGit(path, config, signal));
+    const settings = config(); settings.checks = ['node -e "console.error(\'FIXTURE_VERIFY_FAILED\');process.exit(3)"'];
+    service.configure(p.id, p.revision, settings);
+    service.start(p.id, p.revision, "assess"); await until(service, p.id);
+    let state = service.snapshot(p.id);
+    assert.equal(fetches, 0, "Static assessment does not fetch origin or require remote-main verification");
+    assert.equal(calls, 1); assert.equal(state.assessmentRuns?.at(-1)?.status, "completed", state.assessmentStatus);
+    assert.equal(state.assessmentRuns?.at(-1)?.completedIDs.length, 1); assert.equal(state.assessmentRuns?.at(-1)?.sessionID, "assessment-session");
+    assert.ok(state.assessmentRuns?.at(-1)?.capture?.omitted.length! >= 1700);
+    assert.equal(state.assessments[r.id]?.status, "complete"); assert.equal(Object.keys(state.delivered).length, 0);
+    const published = JSON.parse(await readFile(join(root, ".requirement-wizard", "progress.json"), "utf8"));
+    assert.equal(published.implementationDelivery[0].assessment.model, undefined, "Local model/cache selection does not enter portable artifacts");
+    assert.equal(published.implementationDelivery[0].assessment.captureFingerprint, undefined);
+    assert.match(state.assessments[r.id]!.evidenceIDs[0]!, /^workspace:/, "Short model handles resolve back to captured provenance");
+    // Prior confirmed delivery is not erased by a failed attempt to rerun tooling.
+    state.delivered[r.id] = { fingerprint: requirementFingerprint(r), main: state.assessments[r.id]!.head, repository: settings.repository, at: new Date().toISOString(), checks: [] }; store.saveExecution(p.id, state);
+    service.start(p.id, p.revision, "verify-main"); await until(service, p.id); state = service.snapshot(p.id);
+    const failed = state.assessmentRuns!.at(-1)!;
+    assert.equal(failed.status, "failed"); assert.equal(failed.completedIDs.length, 0);
+    assert.equal(failed.checks[0]?.exitCode, 3); assert.match(failed.checks[0]!.output, /FIXTURE_VERIFY_FAILED/);
+    assert.match(failed.diagnostic!, /No requirement assessment was performed/);
+    assert.match(state.assessmentStatus!, /0\/1 requirements assessed/);
+    assert.equal(calls, 1, "A failed command does not silently claim to have assessed requirements");
+    assert.ok(state.delivered[r.id], "Failed tooling preserves historical delivery evidence");
+    service.start(p.id, p.revision, "assess"); await until(service, p.id); state = service.snapshot(p.id);
+    assert.equal(state.assessmentRuns!.at(-1)!.status, "completed", state.assessmentStatus);
+    assert.equal(state.assessmentRuns!.at(-1)!.reused, 1); assert.equal(calls, 1, "Unchanged successful requirements are not re-sent to the model");
+    const latest = store.get(p.id); store.note(p.id, latest.revision, "Changed specification context");
+    assert.throws(() => service!.start(p.id, p.revision, "assess"), /Project changed/);
+    service.start(p.id, store.get(p.id).revision, "assess"); await until(service, p.id);
+    assert.equal(calls, 2, "A changed specification revision invalidates cached assessment context");
+  } finally { await service?.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("assessment refuses an empty approved scope instead of reporting a successful zero-item scan", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = store.create("No approvals", "Review before building", { providerID: "openai", modelID: "fixture" });
+    // The scope validation is exercised after normal prerequisites, without inference.
+    const originalWorkspace = store.workspace.bind(store);
+    store.workspace = () => ({ path: "unused", status: "saved", savedRevision: p.revision, diagnostic: null, hashes: {}, pendingHashes: {}, bindingID: "fixture" });
+    const state = store.execution(p.id); state.config = config(); store.saveExecution(p.id, state);
+    const service = new ImplementationService(store, { async perform() { assert.fail("No model call expected"); } });
+    assert.throws(() => service.start(p.id, p.revision, "assess"), /No approved requirements/);
+    assert.equal(store.execution(p.id).assessmentRuns?.length ?? 0, 0);
+    store.workspace = originalWorkspace;
+  } finally { store.close(); }
+});
+
+test("an oversized single requirement pauses before inference, preserves human decisions, and never advances to another task", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const root = await mkdtemp(resolve(".reqwizit-state/tests/context-block-")), store = new ProjectStore(":memory:");
+  let calls = 0;
+  class MetadataGit extends GitDelivery {
+    branch = "";
+    override async git(args: string[]) { if (args[0] === "rev-parse") return args.includes("--git-common-dir") ? root : "base"; if (args[0] === "branch") return this.branch; throw new Error(`Unexpected Git operation ${args[0]}`); }
+    override async localPreflight() {}
+    override async preflight() { return root; }
+    override async worktree(_id: string, branch?: string) { this.branch = branch ?? ""; return root; }
+    override at() { return this; }
+    override async head() { return "base"; }
+  }
+  const service = new ImplementationService(store, { async perform() { calls++; assert.fail("Oversized context must not reach inference"); } }, (path, config, signal) => new MetadataGit(path, config, signal));
+  try {
+    await writeFile(join(root, "README.md"), "Captured implementation evidence\n");
+    let p = seed(store);
+    const humanText = "Exact human constraint ".repeat(500);
+    for (let i = 0; i < 5; i++) p = store.note(p.id, p.revision, humanText, "project");
+    store.connectWorkspace(p.id, p.revision, root); service.configure(p.id, p.revision, config());
+    service.start(p.id, p.revision, "continue"); await until(service, p.id);
+    let state = store.execution(p.id);
+    assert.equal(state.run?.status, "paused"); assert.equal(state.run?.units.length, 1);
+    const blocked = state.run!.units[0]!.items[0]!;
+    assert.equal(blocked.status, "blocked"); assert.ok(blocked.contextBlock!.characters > blocked.contextBlock!.budget);
+    assert.equal(blocked.sessionID, undefined); assert.equal(calls, 0);
+    service.start(p.id, p.revision, "continue"); await until(service, p.id);
+    assert.equal(calls, 0); assert.equal(store.execution(p.id).run!.units[0]!.items.length, 1);
+    service.start(p.id, p.revision, "assess"); await until(service, p.id); state = store.execution(p.id);
+    assert.equal(state.assessmentRuns!.at(-1)!.status, "blocked"); assert.equal(state.assessmentRuns!.at(-1)!.completedIDs.length, 0);
+    assert.ok(state.assessmentRuns!.at(-1)!.contextBlock); assert.equal(calls, 0);
+    assert.ok(store.get(p.id).sources.filter((s) => s.kind === "note").every((s) => s.text === humanText));
+  } finally { await service.close(); store.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("assessment fetches bounded evidence windows for one target in fresh sessions and never cites indexed-only content", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const root = await mkdtemp(resolve(".reqwizit-state/tests/evidence-windows-")), store = new ProjectStore(":memory:");
+  let calls = 0, mode: "resolve" | "limit" | "invalid" = "resolve", requested = "", firstText = "";
+  const service = new ImplementationService(store, { async perform(request) {
+    calls++; assert.equal(request.sessionID, undefined); assert.equal(request.coding, false);
+    const context = JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"requirement"') + 1));
+    assert.equal(request.requirementID, context.requirement.id);
+    request.onSession(`window-session-${calls}`);
+    const scenario = { index: 0, status: "unknown", explanation: "Need supporting code" };
+    if (mode === "invalid") return JSON.stringify({ status: "complete", explanation: "Invalid indexed-only claim", evidenceIDs: [context.evidenceIndex[0].id], scenarios: [{ ...scenario, status: "complete" }] });
+    if (mode === "limit" || calls === 1) {
+      const next = mode === "resolve" ? context.evidenceIndex.find((entry: { pathPreview: string }) => entry.pathPreview === "src/recovery.ts") : context.evidenceIndex[0];
+      assert.ok(next); requested = next.id; firstText = context.evidence[0]?.text ?? "";
+      return JSON.stringify({ status: "unknown", explanation: "MODEL_PREVIOUS_TURN_MARKER", evidenceIDs: [], requestEvidenceIDs: [next.id], scenarios: [scenario] });
+    }
+    assert.equal(request.prompt.includes("MODEL_PREVIOUS_TURN_MARKER"), false, "Previous model turns are not appended to fresh contexts");
+    const detailed = context.evidence.find((entry: { id: string }) => entry.id === requested);
+    assert.ok(detailed); assert.match(detailed.text, /CAPTURED_RECOVERY_SUPPORT/);
+    assert.equal(context.evidence.some((entry: { text: string }) => entry.text === firstText), false, "Evidence windows do not accumulate unrelated prior details");
+    return JSON.stringify({ status: "complete", explanation: "Supporting code inspected", evidenceIDs: [requested], scenarios: [{ ...scenario, status: "complete" }] });
+  } });
+  try {
+    await mkdir(join(root, "src")); await writeFile(join(root, "README.md"), "Overview only\n");
+    await writeFile(join(root, "src", "recovery.ts"), "CAPTURED_RECOVERY_SUPPORT\n");
+    for (let i = 0; i < 8; i++) await writeFile(join(root, "src", `component-${i}.ts`), `Component ${i}\n`);
+    const git = async (args: string[]) => { const result = await command(root, "git", args, new AbortController().signal); assert.equal(result.code, 0, result.output); };
+    await git(["init", "-b", "main"]); await git(["add", "."]); await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Fixture"]);
+    const p = seed(store, 1); store.connectWorkspace(p.id, p.revision, root); service.configure(p.id, p.revision, config());
+    service.start(p.id, p.revision, "assess"); await until(service, p.id);
+    let state = store.execution(p.id), r = p.requirements[0]!;
+    assert.equal(state.assessmentRuns!.at(-1)!.status, "completed", state.assessmentStatus); assert.equal(calls, 2);
+    assert.equal(state.assessments[r.id]!.status, "complete"); assert.equal(state.assessments[r.id]!.files[0]!.path, "src/recovery.ts");
+    assert.equal(state.assessmentRuns!.at(-1)!.sessions![r.id]!.length, 2);
+    mode = "limit"; const other = config(); other.modelID = "fixture-alt"; service.configure(p.id, p.revision, other);
+    service.start(p.id, p.revision, "assess"); await until(service, p.id); state = store.execution(p.id);
+    assert.equal(calls, 5, "At most three model calls per requirement's bounded evidence search");
+    assert.equal(state.assessments[r.id]!.status, "unknown"); assert.equal(state.assessmentRuns!.at(-1)!.sessions![r.id]!.length, 3);
+    mode = "invalid"; other.modelID = "fixture-third"; service.configure(p.id, p.revision, other);
+    service.start(p.id, p.revision, "assess"); await until(service, p.id); state = store.execution(p.id);
+    assert.equal(calls, 6); assert.equal(state.assessmentRuns!.at(-1)!.status, "failed");
+    assert.match(state.assessmentRuns!.at(-1)!.diagnostic!, /uncaptured evidence/); assert.equal(state.assessments[r.id]!.status, "unknown");
+  } finally { await service.close(); store.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 for (const strategy of ["requirement-pr", "epic-pr", "branch", "main"] as const) test(`${strategy}: real isolated commits, sequential delivery, merge barrier, and idempotent continuation`, async () => {
   await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
   const directory = await mkdtemp(resolve(".reqwizit-state/tests/execution-git-")), root = join(directory, "repo"), remote = join(directory, "remote.git");
@@ -122,6 +278,9 @@ for (const strategy of ["requirement-pr", "epic-pr", "branch", "main"] as const)
   process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = "fixture@example.invalid";
   const store = new ProjectStore(":memory:"); let service: ImplementationService | undefined;
   let calls = 0, prCreates = 0;
+  let activeRequests = 0, maxRequests = 0, projectID = "";
+  const sessions = new Map<string, string>();
+  let targets: { id: string; statement: string }[] = [];
   let cancelFirst = strategy === "epic-pr";
   const prs = new Map<string, { url: string; state: string; mergeCommit: { oid: string } | null; headRefOid: string }>();
   class FixtureGit extends GitDelivery {
@@ -133,21 +292,34 @@ for (const strategy of ["requirement-pr", "epic-pr", "branch", "main"] as const)
     }
   }
   const adapter: ExecutionAdapter = { async perform(request) {
+    activeRequests++; maxRequests = Math.max(maxRequests, activeRequests);
+    try {
     if (request.coding) {
-      calls++; request.onSession(request.sessionID ?? `session-${calls}`);
-      if (cancelFirst) { cancelFirst = false; await new Promise<void>((_accept, reject) => request.signal.addEventListener("abort", () => reject(new Error("Stopped fixture")), { once: true })); }
       const data = JSON.parse(request.prompt.split("\n")[1]!) as { requirement: { id: string } };
+      assert.equal(request.requirementID, data.requirement.id);
+      const previousSession = sessions.get(data.requirement.id);
+      assert.equal(request.sessionID, previousSession, "Resume uses only this requirement's saved session");
+      if (strategy !== "branch") for (const other of targets.filter((r) => r.id !== data.requirement.id)) assert.equal(request.prompt.includes(other.statement), false, "Sibling requirement text is not carried into the next task");
+      if (data.requirement.id === targets[1]?.id) {
+        const prior = store.execution(projectID).run!.units.flatMap((u) => u.items).find((i) => i.requirementID === targets[0]!.id)!;
+        assert.equal(prior.status, "verified"); assert.ok(prior.commit); assert.ok(prior.checks.every((c) => c.exitCode === 0), "Prior verification/commit is checkpointed before the next model call");
+      }
+      calls++; const session = request.sessionID ?? `session-${calls}`; sessions.set(data.requirement.id, session); request.onSession(session);
+      if (cancelFirst) { cancelFirst = false; await new Promise<void>((_accept, reject) => request.signal.addEventListener("abort", () => reject(new Error("Stopped fixture")), { once: true })); }
       await writeFile(join(request.directory, `${data.requirement.id}.txt`), "The capability is available after restart.\n");
       return JSON.stringify({ outcome: "complete", summary: "Capability and restart behavior implemented." });
     }
+    assert.equal(request.sessionID, undefined, "Each assessment/evidence window starts a fresh session");
     const data = JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"requirement"') + 1)) as { evidence: { id: string }[] };
     return JSON.stringify({ status: "complete", explanation: "Captured implementation supports restart.", evidenceIDs: [data.evidence[0]!.id], scenarios: [{ index: 0, status: "complete", explanation: "Restart supported by captured code" }] });
+    } finally { activeRequests--; }
   } };
   try {
     await run(directory, ["init", "--bare", remote]); await run(root, ["init", "-b", "main"]);
     await writeFile(join(root, "README.md"), "# Fixture\n"); await writeFile(join(root, ".gitignore"), ".requirement-wizard/\n");
     await run(root, ["add", "."]); await run(root, ["commit", "-m", "Fixture baseline"]); await run(root, ["remote", "add", "origin", remote]); await run(root, ["push", "origin", "main"]);
     const p = seed(store); store.connectWorkspace(p.id, p.revision, root);
+    projectID = p.id; targets = p.requirements;
     // Unrelated human changes remain in the original workspace and never enter commits.
     await writeFile(join(root, "human.txt"), "Uncommitted human work");
     service = new ImplementationService(store, adapter, (path, config, signal) => new FixtureGit(path, config, signal));
@@ -208,6 +380,8 @@ for (const strategy of ["requirement-pr", "epic-pr", "branch", "main"] as const)
       }
     }
     assert.equal(state.run?.status, "completed", state.run?.diagnostic);
+    assert.equal(maxRequests, 1, "Coding and assessment requests are awaited, never run in parallel");
+    assert.equal(new Set(sessions.values()).size, 2, "Each requirement owns a distinct coding session");
     assert.equal(Object.keys(state.delivered).length, 2);
     assert.ok(state.run!.units.flatMap((u) => u.items).every((i) => i.sessionID && i.checks.length && i.commit));
     for (const unit of state.run!.units) {

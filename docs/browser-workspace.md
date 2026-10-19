@@ -1,5 +1,38 @@
 # Browser workspace, epics, and estimated completeness
 
+## Project progress summary
+
+The top-right **Overall progress** card shows a percentage and status. Click it to
+open **Project progress**, then expand **Questions / Definition**, **Requirements
+review**, or **Implementation** for epic-level percentages, statuses and counts.
+The summary always covers the whole project, independently of the Feature filter.
+Escape or **Close progress** closes the modal and restores focus to the card.
+
+- **Definition** retains the evidence-gated coverage rubric: equal weight per active
+  epic plus project-wide information, excluding an empty inbox. Unknown areas stay
+  at zero; freshness, open questions, critical gaps and scope confidence remain visible.
+- **Requirements review** counts approved/rejected decisions over identified
+  requirements in active epics. A matching pending refinement makes its target
+  awaiting review again; stale suggestions do not reopen current wording. Saved
+  decisions count immediately, without waiting for AI follow-up.
+- **Implementation** counts current, repository-matching verified delivery to main
+  over all non-rejected requirements in active epics. Unapproved requirements remain
+  in the denominator. Manual progress, static assessments and unmerged PRs earn no
+  delivery credit. Changed requirement fingerprints invalidate previous delivery.
+- **Overall** is an equal-weight average of the three stages. Empty stages count as
+  0%; empty epic rows explain their missing scope. Review/implementation percentages
+  cannot round up to 100% with outstanding items, and overall is capped at 99% until
+  all stages reach 100% without stale definition assessments, open questions, critical
+  gaps or pending organization review. This describes tracked scope, not proof of
+  exhaustive completeness or readiness. New scope can lower these estimates.
+
+Scoring lives in `src/core/progress.ts`; the browser derives it from the current
+project, coverage and execution snapshot without changing persisted project state.
+Verified with deterministic scoring tests (empty/archived scope, refinements,
+repository/fingerprint invalidation, delivery-only credit and completion gates),
+plus browser dialog expansion, focus restoration, Escape/close and mobile width.
+The mobile screenshot is `.reqwizit-state/project-progress-mobile.png`.
+
 **Implementation**, beside Review, is an integrated local build pilot (DEC-023).
 It shares the existing tabs, feature filter, expandable rows/groups and appearance
 preferences. Its badge counts accepted active requirements not verified as delivered
@@ -12,11 +45,31 @@ root's `origin` remote automatically. Detection is local/read-only, supports HTT
 SSH, and can be refreshed with **Detect again**. Manual edits are retained; detected
 changes to a saved repository require saving settings before starting execution.
 
+The same local inspection suggests verification commands from recognized root project
+metadata (package scripts, Rust, Go, .NET, pytest or Godot). New settings prefill these
+commands; saved commands and edited drafts are preserved. **Use suggested commands**
+replaces a draft explicitly. Suggestions identify their source and have not been run.
+
 Implementation epic drawers start closed. Expand one to inspect its requirements.
 Search matches epic/requirement text, IDs and acceptance scenarios and combines with
 the Feature selector and status filters. Missing, not assessed and needs-reassessment
 filters help narrow the list; matching counts and a clear-filters empty state are
 shown. These controls filter presentation without changing saved execution scope.
+
+Assessment/verification show explicit run state, selected/completed counts, code
+assessment totals and **Assessment details** with command exit codes/output, capture
+scope and progress. Failed or zero-assessed runs do not imply missing implementation.
+**Complete in code** filters existing code separately from confirmed main delivery.
+Local assessment does not fetch origin; main verification retains its remote/check
+requirements. Unchanged completed assessments are reused on explicit retry.
+
+Coding and assessment process one requirement at a time with independent contexts.
+Even epic PRs use separate coding sessions per requirement. Assessment sends focused
+captured-evidence windows and may request up to two additional bounded windows for the
+same target. Details show per-requirement context/session counts and context blockers.
+Full-request preflight includes instructions/schema, reserved overhead and saved
+session history; oversized mandatory input pauses before inference without truncating
+human decisions or advancing to another requirement.
 
 Status: first playable local browser application. It shares the existing SQLite
 projects with the terminal client. No desktop installation is required.

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { CheckResult, DeliveryUnit, ExecutionConfig, WorkspaceRepository } from "../core/execution.js";
 import { safeMessage } from "../runtime/contract.js";
 import { directoryKey } from "../storage/workspace.js";
+import { suggestVerificationCommands } from "../storage/verification.js";
 
 /** Bounded subprocesses; credentials and raw Git/GitHub errors never enter persisted logs. */
 export async function command(directory: string, executable: string, args: string[], signal: AbortSignal, shell = false): Promise<{ code: number; output: string }> {
@@ -37,18 +38,20 @@ export function githubRepository(remote: string): string | undefined {
 
 /** Local metadata only: no fetch, authentication, repository writes or model calls. */
 export async function inspectWorkspaceRepository(directory?: string): Promise<WorkspaceRepository> {
-  if (!directory) return { status: "no-workspace", message: "Connect a local workspace to detect its GitHub repository." };
+  const verification = await suggestVerificationCommands(directory);
+  const result = (value: WorkspaceRepository): WorkspaceRepository => ({ ...value, verification });
+  if (!directory) return result({ status: "no-workspace", message: "Connect a local workspace to detect its GitHub repository." });
   try {
     const signal = AbortSignal.timeout(5_000);
     const root = await command(directory, "git", ["rev-parse", "--show-toplevel"], signal);
-    if (root.code) return { status: "not-repository", message: "The workspace folder is not an accessible Git working tree." };
-    if (directoryKey(resolve(root.output)) !== directoryKey(resolve(directory))) return { status: "not-root", message: "Connect the Git repository root as the workspace to use it for implementation." };
+    if (root.code) return result({ status: "not-repository", message: "The workspace folder is not an accessible Git working tree." });
+    if (directoryKey(resolve(root.output)) !== directoryKey(resolve(directory))) return result({ status: "not-root", message: "Connect the Git repository root as the workspace to use it for implementation." });
     const remote = await command(directory, "git", ["remote", "get-url", "origin"], signal);
-    if (remote.code) return { status: "no-origin", message: "This Git repository has no origin remote. Add its GitHub origin, then detect again." };
+    if (remote.code) return result({ status: "no-origin", message: "This Git repository has no origin remote. Add its GitHub origin, then detect again." });
     const repository = githubRepository(remote.output);
-    return repository ? { status: "detected", repository, message: `Detected from workspace origin: ${repository}` }
-      : { status: "not-github", message: "The workspace origin is not a supported GitHub remote. Use a github.com HTTPS or SSH origin." };
-  } catch { return { status: "unavailable", message: "Could not inspect local Git metadata. Check Git installation and workspace access, then detect again." }; }
+    return result(repository ? { status: "detected", repository, message: `Detected from workspace origin: ${repository}` }
+      : { status: "not-github", message: "The workspace origin is not a supported GitHub remote. Use a github.com HTTPS or SSH origin." });
+  } catch { return result({ status: "unavailable", message: "Could not inspect local Git metadata. Check Git installation and workspace access, then detect again." }); }
 }
 
 export class GitDelivery {
@@ -63,9 +66,12 @@ export class GitDelivery {
     if (result.code) throw new Error(`GitHub ${args.slice(0, 2).join(" ")} failed. Check gh authentication and repository access locally.`);
     return result.output;
   }
-  async preflight() {
+  async localPreflight() {
     const root = await this.git(["rev-parse", "--show-toplevel"]);
     if (directoryKey(resolve(root)) !== directoryKey(resolve(this.directory))) throw new Error("Connect the Git repository root as the project workspace.");
+  }
+  async preflight() {
+    await this.localPreflight();
     const remote = await this.git(["remote", "get-url", "origin"]);
     const repository = githubRepository(remote);
     if (!repository || repository.toLowerCase() !== this.config.repository.toLowerCase()) throw new Error("origin must match the configured GitHub owner/repository.");
@@ -87,13 +93,15 @@ export class GitDelivery {
   at(directory: string) { return new GitDelivery(directory, this.config, this.signal); }
   async head() { return this.git(["rev-parse", "HEAD"]); }
   async clean() { return !(await this.git(["status", "--porcelain"])); }
-  async verification(): Promise<CheckResult[]> {
+  async verification(onCheck?: (result: CheckResult) => void, onStart?: (command: string) => void): Promise<CheckResult[]> {
     const results: CheckResult[] = [];
     for (const check of this.config.checks) {
+      onStart?.(check);
       const result = await command(this.directory, check, [], this.signal, true);
       // Only a bounded redacted diagnostic is retained; full output stays in the local command.
       const output = safeMessage(result.output.slice(-12000));
-      results.push({ command: check, exitCode: result.code, output, at: new Date().toISOString() });
+      const checked = { command: check, exitCode: result.code, output, at: new Date().toISOString() };
+      results.push(checked); onCheck?.(checked);
       if (result.code) break;
     }
     return results;

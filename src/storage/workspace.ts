@@ -141,7 +141,9 @@ export function renderWorkspace(project: Project, execution?: ExecutionState): R
   const delivery = execution?.version ? project.requirements.map((r) => {
     const unit = [...(execution.run?.units ?? []), ...execution.history.flatMap((h) => h.units)].find((u) => u.items.some((i) => i.requirementID === r.id));
     const item = unit?.items.find((i) => i.requirementID === r.id);
-    return { requirementID: r.id, implemented: deliveredRequirement(project, execution, r.id), assessment: execution.assessments[r.id] ?? null,
+    const assessment = execution.assessments[r.id];
+    const { model: _model, captureFingerprint: _cache, ...portableAssessment } = assessment ?? {};
+    return { requirementID: r.id, implemented: deliveredRequirement(project, execution, r.id), assessment: assessment ? portableAssessment : null,
       execution: item?.status ?? "not-started", git: unit?.delivery ?? "none", commit: item?.commit ?? null, pr: unit?.pr ?? null, delivery: execution.delivered[r.id] ?? null };
   }) : undefined;
   files["progress.json"] = json({ formatVersion: 2, projectID: project.id, discovery: score, implementation: progress, ...(delivery ? { implementationDelivery: delivery } : {}) });

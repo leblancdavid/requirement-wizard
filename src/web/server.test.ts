@@ -8,7 +8,7 @@ import { analysisSchema } from "../core/model.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
 import { command } from "../service/git-delivery.js";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 test("workspace API authenticates folder access, creates directories, syncs progress, and rejects stale writes", async () => {
@@ -87,9 +87,12 @@ test("implementation API authenticates actions, rejects stale settings and malfo
     mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true }); detectionRoot = mkdtempSync(resolve(".reqwizit-state/tests/repository-api-"));
     for (const args of [["init", "-b", "main"], ["remote", "add", "origin", "https://github.com/fixture/detected.git"]]) assert.equal((await command(detectionRoot, "git", args, AbortSignal.timeout(5000))).code, 0);
     store.connectWorkspace(project.id, project.revision, detectionRoot);
+    writeFileSync(join(detectionRoot, "package.json"), JSON.stringify({ scripts: { check: "tsc --noEmit", test: "node --test" } }));
     const version = store.execution(project.id).version;
     const detected = await (await fetch(endpoint, { headers })).json();
     assert.equal(detected.status, "detected"); assert.equal(detected.repository, "fixture/detected");
+    assert.deepEqual(detected.verification.commands, ["npm run check", "npm run test"]);
+    assert.deepEqual(detected.verification.evidence, ["package.json"]);
     assert.equal(store.execution(project.id).version, version, "Detection is read-only; saving remains explicit");
     assert.equal(store.execution(project.id).config?.repository, "fixture/build");
   } finally { await app.close(); store.close(); if (detectionRoot) rmSync(detectionRoot, { recursive: true, force: true }); }

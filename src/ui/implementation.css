@@ -4,6 +4,8 @@
 .implementation-status > div { flex: 1 1 20rem; min-width: 0; }
 .implementation-status > details { flex: 1 0 100%; min-width: 0; }
 .implementation-status pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
+.implementation-assessment, .implementation-assessment details { overflow-wrap: anywhere; }
+.implementation-tab pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
 .implementation-row-status { display: block; margin: 5px 0 0; color: var(--muted); }
 .implementation-settings fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 12px; min-width: 0; }
 .implementation-settings select[multiple] { min-height: 6rem; }

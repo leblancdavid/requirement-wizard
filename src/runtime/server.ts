@@ -4,6 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { runtimeFetch } from "./http.js";
+import { implementationAgentPrompt, assessmentAgentPrompt } from "../core/execution-context.js";
 
 // Use the native Windows executable rather than invoking a PowerShell npm shim.
 function executable(): string {
@@ -15,7 +16,7 @@ function executable(): string {
   return "opencode";
 }
 
-export async function startRuntime(model?: string, workspace = ".spike-workspace", signal?: AbortSignal, research = false, coding = false) {
+export async function startRuntime(model?: string, workspace = ".spike-workspace", signal?: AbortSignal, research = false, coding = false, assessment = false) {
   signal?.throwIfAborted();
   const directory = resolve(workspace);
   await mkdir(directory, { recursive: true });
@@ -28,7 +29,8 @@ export async function startRuntime(model?: string, workspace = ".spike-workspace
     ...(model ? { model, small_model: model } : {}),
     agent: {
       ...(coding ? { "reqwizit-implementation": { mode: "primary", description: "Implement one approved requirement", permission,
-        prompt: "Implement only the supplied requirement in this worktree. Respect project instructions and preserve unrelated behavior. Do not commit, push, merge, change branches, configure Git, or create PRs; the application owns delivery. Report blockers explicitly. Return a concise summary and acceptance evidence; never claim checks you did not run." } } : {}),
+        prompt: implementationAgentPrompt } } : {}),
+      ...(assessment ? { "reqwizit-assessment": { mode: "primary", description: "Assess one approved requirement", permission, prompt: assessmentAgentPrompt } } : {}),
       "requirements-spike": {
         mode: "primary", description: "Requirements discovery compatibility probe",
         prompt: `Interpret the supplied idea and propose questions. Do not inspect files or execute commands. ${research ? "Use only websearch/webfetch for targeted research within the request budget." : "Do not perform research."} Return the requested structured output.`,

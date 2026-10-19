@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Project } from "./model.js";
 import { requirementFingerprint } from "./implementation.js";
+import type { ExecutionContextManifest } from "./execution-context.js";
 
 const branch = z.string().trim().min(1).max(200).refine((s) => !s.startsWith("-") && !/[\s~^:?*\[\\]|\.\.|@\{|\/\/|\/$|\.$/.test(s), "Invalid branch name");
 export const executionConfigSchema = z.object({
@@ -12,27 +13,41 @@ export const executionConfigSchema = z.object({
   dependencies: z.record(z.array(z.string().min(1)).max(50)).default({}),
 }).strict();
 export type ExecutionConfig = z.infer<typeof executionConfigSchema>;
+export type VerificationSuggestions = { commands: string[]; evidence: string[]; message: string };
 export type WorkspaceRepository = {
   status: "detected" | "no-workspace" | "not-repository" | "not-root" | "no-origin" | "not-github" | "unavailable";
-  repository?: string; message: string;
+  repository?: string; message: string; verification?: VerificationSuggestions;
 };
 export const assessmentOutputSchema = z.object({
   status: z.enum(["unknown", "missing", "partial", "complete"]),
   explanation: z.string().min(1).max(6000),
   evidenceIDs: z.array(z.string()).max(160),
   scenarios: z.array(z.object({ index: z.number().int().nonnegative(), status: z.enum(["unknown", "missing", "partial", "complete"]), explanation: z.string().min(1).max(3000) }).strict()).max(8),
+  requestEvidenceIDs: z.array(z.string()).max(8).optional(),
 }).strict();
 export type Assessment = z.infer<typeof assessmentOutputSchema> & {
   fingerprint: string; head: string; capturedAt: string; scope: "workspace" | "main";
   files: { path: string; hash: string; startLine: number; endLine: number }[];
   omissions: number; verified: boolean;
+  captureFingerprint?: string; specificationRevision?: number; model?: { providerID: string; modelID: string };
+  contextPolicy?: string;
 };
 export type CheckResult = { command: string; exitCode: number; output: string; at: string };
+export type AssessmentRun = {
+  id: string; operation: "assess" | "verify-main"; revision: number; bindingID: string;
+  status: "running" | "completed" | "failed" | "interrupted" | "blocked";
+  stage: string; requirementIDs: string[]; completedIDs: string[]; reused: number;
+  currentRequirementID?: string; head?: string; directory?: string; sessionID?: string;
+  startedAt: string; finishedAt?: string; diagnostic?: string; checks: CheckResult[]; progress: string[];
+  contexts?: Record<string, ExecutionContextManifest>; contextBlock?: ExecutionContextManifest; sessions?: Record<string, string[]>;
+  capture?: { fingerprint: string; capturedAt: string; files: number; excerpts: number; omissions: number; traversalLimited: boolean; omitted: { path: string; reason: string }[] };
+};
 export type ExecutionItem = {
   requirementID: string; fingerprint: string;
   status: "queued" | "running" | "verifying" | "verified" | "blocked" | "failed" | "interrupted";
   sessionID?: string; promptID?: string; response?: string; commit?: string; tree?: string; diagnostic?: string;
   checks: CheckResult[];
+  context?: ExecutionContextManifest; contextBlock?: ExecutionContextManifest;
 };
 export type DeliveryUnit = {
   id: string; epicID: string; branch: string; base: string; directory: string;
@@ -50,6 +65,7 @@ export type ExecutionState = {
   version: number; config?: ExecutionConfig; assessments: Record<string, Assessment>;
   delivered: Record<string, MainDelivery>; deliveryHistory?: (MainDelivery & { requirementID: string })[];
   run?: ExecutionRun; history: ExecutionRun[]; assessmentStatus?: string;
+  assessmentRuns?: AssessmentRun[];
 };
 export const emptyExecution = (): ExecutionState => ({ version: 0, assessments: {}, delivered: {}, history: [] });
 export function invalidateDelivery(state: ExecutionState, requirementID: string) {
@@ -119,5 +135,6 @@ export function validateAssessment(raw: unknown, r: Project["requirements"][numb
   if (output.status !== "unknown" && !output.evidenceIDs.length) throw new Error("Assessment needs captured evidence; uninspected work stays unknown.");
   if (new Set(output.scenarios.map((s) => s.index)).size !== r.acceptance.length || output.scenarios.length !== r.acceptance.length || output.scenarios.some((s) => s.index >= r.acceptance.length)) throw new Error("Assessment must cover every acceptance scenario exactly once.");
   if (output.status === "complete" && output.scenarios.some((s) => s.status !== "complete")) throw new Error("Complete assessment requires all scenarios to be complete.");
+  if (output.requestEvidenceIDs?.length && output.status !== "unknown") throw new Error("Assessment requesting more evidence must remain unknown; completion was not established.");
   return output;
 }

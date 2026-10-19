@@ -13,7 +13,9 @@ support is deferred.
 
 A playable browser workspace is available. AI organizes your idea into epics, asks
 clickable questions, researches relevant uncertainties, and estimates how well each
-area is defined. Review requirements and coverage evidence without entering IDs.
+area is defined. The top-right **Overall progress** card expands into Definition,
+Requirements review and Implementation scores, with epic-level breakdowns.
+Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 Connect a local folder for each project to automatically save versionable requirements
 and progress files. Choose it during creation or use **Settings → Project workspace**.

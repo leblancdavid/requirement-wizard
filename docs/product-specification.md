@@ -261,6 +261,13 @@ show a deterministic project aggregate with explanations and evidence.
 - Show critical gaps, assessment freshness, and qualitative scope confidence separately.
 - Explain that newly discovered scope can lower the estimate; even 100% is not proof of readiness.
 - Expose the rubric and the supporting records behind each assessment.
+- Show overall progress in a top-right card with percentage and status; open a
+  dialog with separate Definition, Requirements review and Implementation scores,
+  each expandable into epic-level percentages and counts. Overall gives equal
+  weight to the three stages; unknown/empty stages remain zero. Review tracks current
+  human decisions (including pending refinements); implementation requires current
+  verified delivery to main across non-rejected scope. Explain denominators and
+  distinguish the estimate from exhaustive completeness or readiness.
 
 **RW-020 — Bounded AI context.** Assemble fresh, revision-bound working sets with
 global information, focused epics, dependencies, exact evidence, and omission manifests.
@@ -386,6 +393,14 @@ discovery. Persist sessions, frozen requirement/revision context and checkpoints
 
 - Execute one requirement at a time. Stop on failures, blockers, stale context or
   cancellation; preserve completed work and require explicit resume after interruption.
+- Give each requirement an independent coding session and focused context, including
+  within epic runs. Keep sibling conversations/build logs out; retain exact target
+  decisions and necessary transitive guardrails. Check full prompts/schema/instructions
+  and saved session history against the task budget before inference. Pause oversized
+  indivisible tasks without truncating human decisions or advancing the queue.
+- Assess one requirement per fresh evidence-window session. Retrieve additional captured
+  evidence only through bounded follow-up windows; indexed-only or omitted files cannot
+  establish completion. Checkpoint verified work/commits before the next task starts.
 - Reconcile repository/session state before more work. Never silently replace a
   missing session or replay successful commits/PR creation. Retain archived runs.
 - Run configured checks and assess acceptance before automatic commits. Exclude

@@ -8,6 +8,15 @@ assessment and real GitHub delivery/installer integration remain unqualified.
 
 ## Browser workflow
 
+**Assess project** currently requires a connected workspace and saved Implementation
+settings (OpenCode model, delivery strategy and at least one verification command),
+even though the static assessment does not execute those commands. Detecting the
+repository fills the form but does not save it. When an action is disabled, a message
+below the buttons identifies missing settings, active discovery/implementation work,
+an in-progress save or a changed repository for delivery. Local assessment does not
+fetch origin or require remote-main access. Dependency-order errors block execution
+planning but do not prevent an otherwise configured assessment.
+
 **Implementation** sits beside **Review**, using the existing tabs, feature filter,
 compact expandable rows, feature groups, buttons, themes, fonts and text sizes.
 Its badge counts accepted requirements in active epics without current verified
@@ -22,8 +31,9 @@ show matching counts; empty results offer **Clear search and status filter**. St
 assessments do not appear as current partial/missing work. Filtering changes the list,
 not the scope of **Implement epic** or the saved execution plan.
 
-1. Connect the Git repository root in Settings. `origin` must match the configured
-   GitHub `owner/repository`, with an existing remote `main`.
+1. Connect the Git repository root in Settings. Execution and main verification require
+   `origin` to match the configured GitHub `owner/repository`, with an existing remote
+   `main`. Working-folder assessment only needs the local Git working tree and HEAD.
 2. Expand **Implementation settings**. The app checks the connected folder's local Git
    metadata and fills `owner/repository` from its `origin` remote (GitHub HTTPS, scp-style
    SSH or `ssh://git@github.com/...`). No network request or model call is involved.
@@ -31,11 +41,17 @@ not the scope of **Implement epic** or the saved execution plan.
    root. **Detect again** refreshes it without replacing a manually edited draft.
    A changed origin requires saving the updated settings; saved runs retain their frozen
    repository. Set the delivery strategy, explicit
-   OpenCode model and verification commands (one shell command per line). Add
+   OpenCode model and verification commands (one shell command per line). Commands
+   are suggested from bounded root project metadata and prefilled for new settings.
+   Review the suggestions, then save settings. Saved commands and manual edits are
+   retained on redetection; **Use suggested commands** explicitly replaces the draft.
+   Add
    requirement prerequisites where needed; existing epic dependencies also apply.
 3. **Assess project** captures bounded file evidence from the working folder and
    assesses approved requirements sequentially. It does not execute checks or establish
-   main delivery. Each scenario needs evidence; omitted scope stays unknown.
+   main delivery. Each scenario needs evidence; omitted scope stays unknown. A real
+   run reports its stage, selected/completed counts and code-status summary. Empty
+   approved scopes are rejected rather than reported as successful zero-item scans.
 4. **Verify main & refresh delivery** fetches main, creates a detached worktree, runs
    configured checks and assesses requirements. It can recognize existing implementation
    predating Reqwizit's coding runs.
@@ -46,6 +62,105 @@ not the scope of **Implement epic** or the saved execution plan.
    results, PR links and progress. Stop/app closure retains checkpoints; restart never
    automatically repeats work. **Archive run & replan** retains history, branches,
    worktrees and sessions and permits new settings/scope.
+
+### Assessment results, errors and retry
+
+**Complete in code** and **Implemented** are distinct filters. Existing local features
+can assess as complete without new coding/commits, while main completion still requires
+verification/delivery evidence. Failed preflight, capture, model calls or verification
+do not establish that features are missing. Zero-assessed runs explicitly say so.
+
+**Assessment details** shows the current requirement/stage, HEAD/workspace, most recent
+session, captured file/excerpt counts, omitted scope and each verification command's
+exit code and bounded redacted output. The latest 20 assessment/verification run
+records retain diagnostics independently of the coding run. Old generic diagnostics
+cannot reconstruct command output that the previous version did not save.
+
+A bounded source capture is reused within the run. Each requirement receives a focused
+window prioritized by explicit provenance, referenced paths and relevant terms, not
+the entire capture. Selected excerpts remain byte-exact. Omitted-path inventories stay
+in the saved run; the model receives reason counts and a bounded sample instead of
+thousands of repeated excluded paths. Short `file:N` handles resolve back to captured provenance. Source
+hashes and HEAD are checked before accepting results; excluded binaries/cache files
+are not reread to validate source evidence. Over-budget genuine evidence/requirements
+still block explicitly rather than being silently truncated.
+
+Completed requirement assessments are checkpointed individually. Running the same
+action again reuses results only when specification revision, requirement fingerprint,
+model, HEAD, scope, context-policy version and captured-source/omission fingerprint match. Changed inputs need
+fresh inference. Cancellation/failures retain valid earlier results. Verification is
+rerun on each main-verification request. Tooling failures keep previous dated
+assessment/delivery evidence; they do not certify current main anew.
+
+If a suggested command fails (for example `godot` is not on PATH), inspect its output
+and set the actual executable path or fix project/toolchain errors before retrying
+main verification. Working-folder assessment runs independently of those commands.
+
+### One requirement per task and context
+
+Epic/Continue actions enqueue a prerequisite-ordered list of individual requirements.
+The scheduler awaits coding, verification, acceptance assessment, commit and checkpoint
+before advancing. PR merge barriers remain per requirement or epic according to the
+chosen delivery strategy. No coding/assessment calls for a run execute in parallel.
+
+Each coding requirement owns a distinct persistent OpenCode session, including within
+an epic PR. Resume reuses only that requirement's session. Duplicate session mappings
+and foreign requirement task markers are rejected. Completed matching responses are
+recovered without replaying inference. Assessment uses a fresh session per evidence
+window, with no previous model conversations or other requirements' build logs.
+
+Context contains one approved target, its exact acceptance scenarios/supporting human
+decisions, relevant feature notes, and necessary approved project/dependency guardrails
+(including transitive prerequisites). Sharing an epic or original source does not pull
+in sibling requirements or their review history. Background AI rationales, UI tooltips
+and historical file motivation may be omitted explicitly; normative human input is
+never silently truncated. Historical workspace evidence cannot prove current behavior.
+
+Both coding and assessment use a 48,000-character full-request preflight. This includes
+the app-owned prompt/instructions, assessment JSON schema, saved session history on
+resume, and an 8,000-character reserve for runtime overhead. It is a conservative
+character estimate, not an exact provider-token limit or a bound on every future
+OpenCode tool result/inherited instruction. The coding profile asks for bounded
+relevant file reads. Oversized initial requests block before runtime startup; oversized
+resumed transcripts block before another prompt. They do not silently switch models,
+drop decisions or replace the saved session.
+
+The assessment index lists only bounded captured-excerpt metadata. It is navigation,
+not inspected evidence. A model can request up to eight indexed excerpts in another
+fresh, bounded window for the same requirement. There are at most three windows total;
+requests beyond that leave the result unknown. Only currently detailed excerpts may
+be cited. Required target evidence and explicitly requested excerpts are indivisible;
+if they cannot fit with human constraints, the task becomes **Context blocked**.
+Earlier windows do not accumulate in the next prompt.
+
+Coding context blockers pause execution before advancing to another requirement.
+Assessment blockers stop that action while preserving completed results. Per-task
+context counts/block diagnostics and assessment session counts are visible in details.
+These local context manifests remain separate from portable requirements artifacts.
+
+### Suggested verification commands
+
+Detection only reads local metadata; it does not execute package scripts, install
+dependencies, fetch repositories or call a model. Suggestions identify their source
+files and are not successful verification results.
+
+| Recognized metadata | Suggested commands |
+| --- | --- |
+| `package.json` scripts | Existing `check` (or `typecheck`/`type-check`), `lint`, `test`; `build` when none of those is usable |
+| Package manager declaration/lockfile | Use npm, pnpm, Yarn or Bun as detected; npm defaults to `npm run check` / `npm run test` when those scripts exist |
+| `Cargo.toml` package/workspace | `cargo check`, `cargo test` |
+| `go.mod` module | `go test ./...` |
+| One root .NET solution/project | `dotnet build`; add `dotnet test` for an explicitly marked test project |
+| `pytest.ini` or explicit pytest settings in `pyproject.toml` | `python -m pytest` |
+| `project.godot` | `godot --headless --path . --editor --import` (import smoke check; not gameplay acceptance verification) |
+
+Placeholder npm tests, explicit watch/fix/write scripts and ambiguous package-manager
+metadata do not produce guessed checks. Known Vitest/Jest scripts receive non-watch
+flags when needed. Adjust executable names and dependency setup for your machine.
+Unsupported/malformed projects keep an empty editable field instead of a fake passing
+command. Inspection reads at most 128KB per file, 512KB total and 256 root entries,
+excluding linked/nonregular or potentially sensitive file contents. It does not scan
+every nested project in a monorepo.
 
 Install Git, OpenCode and GitHub CLI (`gh`) locally. Use OpenCode's supported sign-in
 and `gh auth login`. Coding initially supports ChatGPT/OpenAI through its explicit
@@ -85,7 +200,8 @@ Coding worktrees live under the Git common directory at
 remain outside automatic staging. Worktrees receive committed repository content.
 OpenCode receives the requirement, exact supporting human evidence, dependency and
 project-wide guardrails. Oversized mandatory context blocks before inference.
-Assessment reuses scanner budgets with a 240,000-character input ceiling per requirement.
+Assessment reuses scanner capture budgets, then selects per-requirement evidence
+windows within the 48,000-character full-request policy described above.
 
 The agent edits files; the service runs checks, reassesses acceptance from captured
 worktree evidence, stages and commits. Commit titles identify the requirement and
@@ -138,6 +254,15 @@ pushes use temporary local bare repositories; models/GitHub are injected. API
 checks cover authentication, versions, malformed input and missing workspace. Browser
 checks cover the tab count, settings/actions, strategies, dark theme and mobile width.
 Screenshots: `.reqwizit-state/browser-implementation{,-dark,-mobile}.png`.
+
+Requirement-isolation regression checks additionally cover exact human/dependency
+closure without sibling history, full-prompt/history budget failures, no inference or
+queue advancement on context blocks, bounded evidence follow-ups, indexed-only citation
+rejection, distinct sessions and verification/commit checkpoints before the next task.
+Browser diagnostics include `.reqwizit-state/browser-requirement-context.png`.
+A metadata-only check on installed OpenCode 1.18.32 confirmed the dedicated primary
+`reqwizit-assessment` agent and its app-owned instructions; no inference was performed
+by that check. This does not qualify live evidence-window behavior or deny enforcement.
 
 Live check on October 18: `openai/gpt-6.1-sol`, pinned SDK 1.18.32, two bounded
 90-second requests in an empty temporary sandbox. The agent used `apply_patch` to

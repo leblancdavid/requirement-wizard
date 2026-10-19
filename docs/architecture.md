@@ -21,6 +21,10 @@ implemented under `src/`. See [decisions.md](decisions.md),
   verification, automatic commits and GitHub merge barriers. Execution state/CAS/
   repository leases are independent of specification revisions. See
   [implementation-workspace.md](implementation-workspace.md) for contracts and gaps.
+- `src/core/execution-context.ts` and `src/storage/assessment.ts`: one-target evidence
+  closure, focused captured-source windows, bounded evidence requests, app-owned prompt/
+  schema/agent/history preflight and explicit context blockers. Requirement sessions
+  remain isolated even when verified commits share an epic delivery branch.
 - `src/runtime/`: shared owned-server lifecycle, provider validation, and discovery adapter.
 - `src/providers/`: app-owned protected ChatGPT credentials, OAuth attempt lifecycle,
   connection service, account catalog/probe, and direct/legacy discovery dispatch.
