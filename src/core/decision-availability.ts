@@ -6,6 +6,7 @@ export type DecisionAvailability = {
   reason?: string;
   submissionIDs: string[];
   jobIDs: string[];
+  questionIDs?: string[];
 };
 
 function decisionScope(project: Project, requirementIDs: readonly string[]) {
@@ -84,8 +85,10 @@ export function decisionAvailability(project: Project, requirementIDs: readonly 
       return questionIDs.has(input.questionID) || !!question && areas.has(question.epicID) || !!s.appliedSourceID && sources.has(s.appliedSourceID);
     })());
   if (waiting.length) return { ...empty, state: "waiting", reason: "Process the pending human input for this requirement or its dependencies before applying this decision. Your response can still be saved for another review.", submissionIDs: waiting.map((s) => s.id) };
-  if (questions.some((q) => ["pending", "deferred", "delegated"].includes(q.status))) {
-    return { ...empty, state: "waiting", reason: "Answer the linked clarification in Design and process its follow-up before applying this decision. Deferral or delegation does not resolve the choice." };
+  const unresolved = questions.filter((q) => ["pending", "deferred", "delegated"].includes(q.status));
+  if (unresolved.length) {
+    return { ...empty, state: "waiting", questionIDs: unresolved.map((q) => q.id),
+      reason: `Answer the linked clarification in Design and process its follow-up before applying this decision: ${unresolved.map((q) => `“${q.text}” (${q.status}; ${project.epics.find((e) => e.id === q.epicID)?.title ?? q.epicID})`).join("; ")}. Deferral or delegation does not resolve the choice.` };
   }
   return { ...empty, state: "ready" };
 }

@@ -69,6 +69,275 @@ match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
 
+### Evidence-equivalent cross-revision retrieval retry (2026-10-20)
+
+Source/target SQLite **3 → 3**, retrieval work **1 → 1**, execution **1 → 1**,
+workspace **2 → 2**. This adds optional independently versioned evidence-basis/reuse
+envelopes, without rewriting projects, original jobs, human sources, approvals, history,
+completed gap checks, assessment fingerprints, delivery evidence or workspace artifacts.
+No DDL, reset, startup backfill, backup conversion or automatic model replay is required.
+
+New navigation/final checkpoints retain the existing exact `contextKey` and add optional
+`evidenceBasis: { format: 1, compatibility: "gap-stage-evidence-v1", key }`. Final responses
+also record their actual input `revision`. The basis expands app-owned lossless text,
+identifier and record-table encodings and canonicalizes object keys. It excludes only
+root revision, explicitly advisory previous interpretation, record index, related hints,
+navigation epic map and submission-scope omitted-record count. All remaining displayed
+fields, exact human constraints, included record IDs, task identity/lens and selected
+epic scope remain binding. Relevant dependencies/rescans are also bound by the unchanged
+gap task identity. Navigation never becomes citation authority.
+
+Explicit retry selects the latest saved failed/cancelled/interrupted/stale checkpoint
+matching project, scope, task evidence key/lens, provider/model/account and research
+permission at or before today's revision. No recent-project cutoff can hide an older
+matching checkpoint. Each saved stage/final must match the new exact authoritative basis
+before reuse; unrelated revision/navigation churn does not cause replay. Previously
+validated navigation handles remain witnessed if later unrelated additions displace their
+index entries. Records must still exist and be loaded before they can authorize citations.
+
+Legacy work without bases is upgraded lazily **in the new retry job only**: reconstruct
+the identified task and completed stages from the original immutable project revision,
+verify every legacy exact wire hash and request, then derive the equivalent basis. The
+verified original snapshot also establishes a missing legacy final-input revision; no
+unknown dates, sessions or model provenance are fabricated. Unverifiable original contexts
+block explicitly without overwriting evidence or replaying completed calls. Reopen performs
+no inference or format rewrite; future basis/reuse formats reject reads without replacement.
+
+New optional `retrievalWork.reuse` format **1** records source job/source revision, current
+target revision, verified navigation-stage count and final-response reuse. Stage revisions,
+wire hashes, session IDs, original output and original jobs remain intact, including mixed-
+revision stage chains. The receipt describes checkpoint reuse, not a new model call at the
+target revision. Cumulative attempts still enforce the same three-request bound. Source
+revision in a reuse receipt names its immediate saved-job snapshot; the actual call's
+revision remains on its stage/final record.
+
+Receipts/checkpoints use existing immediate transactions with live-lease and current-job
+expected-revision checks. A concurrent edit still stales the worker; explicit retry is
+required even when the edit is unrelated. Saved final responses undergo current reference,
+human authority, pending-question-budget and publication checks. Failure rolls back
+publication and never consumes a gap check. Changed retrieved constraints retain previous
+responses and block reuse rather than guessing or silently replaying them. Existing
+approvals, implementation assessments and completed work retain their identities.
+
+Deterministic upgrade/recovery checks cover repeated disk reopen with byte-preserved
+legacy jobs, lazy adoption of navigation/final responses, unchanged original provenance,
+unrelated revisions, displaced navigation hints, exact human-text preservation, lossless
+representation equivalence, changed target/retrieved human constraints, model/account and
+research isolation, unverifiable/future envelopes, current question quotas and an edit
+during replay. The focused browser scenario now inserts unrelated revisions between
+failure and retry and checks no-call replay, displayed provenance, reload and mobile width.
+Verification: `npm run check`, all **402 deterministic tests**, UI production build,
+`npm run test:browser:retrieval`, the full `npm run test:browser` suite and diff whitespace
+checks passed. The focused browser scenario verifies cross-revision reuse provenance;
+the full suite also retained its existing same-revision retrieval, approvals, history and
+mobile checks. The previously observed tooltip timing flake was not reproduced on this
+run and has not been fixed here. The existing large-JavaScript-chunk warning remains.
+Checks used available Node **20.11**; Node 22.12+ and live-provider semantic/permission
+qualification remain outstanding. No live model calls, user database writes, repository
+commits or pushes were performed.
+
+### Bounded multi-stage gap evidence retrieval (2026-10-20)
+
+Historical same-revision policy; cross-revision retry above extends it without invalidating
+its original checkpoints or completed work.
+
+Source/target SQLite **3 → 3**, execution **1 → 1**, workspace **2 → 2**.
+No project/source/submission/assessment transformation, DDL, startup backfill, backup
+rewrite, approval replay or reassessment is required. Original IDs, human addenda,
+history, completed gap checks, assessment fingerprints and delivered evidence remain
+unchanged. `gap-evidence-v1` continues to identify bounded exploration opportunities,
+not proof that all linked workspace motivation was reviewed. Old completed checks stay
+compatible; uncompleted size-block receipts from `current-decisions-v1` are reconsidered
+under `staged-evidence-v1`, because exact static motivation can now be requested later.
+Old blocker receipts remain historical evidence, not rewritten completion claims.
+
+Optional job `context.gapRetrieval` enables the new response alternative. Optional job
+`retrievalWork` has its own **format 1**, separate from revision/CAS: research permission,
+zero-to-three cumulative request attempts, zero-to-two committed navigation stages,
+optional origin job, and optional final response. Each stage records immutable input
+revision, exact context SHA-256, included IDs, strict request and optional runtime
+session ID. Final responses retain their exact context hash and validated analysis;
+normal publication independently validates references, approval authority and freshness.
+`gapReport.modelCalls` now accepts 0–3; staged counts include attempts inherited from
+explicit retries, not measured provider inference/token usage. Browser snapshots omit
+saved final output while exposing stage/attempt progress.
+
+Checkpoint writes are immediate transactions checking live running status, lease and
+expected project revision. A failed write rolls back without discarding earlier stages.
+Explicit retry creates a new attempt job and preserves the original; it reuses compatible
+committed stages/final responses only against matching snapshot/model/research permission
+and exact reconstructed input hashes. It never automatically repeats model calls on
+startup or steals a live lease. Recovery selects the latest matching snapshot/task/lens/
+permission checkpoint before loading its bounded payload, not a recent-project cutoff; no
+cross-revision rebase or invented historical provenance occurs. Unsupported future
+retrieval formats reject reads without replacing payloads. An uncheckpointed response
+lost in a crash is not claimed as saved; another explicit attempt remains bounded.
+
+Human constraints are retained in every stage; cumulative detailed evidence must fit
+96,000 characters. Saved records only are retrievable, with eight requested displayed
+IDs per stage. Retrieved facts are observations, never human preferences. Successful
+publication alone consumes a gap check. Stage/request/context failures retain original
+evidence and blockers, without changing approvals, coverage or implementation state.
+
+Upgrade/recovery fixtures start from older saved projects/jobs without retrieval fields,
+reopen twice, preserve exact snapshots/approvals and original failed jobs, and retry
+without repeating a completed navigation request. Additional deterministic cases cover
+oversized static closures, exact human addenda, unseen/duplicate/unknown/mixed requests,
+unseen citations, stale/cancelled workers, cumulative evidence/request bounds, final
+checkpoint publication failure, expired-lease/CAS rollback, permission changes,
+over-budget expansion retry without replay, compacted navigation handles and future-format
+refusal. Verification: type checking, all **391 deterministic tests**, UI production build
+and the focused `npm run test:browser:retrieval` Playwright check passed. It covers stage
+failure/explicit retry, reload without inference, exact record preservation and mobile
+progress. The full browser suite passed twice including retrieval; its latest run stopped
+at the existing unrelated tooltip timing assertion (`browser-check.ts`, implementation
+settings), before reaching retrieval. That flake remains unresolved. The build retains its
+large-JavaScript-chunk warning. Checks used available Node **20.11**, not the recommended
+22.12+ baseline. No live model calls, user database writes, repository commits or pushes
+were performed; semantic retrieval quality and live permission behavior remain unqualified.
+
+### Current-decision projection and durable gap backlog (2026-10-20)
+
+Source/target SQLite **3 → 3**, execution payload **1 → 1**, workspace **2 → 2**.
+Project/submission JSON schemas, human evidence, revision counters, requirement and
+assessment fingerprints, delivery evidence and workspace artifacts are unchanged.
+There is no DDL migration or startup backfill. The deterministic backlog catalog is
+derived from current project records; existing SQLite jobs are its durable ledger.
+Additive optional job fields are independently versioned:
+
+- `context.decisionProjection` format **1** lists omitted review IDs, retained exact
+  note IDs and projected current generated receipts. It records a new request's view,
+  not a transformation of saved sources. Unknown prose and older human addenda stay
+  exact. Only explicit same-owner supersession and exact current decision/proposal
+  matches allow historical omission or generated-receipt projection. Current approval
+  facts preserve stable source/proposal IDs; omitted embedded history is not evidence.
+- `context.gapExploration.check` format **1**, compatibility **gap-evidence-v1**,
+  records the lens and relevant evidence hash independently of revision/UI metadata.
+  Behavior, failure/recovery and acceptance checks are distinct tasks, not readiness
+  or implementation assessments. Fingerprint changes retain earlier dated job evidence.
+- `gapReport` format **1** stores input-scope counts, local blocker receipts and
+  verified legacy-reuse receipts (each referencing the original completed job), plus
+  zero/one adapter request attempts. It does not claim actual provider inference/token
+  usage. No-call waiting/idle/blocked outcomes never manufacture completed model checks.
+
+Forward compatibility is handled lazily on explicit exploration: an older bounded
+`{ targetRecordID }` job can supply its behavior check only from its immutable input
+snapshot, with equal evidence identity and a manifest containing today's required IDs.
+The new report retains that original source-job ID; original payloads are untouched.
+Broader unmarked jobs do not establish per-task completion. Equivalent representation
+changes cannot force model replay. Genuinely changed relevant evidence creates a new
+task identity while old outputs remain available. Conservative feature/dependency human
+input changes and rescans can reopen checks; unrelated revisions/feature edits do not.
+Existing implementation assessments and completed work are never invalidated by this
+discovery policy. Initial interpretation remains broad; later general gap passes preserve
+global interpretation/coverage rather than replacing them from a partial task.
+
+Successful result publication and check completion share the existing SQLite transaction.
+Malformed, failed, cancelled, expired or stale workers cannot consume a check. Planned
+reports may remain as original attempt evidence after failure; they are not completion.
+Saved blocker receipts prevent repeated over-budget preflight from starving later work
+and are reconsidered on changed evidence/planner policy. Reopen performs no inference;
+recovery requires explicit retry and preserves live leases. Job reads reject unsupported
+future check/report/projection formats without rewriting them. No backup conversion,
+data reset, approval replay or reassessment is required.
+
+Upgrade checks seed older projects/jobs, preserve exact evidence and old job payloads,
+reopen repeatedly, adopt a compatible legacy check using its original snapshot, and
+exercise failures and future envelopes. A 1,000-requirement fixture keeps one request
+bounded and preserves compatible checks when new proposals are added. Read-only planning
+against Rust Grind Galaxy revision **1623** recognized **165** superseded snapshots and
+**229** verified generated receipts across the saved project; the selected request was
+**58,592 / 96,000 characters**, including exact retained human notes and selected feature
+purposes, with **56** detailed
+records. No user-database writes or live model calls were performed. Actual semantic gap
+quality, adaptive multi-stage retrieval and larger real-world scaling remain unqualified.
+
+Verification: type checking, all **383 deterministic tests**, UI production build and
+Playwright browser checks passed, including three explicit gap lenses followed by
+no-call reuse, evidence preservation, reload and mobile layout. One concurrent browser
+attempt timed out in an existing tooltip check before the new scenario; isolated reruns
+passed. The build retains its large-JavaScript-chunk warning. Checks used available Node
+20.11; the development baseline remains Node 22.12+. No live model calls were made.
+
+### Bounded next-gap exploration (2026-10-20)
+
+Historical initial fallback, superseded by the task-sized/backlog policy above. Its
+47,336-character observation preceded the stricter preservation of older human addenda.
+
+Source/target SQLite **3 → 3**, execution payload **1 → 1**, workspace **2 → 2**.
+New discovery jobs may add optional `context.gapExploration: { targetRecordID }`.
+Existing job readers accept additive context metadata; absent means no recorded
+bounded-gap selection, not missing work to backfill. The same original stable ID
+also remains in `taskRecordIDs` and the exact included/omitted manifest. Successful
+gap jobs alone influence future target rotation, not evidence freshness or reuse.
+
+Project/submission JSON, schemas, optimistic revisions, requirement fingerprints,
+assessment semantics, completed checks, delivery evidence and workspace artifacts
+are unchanged. No forward rewrite, backup conversion, reset, reassessment, startup
+inference or replay of completed work is necessary. Failed historical broad jobs
+retain their original diagnostic and manifest; explicit retry plans fresh context.
+Interrupted/failed/cancelled/stale attempts do not consume the target rotation.
+There is no partially applied migration to recover. Existing transactional job
+publication and expected-revision validation remain authoritative.
+
+Upgrade tests seed legacy-shaped projects/jobs without the new marker, repeatedly
+reopen SQLite and explore through the queue, preserving exact human evidence,
+requirements, interpretation and old jobs while persisting successful rotation.
+Read-only planning against Rust Grind Galaxy revision 1623 reduced the failing
+562,745-character broad request to a 47,336-character task within 48,000; no user
+data writes or live inference were needed. Live gap-question quality remains unverified.
+Verification: type checking, all **370 deterministic tests** (including the new
+bounded-exploration and legacy SQLite reopen checks), and whitespace checks passed.
+
+### Resolved historical review attempts (2026-10-20)
+
+Source/target SQLite **3 → 3**, execution payload **1 → 1**, workspace **2 → 2**;
+project, submission and job JSON formats and all fingerprints are unchanged. This is
+a computed workflow projection, not a persisted status migration. Original failed
+attempts retain their IDs, status, input, timestamps, diagnostics and unapplied state;
+later successful reviews retain their original source provenance. Browser review and
+queue presentation classify equivalent superseded plain attempts as history. No
+revisions, assessments, completed checks or delivery evidence are invalidated.
+
+Classification requires a later completed/applied review with the same story/decision,
+current exact requirement wording/scenarios/feature and a real non-superseded human
+source. A failed attempt containing any nonblank note is never swept away. Current
+status alone, older approvals, unfinished follow-up, changed records or unsupported
+fingerprints cannot establish resolution. Later explicit approval of updated wording
+can replace an older plain attempt without attributing approval to that failed attempt.
+
+No database rewrite, backup transformation, schema bump, reset or model replay is
+required. The projection is recomputed from saved evidence on polls/reload and queue
+startup, so interruption has no partial upgrade to recover. Startup avoids creating a
+pause solely for resolved attempts, but never clears saved pauses or resumes inference.
+Existing raw submission APIs and historical activity remain truthful original records.
+
+Verification: all 367 deterministic tests, type check, UI build and browser checks
+passed. The legacy SQLite fixture reopens twice, verifies byte-for-byte submission
+payload preservation, derived resolution and no startup inference/pause. Browser checks
+verify live transition from three Submitted attempts to resolved history, queue counts,
+navigation, reload and mobile width. No user-database writes or live model calls ran.
+
+### Current decision-blocker recovery (2026-10-20)
+
+Source/target SQLite **3 → 3**, execution payload **1 → 1**, workspace **2 → 2**;
+project/submission/job JSON formats and evidence fingerprints are unchanged. Optional
+blocking question IDs are computed in memory, not stored as new provenance. Existing
+failed-review diagnostics remain byte-for-byte historical evidence; the UI recomputes
+current availability rather than rewriting old warnings or applying saved decisions.
+Restored review notes are UI drafts only until explicit resubmission. New failure
+diagnostics distinguish existing rejection conditions without weakening those guards.
+
+No forward transformation, backup rewrite, data reset, startup inference or replay of
+completed checks is needed. Reload/reopen reads the same original records and repeats
+only the read-only availability check; there is no partially applied migration to
+recover. Legacy-shaped failed-review fixtures cover cleared and current blockers,
+changed requirements, exact input preservation and no implicit application. Existing
+SQLite upgrade/reopen, rollback and future-format tests remain applicable.
+Verification: type check, all 350 deterministic tests (including upgrade/reopen tests),
+UI build, browser recovery/navigation checks and whitespace checks passed. No live
+model calls or writes to the user's database were performed.
+
 ### Completion-linked pending review reconciliation (2026-10-20)
 
 Source/target SQLite **3 → 3**, execution payload **1 → 1**, workspace **2 → 2**.

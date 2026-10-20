@@ -193,7 +193,8 @@ for (const mode of ["approved", "invented-source", "duplicate-target", "outside-
       if (mode === "waiting-review") { const waiting = store.submissions(p.id).at(-1)!; waiting.status = "queued"; waiting.conflict = false; store.saveSubmission(waiting); }
       const before = structuredClone(store.get(p.id)), saved = structuredClone(store.submissions(p.id));
       assert.throws(() => store.finishJob(job.id, { ...empty(), pendingChanges: pending,
-        ...(mode === "plain-approval" ? { reviewResponses: [{ sourceID: item.appliedSourceID!, text: "Original review retained" }] } : {}) }));
+        ...(mode === "plain-approval" ? { reviewResponses: [{ sourceID: item.appliedSourceID!, text: "Original review retained" }] } : {}) }),
+        mode === "outside-context" ? /outside this round's detailed context/ : mode === "waiting-answer" || mode === "waiting-review" ? /has unfinished human input/ : /./);
       assert.deepEqual(store.get(p.id), before); assert.deepEqual(store.submissions(p.id), saved);
       assert.equal(store.getJob(job.id).status, "running", "The service owns failure handling; no partial publication escaped");
     } finally { store.close(); }

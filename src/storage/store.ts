@@ -16,6 +16,9 @@ import { wordingKey } from "../core/similarity.js";
 import { refinementIsStale, validateResolutionEvidence } from "../core/resolution.js";
 import { planIncrementalResolution } from "../core/incremental-resolution.js";
 import { decisionBasisSchema, overlapFollowupSchema, pendingChangesSchema, requirementEvidenceIDs } from "../core/model.js";
+import { gapCheckSchema, gapReportSchema, type GapReport } from "../core/gap-types.js";
+import { retrievalWorkSchema, type RetrievalWork } from "../core/gap-retrieval.js";
+import type { GapHistory } from "../core/gap-backlog.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
@@ -31,6 +34,10 @@ function readStoredJob(payload: string): Job {
     ...(job.result?.refinements ?? []).flatMap((p) => p.resolution ? [p.resolution] : [])];
   if (envelopes.some((value) => value.format !== 1)) throw new Error("Unsupported requirement-resolution format in saved job. Upgrade the app; saved evidence was not overwritten.");
   if (job.result?.pendingChanges !== undefined) pendingChangesSchema.parse(job.result.pendingChanges);
+  if (job.context?.gapExploration?.check !== undefined) gapCheckSchema.parse(job.context.gapExploration.check);
+  if (job.gapReport !== undefined) gapReportSchema.parse(job.gapReport);
+  if (job.retrievalWork !== undefined) retrievalWorkSchema.parse(job.retrievalWork);
+  if (job.context?.decisionProjection !== undefined) z.object({ format: z.literal(1), omittedReviewSourceIDs: z.array(z.string()), retainedReviewNoteSourceIDs: z.array(z.string()), projectedReceiptSourceIDs: z.array(z.string()).optional() }).strict().parse(job.context.decisionProjection);
   return job;
 }
 
@@ -648,6 +655,32 @@ export class ProjectStore {
     return (rows as Array<{ payload: string }>).map((row) => readStoredJob(row.payload));
   }
 
+  /** Read only backlog receipts, not the growing collection of model results/manifests. */
+  gapHistory(projectID: string): GapHistory[] {
+    const rows = this.db.prepare(`SELECT id, json_extract(payload, '$.expectedRevision') AS revision,
+      json_extract(payload, '$.status') AS status, json_extract(payload, '$.kind') AS kind,
+      json_extract(payload, '$.helpRequest') AS help, json_extract(payload, '$.context.refinementOnly') AS refinement,
+      json_extract(payload, '$.context.decisionProjection.format') AS projectionFormat,
+      json_extract(payload, '$.context.gapExploration') AS exploration, json_extract(payload, '$.gapReport') AS report,
+      CASE WHEN json_type(payload, '$.context.gapExploration.check') IS NULL
+        THEN json_extract(payload, '$.context.includedIDs') END AS legacyIncludedIDs
+      FROM jobs WHERE project_id = ? AND (json_type(payload, '$.context.gapExploration') IS NOT NULL
+        OR json_type(payload, '$.gapReport') IS NOT NULL) ORDER BY rowid`).all(projectID) as {
+      id: string; revision: number; status: Job["status"]; kind: string | null; help: string | null;
+      refinement: number | null; exploration: string | null; report: string | null; legacyIncludedIDs: string | null;
+      projectionFormat: number | null;
+    }[];
+    return rows.map((row) => {
+      if (row.projectionFormat !== null && row.projectionFormat !== 1) throw new Error("Unsupported current-decision projection format. Saved evidence was not overwritten.");
+      const exploration = row.exploration ? JSON.parse(row.exploration) as NonNullable<Job["context"]>["gapExploration"] : undefined;
+      if (exploration?.check !== undefined) gapCheckSchema.parse(exploration.check);
+      return { id: row.id, expectedRevision: row.revision, status: row.status, ...(row.kind ? { kind: row.kind } : {}),
+        ...(row.help ? { helpRequest: true } : {}), context: { gapExploration: exploration, refinementOnly: !!row.refinement,
+          ...(row.legacyIncludedIDs ? { includedIDs: z.array(z.string()).parse(JSON.parse(row.legacyIncludedIDs)) } : {}) },
+        ...(row.report ? { gapReport: gapReportSchema.parse(JSON.parse(row.report)) } : {}) };
+    });
+  }
+
   private saveJob(job: Job) {
     this.db.transaction(() => {
       this.db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(job), job.id);
@@ -656,6 +689,58 @@ export class ProjectStore {
         if (entry) saveActivity(this.db, job.projectID, { ...entry, at: new Date().toISOString(), atLabel: "Recorded" });
       }
     })();
+  }
+
+  attachGapReport(id: string, report: GapReport) {
+    this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running") throw new Error("Job is no longer running.");
+      job.gapReport = gapReportSchema.parse(report);
+      this.saveJob(job);
+    }).immediate();
+  }
+
+  /** A checkpoint is evidence of a completed navigation call, never a gap check. */
+  checkpointRetrieval(id: string, input: RetrievalWork, context: NonNullable<Job["context"]>) {
+    this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Retrieval worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      job.retrievalWork = retrievalWorkSchema.parse(input);
+      job.context = context;
+      this.saveJob(job);
+    }).immediate();
+  }
+
+  retrievalHistory(projectID: string, revision: number, exploration: NonNullable<Job["context"]>["gapExploration"], research: boolean, model: Job["model"], focusEpicID: string | null): Job[] {
+    return (this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ?
+      AND json_type(payload, '$.retrievalWork') IS NOT NULL
+      AND json_extract(payload, '$.expectedRevision') <= ?
+      AND json_extract(payload, '$.context.gapExploration.targetRecordID') = ?
+      AND json_extract(payload, '$.context.gapExploration.check.inputKey') = ?
+      AND json_extract(payload, '$.context.gapExploration.check.lens') = ?
+      AND json_extract(payload, '$.retrievalWork.research') = ?
+      AND json_extract(payload, '$.model.providerID') = ?
+      AND json_extract(payload, '$.model.modelID') = ?
+      AND json_extract(payload, '$.model.connectionID') IS ?
+      AND json_extract(payload, '$.context.focusEpicID') IS ?
+      AND json_extract(payload, '$.status') IN ('failed', 'cancelled', 'interrupted', 'stale')
+      ORDER BY rowid DESC LIMIT 1`)
+      .all(projectID, revision, exploration?.targetRecordID ?? "", exploration?.check?.inputKey ?? "", exploration?.check?.lens ?? "", research ? 1 : 0,
+        model.providerID, model.modelID, model.connectionID ?? null, focusEpicID) as { payload: string }[])
+      .map((row) => readStoredJob(row.payload));
+  }
+
+  /** A saved no-call outcome is not a model check and never advances specification state. */
+  finishGapIdle(id: string, report: GapReport): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running" || job.context?.gapExploration?.check || report.modelCalls !== 0) throw new Error("Invalid no-call gap outcome.");
+      job.gapReport = gapReportSchema.parse(report);
+      job.status = (job.leaseUntil ?? 0) <= Date.now() ? "interrupted" : this.get(job.projectID).revision !== job.expectedRevision ? "stale" : "completed";
+      job.leaseUntil = null;
+      this.saveJob(job); return job;
+    }).immediate();
   }
 
   claimJob(id: string, leaseUntil: number) {
@@ -835,6 +920,11 @@ export class ProjectStore {
       } else {
         this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
           const before = structuredClone(project);
+          if (job.context?.gapExploration?.check) {
+            // Older/deterministic adapters may omit the optional area field.
+            // A bounded gap task defaults to its detailed target, never an unseen inbox.
+            for (const record of [...result.questions, ...result.requirements]) record.epicID ??= job.context.focusEpicID ?? "project";
+          }
           const reviews = this.submissions(project.id).filter((s) => s.applied && s.input.type === "review" && job.context?.submissionIDs?.includes(s.id));
           const pair = job.context?.refinementPair?.requirementIDs;
           if (job.context?.refinementOnly && ((!pair && result.questions.length) || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length || result.pendingChanges?.changes.length || result.researchFindings?.length)) throw new Error("Refinement-only passes may only propose requirement cleanup.");
@@ -871,7 +961,8 @@ export class ProjectStore {
           const eligible = new Set(requirementEvidenceIDs(project).filter((id) => project.sources.find((s) => s.id === id)?.kind !== "workspace"));
           for (const change of result.pendingChanges?.changes ?? []) {
             const recordID = change.type === "revise-question" ? change.questionID : change.requirementID;
-            if (!job.context?.includedIDs.includes(recordID) || protects(recordID)) throw new Error("Cannot update a pending item outside detailed context or with waiting human input. Human responses were retained.");
+            if (!job.context?.includedIDs.includes(recordID)) throw new Error(`Cannot update pending item ${recordID}: it was outside this round's detailed context. No proposals were applied; human responses were retained. Resume discovery with the affected feature selected.`);
+            if (protects(recordID)) throw new Error(`Cannot update pending item ${recordID}: it has unfinished human input. No proposals were applied; human responses were retained. Process its saved response before requesting other changes to this item.`);
             const evidence = change.type === "revise-question" ? project.questions.find((q) => q.id === recordID)?.evidenceIDs : project.requirements.find((r) => r.id === recordID)?.sourceIDs;
             if (evidence?.some((id) => !job.context!.includedIDs.includes(id))) throw new Error("Pending-item updates require the target's complete supporting evidence.");
             if (change.sourceIDs.some((id) => !taskSources.has(id) || !eligible.has(id) || !job.context!.includedIDs.includes(id))) throw new Error("Pending-item updates must cite current concrete human input from this batch. Original supporting links are retained separately; plain approvals, delegation and deferral do not authorize wider changes.");
@@ -965,13 +1056,15 @@ export class ProjectStore {
         job.status = "completed";
       }
       job.result = result;
+      if (job.status === "completed" && job.context?.gapExploration?.check && job.gapReport) job.gapReport = { ...job.gapReport,
+        state: "checked", checked: job.gapReport.checked + 1, pending: Math.max(0, job.gapReport.pending - 1) };
       job.leaseUntil = null;
       this.saveJob(job);
       return job;
     }).immediate();
   }
 
-  failJob(id: string, status: "failed" | "cancelled", diagnostic: string) {
+  failJob(id: string, status: "failed" | "cancelled" | "stale", diagnostic: string) {
     this.db.transaction(() => {
       const job = this.getJob(id);
       if (!["running", "pending"].includes(job.status)) return;

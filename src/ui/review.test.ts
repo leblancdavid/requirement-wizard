@@ -6,6 +6,18 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { pageWindow, PagedList } from "./pagination.js";
 import { ReviewUpdateNotice } from "./review-update.js";
+import { GapExplorationStatus } from "./gap-status.js";
+import type { Job } from "../core/model.js";
+
+test("gap backlog status distinguishes saved checks, unresolved decisions and no-call reuse without a completeness claim", () => {
+  const job: Job = { id: "gap-job", projectID: "project", expectedRevision: 1, model: { providerID: "openai", modelID: "fixture" },
+    status: "completed", leaseUntil: null, gapReport: { format: 1, state: "idle", checked: 2, pending: 0, waiting: 1, blocked: 1,
+      total: 4, modelCalls: 0, explanation: "Bounded task checks are not proof of completeness." } };
+  const before = structuredClone(job), html = renderToStaticMarkup(createElement(GapExplorationStatus, { job }));
+  assert.match(html, /Gap exploration backlog/); assert.match(html, /2 checked/); assert.match(html, /waiting for decisions/);
+  assert.match(html, /No model request made/); assert.match(html, /not live completeness/); assert.match(html, /not proof of completeness/);
+  assert.ok(!html.includes("100%")); assert.deepEqual(job, before);
+});
 
 test("page windows bound large lists and clamp empty, negative and shortened pages", () => {
   assert.deepEqual(pageWindow(500, 25, 25), { page: 1, pages: 20, start: 25, end: 50 });
@@ -45,6 +57,22 @@ test("Review uses Refine as the single duplicate/conflict workflow without runni
   assert.ok(!html.includes("Approved requirement audit"));
   assert.equal(calls, 0);
   assert.deepEqual(p, before);
+});
+
+test("requirement review places duplicate removal after Reject in the same button row", () => {
+  const p = fixture();
+  p.refinements = [];
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
+    refine: () => {}, submit: async () => true, reviewRefinement: async () => true, removeDuplicate: async () => true }));
+  assert.match(html, /<div class="button-row"><button[^>]*>Approve<\/button><button[^>]*>Reject<\/button><button[^>]*>Remove as duplicate…<\/button><\/div>/);
+});
+
+test("refinement review places duplicate removal next to the keep action in the same button row", () => {
+  const p = fixture();
+  p.requirements = p.requirements.filter((r) => r.id !== "pause");
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
+    refine: () => {}, submit: async () => true, reviewRefinement: async () => true, removeDuplicate: async () => true }));
+  assert.match(html, /<div class="button-row"><button[^>]*>Approve refinement<\/button><button[^>]*>Keep current wording<\/button><button[^>]*>Remove as duplicate…<\/button><\/div>/);
 });
 
 test("Review bounds a 500-item pending list without limiting its counts or mutating evidence", () => {

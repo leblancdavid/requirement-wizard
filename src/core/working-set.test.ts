@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { buildContext, ContextBudgetError } from "./context.js";
 import { planContext } from "./working-set.js";
 import { analysisSchema, reviewFingerprint, type Analysis, type Project } from "./model.js";
@@ -7,6 +10,7 @@ import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
+import { planGapContext } from "./gap-context.js";
 
 const empty = (): Analysis => ({ summary: "Updated interpretation", goals: ["Changed goal"], actors: [], assumptions: [],
   questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [],
@@ -66,6 +70,91 @@ function corrections(store: ProjectStore, project: Project) {
     input: { type: "answer", questionID: q.id, questionText: q.text, sourceID: q.sourceID,
       answer: { kind: "answer", text: `  Corrected ${q.text}\n` } } }));
 }
+
+function largeGapProject(store: ProjectStore) {
+  let project = seed(store);
+  for (let group = 0; group < 2; group++) {
+    const job = store.beginJob(project.id, project.revision).job;
+    store.claimJob(job.id, Date.now() + 60000);
+    store.finishJob(job.id, { ...empty(), organization: group ? [
+      { type: "upsert", epicID: "new:other", title: "Other area", purpose: "Independent behavior", dependencies: [] },
+    ] : [], requirements: Array.from({ length: 10 }, (_, index) => {
+      const i = group * 10 + index;
+      return { epicID: group ? "new:other" : "inbox",
+        statement: `Behavior ${i}: ${String.fromCharCode(65 + i).repeat(11000)}`, rationale: "Original evidence",
+        acceptance: [`Scenario ${i} preserves its behavior`], sourceIDs: [project.sources[0]!.id] };
+    }) });
+    project = store.get(project.id);
+  }
+  for (const r of project.requirements) project = store.review(project.id, project.revision, r.id, "accepted", "");
+  return project;
+}
+
+test("Explore next gaps falls back to exact bounded tasks and rotates only successful explorations", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = largeGapProject(store), before = structuredClone(project);
+    assert.throws(() => planContext(project, { expandMandatory: true }), ContextBudgetError);
+    const first = planGapContext(project, []);
+    const targetID = first.manifest.gapExploration!.targetRecordID;
+    const target = project.requirements.find((r) => r.id === targetID)!;
+    assert.ok(first.manifest.characters <= first.manifest.budget);
+    assert.equal(first.manifest.characters, JSON.stringify(first.data).length);
+    assert.ok(first.manifest.partial && first.manifest.isolatedTask);
+    const decoded = decodeContext<{ sources: Project["sources"]; requirements: Project["requirements"]; submissionScope: { explanation: string } }>(first.data);
+    assert.deepEqual(decoded.requirements.find((r) => r.id === targetID), target);
+    for (const id of target.sourceIDs) assert.deepEqual(decoded.sources.find((s) => s.id === id), project.sources.find((s) => s.id === id));
+    assert.match(decoded.submissionScope.explanation, /Explore next gaps.*not a queued submission/);
+    assert.match(decoded.submissionScope.explanation, /do not infer preferences from missing records/);
+    assert.match(discoveryPrompt(project, first), /Global interpretation is unchanged/);
+    const history = (status: import("./model.js").Job["status"]) => [{ id: "previous-gap", projectID: project.id,
+      expectedRevision: project.revision, status, model: project.model, leaseUntil: null, context: first.manifest }];
+    for (const status of ["failed", "cancelled", "stale", "interrupted"] as const) {
+      assert.equal(planGapContext(project, history(status)).manifest.gapExploration!.targetRecordID, targetID);
+    }
+    const next = planGapContext(project, history("completed"));
+    assert.notEqual(next.manifest.focusEpicID, target.epicID, "all-area exploration rotates features, not only records");
+    const focused = planGapContext(project, history("completed"), target.epicID);
+    // This smaller full feature may fit. If it needs fallback, it must stay in scope.
+    assert.equal(focused.manifest.focusEpicID, target.epicID);
+    if (focused.manifest.gapExploration) assert.notEqual(focused.manifest.gapExploration.targetRecordID, targetID);
+    assert.deepEqual(project, before);
+    const small = store.create("Small", "Small idea", project.model);
+    assert.deepEqual(planGapContext(small, []), planContext(small, { expandMandatory: true }));
+    for (let i = 0; i < 9; i++) project.sources.push({ id: `mandatory-${i}`, kind: "note", epicID: "project", text: `${i}:${String.fromCharCode(97 + i).repeat(12000)}` });
+    assert.throws(() => planGapContext(project, []), ContextBudgetError, "genuine oversized human guardrails still block every target");
+  } finally { store.close(); }
+});
+
+test("legacy projects explore gaps through the queue and retain rotation across repeated SQLite reopening", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "reqwizit-gap-upgrade-"));
+  const path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  let queue: DiscoveryQueue | undefined;
+  try {
+    const original = largeGapProject(store), originalJobs = store.jobs(original.id);
+    assert.ok(originalJobs.every((j) => !j.context?.gapExploration));
+    const targets: string[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      store.close(); store = new ProjectStore(path);
+      const before = store.get(original.id);
+      queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
+        assert.deepEqual(snapshot.sources, original.sources);
+        assert.ok(options.context.manifest.gapExploration);
+        assert.ok(options.context.manifest.characters <= options.context.manifest.budget);
+        targets.push(options.context.manifest.gapExploration.targetRecordID);
+        return empty();
+      } }));
+      queue.resume(original.id, { research: false }); await idle(queue, original.id);
+      assert.equal(store.jobs(original.id).at(-1)!.status, "completed");
+      const after = store.get(original.id);
+      for (const field of ["sources", "questions", "requirements", "summary", "goals", "actors", "assumptions", "assessments", "scopeAssessment"] as const) assert.deepEqual(after[field], before[field]);
+      assert.deepEqual(store.jobs(original.id).slice(0, originalJobs.length), originalJobs);
+      await queue.close(); queue = undefined;
+    }
+    assert.equal(new Set(targets).size, 3);
+  } finally { await queue?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("50,777-character focused context recovers with exact evidence and explicitly reduced AI detail", () => {
   const store = new ProjectStore(":memory:");

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Job, Submission } from "../core/model.js";
+import type { Job, Project, Submission } from "../core/model.js";
+import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import type { QueueActivity } from "./queue-activity.js";
 import { ActivityBar, ActivityFeedback, Spinner } from "./activity.js";
 import "./processing-queue.css";
@@ -9,8 +10,10 @@ import { SubmissionOverlapStatus } from "./submission-overlap.js";
 import { LazyDetails } from "./lazy-details.js";
 import type { RefinementProgress } from "../core/refinement.js";
 import { refinementActivity } from "./refinement-progress.js";
+import { GapExplorationStatus } from "./gap-status.js";
 
-export function ProcessingQueue({ active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, stop, error }: {
+export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, stop, error }: {
+  project: Project;
   active: boolean; progress: string[]; submissions: Submission[]; paused: boolean; lastJob?: Job;
   refinementProgress?: RefinementProgress | null;
   activities: QueueActivity[]; stopActivity: (target: NonNullable<QueueActivity["stop"]>) => void;
@@ -21,7 +24,8 @@ export function ProcessingQueue({ active, progress, refinementProgress, submissi
   const trigger = useRef<HTMLButtonElement>(null);
   const processing = submissions.filter((item) => item.status === "processing");
   const waiting = submissions.filter((item) => item.status === "queued");
-  const attention = submissions.filter((item) => item.status === "needs-attention");
+  const resolvedAttempts = resolvedReviewAttempts(project, submissions);
+  const attention = submissions.filter((item) => item.status === "needs-attention" && !resolvedAttempts.has(item.id));
   const blocked = attention.filter((item) => item.contextBlock);
   const saved = submissions.filter((item) => item.status === "saved");
   const [task = "Preparing discovery…", ...stage] = (progress.at(-1) ?? "Preparing discovery…").split("\n");
@@ -37,7 +41,9 @@ export function ProcessingQueue({ active, progress, refinementProgress, submissi
   const discoveryHeadline = refinement?.headline ?? (active ? processing.length ? `Processing ${processing.length} ${processing.length === 1 ? "response" : "responses"}` : task
     : blocked.length ? "AI follow-up blocked by context size" : paused ? "Processing paused" : attention.length ? "Needs attention"
     : failed ? `Last ${lastJob.kind === "scan" ? "scan" : "round"} ${lastJob.status}` : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting discovery"
-    : lastJob?.status === "cancelled" ? "Processing stopped" : lastJob?.status === "completed" ? "Up to date" : "Ready when you are");
+    : lastJob?.status === "cancelled" ? "Processing stopped" : lastJob?.status === "completed" ? lastJob.gapReport
+      ? lastJob.gapReport.state === "checked" ? "Gap task checked" : lastJob.gapReport.state === "waiting" ? "Gap exploration waiting"
+        : lastJob.gapReport.state === "blocked" ? "Gap exploration blocked" : "Saved gap checks reused" : "Up to date" : "Ready when you are");
   const outcome = recent.find((item) => item.title !== "Question help");
   const headline = taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? (!refinement && !active && !blocked.length && !paused && !attention.length && !failed && outcome ? `${outcome.title} · ${outcome.status}` : discoveryHeadline);
   const liveStage = running[0]?.stage ?? refinement?.label ?? stage.join(" ");
@@ -58,11 +64,12 @@ export function ProcessingQueue({ active, progress, refinementProgress, submissi
 
   function items(entries: Submission[]) {
     return entries.map((item) => <article className="queue-item" key={item.id}>
-      <span className={`badge ${item.status}`}>{item.status === "needs-attention" ? item.contextBlock ? "Context blocked" : "Needs attention" : item.status === "saved" ? "Saved · awaiting discovery" : item.status}</span>
+      <span className={`badge ${resolvedAttempts.has(item.id) ? "superseded" : item.status}`}>{resolvedAttempts.has(item.id) ? "Resolved · history only" : item.status === "needs-attention" ? item.contextBlock ? "Context blocked" : "Needs attention" : item.status === "saved" ? "Saved · awaiting discovery" : item.status}</span>
       <strong>{item.input.type === "answer" ? item.input.questionText : item.input.type === "review" ? item.input.requirementText : "Idea, correction, or constraint"}</strong>
       <p className="source-excerpt">{item.input.type === "answer" ? item.input.answer.text : item.input.type === "review" ? `${item.input.action}: ${item.input.note || "No addendum"}` : item.input.text}</p>
       <small>{new Date(item.submittedAt).toLocaleString()}{item.jobID ? ` · Batch ${item.jobID.slice(0, 8)}` : ""}{item.input.type === "answer" ? ` · ${item.input.answer.kind}` : ""}</small>
-      {item.diagnostic && <p className="job-error">{item.diagnostic}</p>}
+      {resolvedAttempts.has(item.id) && <p>Already {item.input.type === "review" && item.input.action === "rejected" ? "rejected" : "approved"} by a later completed review. Nothing to process. See Reviewed for the current story and original attempt history.</p>}
+      {item.diagnostic && (resolvedAttempts.has(item.id) ? <details><summary>Previous attempt diagnostic (saved history)</summary><p>{item.diagnostic}</p></details> : <p className="job-error">{item.diagnostic}</p>)}
       <SubmissionOverlapStatus submission={item} />
     </article>);
   }
@@ -92,6 +99,7 @@ export function ProcessingQueue({ active, progress, refinementProgress, submissi
         {active && <section aria-label="Current task"><h3>{refinement?.headline ?? task}</h3><ActivityFeedback label={refinement?.label ?? (stage.join(" ") || task)} completed={completed} total={total} />{refinement && <><p>{task}{stage.length ? ` · ${stage.join(" ")}` : ""}</p><p>Progress covers this run only, with up to 20 overlap checks followed by unfinished wording checks. Ineligible work is skipped; further overlaps may remain. Proposed changes still need your approval.</p></>}<button className="secondary" disabled={stopDisabled} onClick={stop}>Stop</button>{!processing.length && !refinement && <p>The active round is exploring existing project information; queued responses join the next round.</p>}</section>}
         {!active && refinement && <section aria-label="Refinement outcome"><h3>{refinement.headline}</h3><p>{refinement.label}</p><p>{progress.at(-1)}</p></section>}
         {!active && failed && <p className="job-error">Last {lastJob.kind === "scan" ? "scan" : "round"} {lastJob.status}: {lastJob.diagnostic}</p>}
+        {!active && lastJob?.gapReport && <GapExplorationStatus job={lastJob} />}
         {paused && <p role="status">Discovery is paused. Saved submissions are retained.</p>}
         {executionWaiting && !paused && waiting.length > 0 && <p role="status">Responses are saved and waiting for assessment or implementation to finish. Automatic follow-up resumes afterward for responses submitted with automatic processing enabled.</p>}
         {blocked.length > 0 && <p role="status">Context preflight stopped {blocked.length} {blocked.length === 1 ? "response" : "responses"} before starting an AI batch. Review that feature's cross-cutting notes and dependency scope in Project map, or split its work, then resume to recheck. The saved answers and approvals remain intact.</p>}
@@ -100,13 +108,14 @@ export function ProcessingQueue({ active, progress, refinementProgress, submissi
         {recent.length > 0 && <LazyDetails summary={<>Recent background work · {recent.length}</>}>{() => recent.map((item) => <article className="queue-item" key={item.id}><h3>{item.title} · {item.status}</h3>{item.stage && <p className={["failed", "blocked", "interrupted", "stale"].includes(item.status) ? "job-error" : undefined}>{item.stage}</p>}{item.detail && <p>{item.detail}</p>}</article>)}</LazyDetails>}
         {([[processing, "Currently processing"], [waiting, "Waiting next · submission order"], [attention, "Needs attention"], [saved, "Saved · awaiting discovery"]] as const).map(([entries, label]) => entries.length > 0 && <section key={label} aria-label={label}><h3>{label}</h3>{items(entries)}</section>)}
         {([ ["completed", "Recent completed work"], ["superseded", "Replaced responses · history only"] ] as const).map(([status, label]) => {
-          const entries = submissions.filter((item) => item.status === status).reverse();
+           const entries = submissions.filter((item) => item.status === status || status === "superseded" && resolvedAttempts.has(item.id)).reverse();
           return entries.length > 0 && <LazyDetails key={status} summary={<>{label} · {entries.length}</>}>{() => <SubmissionHistory entries={entries} render={items} />}</LazyDetails>;
         })}
       </div>
     </dialog></ActionScope>, document.body)}
   </ActionScope>;
 }
+
 
 function SubmissionHistory({ entries, render }: { entries: Submission[]; render: (entries: Submission[]) => React.ReactNode }) {
   const [page, setPage] = useState(0);

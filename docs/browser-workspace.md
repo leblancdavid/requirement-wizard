@@ -1,5 +1,112 @@
 # Browser workspace, epics, and estimated completeness
 
+## Exploring gaps in large projects
+
+After the initial interpretation, **Explore next gaps** works from a durable task
+backlog rather than loading a whole feature. Requirements offer three bounded lenses:
+workflow/behavior, failures/recovery, and acceptance boundaries. Questions and human
+notes offer one behavior lens. These are opportunities to investigate, not a checklist
+that must all be run to finish a specification. Choose a feature to restrict the scope.
+An explicitly selected empty feature can start from the original idea and its saved
+purpose, without inventing a new evidence record or changing the original input.
+
+Each task makes **at most three model request attempts across explicit retries** (initial
+interpretation keeps its existing one-request path). Compatible completed checks are reused,
+including after restart. Unresolved target-linked questions wait for a concrete answer;
+deferral/delegation does not settle them. If everything in the selected scope is already
+checked or waiting, the app explains that outcome **without calling the model** or
+creating a specification revision. New proposals add tasks without automatically
+replaying unrelated completed work. Human input conservatively reopens affected feature
+and dependency scopes; an unrelated feature edit or an advisory summary/revision change
+does not. Rescans reopen checks because evidence currentness may have changed.
+
+The current-decision view preserves exact current wording/scenarios and all original
+human notes. Proven superseded plain approvals can be omitted from a request, but never
+deleted from history. App-generated cleanup/resolution receipts can show verified current
+approval facts instead of their embedded old snapshots, only when they exactly match a
+saved accepted proposal and current requirement. Source/proposal IDs remain explicit.
+Older human addenda and unknown review prose stay intact, even after a later plain
+approval; conflicting intent still needs clarification. Omitted history cannot be cited.
+
+**Processing & queue → Gap exploration backlog** shows checked, pending, waiting and
+context-blocked counts for that exploration's input scope/revision, plus whether a model
+request was attempted. Counts are not a live completeness score. Up to twenty candidate
+packages are checked locally per click. Oversized tasks retain their evidence and are
+recorded as blocked so later tasks can proceed; changing their scope reconsiders them.
+Queued-response follow-up, scans, question help and Refine keep their separate policies.
+
+These are adjacent-gap passes, not whole-feature reviews or proof of completeness.
+Unrelated history is explicitly omitted/indexed and cannot support new decisions.
+Global interpretation and whole-feature coverage are unchanged by partial passes.
+After updating/restarting the app, retry **Explore next gaps** explicitly; upgrading
+never automatically resumes a failed call or replays completed responses.
+
+Deterministic checks include a 1,000-requirement catalog, repeated SQLite reopening,
+failure/cancellation/staleness, legacy-check adoption, exact human addenda and unsupported
+future formats. Browser checks exercise three lenses followed by no-call reuse, reload
+and mobile layout (`.reqwizit-state/browser-gap-backlog.png`). Live semantic quality and
+live-provider retrieval quality remain unqualified. The staged protocol is described below.
+
+### Bounded exact-evidence stages
+
+Gap tasks can defer saved static-file motivation instead of requiring the entire file
+closure up front. Human constraints/addenda, current decisions and applicable guardrails
+stay exact in **every** stage. Index labels, related-record hints and unseen source links
+are navigation, not authoritative evidence. A model can request up to eight displayed,
+unseen record IDs in a strict `retrieveEvidence` envelope instead of returning proposals.
+The app loads exact saved records and their human dependencies in a fresh context, keeps
+previously loaded evidence, and independently rejects unseen citations/changes.
+
+There are at most two completed navigation stages and three total adapter attempts,
+including failed requests across retries. Context targets 48,000 characters and has a
+96,000-character hard evidence cap; final saved output also has a 96,000-character cap.
+Oversized human constraints or cumulative evidence block; they are never silently
+summarized, truncated or forgotten. The existing five-minute job deadline still applies.
+Research is opt-in under the existing permission profile (at most four tool calls per
+adapter request, twelve across a three-request task); saved-record retrieval itself uses
+no tools, arbitrary paths or network access. Direct-provider research remains unsupported.
+
+Processing & queue shows saved navigation stages, cumulative request attempts and failure
+blockers. After an interruption, click **Explore next gaps** explicitly in the same scope.
+The app reuses committed stages with matching authoritative evidence/model/research
+permission, including across unrelated specification revisions; it does not repeat
+compatible completed calls. Original wire hashes and model-call revisions stay saved. A
+schema-valid, citation-checked final response is checkpointed before normal transactional
+publication and can be reused after publication interruption. Publication still performs
+all existing reference/revision/lease/approval checks. Invalid references never authorize
+changes. Startup/reload never resumes inference. Relevant human or target changes create
+a new task identity. Changes to already retrieved supporting constraints block saved-output
+reuse; old results remain available, never silently applied or replayed.
+
+Cross-revision reuse excludes only revision labels, advisory previous interpretation,
+navigation indexes/hints, the navigation epic map and omitted-record counts. Lossless wire
+encodings are expanded before comparison; exact displayed human text, records, task lens,
+feature/dependency scope and retrieval policy remain binding. A previously displayed handle
+can still load its exact saved record after unrelated additions move its hint out of the
+bounded index; this does not authorize citations before its contents are loaded. Older
+checkpoints without the new basis are adopted only after rebuilding their immutable input
+revision and verifying the original exact wire hash. No startup rewrite is needed.
+
+Processing & queue displays source/retry revisions and the number of reused stages/final
+responses. A reused result still faces current reference, pending-question-budget and
+revision/lease publication checks. A rejected publication consumes no task check. Failed
+attempts still count toward the three-request limit across revisions; unrelated edits and
+repeated clicks do not reset it. A concurrent edit during retry still makes the worker
+stale, even if that edit itself would permit another explicit compatible retry.
+
+The loader reads saved evidence only, not uncaptured files, arbitrary text ranges or a
+semantic search index. Loaded evidence is cumulative: this is **not** a way to divide
+mandatory human constraints into lossy summaries or process an unbounded evidence union.
+Only displayed handles are requestable. Exhausted request budgets require a meaningful
+scope/evidence change, not repeated clicks. Crash-before-checkpoint model responses cannot
+be recovered automatically; a later explicit retry may need another bounded attempt.
+Retrieved facts never become user preferences, and finishing a lens never certifies
+completeness. Browser recovery coverage includes saved-stage failure, explicit retry,
+reload/no-call replay, preserved records and mobile layout (`browser-gap-retrieval.png`).
+Run `npm run test:browser:retrieval` for the independently runnable deterministic
+retrieval UI/API scenario (`browser-gap-retrieval-focused.png`), without the full suite's
+unrelated tooltip timing dependency. It uses an in-memory database and no model calls.
+
 ## Repeated questions and overlapping requirements
 
 ### Direct duplicate removal and outdated proposal recovery
@@ -235,6 +342,61 @@ Live-model reconciliation quality remains unverified; these fixtures establish w
 and validation behavior, not semantic completeness.
 
 ### Decision safety during queued work
+
+#### Earlier failed attempts resolved by later reviews
+
+Failed plain approval/rejection attempts no longer remain actionable under **Submitted**
+when a later completed human review of the same story and decision is still current.
+They appear under **Reviewed** as **Resolved · history only**, explain **Already approved
+by a later completed review** (or rejected), and offer **View approved story** instead
+of asking the user to approve again. Processing & queue excludes them from attention
+counts and retains them under replaced-response history. Merely navigating to Reviewed
+does not change a decision. Existing matching attempts reconcile on reload; new ones
+reconcile as the successful follow-up completes.
+
+The shared read-only check requires the later review's real, non-superseded human
+source, completed follow-up, current matching statement/rationale/scenarios/feature,
+matching decision and durable later submission order. A later explicit review can
+replace a plain failed attempt at older wording; the original attempt is never
+represented as having approved the new wording. Notes, opposite decisions, applied
+failed follow-up, unsupported fingerprints, changed current requirements or missing
+provenance remain actionable. No records, warnings or input are deleted or rewritten.
+Startup does not pause an otherwise idle queue merely for these resolved attempts;
+existing explicit pauses/failures are not cleared and no model work is resumed.
+
+Verification (2026-10-20): type check, all **367 deterministic tests**, UI build and
+Playwright browser checks passed. Coverage includes duplicate failed approvals for two
+stories, current/historical wording, rejection, genuine notes, SQLite repeated reopen
+with exact payload preservation, startup without inference, browser polling/reload,
+attention counts, viewing the approved story and mobile layout. Screenshot:
+`.reqwizit-state/browser-resolved-reviews.png`. User data was inspected read-only:
+the three reported attempts classify as resolved, leaving zero actionable reviews.
+This does not fix the separate oversized whole-feature **Explore next gaps** context.
+
+#### Current blockers and retained review recovery
+
+Submitted conflicting reviews now show a read-only **Current review recovery** check.
+Their original warning remains under **Previous attempt diagnostic (saved history)**,
+not as a claim that an already-answered question is still unresolved. When the blocker
+has cleared, **Review current requirement with saved note** opens the current record
+and restores the retained note without overwriting an existing draft. The user must
+explicitly approve/reject again; recovery never applies the old decision automatically.
+This also opens originals normally hidden behind a matching refinement.
+
+Unresolved clarification warnings name the question, status and feature. Review cards
+and submitted-review recovery offer **Open blocking clarification in Design**, selecting
+the question's feature, appropriate filter and page even for deferred/delegated questions.
+Failed pending-item updates now distinguish omitted detailed context from unfinished
+human input and identify the exact target ID. Validation protections are unchanged;
+these diagnostics do not establish that an invalid model proposal was safe to apply.
+
+Recovery verification (2026-10-20): type check, all **350 deterministic tests**, UI
+build, Playwright browser checks and diff checks passed. Browser checks open a linked
+clarification from Reviewed, distinguish cleared blockers from historical diagnostics,
+and restore a saved review note without applying its decision. No live model calls or
+user-data repairs were performed. The existing approximately 511 kB Vite chunk warning
+is non-blocking. The original failed model proposal's exact invalid operation was not
+recovered; clearer future diagnostics do not constitute a live-model behavior fix.
 
 Requirement review, refinement/resolution approval and duplicate removal share explicit
 relationship checks in `src/core/decision-availability.ts`. Relevant work includes the

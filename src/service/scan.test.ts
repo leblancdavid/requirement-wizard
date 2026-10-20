@@ -780,7 +780,9 @@ test("existing-project discovery rejects ungrounded questions and fits task cont
     const context = planContext(project); assert.ok(context.manifest.characters <= 48000);
     let grounded = false;
     const service = new DiscoveryService(f.store, { async analyze(_p, options) {
-      const id = project.sources.find((s) => s.kind === "workspace" && options.context.manifest.includedIDs.includes(s.id))!.id;
+      const source = project.sources.find((s) => s.kind === "workspace" && options.context.manifest.includedIDs.includes(s.id));
+      if (!source) return { retrieveEvidence: { format: 1, recordIDs: [project.requirements[0]!.sourceIDs[0]!], reason: "Load the linked exact workspace evidence before proposing a question." } };
+      const id = source.id;
       return analysisSchema.parse({ summary: "Existing gameplay", goals: [], actors: [], assumptions: [], retireQuestions: [], requirements: [], questions: [{ text: "Which documented restart behavior should be preserved?", whyItMatters: "README.md describes existing behavior; intent needs review.", evidenceIDs: grounded ? [id] : undefined, options: [{ label: "Keep", consequence: "Preserve behavior" }, { label: "Change", consequence: "Specify a change" }] }] });
     } });
     assert.equal((await service.analyze(project.id, project.revision)).status, "failed");

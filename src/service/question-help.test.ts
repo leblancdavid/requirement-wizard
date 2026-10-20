@@ -40,7 +40,7 @@ test("invalid optional concepts are omitted while valid concepts and discovery p
     } });
     assert.equal((await service.analyze(project.id, project.revision)).status, "completed");
     const saved = store.get(project.id);
-    assert.equal(saved.summary, "Saved discovery");
+    assert.equal(saved.summary, project.summary, "A task-sized gap pass preserves the global interpretation.");
     const question = saved.questions.at(-1)!;
     assert.equal(question.text, "Need roles for offline editing or offline viewing?");
     assert.deepEqual(question.concepts?.map((item) => item.phrase), ["roles", "Roles"]);

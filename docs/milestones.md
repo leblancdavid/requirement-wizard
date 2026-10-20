@@ -140,6 +140,22 @@ and whole-area assessments. Websearch and
 adversarial tool-budget/permission checks still need live qualification. Full scenario
 review, conflict resolution, release baselines, and readiness gates remain pending.
 
+Next-gap scalability foundation: general discovery after initial interpretation now
+uses a durable evidence-keyed workflow/failure/acceptance backlog and read-only current-
+decision projection. Compatible checks survive unrelated changes/restarts; exact human
+addenda and original history are preserved. Deterministic upgrade/failure checks include
+a 1,000-requirement catalog; browser checks cover no-call reuse and scope/reload status.
+This is bounded adjacent-gap exploration, not qualified semantic completeness or a
+readiness gate. Bounded multi-stage saved-evidence retrieval is implemented: exact human
+constraints stay pinned, static motivation can be requested by displayed record ID,
+completed stages are revision/lease-checkpointed, and explicit compatible retry avoids
+replaying saved model responses. Three cumulative requests and a 96,000-character
+evidence cap block rather than truncate constraints. Explicit retries reuse compatible
+stages across unrelated revisions with original provenance and current-revision publication;
+in-flight stale workers never rebase automatically. Live semantic quality, arbitrary evidence
+windows and semantic prioritization remain follow-on
+work; see [browser discovery](browser-workspace.md#exploring-gaps-in-large-projects).
+
 Dependencies: M2 and M1 research recommendation; M3 required for full client verification.
 Covers RW-009–010 and RW-013–014.
 

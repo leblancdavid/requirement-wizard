@@ -8,6 +8,8 @@ import { SubmissionOverlapStatus } from "./submission-overlap.js";
 import { Pagination, usePagination } from "./pagination.js";
 import { ReviewUpdateNotice } from "./review-update.js";
 import { reviewUpdateFor } from "../core/review-completion.js";
+import { ClarificationLinks, RetainedReviewNotice } from "./decision-recovery.js";
+import { resolvedReviewAttempts } from "../core/review-attempts.js";
 
 export function pendingReviews(project: Project, submissions: Submission[]) {
   const waiting = new Set(submissions.filter((s) => s.input.type === "review" && ["queued", "saved", "processing"].includes(s.status)).map((s) => s.input.type === "review" ? s.input.requirementID : ""));
@@ -74,16 +76,18 @@ function DuplicateRemoval({ project, submissions, jobs, removeID, keepID, disabl
     : <ActionButton className="secondary" disabled={disabled} onClick={() => setOpen(true)}>Remove as duplicate…</ActionButton>;
 }
 
-export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate }: {
+export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
   disabled: boolean; disabledReason?: string; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
   refreshRefinement?: (proposalID: string) => void; removeDuplicate?: RemoveDuplicate;
+  openQuestion?: (id: string) => void;
 }) {
   const [filter, setFilter] = useState<ReviewFilter>("pending");
   const [expanded, setExpanded] = useState<string | null | undefined>(undefined);
   const [drafts, setDrafts] = useState<Record<string, { note: string; fingerprint: string; contextKey: string; revision: number }>>({});
   const [message, setMessage] = useState("");
+  const [recoveryTarget, setRecoveryTarget] = useState<string>();
   const saveDuplicate: RemoveDuplicate | undefined = removeDuplicate && (async (...args) => {
     setMessage("");
     const saved = await removeDuplicate(...args);
@@ -92,12 +96,17 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   });
   const scoped = (id: string) => epicID === "all" || project.requirements.find((r) => r.id === id)?.epicID === epicID;
   const pending = reviewItems(project, submissions, "pending", epicID);
+  // A matching refinement normally hides its original card. Explicit recovery
+  // must still open the requirement so its retained review note can be edited.
+  const recovered = pendingReviews(project, submissions).find((r) => r.id === recoveryTarget && scoped(r.id));
+  if (recovered && !pending.some((item) => item.kind === "requirement" && item.requirement.id === recovered.id)) pending.unshift({ id: `requirement:${recovered.id}`, kind: "requirement", requirement: recovered });
   const refinements = reviewItems(project, submissions, "refinements", epicID);
   const reviews = submissions.filter((s) => s.input.type === "review" && scoped(s.input.requirementID));
-  const submitted = reviews.filter((s) => s.status !== "completed" && s.status !== "superseded");
+  const resolvedAttempts = useMemo(() => resolvedReviewAttempts(project, submissions), [project, submissions]);
+  const submitted = reviews.filter((s) => s.status !== "completed" && s.status !== "superseded" && !resolvedAttempts.has(s.id));
   const reviewed = reviewItems(project, submissions, "reviewed", epicID);
   const visible = filter === "pending" ? pending : filter === "refinements" ? refinements : filter === "reviewed" ? reviewed : [];
-  const history = (filter === "submitted" ? submitted : filter === "reviewed" ? reviews.filter((s) => s.status === "completed") : []).slice().reverse();
+  const history = (filter === "submitted" ? submitted : filter === "reviewed" ? reviews.filter((s) => s.status === "completed" || resolvedAttempts.has(s.id)) : []).slice().reverse();
   const paging = usePagination([...visible.map((item) => item.id), ...history.map((s) => `submission:${s.id}`)], `${project.id}:${epicID}:${filter}`, expanded);
   const pageItems = visible.slice(paging.start, paging.end);
   const pageHistory = history.slice(Math.max(0, paging.start - visible.length), Math.max(0, paging.end - visible.length));
@@ -156,11 +165,12 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
             <details><summary>Supporting evidence</summary>{p.original.sourceIDs.map((id) => <p className="source-excerpt" key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
             {stale && <p role="status">{refinementStaleReason(project, p)} This proposal cannot be approved as-is. Refresh only this {p.resolution ? "comparison" : "requirement"}, make your own duplicate-removal decision, or dismiss the proposal. No full refinement run is needed.</p>}
             {pending && waiting && <p role="status">{availability.reason ?? "Finish the pending human input before approving this refinement or resolution."}</p>}
+            {pending && <ClarificationLinks availability={availability} openQuestion={openQuestion} />}
             {pending ? <div className="button-row"><ActionButton className="primary" disabled={disabled || stale || waiting} reason={disabled ? undefined : stale ? "This proposal is outdated. Refresh only this item, remove a duplicate yourself, or dismiss the proposal." : availability.reason} onClick={() => void save(true)}>{p.resolution ? "Approve resolution" : "Approve refinement"}</ActionButton>
               {stale && refreshRefinement && <ActionButton className="secondary" disabled={disabled || waiting} reason="Process pending human input before refreshing this comparison." onClick={() => refreshRefinement(p.id)}>{p.resolution ? "Refresh this comparison" : "Refresh this requirement"}</ActionButton>}
-              <ActionButton className="secondary" disabled={disabled} onClick={() => void save(false)}>{stale ? "Dismiss outdated proposal" : p.resolution ? "Keep both unchanged" : "Keep current wording"}</ActionButton></div>
+              <ActionButton className="secondary" disabled={disabled} onClick={() => void save(false)}>{stale ? "Dismiss outdated proposal" : p.resolution ? "Keep both unchanged" : "Keep current wording"}</ActionButton>
+              {saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={p.resolution?.relatedRequirementID ?? p.requirementID} keepID={p.resolution ? p.requirementID : undefined} disabled={disabled} save={saveDuplicate} />}</div>
               : <p className="save-notice">{withdrawn ? "This outdated suggestion left the actionable review list automatically. It was not a human rejection. Use Refine requirements if a current suggestion is still needed." : p.status === "accepted" ? "This replacement was approved. Later requirement decisions may have changed its wording." : "This refinement was dismissed without applying its proposed changes. Later decisions may have changed or removed its requirements."}</p>}
-            {pending && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={p.resolution?.relatedRequirementID ?? p.requirementID} keepID={p.resolution ? p.requirementID : undefined} disabled={disabled} save={saveDuplicate} />}
           </div>}
         </article>;
       }
@@ -192,18 +202,31 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
           {r.reviewNote && <p>{r.reviewNote}</p>}{response && <p className="save-notice"><strong>AI response:</strong> {response}</p>}
           <label>Anything to add? (optional)<textarea rows={3} maxLength={12000} value={draft?.note ?? ""} onChange={(event) => setDrafts((current) => ({ ...current, [r.id]: { note: event.target.value, fingerprint: current[r.id]?.fingerprint ?? fingerprint, contextKey: current[r.id]?.contextKey ?? contextKey, revision: current[r.id]?.revision ?? project.revision } }))} placeholder="I approve this, but we also need to consider…" /></label>
           {availability.state !== "ready" && <p role="status">{availability.reason} A saved review will need your attention instead of applying automatically.</p>}
+          <ClarificationLinks availability={availability} openQuestion={openQuestion} />
           {changed && <p role="alert">This requirement or its supporting context changed while you were writing. Your note is retained. Read the updated information, then <button className="quiet" onClick={() => setDrafts((current) => ({ ...current, [r.id]: { note: draft!.note, fingerprint, contextKey, revision: project.revision } }))}>Use note with updated requirement</button>.</p>}
-          <div className="button-row"><ActionButton className="primary" disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton><ActionButton className="secondary" disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : "This review is being saved or is already waiting for processing."} onClick={() => void save("rejected")}>Reject</ActionButton></div>
+          <div className="button-row"><ActionButton className="primary" disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton><ActionButton className="secondary" disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : "This review is being saved or is already waiting for processing."} onClick={() => void save("rejected")}>Reject</ActionButton>
           {r.status !== "rejected" && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={r.id} disabled={disabled || blocked} save={saveDuplicate} />}
+          </div>
         </div>}
       </article>;
     })}</div>
     {filter === "submitted" && !submitted.length && <p className="empty-card">No reviews awaiting follow-up.</p>}
     {pageHistory.map((s) => {
       if (s.input.type !== "review") return null;
+      const resolved = resolvedAttempts.get(s.id);
+      if (resolved) return <article className="requirement-card" key={s.id}><span className="badge superseded">Resolved · history only</span><h3>{s.input.requirementText}</h3><RetainedReviewNotice project={project} submissions={submissions} submission={s} reviewCurrent={() => { if (s.input.type !== "review") return; setFilter("reviewed"); setExpanded(`requirement:${s.input.requirementID}`); }} /><details><summary>Previous attempt diagnostic (saved history)</summary><p>{s.diagnostic}</p><p>Original attempt: {s.id} · Later completed review: {resolved.submissionID}</p></details></article>;
       const response = s.response;
       const decision = s.applied ? s.input.action === "accepted" ? "Approved" : "Rejected" : s.input.action === "accepted" ? "Approval requested · not applied" : "Rejection requested · not applied";
-      return <article className="requirement-card" key={s.id}><span className={`badge ${s.status}`}>{s.status === "needs-attention" && s.contextBlock ? "Context blocked" : s.status}</span><h3>{s.input.requirementText}</h3><p>{decision}{s.input.note ? ` — ${s.input.note}` : ""}</p>{response && <p><strong>AI response:</strong> {response}</p>}{s.status === "completed" && !response && <p>Follow-up saved. See Latest changes and the Project map.</p>}{s.status === "saved" && <p>Decision saved. Use Explore next gaps to process follow-up.</p>}{s.diagnostic && <p role="status">{s.diagnostic} {s.conflict ? "Return to To review or Reviewed to submit against the current requirement." : s.contextBlock ? "Review the feature's context scope in Project map, then resume to recheck. Your decision is retained." : "Use Resume discovery to retry follow-up; your decision is retained."}</p>}<SubmissionOverlapStatus submission={s} /></article>;
+      return <article className="requirement-card" key={s.id}><span className={`badge ${s.status}`}>{s.status === "needs-attention" && s.contextBlock ? "Context blocked" : s.status}</span><h3>{s.input.requirementText}</h3><p>{decision}{s.input.note ? ` — ${s.input.note}` : ""}</p>{response && <p><strong>AI response:</strong> {response}</p>}{s.status === "completed" && !response && <p>Follow-up saved. See Latest changes and the Project map.</p>}{s.status === "saved" && <p>Decision saved. Use Explore next gaps to process follow-up.</p>}{s.diagnostic && (s.conflict ? <details><summary>Previous attempt diagnostic (saved history)</summary><p>{s.diagnostic}</p></details> : <p role="status">{s.diagnostic} {s.contextBlock ? "Review the feature's context scope in Project map, then resume to recheck. Your decision is retained." : "Use Resume discovery to retry follow-up; your decision is retained."}</p>)}<RetainedReviewNotice project={project} submissions={submissions} jobs={jobs} submission={s} openQuestion={openQuestion} reviewCurrent={() => {
+        if (s.input.type !== "review") return;
+        const input = s.input, target = project.requirements.find((r) => r.id === input.requirementID);
+        if (!target) return;
+        setDrafts((current) => ({ ...current, [target.id]: current[target.id] ?? { note: input.note, fingerprint: reviewFingerprint(target), contextKey: decisionContextKey(project, [target.id]), revision: project.revision } }));
+        setFilter(["accepted", "rejected"].includes(target.status) ? "reviewed" : "pending");
+        setRecoveryTarget(target.id);
+        setExpanded(`requirement:${target.id}`);
+        setMessage("Saved note restored without replacing any existing draft. Review the current requirement before approving or rejecting again.");
+      }} /><SubmissionOverlapStatus submission={s} /></article>;
     })}
     {paging.pages > 1 && <Pagination paging={paging} label="Review bottom" onNavigate={() => setExpanded(undefined)} />}
   </section></ActionScope>;

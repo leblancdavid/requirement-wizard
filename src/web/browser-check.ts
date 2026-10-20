@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { startApp } from "./server.js";
 import { ProjectStore } from "../storage/store.js";
-import { analysisSchema } from "../core/model.js";
+import { analysisSchema, reviewFingerprint } from "../core/model.js";
 import type { Connections, LoginStatus } from "../providers/connections.js";
 import { themes } from "../ui/appearance.js";
 import { planContext } from "../core/working-set.js";
@@ -54,6 +54,8 @@ const refinementReleases: Array<() => void> = [];
 let holdRefinement = true;
 let releaseCompletion: (() => void) | undefined;
 let completionCalls = 0;
+let gapCalls = 0;
+let retrievalCalls = 0;
 let rounds = 0;
 let failNextScan = false;
 let failAutomaticPair = false;
@@ -77,6 +79,20 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
   return JSON.stringify({ summary: "Build dependency-safe slices", packages: [{ requirementID: request.requirementID, title: `Planning package ${index + 1}`, reason: "Unlocks a usable workflow", steps: ["Implement the approved outcome"], verification: ["Verify the acceptance scenario"],
     prerequisites: index < 2 ? [{ requirementID: other.id, kind: "hard", reason: "Needs the supporting contract", evidenceIDs: [other.id], confidence: "medium" }] : [], questions: index === 0 ? ["Which shared contract comes first?"] : [] }] });
 } }, adapter: { async analyze(project, options) {
+  if (project.name === "Staged retrieval fixture") {
+    retrievalCalls++;
+    const extra = project.requirements[1]!;
+    if (!options.context.manifest.includedIDs.includes(extra.id)) return { retrieveEvidence: { format: 1, recordIDs: [extra.id], reason: "Inspect the exact adjacent rule, not its index label." } };
+    if (retrievalCalls === 2) throw new Error("Fixture interruption after saved navigation stage");
+    assert.equal(retrievalCalls, 3, "Explicit retry must reuse the completed navigation request");
+    return analysisSchema.parse({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+  }
+  if (project.name === "Gap backlog fixture") {
+    gapCalls++;
+    assert.ok(options.context.manifest.gapExploration?.check);
+    assert.ok(options.context.manifest.characters <= options.context.manifest.budget);
+    return analysisSchema.parse({ summary: "One bounded fixture check", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+  }
   if (project.name === "Completion reconciliation fixture") {
     completionCalls++;
     await new Promise<void>((accept) => { releaseCompletion = accept; options.signal.addEventListener("abort", () => accept(), { once: true }); });
@@ -131,7 +147,8 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
       requirements: [{ epicID: "new:existing", statement: "List existing saved jobs.", rationale: "README.md lines 1–2 documents listing; intent needs review.", sourceIDs: [data.capturedFiles[0]!.id], acceptance: ["Saved jobs can be listed."] }] });
   }
   if (project.origin) {
-    const evidence = project.sources.find((s) => s.kind === "workspace" && options.context.manifest.includedIDs.includes(s.id))!;
+    const evidence = project.sources.find((s) => s.kind === "workspace" && options.context.manifest.includedIDs.includes(s.id));
+    if (!evidence) return { retrieveEvidence: { format: 1, recordIDs: [project.requirements[0]!.sourceIDs[0]!], reason: "Read the linked captured file before asking about existing behavior." } };
     return analysisSchema.parse({ summary: "Existing tracker", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], questions: [{ text: "Should the existing saved-job recovery preserve progress after failure?", whyItMatters: "README.md documents existing tracking; failure recovery is unresolved.", evidenceIDs: [evidence.id], options: [{ label: "Preserve", consequence: "Keep saved progress" }, { label: "Reset", consequence: "Restart progress explicitly" }] }] });
   }
   options.onProgress("Organizing sample project");
@@ -509,6 +526,18 @@ try {
   await expect.poll(() => releases.length).toBe(1);
   releases.shift()!(); // finish this safety exercise without shifting later queue-fixture indexes
   await expect.poll(() => store.submissions(safetyProjectID).filter((s) => s.input.type === "answer" && s.status === "completed").length).toBe(1);
+  await page.getByRole("tab", { name: /^Review/ }).click();
+  const recoveryReview = page.getByRole("region", { name: "Requirement review", exact: true });
+  await recoveryReview.getByRole("button", { name: /^Submitted/ }).click();
+  await expect(recoveryReview.getByRole("region", { name: "Current review recovery" })).toContainText("earlier blocker is no longer active");
+  await expect(recoveryReview.getByText("Previous attempt diagnostic (saved history)")).toBeVisible();
+  await recoveryReview.getByRole("button", { name: "Review current requirement with saved note" }).click();
+  await expect(recoveryReview.getByLabel("Anything to add? (optional)")).toHaveValue("Saving jobs is essential.");
+  assert.equal(store.get(safetyProjectID).requirements[0]!.status, "proposed", "Opening recovery must not apply the retained review");
+  await page.getByRole("tab", { name: "Project map", exact: true }).click();
+  await mapEpic.getByText("View details", { exact: true }).click();
+  await page.locator(".requirement-detail > summary").click();
+  await page.getByLabel("Review rationale").fill("Saving jobs is essential.");
   await expect(page.getByLabel("Review rationale")).toHaveValue("Saving jobs is essential.");
   await expect(page.locator(".review-form")).not.toContainText("pending human input");
   await page.locator('.review-form .button-row > button:not([aria-disabled])').filter({ hasText: "Confirm requirement" }).click();
@@ -1060,7 +1089,11 @@ try {
         if (ambiguous) {
           await expect.poll(() => store.get(resolutionProject.id).questions.length).toBe(1);
           assert.deepEqual(store.get(resolutionProject.id).requirements, originals);
-          await page.getByRole("tab", { name: /^Design/ }).click();
+          await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
+          await reviewPanel.locator(".review-card-heading").filter({ hasText: "Guests can access private reports" }).click();
+          await expect(reviewPanel).toContainText("Should guests be allowed to access private reports?");
+          await reviewPanel.getByRole("button", { name: "Open blocking clarification in Design", exact: true }).click();
+          await expect(page.getByRole("tab", { name: /^Design/ })).toHaveAttribute("aria-selected", "true");
           const clarification = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Should guests be allowed to access private reports?", exact: true }) });
           await clarification.getByRole("button", { name: /Choose Allow private reports/ }).click();
           await clarification.getByRole("button", { name: /^Save response/ }).click();
@@ -1796,6 +1829,109 @@ try {
              await page.reload(); await page.getByRole("tab", { name: /^Review/ }).click();
              await expect(reviewPanel).toContainText("Updated proposed behavior");
              assert.equal(completionCalls, 1, "Reconciliation used the original queued response call; reload did not repeat inference");
-             assert.deepEqual(errors, []);
-   console.log("Browser checks passed: appearance presets, custom colors, fonts/text size, persistence, cross-tab sync, reset, contrast hints, keyboard dropdowns and mobile sizing; local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; Implementation tab count/actions, four delivery strategies, saved settings, matching dark theme and mobile layout; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation; explicit existing-project entry, local identity autofill, preserved manual edits across folders, initialization failure/retry, review-first project map, manual rescan, retained IDs, question dismissal and evidence-grounded replacements, reload and mobile width. Screenshots include .reqwizit-state/browser-implementation{,-dark,-mobile}.png");
+              // Three failed plain approvals for two stories leave actionable
+              // Submitted only after later completed reviews, including on reload.
+              let historyProject = store.create("Resolved review history fixture", "Keep failed attempts as history", { providerID: "openai", modelID: "fixture" });
+              const historySeed = store.beginJob(historyProject.id, historyProject.revision).job; store.claimJob(historySeed.id, Date.now() + 60000);
+              store.finishJob(historySeed.id, { summary: "Review history", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["First reviewed story", "Second reviewed story"].map((statement) => ({ statement, rationale: "Original intent", acceptance: ["Observable behavior"], sourceIDs: [historyProject.sources[0]!.id] })) });
+              historyProject = store.get(historyProject.id);
+              const historyBlocker = store.enqueue(historyProject.id, { id: crypto.randomUUID(), auto: false, research: false, input: { type: "note", epicID: "project", text: "Resolve this constraint before approval" } });
+              const historyInputs = historyProject.requirements.map((r) => ({ type: "review" as const, requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted" as const, note: "" }));
+              for (const input of [historyInputs[0]!, historyInputs[1]!, historyInputs[1]!]) store.enqueue(historyProject.id, { id: crypto.randomUUID(), auto: false, research: false, input });
+              await page.evaluate((id) => { localStorage.setItem("reqwizit-project", id); }, historyProject.id);
+              await page.reload(); await page.getByRole("tab", { name: /^Review/ }).click();
+              await reviewPanel.getByRole("button", { name: /^Submitted/ }).click();
+              await expect(reviewPanel.getByRole("region", { name: "Current review recovery" })).toHaveCount(3);
+              store.applyQueued(historyProject.id, [historyBlocker.id]);
+              const finishedNote = store.submissions(historyProject.id).find((s) => s.id === historyBlocker.id)!; finishedNote.status = "completed"; store.saveSubmission(finishedNote);
+              const roundsBeforeHistoryRecovery = rounds;
+              for (const input of historyInputs) {
+                const approval = store.enqueue(historyProject.id, { id: crypto.randomUUID(), auto: false, research: false, input });
+                store.applyQueued(historyProject.id, [approval.id]);
+                const completedApproval = store.submissions(historyProject.id).find((s) => s.id === approval.id)!;
+                completedApproval.status = "completed"; store.saveSubmission(completedApproval);
+              }
+              await expect(reviewPanel.getByRole("button", { name: /^Submitted/ })).toHaveText("Submitted 0");
+              await expect(reviewPanel).toContainText("No reviews awaiting follow-up");
+              await expect(page.getByRole("button", { name: /^Processing & queue:/ })).not.toHaveAccessibleName(/need attention/);
+              await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
+              await expect(reviewPanel.getByRole("region", { name: "Resolved review attempt" })).toHaveCount(3);
+              await expect(reviewPanel.getByRole("region", { name: "Current review recovery" })).toHaveCount(0);
+              await reviewPanel.getByRole("button", { name: "View approved story", exact: true }).first().click();
+              await expect(reviewPanel.getByRole("button", { name: /Approved.*Second reviewed story/ }).first()).toHaveAttribute("aria-expanded", "true");
+              await page.setViewportSize({ width: 390, height: 844 });
+              assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Resolved review history fits mobile width");
+              await page.screenshot({ path: ".reqwizit-state/browser-resolved-reviews.png", fullPage: true });
+              await page.reload(); await page.getByRole("tab", { name: /^Review/ }).click();
+              await reviewPanel.getByRole("button", { name: /^Submitted/ }).click();
+              await expect(reviewPanel).toContainText("No reviews awaiting follow-up");
+              assert.equal(rounds, roundsBeforeHistoryRecovery, "Resolved review cleanup and reload must not run model calls");
+              assert.deepEqual(errors, []);
+   let gapProject = store.create("Gap backlog fixture", "Preserve work across interruptions", { providerID: "openai", modelID: "fixture" });
+   const gapSeed = store.beginJob(gapProject.id, gapProject.revision).job; store.claimJob(gapSeed.id, Date.now() + 60000);
+   store.finishJob(gapSeed.id, { summary: "Recovery workflow", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [],
+     organization: [{ type: "upsert", epicID: "new:recovery", title: "Recovery workflow", purpose: "Keep saved work", dependencies: [] }],
+     requirements: [{ epicID: "new:recovery", statement: "Retain work after restart", rationale: "Human intent", acceptance: ["Saved work remains available"], sourceIDs: [gapProject.sources[0]!.id] }] });
+   gapProject = store.get(gapProject.id);
+   gapProject = store.review(gapProject.id, gapProject.revision, gapProject.requirements[0]!.id, "accepted", "");
+   const gapOriginal = structuredClone(gapProject);
+   await page.reload(); await page.locator(".sidebar").getByRole("button", { name: /Gap backlog fixture/ }).click();
+   await page.getByRole("tab", { name: /^Design/ }).click();
+   await page.getByLabel("Filter by feature").selectOption(gapProject.requirements[0]!.epicID);
+   for (let i = 0; i < 4; i++) {
+     const jobsBefore = store.jobs(gapProject.id).length, revisionBefore = store.get(gapProject.id).revision;
+     await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+     await expect.poll(() => store.jobs(gapProject.id).length).toBe(jobsBefore + 1);
+     await expect.poll(() => store.jobs(gapProject.id).at(-1)!.status).toBe("completed");
+     await expect(page.getByRole("button", { name: "Explore next gaps →", exact: true })).toBeEnabled();
+     assert.equal(store.jobs(gapProject.id).at(-1)!.gapReport!.checked, Math.min(i + 1, 3));
+     if (i === 3) assert.equal(store.get(gapProject.id).revision, revisionBefore, "A no-call reuse outcome cannot create a specification revision");
+   }
+   assert.equal(gapCalls, 3, "Explore reuses all three compatible lenses instead of calling the adapter again");
+   assert.deepEqual(store.get(gapProject.id).requirements, gapOriginal.requirements);
+   assert.deepEqual(store.get(gapProject.id).sources, gapOriginal.sources);
+   await expect(page.locator(".round-status")).toContainText("Saved gap checks reused");
+   await page.locator(".topbar .queue-trigger").click();
+   const gapStatus = page.getByRole("region", { name: "Gap exploration backlog", exact: true });
+   await expect(gapStatus).toContainText("3 checked"); await expect(gapStatus).toContainText("No model request made");
+   await expect(gapStatus).toContainText("not live completeness");
+   await page.setViewportSize({ width: 390, height: 844 });
+   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Gap backlog status fits mobile width");
+   await page.screenshot({ path: ".reqwizit-state/browser-gap-backlog.png", fullPage: true });
+   await page.getByRole("button", { name: "Close processing queue" }).click(); await page.reload();
+   await page.locator(".topbar .queue-trigger").click();
+   await expect(gapStatus).toContainText("3 checked"); await expect(gapStatus).toContainText("No model request made");
+   assert.equal(gapCalls, 3, "Reload cannot start another inference request");
+   await page.getByRole("button", { name: "Close processing queue" }).click();
+    let retrievalProject = store.create("Staged retrieval fixture", "Keep exact human constraints", { providerID: "openai", modelID: "fixture" });
+    const retrievalSeed = store.beginJob(retrievalProject.id, retrievalProject.revision).job; store.claimJob(retrievalSeed.id, Date.now() + 60000);
+    store.finishJob(retrievalSeed.id, { summary: "Adjacent rules", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [],
+      organization: [{ type: "upsert", epicID: "new:stages", title: "Saved evidence", purpose: "Inspect exact adjacent evidence", dependencies: [] }],
+      requirements: ["Keep saved edits", "Restore saved drafts"].map((statement) => ({ epicID: "new:stages", statement, rationale: "Human idea", acceptance: ["Work remains available"], sourceIDs: [retrievalProject.sources[0]!.id] })) });
+    retrievalProject = store.get(retrievalProject.id);
+    const retrievalOriginal = structuredClone(retrievalProject);
+    await page.reload(); await page.locator(".sidebar").getByRole("button", { name: /Staged retrieval fixture/ }).click();
+    await page.getByRole("tab", { name: /^Design/ }).click();
+    await page.getByLabel("Filter by feature").selectOption(retrievalProject.requirements[0]!.epicID);
+    await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+    await expect.poll(() => store.jobs(retrievalProject.id).at(-1)!.status).toBe("failed");
+    await page.locator(".topbar .queue-trigger").click();
+    await expect(gapStatus).toContainText("1 evidence navigation stages saved");
+    await expect(gapStatus).toContainText("2 of 3 model requests");
+    await expect(gapStatus).toContainText("navigation hints cannot be cited");
+    await page.getByRole("button", { name: "Close processing queue" }).click();
+    await page.reload(); assert.equal(retrievalCalls, 2, "Reload must not resume inference");
+    await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+    await expect.poll(() => store.jobs(retrievalProject.id).at(-1)!.status).toBe("completed");
+    assert.equal(retrievalCalls, 3);
+    await page.locator(".topbar .queue-trigger").click();
+    await expect(gapStatus).toContainText("1 evidence navigation stages saved");
+    await expect(gapStatus).toContainText("3 of 3 model requests");
+    assert.deepEqual(store.get(retrievalProject.id).requirements, retrievalOriginal.requirements);
+    assert.deepEqual(store.get(retrievalProject.id).sources, retrievalOriginal.sources);
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Retrieval progress fits mobile width");
+    await page.screenshot({ path: ".reqwizit-state/browser-gap-retrieval.png", fullPage: true });
+    assert.deepEqual(errors, []);
+    console.log("Browser checks passed, including bounded gap lenses, no-call reuse, staged evidence retrieval, interrupted-stage explicit retry without replay, reload, preserved decisions and mobile progress.");
 } finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await rm(scanDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await rm(planningDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }

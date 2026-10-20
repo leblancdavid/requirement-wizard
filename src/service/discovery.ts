@@ -1,9 +1,11 @@
 import { z } from "zod";
-import { reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Telemetry, type ResearchEvidence } from "../core/model.js";
+import { StaleRevisionError, parseDiscoveryAnalysis, reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Telemetry, type ResearchEvidence } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
 import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext } from "../core/working-set.js";
+import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
+import { checkpointEvidenceBasis, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
@@ -211,13 +213,22 @@ export class DiscoveryService {
       if (options.refinementOnly && !refinementTarget && !pair) throw new Error("No requirement available for refinement in this scope.");
       const linkedQuestions = pair ? pairQuestions(project, pair) : [];
       const pairRecords = pair ? [...pair, ...triggerSourceIDs, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
-      const context = planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
+      const generalExploration = !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
+        && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
+      let context = generalExploration ? planGapContext(project, this.store.gapHistory(projectID), options.focusEpicID, (revision) => this.store.get(projectID, revision))
+        : planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
         requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
         recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
         isolatedTask: options.refinementOnly || options.isolatedTask,
         budget: options.helpRequest ? 36000 : 48000, advisory: !!options.helpRequest, expandMandatory: !options.helpRequest });
       context.manifest.submissionIDs = options.submissionIDs;
       context.manifest.refinementOnly = options.refinementOnly;
+      if (context.manifest.gapExploration) {
+        const targetID = context.manifest.gapExploration.targetRecordID;
+        const target = project.requirements.find((r) => r.id === targetID) ?? project.questions.find((q) => q.id === targetID) ?? project.sources.find((s) => s.id === targetID);
+        const title = project.epics.find((e) => e.id === (context.manifest.focusEpicID ?? target?.epicID))?.title ?? "selected area";
+        options.onProgress?.(`Exploring ${context.manifest.gapExploration.check?.lens ?? "behavior"} gaps in ${title}. Exact current decisions, target evidence and human addenda are retained. ${context.gapReport?.checked ?? 0} compatible task checks are reused; other records are not assessed.`);
+      }
       if (pair) context.manifest.refinementPair = { requirementIDs: pair, contextKey: resolutionContextKey(project, pair, triggerSourceIDs),
         ...(options.includeUnapproved ? { includeUnapproved: true } : {}), ...(triggerSourceIDs.length ? { triggerSourceIDs } : {}) };
       if (!options.helpRequest && !options.refinementOnly) addRelatedRecordHints(project, context);
@@ -254,6 +265,7 @@ export class DiscoveryService {
         }
       }
       this.store.attachContext(job.id, context.manifest);
+      if (context.gapReport) this.store.attachGapReport(job.id, context.gapReport);
       const shorten = (text: string) => { const line = text.replace(/\s+/g, " ").trim(); return line.length > 140 ? `${line.slice(0, 137)}…` : line; };
       const submitted = options.submissionIDs?.map((id) => this.store.submissions(projectID).find((item) => item.id === id))[0];
       const feature = project.epics.find((epic) => epic.id === options.focusEpicID)?.title;
@@ -274,22 +286,116 @@ export class DiscoveryService {
         research: options.helpRequest || options.refinementOnly ? false : options.research ?? false,
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
-      const output = options.helpRequest ? await this.adapter.clarify!(project, options.helpRequest, adapterOptions)
+      controller.signal.throwIfAborted();
+      if (context.gapReport && !context.manifest.gapRetrieval) this.store.attachGapReport(job.id, { ...context.gapReport, modelCalls: 1 });
+      let output: unknown;
+      if (context.manifest.gapRetrieval) {
+        const prior = this.store.retrievalHistory(projectID, project.revision, context.manifest.gapExploration, adapterOptions.research, project.model, context.manifest.focusEpicID).find((saved) => saved.id !== job.id
+          && !saved.kind && !saved.helpRequest && !saved.context?.refinementOnly);
+        const work: RetrievalWork = prior ? { ...structuredClone(prior.retrievalWork!), originJobID: prior.id }
+          : { format: 1, research: adapterOptions.research, stages: [], attempts: 0 };
+        if (prior && (work.stages.some((s) => !s.evidenceBasis) || work.final && !work.final.evidenceBasis)) {
+          const originalProject = this.store.get(projectID, prior.expectedRevision);
+          let original = restoreGapTaskContext(originalProject, prior.context!.gapExploration!, prior.context?.focusEpicID ?? undefined);
+          addRelatedRecordHints(originalProject, original);
+          const requested: string[] = [];
+          for (const [index, saved] of work.stages.entries()) {
+            if (!saved.evidenceBasis && saved.revision !== prior.expectedRevision) throw new Error("Legacy stage revision is not established by its saved job. Original work retained.");
+            saved.evidenceBasis = checkpointEvidenceBasis(saved, original);
+            validateRetrieval(original, saved.request);
+            requested.push(...saved.request.retrieveEvidence.recordIDs);
+            if (index + 1 < work.stages.length || work.final) original = nextGapContext(originalProject, original, requested);
+          }
+          if (work.final && !work.final.evidenceBasis) {
+            if (work.final.revision !== undefined && work.final.revision !== prior.expectedRevision) throw new Error("Legacy final revision is not established by its saved job. Original work retained.");
+            work.final.evidenceBasis = checkpointEvidenceBasis(work.final, original);
+            // The original exact wire hash includes this immutable revision.
+            work.final.revision = prior.expectedRevision;
+          }
+        }
+        if (prior) {
+          work.reuse = { format: 1, sourceJobID: prior.id, sourceRevision: prior.expectedRevision,
+            targetRevision: project.revision, stages: 0, final: false };
+          this.store.checkpointRetrieval(job.id, work, context.manifest);
+        }
+        if (context.gapReport) this.store.attachGapReport(job.id, { ...context.gapReport, modelCalls: work.attempts });
+        const requested: string[] = [];
+        let stage = 0;
+        while (true) {
+          controller.signal.throwIfAborted();
+          const saved = work.stages[stage];
+          if (saved) {
+            if (saved.evidenceBasis?.key !== retrievalEvidenceBasis(context).key) throw new Error("Saved retrieval evidence changed. Original stages retained; no completed call replayed. Review the changed evidence or task scope.");
+            validateRetrieval(context, saved.request, saved.request.retrieveEvidence.recordIDs);
+            if (work.reuse) work.reuse.stages = stage + 1;
+            this.store.checkpointRetrieval(job.id, work, context.manifest);
+            requested.push(...saved.request.retrieveEvidence.recordIDs);
+            report(`Reusing saved evidence stage ${stage + 1}; no model request repeated.`);
+            context = nextGapContext(project, context, requested); stage++; continue;
+          }
+          if (work.final) {
+            if (work.final.evidenceBasis?.key !== retrievalEvidenceBasis(context).key) throw new Error("Saved final evidence changed; original response retained and no completed call replayed. Review the changed evidence or task scope.");
+            validateGapFinal(project, context, work.final.output);
+            if (work.reuse) work.reuse.final = true;
+            output = work.final.output;
+            if (prior?.researchEvidence) this.store.attachResearch(job.id, prior.researchEvidence);
+            if (prior?.sessionID) this.store.attachSession(job.id, prior.sessionID);
+            if (prior?.telemetry) this.store.attachTelemetry(job.id, prior.telemetry);
+            report(`Reusing saved final model response from revision ${work.final.revision ?? prior!.expectedRevision}; validating publication at revision ${project.revision} without another request.`);
+            break;
+          }
+          if (work.attempts >= 3) throw new Error("Evidence retrieval reached its three-request bound. Completed stages are saved; narrow the task or review missing evidence. Exploration is not complete.");
+          this.store.checkpointRetrieval(job.id, { ...work, attempts: ++work.attempts }, context.manifest);
+          if (context.gapReport) this.store.attachGapReport(job.id, { ...context.gapReport, modelCalls: work.attempts });
+          report(`Evidence stage ${stage + 1}: ${work.stages.length} navigation stages saved; request ${work.attempts} of 3, ${context.manifest.characters} / ${context.manifest.budget} characters. Unseen evidence cannot support proposals.`);
+          output = await this.adapter.analyze(project, { ...adapterOptions, context });
+          controller.signal.throwIfAborted();
+          if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
+          if (!output || typeof output !== "object" || !("retrieveEvidence" in output)) {
+            if (JSON.stringify(output)?.length > 96000) throw new Error("Final gap response exceeds the 96,000-character saved-output bound.");
+            const parsed = parseDiscoveryAnalysis(output).result;
+            validateGapFinal(project, context, parsed);
+            work.final = { contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context), revision: project.revision, output: parsed };
+            break;
+          }
+          const request = validateRetrieval(context, output);
+          if (work.stages.length >= 2) throw new Error("Evidence stage limit reached. No proposals applied; completed stages retained.");
+          work.stages.push({ revision: project.revision, contextKey: retrievalContextKey(context),
+            evidenceBasis: retrievalEvidenceBasis(context), includedIDs: [...context.manifest.includedIDs], request, sessionID: this.store.getJob(job.id).sessionID });
+          this.store.checkpointRetrieval(job.id, work, context.manifest);
+          requested.push(...request.retrieveEvidence.recordIDs);
+          context = nextGapContext(project, context, requested); stage++;
+        }
+        this.store.checkpointRetrieval(job.id, work, context.manifest);
+      } else output = options.helpRequest ? await this.adapter.clarify!(project, options.helpRequest, adapterOptions)
         : await this.adapter.analyze(project, adapterOptions);
       controller.signal.throwIfAborted();
       report("Checking returned proposals and references before saving…");
       return options.helpRequest ? this.store.finishHelp(job.id, output) : this.store.finishJob(job.id, output);
     } catch (error) {
+      if (error instanceof GapBacklogIdle) {
+        if (controller.signal.aborted) {
+          this.store.attachGapReport(job.id, error.report);
+          this.store.failJob(job.id, "cancelled", "Gap exploration cancelled. No model request was made; saved checks are retained.");
+          return this.store.getJob(job.id);
+        }
+        options.onProgress?.(error.message);
+        return this.store.finishGapIdle(job.id, error.report);
+      }
       if (error instanceof ContextBudgetError) {
+        if (error instanceof GapBacklogBlocked) this.store.attachGapReport(job.id, error.report);
         error.manifest.submissionIDs = options.submissionIDs;
         error.manifest.refinementOnly = options.refinementOnly;
         if (refinementTarget) error.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
         this.store.attachContext(job.id, error.manifest);
       }
       const cancelled = controller.signal.aborted;
-      this.store.failJob(job.id, cancelled ? "cancelled" : "failed",
+      const retainedAttempts = this.store.getJob(job.id).retrievalWork?.attempts ?? 0;
+      this.store.failJob(job.id, cancelled ? "cancelled" : error instanceof StaleRevisionError ? "stale" : "failed",
         cancelled ? "Request cancelled or timed out. Human input was preserved." :
-          error instanceof z.ZodError ? schemaDiagnostic(error) : safeMessage(error instanceof Error ? error.message : error));
+          error instanceof z.ZodError ? schemaDiagnostic(error) : safeMessage(error instanceof ContextBudgetError && retainedAttempts
+            ? error.message.replace("No model call was made", "No additional request was made for the oversized stage; earlier attempts and saved stages are retained")
+            : error instanceof Error ? error.message : error));
       return this.store.getJob(job.id);
     } finally {
       clearTimeout(timer);

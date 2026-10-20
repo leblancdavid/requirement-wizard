@@ -1,5 +1,7 @@
 import { buildContext, ContextBudgetError, type ContextPack } from "./context.js";
 import type { Project } from "./model.js";
+import { currentDecisionProjection } from "./current-decisions.js";
+import { gapInstructions, type GapLens } from "./gap-types.js";
 
 export type ContextTask = {
   focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; budget?: number;
@@ -7,6 +9,12 @@ export type ContextTask = {
   expandMandatory?: boolean;
   /** One queued submission: detailed target/evidence plus explicit guardrails. */
   isolatedTask?: boolean;
+  /** Bounded general gap exploration, not follow-up on a human submission. */
+  gapExploration?: boolean;
+  gapLens?: GapLens;
+  supportingRecordIDs?: string[];
+  /** Gap navigation can defer static file motivation, never human constraints. */
+  deferWorkspaceEvidence?: boolean;
 };
 
 /** Lossless wire representation only; stored records and evidence IDs stay intact. */
@@ -134,6 +142,7 @@ function shareRecordStructure(data: unknown) {
 /** Plan locally before inference. Exact human guardrails are never summarized away. */
 export function planContext(project: Project, task: ContextTask = {}): ContextPack {
   const budget = task.budget ?? 48000;
+  const decisions = task.gapExploration ? currentDecisionProjection(project) : undefined;
   const superseded = new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
   const questionAreas = new Map(project.questions.map((q) => [q.id, q.epicID]));
   const requirementAreas = new Map(project.requirements.map((r) => [r.id, r.epicID]));
@@ -164,7 +173,7 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   const active = project.epics.filter((e) => !e.archived);
   const taskIDs = new Set(task.recordIDs ?? []);
   const allRecords = [...project.sources, ...project.questions, ...project.requirements, ...project.research];
-  for (const id of taskIDs) if (!allRecords.some((r) => r.id === id)) throw new Error(`Context task record ${id} no longer exists.`);
+  for (const id of [...taskIDs, ...task.supportingRecordIDs ?? []]) if (!allRecords.some((r) => r.id === id)) throw new Error(`Context task record ${id} no longer exists.`);
   const focus = task.focusEpicID ?? task.requiredEpicIDs?.[0]
     ?? allRecords.find((r) => taskIDs.has(r.id))?.epicID
     ?? project.questions.find((q) => q.status === "pending")?.epicID
@@ -180,7 +189,7 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   for (const id of [...selected]) dependencies(id);
   const guardrailArea = (id: string) => id === "project" || selected.has(id) && !taskAreas.has(id);
 
-  const included = new Set(taskIDs);
+  const included = new Set([...taskIDs, ...task.supportingRecordIDs ?? []]);
   const workspaceIDs = new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id));
   const taskEvidenceIDs = new Set([...taskIDs, ...project.questions.filter((q) => taskIDs.has(q.id)).flatMap((q) => q.sourceID ? [q.sourceID] : [])]);
   // A current question can cite a reviewed requirement as motivation. Its files
@@ -204,9 +213,12 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   // and feature notes. Unrelated feature answers/reviews do not become mandatory
   // merely because they share the target's area. Broad discovery keeps its scope.
   for (const source of project.sources) {
+    if (decisions?.omitted.has(source.id) && !taskIDs.has(source.id)) continue;
     if (source.kind === "initial" || (source.kind !== "workspace" && !superseded.has(source.id) && selected.has(sourceArea(source))
       && (!task.isolatedTask || guardrailArea(sourceArea(source)) || source.kind === "note")
       && (!task.advisory || sourceArea(source) === "project"))) included.add(source.id);
+    // A later plain approval must not silently erase an earlier human addendum.
+    if (decisions?.addenda.has(source.id) && selected.has(sourceArea(source))) included.add(source.id);
   }
   for (const requirement of project.requirements) {
     if (selected.has(requirement.epicID) && (!task.isolatedTask || guardrailArea(requirement.epicID)
@@ -229,14 +241,17 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
           // Current task questions and requirement-linked files still close fully.
           if (q.status === "answered" && !taskIDs.has(q.id) && !(q.sourceID && taskIDs.has(q.sourceID))
             && workspaceIDs.has(evidenceID)) continue;
+          if (task.deferWorkspaceEvidence && workspaceIDs.has(evidenceID) && !taskIDs.has(evidenceID)) continue;
           ids.add(evidenceID);
         }
       }
       for (const r of project.requirements) if (ids.has(r.id)) for (const id of r.sourceIDs) {
+        if (decisions?.omitted.has(id) && !taskIDs.has(id)) continue;
         // Human-reviewed background already carries exact normative wording,
         // scenarios and approval. Historical static file motivation is not a
         // further human constraint. All human links still close transitively.
         if (backgroundAccepted.has(r.id) && workspaceIDs.has(id)) continue;
+        if (task.deferWorkspaceEvidence && workspaceIDs.has(id) && !taskIDs.has(id)) continue;
         ids.add(id);
       }
       for (const s of project.sources) if (ids.has(s.id)) {
@@ -288,9 +303,19 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       workspaceEvidence: project.scans.length ? { snapshotID: project.scans.at(-1)!.id, capturedAt: project.scans.at(-1)!.capturedAt, limitation: "Only detailed included source excerpts can support claims about existing behavior." } : null,
       retiredQuestionGuidance: project.questions.filter((q) => q.status === "retired").slice(-20).map((q) => ({ text: q.text, reason: q.retirementReason })),
       taskRecordIDs: [...taskIDs], partial: true,
+      ...(task.deferWorkspaceEvidence ? { deferredGapEvidence: {
+        explanation: "Saved workspace source links whose exact records are not in sources are navigation only. Their file contents have NOT been reviewed. Request exact linked IDs through evidenceRetrieval before citing or drawing conclusions from them. Static file motivation may be deferred even for the target requirement/question. All mandatory human constraints remain exact; file observations cannot establish preferences. A bounded completed check does not mean every linked file was read or exploration is complete.",
+      } } : {}),
+      ...(task.gapExploration ? { gapTask: { lens: task.gapLens ?? "behavior", supportingRecordIDs: task.supportingRecordIDs ?? [], instruction: gapInstructions[task.gapLens ?? "behavior"] },
+        currentDecisions: { format: 1, omittedReviewHistory: [...decisions!.omitted].filter(([id, item]) => !ids.has(id) && ids.has(item.requirementID))
+          .map(([sourceID, item]) => ({ sourceID, ...item })),
+          explanation: "Current-decision projection: exact current requirements and scenarios remain authoritative. Source text objects containing approvedReviewReceipt are structured current approval facts verified against an exact app-generated receipt and its saved accepted proposal. They preserve the original source/proposal IDs, approved wording/scenarios and reason, but intentionally omit the generated receipt's embedded OLD snapshots. Cite these sources only for the displayed approved decision, never unseen history. Only canonical plain review snapshots or verified app-generated receipts with an explicit unambiguous supersession chain to a matching current human decision can be omitted. Older human addenda and unknown review prose remain exact, including superseded notes; their presence does not prove they are still current or resolved. Preserve them and ask when intent conflicts. Omitted historical IDs remain stored, but their text was not reviewed here and cannot be cited, refined or treated as current constraints. Requirement source links are unchanged; current approval does not verify implementation. This is not a summary of human decisions." } } : {}),
       ...(task.isolatedTask ? { submissionScope: {
         taskRecordIDs: [...taskIDs], omittedRecords: allRecords.filter((r) => !ids.has(r.id)).length,
-        explanation: "One queued submission only. Detail is limited to its target and linked evidence, project-wide and dependency guardrails, and current feature notes. Unrelated feature answers, reviews and requirements are omitted or indexed, even within the same area. This is not a whole-feature review. Preserve all existing decisions; do not infer preferences from missing records, change omitted requirements, or use indexed/omitted evidence for proposals. Follow up only on this submission. Request focused discovery if wider decisions or evidence are needed.",
+        explanation: (task.gapExploration ? "Explore next gaps around the detailed task record, not a queued submission. Look for consequential unresolved behavior and scenario boundaries adjacent to this record; do not repeat existing decisions. This is one bounded exploration, not a completeness audit. " : "One queued submission only. ")
+          + "Detail is limited to its target and linked evidence, project-wide and dependency guardrails, and current feature notes. Unrelated feature answers, reviews and requirements are omitted or indexed, even within the same area. This is not a whole-feature review. Preserve all existing decisions; do not infer preferences from missing records, change omitted requirements, or use indexed/omitted evidence for proposals. "
+          + (task.gapExploration ? "Propose only gaps supported by detailed evidence. " : "Follow up only on this submission. ")
+          + "Request focused discovery if wider decisions or evidence are needed.",
       } } : {}),
       ...(omittedQuestionWorkspaceEvidence.length ? { omittedQuestionWorkspaceEvidence: {
         questions: omittedQuestionWorkspaceEvidence,
@@ -312,15 +337,16 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       previousInterpretation: { summary: project.summary.slice(0, 1000), summaryIsExcerpt: project.summary.length > 1000,
         generatedAtRevision: project.analysisRevision, advisoryOnly: true },
       epicMap: active.map((e) => ({ id: e.id, title: e.title, dependencies: e.dependencies })),
-      focusedEpics: active.filter((e) => selected.has(e.id)).map((e) => ({ id: e.id, title: e.title })),
-      sources: project.sources.filter((s) => ids.has(s.id)), questions,
+      focusedEpics: active.filter((e) => selected.has(e.id)).map((e) => ({ id: e.id, title: e.title, ...(task.gapExploration ? { purpose: e.purpose } : {}) })),
+      sources: project.sources.filter((s) => ids.has(s.id)).map((source) => decisions?.receipts.has(source.id) && !taskIDs.has(source.id)
+        ? { ...source, text: { approvedReviewReceipt: decisions.receipts.get(source.id)! } } : source), questions,
       requirements: project.requirements.filter((r) => ids.has(r.id)).map((r) => {
         if (!omitBackgroundExplanations || !backgroundAccepted.has(r.id)) return r;
         const { rationale: _, ...evidence } = r; return evidence;
       }), research: project.research.filter((r) => ids.has(r.id)),
       recordIndex: index, movableRecordIDs: [], assessments: [], pendingOrganization: [],
       limitations: task.isolatedTask
-        ? "Isolated submission pass; see submissionScope for exact boundaries and omissions. Project/dependency human guardrails, feature notes and target evidence remain exact. Feature membership alone does not include every answer, review or requirement. Do not claim whole-feature review, infer omitted decisions, change omitted requirements, or cite index-only records. Return empty organization and assessments. Global interpretation is unchanged. Request focused discovery for wider work."
+        ? (task.gapExploration ? "Bounded gap exploration; " : "Isolated submission pass; ") + "see submissionScope for exact boundaries and omissions. Project/dependency human guardrails, feature notes and target evidence remain exact. Feature membership alone does not include every answer, review or requirement. Do not claim whole-feature review, infer omitted decisions, change omitted requirements, or cite index-only records. Return empty organization and assessments. Global interpretation is unchanged. Request focused discovery for wider work."
         : "Partial task pass. All current human evidence in selected discovery areas, exact task evidence, and unconfirmed requirement evidence are retained; advisory help includes only task evidence and project guardrails. Historical answered-question and human-confirmed background-requirement workspace motivation, question help text, previous assessments, and other AI detail may be omitted. Accepted background requirements retain exact wording, scenarios and human evidence; acceptance does not verify implementation. Index labels are navigation only. Do not cite omitted or indexed-only records. Return empty organization and assessments; do not retire questions outside this package. This pass cannot replace global interpretation or scope confidence. Do not claim whole-area review or completeness.",
     };
   };
@@ -344,7 +370,11 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       omittedIDs: allRecords.filter((r) => !ids.has(r.id)).map((r) => r.id),
       indexedIDs: data.recordIndex.map((r) => r.id), epicIDs: [...selected], partial: true, taskRecordIDs: [...taskIDs],
       isolatedTask: !!task.isolatedTask,
-      selectionReason: (task.isolatedTask ? "Isolated single-submission pass; exact target evidence, project/dependency guardrails and feature notes retained. Unrelated feature history explicitly omitted." : "Budget-aware task pass; exact human guardrails, task evidence and unconfirmed requirement evidence pinned before optional AI detail.")
+      ...(data.currentDecisions ? { decisionProjection: { format: 1 as const,
+        omittedReviewSourceIDs: data.currentDecisions.omittedReviewHistory.map((s) => s.sourceID),
+        retainedReviewNoteSourceIDs: [...decisions!.addenda].filter((id) => ids.has(id)),
+        projectedReceiptSourceIDs: [...decisions!.receipts.keys()].filter((id) => ids.has(id) && !taskIDs.has(id)) } } : {}),
+      selectionReason: (task.isolatedTask ? (task.gapExploration ? "Bounded gap exploration; " : "Isolated single-submission pass; ") + "exact target evidence, project/dependency guardrails and feature notes retained. Unrelated feature history explicitly omitted." : "Budget-aware task pass; exact human guardrails, task evidence and unconfirmed requirement evidence pinned before optional AI detail.")
         + (data.omittedQuestionWorkspaceEvidence ? " Historical answered-question workspace motivation is explicitly omitted where not otherwise required." : "")
         + (data.omittedRequirementWorkspaceEvidence ? " Historical workspace motivation for confirmed background requirements is explicitly omitted where not otherwise required." : ""),
       sectionCharacters: Object.fromEntries(Object.entries(data).map(([key, value]) => [key, JSON.stringify(value).length])) } };

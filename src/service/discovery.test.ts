@@ -98,7 +98,8 @@ test("review prompts authorize only current batch sources, excluding historical 
     const adapter: DiscoveryAdapter = { async analyze(snapshot, options) {
       const ids = options.context.manifest.reviewSourceIDs!;
       const prompt = discoveryPrompt(snapshot, options.context, false);
-      const schema = JSON.parse(prompt.split("Schema: ")[1]!.split("\nWorking context revision")[0]!);
+      const wireSchema = JSON.parse(prompt.split("Schema: ")[1]!.split("\nWorking context revision")[0]!);
+      const schema = wireSchema.anyOf?.find((item: { properties?: { reviewResponses?: unknown } }) => item.properties?.reviewResponses) ?? wireSchema;
       if (options.context.manifest.submissionIDs?.length) {
         assert.deepEqual(ids, [currentID]);
         assert.deepEqual(schema.properties.reviewResponses.items.properties.sourceID.enum, [currentID]);
@@ -359,7 +360,7 @@ test("discovery sends a compacted focused context and persists the savings witho
       assert.ok(prompt.includes(JSON.stringify("  Keep this exactly\n")));
       return { summary: "Reviewed", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] };
     } });
-    const job = await service.analyze(project.id, project.revision, { focusEpicID: "inbox", onProgress: (message) => progress.push(message) });
+    const job = await service.analyze(project.id, project.revision, { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id], onProgress: (message) => progress.push(message) });
     assert.equal(job.status, "completed");
     assert.equal(calls, 1);
     assert.ok(job.context!.compaction);

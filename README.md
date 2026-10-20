@@ -17,6 +17,11 @@ area is defined. The top-right **Overall progress** card expands into Definition
 Requirements review and Implementation scores, with epic-level breakdowns.
 Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
+Gap discovery can request additional exact saved evidence in up to three bounded stages,
+retaining human constraints and checkpointing completed calls for explicit retry. Navigation
+hints cannot support citations; oversized evidence blocks rather than silently truncating it.
+Compatible saved stages also survive unrelated specification revisions; original model-call
+provenance is retained and publication still checks the latest revision.
 Connect a local folder for each project to automatically save versionable requirements
 and progress files. Choose it during creation or use **Settings → Project workspace**.
 Generated requirements are split by stable feature ID with a linked overview and shared
@@ -85,6 +90,11 @@ and submitted answers being processed, waiting, or completed in **Activity**.
 Context preflight checks queued follow-up before starting an AI batch. Responses that
 still cannot fit are marked **Context blocked** with their answers/approvals saved;
 fitting responses can continue, and unchanged retries create no failed batches.
+**Explore next gaps** uses a durable workflow/failure/acceptance task backlog after
+initial interpretation. It reuses compatible saved checks, waits for unresolved linked
+decisions and avoids model calls for exhausted scopes. Current-decision context retains
+human addenda while avoiding proven historical review duplication. Processing & queue
+shows task counts—not a completeness score. See [large-project discovery](docs/browser-workspace.md#exploring-gaps-in-large-projects).
 **Review** beside Design shows requirements awaiting approval, with optional notes,
 auto-advance, durable background follow-up, and submitted/reviewed history. AI can
 propose additional requirements/questions, revise wording for another review, or

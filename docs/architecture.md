@@ -190,7 +190,25 @@ is explicitly counted and may appear in a bounded navigation index; it cannot ju
 new decisions or changes to omitted records. No optional-detail refill is performed.
 These are partial passes: global interpretation, organization, whole-area assessment
 and feature archival remain unavailable without a wider detailed discovery context.
-Plain discovery without a queued submission retains the broader planning path.
+Initial interpretation retains the broader planning path. Later gap discovery uses the
+durable per-target/lens backlog and `gap-retrieval.ts`: workspace motivation can remain
+unseen navigation until requested, but mandatory human constraints cannot. Strict
+navigation-only replies load up to eight displayed exact record IDs; at most two such
+stages precede final analysis, within three cumulative adapter attempts and a 96,000
+character context cap. Loaded evidence accumulates rather than becoming model summaries.
+Revision/lease-checked SQLite checkpoints retain input hashes, included IDs, requests and
+optional session IDs; final schema/citation-checked responses are checkpointed separately
+from the existing atomic proposal publication. Explicit retry can reuse stages across
+unrelated revisions via `gap-stage-evidence-v1`: exact expanded evidence, lens and scope
+must match; only declared advisory navigation/revision fields are excluded. Model/account
+and research permission must also match. Original wire hashes and stage revisions are
+retained, while a versioned reuse receipt records source/retry revisions and verified
+stage/final counts. Legacy bases require immutable-snapshot reconstruction and the original
+wire hash, never today's invented provenance. Publication still uses the new job's latest
+expected revision and all existing eligibility checks; stale workers cannot rebase in flight.
+Older completed checks/approvals and implementation identities are unchanged.
+See [the protocol and boundaries](browser-workspace.md#bounded-exact-evidence-stages)
+and [migration compatibility](migrations.md).
 Before starting a queued AI job, each indivisible candidate is checked against the
 service's compacted mandatory package. If it cannot fit, the submission remains applied
 but becomes `needs-attention` with `contextBlock`: revision, usage/budget, selected areas
@@ -415,6 +433,60 @@ Mandatory evidence beyond the hard bound fails before inference; evidence
 outside the detailed working set cannot justify generated requirements/assessments.
 The character bound is not an exact tokenizer/model-window estimate. See the browser
 guide for the implemented rubric and limitations.
+General **Explore next gaps** requests with no submission or explicit record target
+use broad interpretation only before any questions/requirements exist. Subsequent
+requests use `gap-backlog.ts` and `gap-context.ts`: a deterministic catalog over active
+non-rejected requirements (behavior, failures, acceptance lenses), non-retired questions
+and initial/note sources (behavior). Selection rotates features/records within any
+explicit feature filter, skips compatible saved checks, and waits for unresolved
+explicit target-linked questions. Historical answered supporting questions remain
+evidence, not new task roots that force all their old motivating files into the request.
+An explicitly selected empty feature can use the real initial source as its scoped
+anchor; exact selected feature purposes remain in the request and its evidence identity.
+The gap task declares its lens and exact detailed scope; unspecified proposal areas from
+older adapters default to that target scope rather than an unseen inbox.
+
+`current-decisions.ts` supplies a read-only gap-context projection. A canonical plain
+review, or exact generated cleanup/resolution receipt matched to an accepted saved
+proposal, may be omitted only through an unambiguous same-owner supersession chain to
+a matching current human decision. Missing, cyclic, branched, unapproved or mismatched
+provenance cannot justify omission. Generated current receipts can instead expose
+structured approved wording/scenarios/reason with original source/proposal IDs; embedded
+old snapshots are explicitly not detailed evidence. All human addenda and unknown review
+prose remain exact, including superseded notes, without claiming they are still current
+or resolved. Original sources and requirement links are never rewritten. The manifest's
+`decisionProjection` lists omissions, retained notes and projected receipts.
+
+The durable backlog ledger is existing SQLite jobs, not a second source of project truth.
+`gapExploration.check` records format 1, `gap-evidence-v1`, lens and an input hash. Hashes
+cover normalized exact target/evidence closure, explicit linked questions, conservative
+feature/project/dependency human guardrails and latest scan identity. Revision counters,
+summary, UI tooltips and generated requirement rationale are excluded. Evidence hashes
+use a per-feature cached guardrail digest, not repeated whole-project serialization for
+every lens. `ProjectStore.gapHistory` reads only check/report metadata (plus legacy included
+IDs where needed), not all old model output and growing manifests. A thousand requirements
+can produce a local catalog without placing that catalog in the model prompt.
+
+Publication marks a check only in the same successful transaction as its result. Failure,
+cancellation, expiry and stale output cannot establish a check. Current compatible
+checks survive unrelated revisions and independent feature edits; changed human input
+conservatively reopens its feature/dependants. New unapproved requirements add tasks
+without invalidating unrelated checks. Unchanged exhausted/waiting scopes save a no-call
+job outcome without mutating the specification. Up to twenty local candidate packages
+are planned per action; oversized tasks save fingerprinted blocker receipts, never drop
+evidence, and cannot repeatedly starve later tasks. Changed evidence or planner policy
+can reconsider blockers. Each action makes at most one adapter request, with no startup
+inference. `gapReport` stores checked/pending/waiting/blocked counts and request attempts
+for the input scope/revision, not a completeness verdict or confirmed provider token use.
+
+Legacy bounded jobs without check envelopes can contribute only their equivalent
+behavior check: use their immutable input revision, require equal current evidence identity
+and verify that today's mandatory included IDs were actually in the old manifest. New
+reuse receipts reference that original completed job, preserving its payload. Never
+infer completion from an unmarked broad historical round. See the migration ledger for
+formats and recovery. Global interpretation, organization and whole-area coverage remain
+unchanged by these partial passes. Multi-stage evidence retrieval and semantic gap-priority
+ranking remain future work; this catalog is not an exhaustive completeness audit.
 Navigation-index trimming computes the package's serialized size once, then subtracts
 each removed item's exact JSON length and comma. It preserves the same selection and
 counts without repeatedly serializing the entire package for every label.

@@ -1,7 +1,8 @@
 import type { Project, Job } from "./model.js";
 import { organizationRecords } from "./epics.js";
+import type { GapReport } from "./gap-types.js";
 
-export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]> };
+export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]>; gapReport?: GapReport };
 
 export class ContextBudgetError extends Error {
   constructor(readonly manifest: ContextPack["manifest"]) {

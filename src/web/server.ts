@@ -172,7 +172,9 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const known = rawTokens === undefined ? undefined : parseSnapshotTokens(rawTokens);
         const current = revisionSnapshot(project);
         const allJobs = options.store.jobs(id);
-        const jobs = allJobs.filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, scanWork, ...job }) => ({ ...job, ...(scan ? { scan: { ...scan, sources: [] } } : {}),
+        const jobs = allJobs.filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, ...job }) => ({ ...job,
+          ...(retrievalWork ? { retrievalWork: { format: retrievalWork.format, research: retrievalWork.research, stages: retrievalWork.stages, attempts: retrievalWork.attempts, originJobID: retrievalWork.originJobID, reuse: retrievalWork.reuse } } : {}),
+          ...(scan ? { scan: { ...scan, sources: [] } } : {}),
           ...(scan && scanWork ? { scanProgress: { completed: scanWork.batches.filter((batch) => batch.output).length, total: scanWork.batches.length, capturedAt: scan.snapshot.capturedAt,
             resumable: ["failed", "cancelled", "interrupted"].includes(job.status) && job.expectedRevision === project.revision && scanWork.bindingID === options.store.workspace(id)?.bindingID } } : {}) }));
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);

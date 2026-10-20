@@ -10,6 +10,7 @@ import { refinementIsStale, resolutionContextKey, resolutionTaskForAnswer } from
 import { OperationConflictError } from "../core/operations.js";
 import { decisionAvailability } from "../core/decision-availability.js";
 import { reconciliationCandidates } from "../core/review-completion.js";
+import { resolvedReviewAttempts } from "../core/review-attempts.js";
 
 type Work = { controller: AbortController; promise: Promise<void> };
 
@@ -33,7 +34,10 @@ export class DiscoveryQueue {
     // Never repeat inference on restart. Reconcile only batches whose worker is no longer live.
     service.store.recoverExpiredJobs();
     for (const project of service.store.list()) {
-      const unfinished = service.store.submissions(project.id).some((s) => ["queued", "saved", "needs-attention"].includes(s.status));
+      const submissions = service.store.submissions(project.id);
+      const resolved = submissions.some((s) => s.input.type === "review" && s.conflict && !s.applied && s.status === "needs-attention")
+        ? resolvedReviewAttempts(service.store.get(project.id), submissions) : new Map();
+      const unfinished = submissions.some((s) => ["queued", "saved", "needs-attention"].includes(s.status) && !resolved.has(s.id));
       if (unfinished && !this.isActive(project.id)) service.store.pauseQueue(project.id, true);
       this.reconcile(project.id);
     }
