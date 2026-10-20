@@ -10,11 +10,22 @@ implemented under `src/`. See [decisions.md](decisions.md),
 - `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`, `working-set.ts`: organization, material
   change review, deterministic coverage, and bounded working sets.
 - `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.
+- `src/core/project-activity.ts`, `src/storage/activity.ts`: deterministic snapshot
+  comparisons and durable activity projections. Database migration 3 backfills the index
+  from retained revisions and saved job/execution outcomes. New entries are written in
+  the source transaction; anchored SQL pages return at most 25 filtered entries, and
+  a lightweight head endpoint announces new work without reloading older pages.
 - `src/service/discovery.ts`: in-process orchestration and runtime adapter contract.
   Question clarification shares bounded runtime/job orchestration but saves only
   advisory responses; it cannot apply discovery proposals or mutate project decisions.
 - `src/service/queue.ts`: durable-submission orchestration, per-project serial rounds,
   batched follow-ups, pause/resume, and interrupted-batch reconciliation.
+  Submissions wait while execution owns the project; a lightweight wake-up also notices
+  another process releasing ownership. Storage transactions enforce mutual discovery/
+  execution exclusion and reject specification writes during execution. Execution takes
+  a project startup reservation before asynchronous inspection, then atomically binds it
+  to the canonical Git common-directory lease before repository work. Advisory help is
+  independent. See [operation availability](browser-workspace.md#operation-availability-and-disabled-action-explanations).
 - `src/core/execution.ts`, `src/service/implementation.ts`, `git-delivery.ts` and
   `src/runtime/execution.ts`: dependency-aware implementation pilot, separate code/
   execution/delivery state, isolated Git worktrees, sequential OpenCode sessions,

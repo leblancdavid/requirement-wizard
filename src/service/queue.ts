@@ -5,6 +5,7 @@ import { DiscoveryService } from "./discovery.js";
 import { planContext } from "../core/working-set.js";
 import { ContextBudgetError } from "../core/context.js";
 import { refinementContextKey } from "./refinement-tasks.js";
+import { OperationConflictError } from "../core/operations.js";
 
 type Work = { controller: AbortController; promise: Promise<void> };
 
@@ -21,6 +22,7 @@ export class DiscoveryQueue {
   private readonly active = new Map<string, Work>();
   private readonly messages = new Map<string, string[]>();
   private closing = false;
+  private readonly wakeTimer: ReturnType<typeof setInterval>;
 
   constructor(private readonly service: DiscoveryService) {
     // Never repeat inference on restart. Reconcile only batches whose worker is no longer live.
@@ -30,6 +32,11 @@ export class DiscoveryQueue {
       if (unfinished && !this.isActive(project.id)) service.store.pauseQueue(project.id, true);
       this.reconcile(project.id);
     }
+    // Also notices a worker in another local process releasing its lease.
+    this.wakeTimer = setInterval(() => {
+      for (const id of service.store.automaticQueueProjects()) this.start(id);
+    }, 500);
+    this.wakeTimer.unref();
   }
 
   private reconcile(id: string) {
@@ -46,9 +53,11 @@ export class DiscoveryQueue {
     }
   }
 
-  isActive(id: string) { return this.active.has(id) || this.service.store.jobs(id).some((j) => !j.helpRequest && j.status === "running" && (j.leaseUntil ?? 0) > Date.now()); }
+  isActive(id: string) { return this.active.has(id) || this.service.store.discoveryActive(id); }
   progress(id: string) { return this.messages.get(id) ?? []; }
   scan(id: string, revision: number, resumeJobID?: string) {
+    this.service.store.assertNoExecution(id);
+    this.service.store.acknowledgeExpiredExecution(id);
     if (this.closing || this.isActive(id)) throw new Error("This project already has active work or is closing.");
     this.service.store.pauseQueue(id, true);
     const controller = new AbortController();
@@ -66,6 +75,8 @@ export class DiscoveryQueue {
   }
 
   resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean } = {}) {
+    this.service.store.assertNoExecution(id);
+    this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
     if (this.isActive(id)) throw new Error("This project already has an active discovery job.");
     const project = this.service.store.get(id);
@@ -87,7 +98,11 @@ export class DiscoveryQueue {
   }
 
   private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean }) {
-    if (this.closing || this.isActive(id)) return;
+    if (this.closing || this.isActive(id) || this.service.store.executionActive(id)) return;
+    if (!manual && this.service.store.executionExpired(id)) {
+      this.service.store.pauseQueue(id, true);
+      return;
+    }
     const controller = new AbortController();
     const progress: string[] = []; this.messages.set(id, progress);
     const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
@@ -116,6 +131,7 @@ export class DiscoveryQueue {
       let explicit = manual;
       let continuing = false;
       while (!this.closing && !controller.signal.aborted && !this.service.store.queuePaused(id)) {
+        if (this.service.store.executionActive(id)) break;
         const scope = manual?.focusEpicID;
         const before = this.service.store.get(id);
         const submissionIDs = scope ? this.service.store.submissions(id).filter((s) => submissionEpic(before, s) === scope).map((s) => s.id) : undefined;
@@ -205,6 +221,7 @@ export class DiscoveryQueue {
         }
       }
     }).catch((error: unknown) => {
+      if (error instanceof OperationConflictError) { report(error.message); return; }
       const diagnostic = safeMessage(error instanceof Error ? error.message : error);
       report(diagnostic);
       for (const item of this.service.store.submissions(id).filter((s) => s.status === "saved" || s.status === "processing")) {
@@ -218,6 +235,7 @@ export class DiscoveryQueue {
 
   async close() {
     this.closing = true;
+    clearInterval(this.wakeTimer);
     for (const [id] of this.active) this.stop(id);
     await Promise.all([...this.active.values()].map((work) => work.promise));
   }

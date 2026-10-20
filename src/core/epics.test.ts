@@ -11,7 +11,9 @@ function round(store: ProjectStore, project: Project, extra: Record<string, unkn
   const result = analysisSchema.parse({ summary: "Job management", goals: ["Track jobs"], actors: ["Owner"], assumptions: [],
     questions: [], requirements: [], retireQuestions: [], ...extra });
   const { job } = store.beginJob(project.id, project.revision); store.claimJob(job.id, Date.now() + 60000);
-  store.finishJob(job.id, result); return store.get(project.id);
+  try { store.finishJob(job.id, result); }
+  catch (error) { store.failJob(job.id, "failed", error instanceof Error ? error.message : "Invalid result"); throw error; }
+  return store.get(project.id);
 }
 const epic = (id: string, title = "Jobs") => ({ type: "upsert", epicID: id, title, purpose: `Define ${title}`, dependencies: [] });
 const question = (epicID: string, localID = "new:q") => ({ localID, epicID, text: "Who uses this?", whyItMatters: "Permissions", options: [{ label: "Owner", consequence: "Single account" }, { label: "Team", consequence: "Shared access" }] });

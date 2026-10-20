@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
@@ -396,7 +397,7 @@ test("one implementation check preserves local/main evidence, updates delivery, 
       if (a.contextFingerprint) { const [, data, paths] = JSON.parse(a.contextFingerprint); a.contextFingerprint = JSON.stringify([data, paths, legacyAssessmentSkillDocument]); }
     }
     legacyDB.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(JSON.stringify(saved), p.id);
-    legacyDB.exec("DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;"); legacyDB.close();
+    legacyDB.exec("DROP TABLE project_activity; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;"); legacyDB.close();
     store = new ProjectStore(join(directory, "state.sqlite"));
     service = new ImplementationService(store, { async perform() { assert.fail("Saved unknown assessment must be reused after upgrade"); } });
     service.start(p.id, p.revision, "assess", { requirementID: r.id }); await until(service, p.id);
@@ -414,8 +415,13 @@ test("one implementation check preserves local/main evidence, updates delivery, 
       return JSON.stringify({ status: "complete", explanation: "Code found", evidenceIDs: [context.evidence[0].id], scenarios: [{ index: 0, status: "complete", explanation: "Restart code" }] });
     } });
     service.start(p.id, p.revision, "assess", {}, { force: true });
+    assert.throws(() => store.beginJob(p.id, p.revision), /Assessment or implementation is running/, "Startup is reserved before asynchronous Git inspection");
     await Promise.race([secondReady, until(service, p.id).then(() => assert.fail("Second forced requirement did not start"))]);
+    store.enqueue(p.id, { id: randomUUID(), input: { type: "note", epicID: "project", text: "Retain after cancellation" }, auto: true, research: false });
+    assert.equal(store.queuePaused(p.id), false);
     service.stop(p.id); await until(service, p.id);
+    assert.equal(store.queuePaused(p.id), true, "Cancelling a worker cannot silently launch queued model follow-up");
+    assert.equal(store.submissions(p.id).at(-1)!.status, "queued");
     state = service.snapshot(p.id);
     assert.equal(state.assessmentRuns!.at(-1)!.status, "interrupted");
     assert.deepEqual(state.assessmentRuns!.at(-1)!.freshIDs, [r.id]);
@@ -434,7 +440,7 @@ test("one implementation check preserves local/main evidence, updates delivery, 
   } finally { await service?.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("assessment keeps one snapshot across concurrent answers and both phases, with relevant freshness and retry reuse", async () => {
+test("assessment holds submitted answers until both phases finish, with relevant freshness and retry reuse", async () => {
   await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
   const directory = await mkdtemp(resolve(".reqwizit-state/tests/concurrent-assessment-")), root = join(directory, "repo"), remote = join(directory, "remote.git");
   await mkdir(root);
@@ -455,7 +461,13 @@ test("assessment keeps one snapshot across concurrent answers and both phases, w
     for (const mode of ["unrelated", "relevant", "between-phases"] as const) {
       let calls = 0, changed = false;
       const before = store.get(p.id), question = before.questions.find((q) => q.epicID === (mode === "unrelated" ? "other" : "project"))!;
-      const answer = () => { const latest = store.get(p.id); store.answer(p.id, latest.revision, question.id, { kind: "answer", text: `Concurrent ${mode} answer` }); changed = true; };
+      const answer = () => {
+        const latest = store.get(p.id);
+        assert.throws(() => store.answer(p.id, latest.revision, question.id, { kind: "answer", text: `Concurrent ${mode} answer` }), /Assessment or implementation is running/);
+        store.enqueue(p.id, { id: randomUUID(), input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: question.sourceID ?? null, answer: { kind: "answer", text: `Concurrent ${mode} answer` } }, auto: false, research: false });
+        assert.throws(() => store.applyQueued(p.id), /Assessment or implementation is running/);
+        changed = true;
+      };
       class FixtureGit extends GitDelivery {
         override async preflight() {
           if (mode === "between-phases" && !changed) answer();
@@ -472,13 +484,17 @@ test("assessment keeps one snapshot across concurrent answers and both phases, w
       const settings = config(); settings.modelID = `fixture-${mode}`; service.configure(p.id, before.revision, settings);
       service.start(p.id, before.revision, "check"); await until(service, p.id);
       let state = service.snapshot(p.id), latest = store.get(p.id);
-      assert.equal(calls, 2); assert.equal(changed, true); assert.equal(latest.questions.find((q) => q.id === question.id)!.status, "answered");
+      assert.equal(calls, 2); assert.equal(changed, true); assert.equal(latest.revision, before.revision);
+      assert.equal(store.submissions(p.id).at(-1)!.status, "queued");
       assert.deepEqual(state.assessmentRuns!.slice(-2).map((run) => [run.status, run.revision]), [["completed", before.revision], ["completed", before.revision]], state.assessmentStatus);
       assert.equal(state.workspaceAssessments![r.id]!.contextFingerprint, state.mainAssessments![r.id]!.contextFingerprint);
       assert.equal(state.mainAssessments![r.id]!.specificationRevision, before.revision);
+      assert.equal(assessmentCurrent(latest, state, r.id), true);
+      assert.equal(deliveredRequirement(latest, state, r.id), true);
+      store.applyQueued(p.id); latest = store.get(p.id);
+      assert.equal(latest.questions.find((q) => q.id === question.id)!.status, "answered");
       assert.equal(assessmentCurrent(latest, state, r.id), mode === "unrelated");
       assert.equal(deliveredRequirement(latest, state, r.id), mode === "unrelated");
-      if (mode !== "unrelated") assert.match(state.assessmentStatus!, /need reassessment/);
       // The retry sees current answers. Remove the first-pass assertion by using a new adapter.
       await service.close();
       service = new ImplementationService(store, { async perform(request) {
@@ -504,9 +520,11 @@ test("assessment keeps one snapshot across concurrent answers and both phases, w
       } });
       try {
         const settings = config(); settings.modelID = `fixture-${mode}`; service.configure(p.id, before.revision, settings);
+        store.pauseQueue(p.id, false);
         service.start(p.id, before.revision, "assess"); await until(service, p.id);
         const state = service.snapshot(p.id), run = state.assessmentRuns!.at(-1)!;
         assert.equal(run.status, "failed"); assert.equal(run.completedIDs.length, 0);
+        assert.equal(store.queuePaused(p.id), true, "Failure leaves earlier saved submissions waiting for explicit resume");
         assert.match(run.diagnostic!, mode === "workspace" ? /Workspace connection changed.*Check implementation/ : mode === "head" ? /HEAD changed/ : /changed/i);
         assert.equal(run.diagnostic!.includes("Archive"), false, "Assessment failures give assessment-specific recovery instructions");
         assert.notEqual(state.workspaceAssessments![r.id]!.model!.modelID, settings.modelID, "Changed repository inputs cannot publish a new assessment");
@@ -524,7 +542,7 @@ test("assessment keeps one snapshot across concurrent answers and both phases, w
     service.configure(p.id, beforeCoding.revision, settings);
     service.start(p.id, beforeCoding.revision, "continue"); await until(service, p.id);
     assert.equal(service.snapshot(p.id).run!.status, "failed");
-    assert.match(service.snapshot(p.id).run!.diagnostic!, /Specification changed.*Archive the run/);
+    assert.match(service.snapshot(p.id).run!.diagnostic!, /Assessment or implementation is running/);
   } finally { await service?.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

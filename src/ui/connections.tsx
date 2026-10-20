@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Account, LoginStatus, Model } from "../providers/connections.js";
 import { ActivityBar, ActivityFeedback, Spinner, useActivity } from "./activity.js";
+import { ActionScope } from "./action-button.js";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
 export function AIConnections({ request, accountID, modelID, onSelect, children, disabled = false }: {
@@ -101,7 +102,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
     });
   }
   const account = accounts.find((item) => item.id === accountID);
-  return <section className="ai-connections" aria-label="AI connections">
+  return <ActionScope reason={testing ? "Wait for the connection test to finish." : activeLogin ? "Complete or cancel the current ChatGPT sign-in first." : loadingModels ? "Wait for the model catalog to finish loading." : !available ? "Direct ChatGPT sign-in is unavailable. Check the connection service status." : busy ? "Wait for the current connection request to finish." : "Select a connected account and an available model first."}><section className="ai-connections" aria-label="AI connections">
     <div className="connection-heading"><div><h2>AI connections</h2><p>Connect your ChatGPT plan and choose which account and model this project uses.</p></div><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
     {error && <p role="alert" className="connection-error">{error}</p>}
     {!activeLogin && (working || testing || loadingModels) && <ActivityFeedback label={activityLabel} />}
@@ -131,5 +132,5 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
       </div><small>Testing makes one small inference request and uses your plan allowance. Browsing models does not run inference.</small>
     </> : <><label>OpenCode model ID<input disabled={busy} value={modelID} onChange={(event) => onSelect("", event.target.value)} /></label><p>Uses the existing OpenCode connection. Direct ChatGPT sign-in above does not change OpenCode credentials.</p></>}
     {children}
-  </section>;
+  </section></ActionScope>;
 }

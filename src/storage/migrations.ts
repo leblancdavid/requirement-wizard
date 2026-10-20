@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { decisionIdentity, executionSchemaVersion } from "../core/assessment-identity.js";
 import type { ExecutionState } from "../core/execution.js";
+import { createActivityIndex } from "./activity.js";
 
-export const databaseSchemaVersion = 2;
+export const databaseSchemaVersion = 3;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -73,7 +74,7 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
     db.prepare("UPDATE execution_state SET version = ?, payload = ? WHERE project_id = ?").run(state.version, JSON.stringify(state), row.project_id);
     db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(row.project_id);
   }
-} }];
+} }, { version: 3, name: "project-activity-index-v1", apply: createActivityIndex }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
  * or filesystem publication. Original execution payloads are backed up in SQLite. */

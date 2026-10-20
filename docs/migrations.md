@@ -21,7 +21,7 @@ freshness rules. Record the plan here **with the code change**, before release:
 
 ## Version boundaries
 
-- SQLite `PRAGMA user_version`: database schema, currently **2**.
+- SQLite `PRAGMA user_version`: database schema, currently **3**.
 - Execution payload `schemaVersion`: JSON representation, currently **1**. Missing
   means the shipped legacy format, **0**.
 - Execution `version`: optimistic-concurrency counter, independent of schema version.
@@ -40,6 +40,85 @@ Its actual model, requirement, relevant decisions and latest captured code must 
 match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
+
+### Project activity index v1 (2026-10-19)
+
+Source/target: SQLite **2 → 3** (older supported databases run migration 2 first).
+Execution schema **1 → 1**, assessment semantics and freshness fingerprints unchanged.
+Migration 3 adds `project_activity`, an indexed projection keyed by project/event ID
+with an independent monotonic recording sequence. Original revision snapshots, human
+input, jobs, submissions, execution payloads/CAS and workspace artifacts are untouched.
+No reassessment or model call is needed.
+
+- Backfill compares consecutive saved project snapshots by stable record ID, retaining
+  before/after descriptions and feature names. It also projects saved stopped jobs,
+  needs-attention submissions and retained assessment/implementation outcomes. Dates
+  absent from historical revisions are left absent; known run start dates remain start
+  dates. Revision entries are backfilled in revision order, then retained outcomes;
+  cross-source historical chronology is not inferred.
+- Linked job/run snapshots supply historical item and feature names. Missing linked
+  snapshots fall back to retained IDs rather than substituting current wording. Old
+  needs-attention submissions without a recorded context revision remain explicitly
+  unlinked; the current specification revision is not substituted as their original
+  event revision.
+- Reads are bounded to adjacent snapshots, without holding an active SQLite cursor
+  during writes. Index creation, backfill, migration ledger and `user_version` commit
+  atomically under the ordered migration transaction. Failure rolls back the derived
+  table and version; reopening retries against unchanged source evidence. Original
+  evidence is its own rebuild source, so no additional source-payload backup is needed.
+- New activity and its source changes commit in the same transaction. Event IDs make
+  repeated saved outcomes idempotent; historical projections are not overwritten with
+  today's feature names. New revision/job/submission entries carry their actual recording
+  timestamp; backfill never substitutes the upgrade date for missing event provenance.
+  Routine worker progress is not indexed. This additive upgrade
+  does not expire leases or take ownership of another worker. Unsupported future
+  database/payload formats retain the existing refusal-without-overwrite behavior.
+- The authenticated read API applies highlight/type/feature/search filters in SQLite
+  before its fixed 25-row limit. Anchored pages exclude later recording sequences;
+  search treats punctuation literally. The existing revision API stays compatible.
+
+Upgrade coverage includes a 1,000-revision v2 database, malformed-snapshot rollback,
+repair/retry, exact preservation and repeated reopen. Existing execution upgrade tests
+now also remove the new derived table when constructing pre-upgrade fixtures.
+Verification (2026-10-19): `npm run check`, all 233 tests under `npm test`, and
+`npm run test:browser` (including the UI build and 1,000-routine-revision activity
+exercise) passed. The suite also checks historical labels, duplicate-outcome
+preservation, stopped jobs/submissions, literal search, stale-page anchors and API
+authentication/input bounds. These ran in the available Node 20.11 environment;
+Node 22.12+ remains the development baseline. No live model calls were made.
+
+### Operation coordination and citation diagnostics (2026-10-19)
+
+Database **2 → 2**, execution envelope **1 → 1**, assessment compatibility and all
+freshness/content fingerprints unchanged. No schema migration, payload rewrite,
+reassessment or model call is required. Existing completed evidence, source IDs,
+submission IDs, history and manual pause intent retain their meanings.
+
+- Execution uses the existing lease table for a short project startup reservation
+  (`startup:<project id>` resource), upgraded transactionally to the canonical Git
+  common directory with the same owner. Other live owners are never displaced.
+  Crashed startup reservations expire under the existing execution lease duration.
+- Newly pending discovery/help/scan jobs populate the existing `leaseUntil` field
+  before the runtime starts. Recovery also recognizes expired pending jobs. Legacy
+  pending jobs with `leaseUntil: null` have no live-worker provenance and become
+  interrupted during explicit recovery/startup; they are retained and never replayed
+  automatically. Completed and live leased jobs remain untouched.
+- Existing queued/saved submissions stay in their original formats. Automatic wake-up
+  cannot apply them during execution; failed/cancelled workers pause waiting follow-up.
+  An expired execution lease pauses automatic follow-up until explicit discovery/scan
+  resume acknowledges only the expired reservation. Restart retains explicit resume.
+- Evidence eligibility is unchanged; the prompt now shares the validator's allowlist,
+  and diagnostics distinguish invalid references. Historical failure messages and
+  previously completed work are not rewritten.
+
+Regression coverage includes independent database connections, reopen with a live
+owner, legacy null-lease pending recovery and repeated recovery, canonical-repository
+contention, durable queued input, advisory help, manual/automatic follow-up preferences
+and expired-worker explicit resume. Browser coverage exercises disabled actions with
+focus/hover/touch, accessible descriptions, activation suppression and dialog Escape.
+These checks passed in the 228-test deterministic suite and the Playwright browser
+run on 2026-10-19; type checking and the UI build also passed. No live model calls or
+user data resets were used.
 
 ### Additive assessment impact metadata v1 (2026-10-19)
 

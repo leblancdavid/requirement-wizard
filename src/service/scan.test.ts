@@ -93,12 +93,15 @@ test("invalid references, cancellation, stale revisions and rebinding cannot par
         if (mode === "reference") result.requirements[0]!.sourceIDs = ["invented-file"];
         if (mode === "cancel") controller.abort();
         if (mode === "stale") f.store.note(project.id, project.revision, "My newer decision");
-        if (mode === "rebind") f.store.disconnectWorkspace(project.id, project.revision);
+        if (mode === "rebind") {
+          assert.throws(() => f.store.disconnectWorkspace(project.id, project.revision), /active work/);
+          controller.abort();
+        }
         if (mode === "review") result.organization = [{ type: "upsert", epicID: "project", title: "Overwrite", purpose: "No", dependencies: [] }];
         return result;
       } });
       const job = await service.scan(f.project.id, 1, { signal: controller.signal });
-      assert.equal(job.status, mode === "cancel" ? "cancelled" : mode === "stale" || mode === "rebind" ? "stale" : "failed", job.diagnostic);
+      assert.equal(job.status, mode === "cancel" || mode === "rebind" ? "cancelled" : mode === "stale" ? "stale" : "failed", job.diagnostic);
       const saved = f.store.get(f.project.id);
       assert.equal(saved.scans.length, 0); assert.equal(saved.requirements.length, 0);
       assert.equal(saved.sources.some((s) => s.kind === "workspace"), false);
@@ -603,7 +606,10 @@ test("window continuation rejects changed state or expired leases before startin
       const job = await service.scan(f.project.id, 1, { onProgress: (message) => {
         if (!/^3 of \d+ batches saved\.$/.test(message)) return;
         if (mode === "revision") f.store.note(f.project.id, 1, "A newer human decision wins");
-        if (mode === "rebind") f.store.connectWorkspace(f.project.id, 1, f.path);
+        if (mode === "rebind") {
+          assert.throws(() => f.store.connectWorkspace(f.project.id, 1, f.path), /active work/);
+          f.store.note(f.project.id, 1, "A newer human decision wins");
+        }
         // Move wall time without running timers to exercise the store's independent
         // expiry check, even if the in-process timeout has not fired yet.
         if (mode === "expired") t.mock.timers.setTime(originalLease + 1);

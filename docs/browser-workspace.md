@@ -1,5 +1,83 @@
 # Browser workspace, epics, and estimated completeness
 
+## Operation availability and disabled-action explanations
+
+Assessment, main verification and coding hold a stable specification from startup
+through completion. Answers, notes and ordinary requirement reviews can still be
+submitted: they remain durable waiting submissions and do not change that snapshot.
+Discovery, scans and refinement cannot start while that worker is active. Direct
+specification mutations (including refinement approval, organization, model changes,
+manual implementation progress and folder rebinding) are blocked at storage as well
+as in the browser. Advisory question help and browsing remain available.
+
+When the worker completes, queued automatic follow-up can continue, preserving manual
+pause and per-submission automatic-processing preferences. A failed, cancelled or
+expired worker leaves waiting work paused for explicit **Resume discovery**. Reloading
+or reopening never repeats model work automatically. Processing & queue distinguishes
+saved responses waiting on implementation from manually paused discovery.
+
+Buttons that are unavailable explain the current blocker on hover, keyboard focus
+or tap. They remain focusable with `aria-disabled` and an accessible description;
+activation cannot submit the action. Escape dismisses an open explanation first,
+including inside the queue dialog. Local prerequisites (blank responses, folder
+selection, pending reviews, stale refinements and unconfigured implementation) have
+their own explanations. Frozen settings keep their fields disabled and explain their
+save action. The shared UI implementation is `src/ui/action-button.tsx`.
+
+New-requirement prompts enumerate only current eligible source IDs present in the
+detailed round context. Missing, superseded, deferred, delegated and duplicate citations
+identify the proposal and source in validation diagnostics. Rejection remains atomic;
+saved input is retained and invalid citations are never silently replaced.
+
+Verification (2026-10-19): type checking and all 228 deterministic tests passed, as
+did the UI build and Playwright browser checks. The browser checks cover hover,
+keyboard focus and touch explanations, accessible descriptions, blocked activation,
+waiting-state feedback and Escape dismissal inside the queue dialog. The existing
+500-requirement DOM/navigation check also passed. No live model calls were made.
+
+## Project activity
+
+**Activity → Changes & outcomes** defaults to **Highlights**, with **25 entries per
+page** and Newer/Older controls at the top and bottom. Highlights include item changes,
+saved human decisions, stopped discovery/help/scan jobs, submissions needing attention,
+and assessment/coding/delivery outcomes. Routine revisions without recorded item changes
+are hidden; **All activity & revisions** exposes every revision plus retained outcomes.
+Implementation progress is grouped by run outcome rather than each worker checkpoint.
+Problems remain highlights regardless of whether they changed the specification.
+
+Entries show affected item names, change counts, decision excerpts and feature names.
+**View changes & details** reveals original revision reasons, stable IDs, before/after
+text and links to current features. Details mount only on expansion. Historical names
+and evidence are retained even if the current feature is renamed or archived.
+The feature selector now filters activity; type and literal text search run across the
+whole saved history, not only the displayed page. Applying search/filters starts at
+the latest page; changing feature resets the activity controls. Empty results and
+failed requests have explicit feedback and retry controls.
+
+Paging uses a fixed activity-sequence anchor. Polling only checks a lightweight head
+when project/job/submission/execution state changes; **New activity available** refreshes
+explicitly, so new work does not shift the list while reading older entries. Requests
+are aborted on filter/project changes to prevent stale responses replacing the page.
+The legacy `/history` API remains available; the UI uses `/activity` and `/activity-head`.
+
+Upgrade **database 2 → 3** builds a transactional, additive activity index from original
+snapshots and currently retained outcomes. Historical revision dates were not recorded
+and remain explicitly undated. Backfilled outcomes are recorded after revision entries;
+their original run start dates are shown when present, without claiming a reconstructed
+cross-source chronology. New events are ordered by local recording sequence. The index
+records new decision/job/submission event dates as **Recorded**, separately from known
+run **Started** dates. Historical undated entries are not assigned upgrade dates. It
+does not alter specification/execution revisions, evidence, freshness or workspace files;
+see [migration details](migrations.md#project-activity-index-v1-2026-10-19).
+
+Verification (2026-10-19): type checking, all **233 deterministic tests**, UI build
+and Playwright browser checks passed. The activity exercise uses 1,000 routine
+revisions plus 64 highlights, checks bounded 25-entry rendering, anchored navigation,
+new-work notification, full-history search, disclosures, type/feature filters and
+mobile width. Screenshot: `.reqwizit-state/browser-activity-mobile.png`. Checks used
+the available Node 20.11 environment; the documented development baseline remains
+Node 22.12+. No live model calls or production-data resets were performed.
+
 ## Large-project responsiveness
 
 Implementation feature drawers, requirement bodies, assessment details and run history
@@ -140,8 +218,9 @@ versus freshly assessed counts and forced attempts. Completed checkpoints surviv
 restart; failed/cancelled retries retain older dated evidence. Freshness reasons identify
 requirement, decision/guardrail, workflow/skill, model and latest captured-code changes.
 Code snapshot invalidation is conservative across the captured scope, not just cited files.
-You can keep answering questions during assessment: both phases use the same starting
-specification snapshot. Unrelated answers preserve current results and reuse. Changed
+You can keep submitting answers during assessment: submissions wait until both phases
+finish before changing the starting specification snapshot. Unrelated answers preserve
+current results and reuse when applied afterward. Changed
 supporting decisions, feature/project notes or dependency guardrails mark affected
 results **Needs reassessment** and invalidate new delivery evidence's current credit,
 even when requirement wording is unchanged. Retry **Check implementation** against

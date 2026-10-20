@@ -4,12 +4,98 @@ import { request as httpRequest } from "node:http";
 import { startApp } from "./server.js";
 import { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "../service/discovery.js";
-import { analysisSchema } from "../core/model.js";
+import { analysisSchema, reviewFingerprint } from "../core/model.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
 import { command } from "../service/git-delivery.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import type { ActivityPage } from "../core/project-activity.js";
+
+test("activity API returns bounded filtered pages, validates cursors and keeps authentication", async () => {
+  const store = new ProjectStore(":memory:");
+  let project = store.create("Paged history", "Retain input", { providerID: "openai", modelID: "fixture" });
+  for (let i = 0; i < 30; i++) project = store.note(project.id, project.revision, `Activity note ${i}`);
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { throw new Error("No inference expected"); } } });
+  const base = `${app.origin}/api/projects/${project.id}`, headers = { "X-Reqwizit-Token": app.token };
+  try {
+    assert.equal((await fetch(`${base}/activity`)).status, 403);
+    const response = await fetch(`${base}/activity`, { headers }); assert.equal(response.status, 200);
+    const page = await response.json() as ActivityPage;
+    assert.equal(page.entries.length, 25); assert.equal(page.total, 31);
+    const older = await fetch(`${base}/activity?page=2&anchor=${page.anchor}`, { headers });
+    assert.equal(((await older.json()) as ActivityPage).entries.length, 6);
+    const search = await fetch(`${base}/activity?search=${encodeURIComponent("Activity note 0")}&type=decisions&feature=project`, { headers });
+    assert.equal(((await search.json()) as ActivityPage).total, 1);
+    assert.equal((await fetch(`${base}/activity-head`, { headers })).status, 200);
+    for (const query of ["page=0", "page=2.5", "anchor=-1", "view=other", "unknown=true", "search=" + "x".repeat(201)]) {
+      assert.equal((await fetch(`${base}/activity?${query}`, { headers })).status, 400, query);
+    }
+    assert.equal((await fetch(`${base}/history`, { headers })).status, 200, "Legacy revision endpoint stays compatible");
+  } finally { await app.close(); store.close(); }
+});
+
+test("execution ownership holds automatic discovery while submissions and advisory help remain available", async (t) => {
+  const store = new ProjectStore(":memory:");
+  let project = store.create("Concurrent work", "Save work", { providerID: "openai", modelID: "fixture" });
+  const seed = store.beginJob(project.id, project.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+  store.finishJob(seed.id, { summary: "Save work", goals: [], actors: [], assumptions: [], retireQuestions: [],
+    questions: [{ text: "Who saves work?", whyItMatters: "Permissions", options: [{ label: "Owner", consequence: "One account" }, { label: "Team", consequence: "Multiple accounts" }] }],
+    requirements: [{ statement: "Save work", rationale: "Requested", sourceIDs: [project.sources[0]!.id], acceptance: ["Saved work survives restart"] }] });
+  project = store.get(project.id);
+  let calls = 0;
+  const app = await startApp({ store, port: 0, adapter: {
+    async analyze(_project, options) { calls++; return { summary: "Processed", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], reviewResponses: (options.context.manifest.reviewSourceIDs ?? []).map((sourceID) => ({ sourceID, text: "Review retained." })) }; },
+    async clarify() { return { explanation: "Advisory explanation only.", assumptions: [], followUp: null }; },
+  } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const post = (action: string, body: unknown) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers, body: JSON.stringify(body) });
+  try {
+    store.claimExecution(project.id, "fixture-repository", "worker");
+    const question = project.questions[0]!, requirement = project.requirements[0]!;
+    const inputs: Submission["input"][] = [
+      { type: "answer", questionID: question.id, questionText: question.text, sourceID: null, answer: { kind: "answer", text: "Owner only" } },
+      { type: "note", text: "Preserve saved work", epicID: "project" },
+      { type: "review", requirementID: requirement.id, requirementText: requirement.statement, fingerprint: reviewFingerprint(requirement), action: "accepted", note: "" },
+    ];
+    for (const input of inputs) assert.equal((await post("submit", { id: randomUUID(), input, auto: true, research: false })).status, 202);
+    for (const action of ["analyze", "scan"]) assert.equal((await post(action, { revision: project.revision })).status, 409);
+    assert.equal((await post("workspace", { operation: "disconnect", revision: project.revision })).status, 409);
+    assert.equal((await post("note", { revision: project.revision, text: "Cannot change snapshot" })).status, 409);
+    assert.equal((await post("question-help", { revision: project.revision, request: { questionID: question.id, action: "rephrase" } })).status, 202);
+    await new Promise((accept) => setTimeout(accept, 650));
+    assert.equal(calls, 0); assert.equal(store.get(project.id).revision, project.revision);
+    assert.ok(store.submissions(project.id).every((item) => item.status === "queued" && !item.applied));
+    assert.equal(store.jobs(project.id).at(-1)!.status, "completed", "Question help can complete independently");
+    store.releaseExecution(project.id, "worker");
+    await until(() => store.submissions(project.id).every((item) => item.status === "completed"));
+    assert.equal(calls, 3); assert.equal(store.get(project.id).requirements[0]!.status, "accepted");
+    store.pauseQueue(project.id, true);
+    store.claimExecution(project.id, "fixture-repository", "worker");
+    assert.equal((await post("submit", { id: randomUUID(), input: { type: "note", text: "Keep manually paused", epicID: "project" }, auto: true, research: false })).status, 202);
+    store.releaseExecution(project.id, "worker");
+    await new Promise((accept) => setTimeout(accept, 650));
+    assert.equal(calls, 3); assert.equal(store.submissions(project.id).at(-1)!.status, "queued");
+    assert.equal((await post("analyze", { revision: store.get(project.id).revision })).status, 202);
+    await until(() => store.submissions(project.id).at(-1)!.status === "completed");
+    const beforeManual = calls;
+    store.claimExecution(project.id, "fixture-repository", "worker");
+    assert.equal((await post("submit", { id: randomUUID(), input: { type: "note", text: "Manual follow-up only", epicID: "project" }, auto: false, research: false })).status, 202);
+    store.releaseExecution(project.id, "worker");
+    await new Promise((accept) => setTimeout(accept, 650));
+    assert.equal(calls, beforeManual); assert.equal(store.submissions(project.id).at(-1)!.status, "queued");
+    store.claimExecution(project.id, "fixture-repository", "worker");
+    assert.equal((await post("submit", { id: randomUUID(), input: { type: "note", text: "Worker interrupted", epicID: "project" }, auto: true, research: false })).status, 202);
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 121000 });
+    await new Promise((accept) => setTimeout(accept, 650));
+    assert.equal(store.queuePaused(project.id), true, "An expired owner requires explicit recovery before model calls");
+    assert.equal(calls, beforeManual);
+    assert.equal((await post("analyze", { revision: store.get(project.id).revision })).status, 202);
+    await until(() => store.submissions(project.id).at(-1)!.status === "completed");
+    assert.equal(store.executionExpired(project.id), false);
+  } finally { t.mock.timers.reset(); store.releaseExecution(project.id, "worker"); await app.close(); store.close(); }
+});
 
 test("workspace API authenticates folder access, creates directories, syncs progress, and rejects stale writes", async () => {
   const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });

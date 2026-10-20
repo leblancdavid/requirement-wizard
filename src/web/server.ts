@@ -7,6 +7,8 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ProjectStore } from "../storage/store.js";
+import { activityQuerySchema } from "../storage/activity.js";
+import { OperationConflictError, discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 import { browseDirectories } from "../storage/workspace.js";
 import { previewFolder } from "../storage/folder-preview.js";
 import { DiscoveryService, type DiscoveryAdapter } from "../service/discovery.js";
@@ -162,6 +164,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, { project, workspace: options.store.syncWorkspace(id), coverage: coverage(project), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) }); return;
       }
       if (req.method === "GET" && action === "history") { json(res, 200, options.store.history(id)); return; }
+      if (req.method === "GET" && action === "activity") {
+        json(res, 200, options.store.activity(id, activityQuerySchema.parse(Object.fromEntries(url.searchParams)))); return;
+      }
+      if (req.method === "GET" && action === "activity-head") { json(res, 200, options.store.activityHead(id)); return; }
       if (req.method === "GET" && action === "execution-repository") {
         const binding = options.store.workspace(id);
         const detected = await inspectWorkspaceRepository(binding?.path);
@@ -176,7 +182,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (action === "execution-start") {
         const input = z.object({ revision, operation: z.enum(["check", "assess", "verify-main", "continue"]), requirementID: z.string().min(1).optional(), epicID: z.string().min(1).optional(), force: z.boolean().optional(), preview: z.boolean().optional() }).strict().parse(raw);
-        if (queue.isActive(id)) throw new Error("Stop discovery before starting implementation work.");
+        if (queue.isActive(id)) throw new OperationConflictError(discoveryBlockReason);
         if (input.requirementID && input.epicID) throw new Error("Choose a requirement or an epic scope.");
         if (input.requirementID && !project.requirements.some((r) => r.id === input.requirementID && r.status === "accepted")) throw new Error("Choose an accepted requirement.");
         if (input.epicID && !project.epics.some((e) => e.id === input.epicID && !e.archived)) throw new Error("Choose an active epic.");
@@ -232,7 +238,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, { cancelled: !!work }); return;
       }
       if (action === "analyze") {
-        if (implementation.isActive(id)) throw new Error("Stop implementation before starting discovery.");
+        if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
         const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional() }).strict().parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();
         if (queue.isActive(id)) {
@@ -242,7 +248,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 202, { started: true }); return;
       }
       if (action === "scan") {
-        if (implementation.isActive(id)) throw new Error("Stop implementation before starting discovery.");
+        if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
         const input = z.object({ revision, resumeJobID: z.string().uuid().optional() }).strict().parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();
         if (!options.store.workspace(id)) throw new Error("Connect a local workspace before initializing.");
@@ -294,7 +300,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       json(res, 404, { error: "Route not found." });
     })().catch((error: unknown) => {
-      const status = error instanceof StaleRevisionError ? 409 : 400;
+      const status = error instanceof StaleRevisionError || error instanceof OperationConflictError ? 409 : 400;
       json(res, status, { error: error instanceof z.ZodError ? "Invalid request fields." : safeMessage(error instanceof Error ? error.message : error) });
     });
   });

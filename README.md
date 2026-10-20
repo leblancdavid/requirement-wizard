@@ -49,6 +49,10 @@ Keep answering while discovery works: responses are durably queued and processed
 one at a time, each in its own revision-linked context. Each follow-up includes its
 target and supporting evidence, project/dependency guardrails and feature notes;
 unrelated feature history is explicitly omitted. Completed items stay completed.
+During assessment or coding, answers, notes and reviews are saved as waiting submissions;
+processing starts after the worker finishes. Conflicting actions explain their blockers
+on hover, keyboard focus or tap. Failures, cancellation and expired-worker recovery keep
+waiting follow-up paused for explicit resume.
 Expand **Processing & queue** to inspect the questions
 and submitted answers being processed, waiting, or completed in **Activity**.
 Context preflight checks queued follow-up before starting an AI batch. Responses that
@@ -74,6 +78,10 @@ context. Use **Previous answers** or **Submitted** to edit responses, including
 waiting answers. **Project map** groups requirements under expandable features;
 definition progress and supporting evidence open on demand. Model/research and
 automatic-processing preferences live in **Settings**.
+**Activity** opens to meaningful highlights with 25 entries per page. Filter by
+feature/type or search the full history; expand entries for before/after evidence.
+**All activity & revisions** retains routine revisions, and new work offers a refresh
+without moving an older page. Existing histories upgrade automatically without model calls.
 **Settings → Appearance** offers six light and six dark themes, a custom-color
 editor, five local font stacks, and adjustable text size. Preferences apply across
 projects and persist locally. Dropdowns coordinate with the selected theme.

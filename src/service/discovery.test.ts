@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DiscoveryService, type DiscoveryAdapter } from "./discovery.js";
 import { ProjectStore } from "../storage/store.js";
-import { analysisSchema, reviewFingerprint, type Analysis, type Project } from "../core/model.js";
+import { analysisSchema, reviewFingerprint, requirementEvidenceIDs, validateAnalysisReferences, type Analysis, type Project } from "../core/model.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 import { buildContext } from "../core/context.js";
 
@@ -12,6 +12,38 @@ function result(project: Project): Analysis {
       { label: "Yes", consequence: "Local storage and synchronization" }, { label: "No", consequence: "Requires connectivity" },
     ] }], requirements: [{ statement: "Persist jobs", rationale: "Track work", sourceIDs: [project.sources[0]!.id], acceptance: ["Saved jobs survive restart"] }] };
 }
+
+test("requirement citations use the same current evidence allowlist in prompts and precise validation diagnostics", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = store.create("Citation policy", "Save jobs", { providerID: "openai", modelID: "fixture" });
+    p.sources.push(
+      { id: "old", epicID: "project", kind: "answer", text: "Old answer" },
+      { id: "current", epicID: "project", kind: "answer", text: "New answer", supersedes: "old" },
+      { id: "delegated", epicID: "project", kind: "delegation", text: "Choose for me" },
+      { id: "deferred", epicID: "project", kind: "deferral", text: "Decide later" },
+      { id: "orphan-review", epicID: "project", kind: "confirmation", text: "Historical review" },
+      { id: "workspace", epicID: "project", kind: "workspace", text: "Captured code" },
+      { id: "accepted-review", epicID: "project", kind: "confirmation", text: "Approved" },
+    );
+    p.requirements.push({ id: "approved", status: "accepted", epicID: "project", statement: "Keep work", rationale: "Human approval", sourceIDs: ["accepted-review"], acceptance: ["Work retained"] });
+    const eligible = requirementEvidenceIDs(p);
+    assert.deepEqual(eligible, [p.sources[0]!.id, "current", "workspace", "accepted-review"]);
+    const context = buildContext(p); context.manifest.includedIDs = ["current", "old", "delegated", "deferred", "workspace", "orphan-review", "accepted-review"];
+    const prompt = discoveryPrompt(p, context);
+    assert.match(prompt, /Allowed requirement sourceIDs for this round: \["current","workspace","accepted-review"\]/);
+    const schema = JSON.parse(prompt.split("Schema: ")[1]!.split("\nWorking context")[0]!);
+    assert.deepEqual(schema.properties.requirements.items.properties.sourceIDs.items.enum, ["current", "workspace", "accepted-review"]);
+    for (const [id, reason] of [["old", "superseded"], ["delegated", "delegated"], ["deferred", "deferred"], ["orphan-review", "currently accepted"], ["invented", "missing source"]]) {
+      const output = result(p); output.questions = []; output.requirements[0]!.localID = "new:save"; output.requirements[0]!.sourceIDs = [id!];
+      assert.throws(() => validateAnalysisReferences(p, output), (error: Error) => error.message.includes("Requirement 1 (new:save)") && error.message.includes(id!) && error.message.includes(reason!) && error.message.includes("No proposals were applied"));
+    }
+    const output = result(p); output.questions = []; output.requirements[0]!.sourceIDs = ["current", "current"];
+    assert.throws(() => validateAnalysisReferences(p, output), /duplicate source ID/);
+    output.requirements[0]!.sourceIDs = eligible;
+    assert.doesNotThrow(() => validateAnalysisReferences(p, output));
+  } finally { store.close(); }
+});
 
 test("review prompts authorize only current batch sources, excluding historical and waiting reviews", async () => {
   const store = new ProjectStore(":memory:");

@@ -5,11 +5,13 @@ import type { coverage } from "../core/coverage.js";
 import { dimensionLabels } from "../core/epics.js";
 import "./appearance.css";
 import "./review.css";
+import "./action-button.css";
 import { ReviewQueue, reviewItems } from "./review.js";
 import { ProcessingQueue } from "./processing-queue.js";
 import { queueActivities } from "./queue-activity.js";
 import { ImplementationTab } from "./implementation.js";
 import { ProjectProgress } from "./project-progress.js";
+import { ProjectActivityFeed } from "./project-activity.js";
 import { ActivityProvider, ActivityFeedback, HeaderActivity, Spinner, useActivity } from "./activity.js";
 import { createExecutionIndex, deliveredRequirement, type ExecutionState, type WorkspaceRepository } from "../core/execution.js";
 import { shareSnapshot } from "./snapshot.js";
@@ -20,6 +22,8 @@ import { AIConnections } from "./connections.js";
 import { WorkspacePicker, WorkspaceConnection, WorkspaceScan, ImplementationProgress } from "./workspace-files.js";
 import type { Workspace } from "../storage/workspace.js";
 import type { FolderPreview } from "../core/folder-preview.js";
+import { ActionScope } from "./action-button.js";
+import { discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 
 type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
@@ -45,12 +49,12 @@ function QuestionCleanup({ project, queuedIDs, disabled, replaceDisabled, retire
   const eligible = project.questions.filter((q) => q.status === "pending" && !q.sourceID && !queuedIDs.has(q.id));
   const retired = project.questions.filter((q) => q.status === "retired");
   if (!eligible.length && !retired.length) return null;
-  return <details className="question-cleanup"><summary>Bulk question actions &amp; history</summary>
+  return <ActionScope><details className="question-cleanup"><summary>Bulk question actions &amp; history</summary>
     <p>Dismiss individual questions beside Save response. These actions apply to all eligible unanswered questions; saved and queued responses are protected. Questions and reasons remain in history.</p>
-    {!!eligible.length && <div className="button-row"><button className="secondary" disabled={disabled} onClick={() => void retire(eligible.map((q) => q.id))}>Dismiss unanswered questions</button><button className="secondary" disabled={disabled || replaceDisabled} onClick={() => void retire(eligible.map((q) => q.id), true)}>Replace unanswered questions from project evidence</button></div>}
+    {!!eligible.length && <div className="button-row"><button className="secondary" disabled={disabled} onClick={() => void retire(eligible.map((q) => q.id))}>Dismiss unanswered questions</button><button className="secondary" disabled={disabled || replaceDisabled} title={!disabled && replaceDisabled ? "Complete a folder scan before generating evidence-based replacements." : undefined} onClick={() => void retire(eligible.map((q) => q.id), true)}>Replace unanswered questions from project evidence</button></div>}
     {replaceDisabled && <small>Complete a folder scan before generating evidence-based replacements.</small>}
     {!!retired.length && <details><summary>Dismissed questions · {retired.length}</summary>{retired.map((q) => <p key={q.id}><strong>{q.text}</strong><br />{q.retirementReason}</p>)}</details>}
-  </details>;
+  </details></ActionScope>;
 }
 function Meter({ value, stale = false }: { value: number; stale?: boolean }) {
   return <div className={`meter ${stale ? "stale" : ""}`} role="meter" aria-label="Definition coverage" aria-valuenow={value} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${value}%` }} /></div>;
@@ -85,7 +89,6 @@ function App() {
   const [note, setNote] = useState("");
   const [newEpic, setNewEpic] = useState(false);
   const [editingEpic, setEditingEpic] = useState<string | null>(null);
-  const [history, setHistory] = useState<Array<{ revision: number; reason: string }>>([]);
   const [showContext, setShowContext] = useState(false);
   const [showSettings, setShowSettings] = useState(location.hash === "#/settings");
   const pageHeading = useRef<HTMLHeadingElement>(null);
@@ -114,6 +117,8 @@ function App() {
   const activeConnection = project ? `${project.model.connectionID ? "Direct ChatGPT plan" : "OpenCode"} · ${project.model.modelID}` : "";
   const lastScan = data?.jobs.filter((job) => job.kind === "scan").at(-1);
   const needsInitialization = !!project && !project.scans.length && (!!project.origin || !!lastScan);
+  const busyReason = pending ? "A workspace request is being saved. Wait for it to finish." : data?.implementationActive ? executionBlockReason : data?.active ? discoveryBlockReason : "";
+  const discoveryReason = busyReason || (connectionChanged ? "Save or revert your AI connection selection in Settings first." : needsInitialization ? "Complete the folder scan before exploring gaps." : "");
   const help: HelpControls = {
     jobs: data?.helpJobs ?? [], revision: project?.revision ?? 1,
     busy: !!data?.helpJobs.some((j) => ["pending", "running"].includes(j.status)),
@@ -187,9 +192,6 @@ function App() {
   useEffect(() => {
     if (project && epicID !== "all" && !project.epics.some((item) => item.id === epicID && !item.archived)) setEpicID("all");
   }, [project?.revision, epicID]);
-  useEffect(() => {
-    if (tab === "history" && id) void api<typeof history>(`projects/${id}/history`).then(setHistory).catch((error: Error) => setError(error.message));
-  }, [tab, project?.revision]);
 
   async function act(action: () => Promise<void>, label = "Saving changes…") {
     setError(""); setActionLabel(label); setPending(true);
@@ -268,7 +270,7 @@ function App() {
     }
   };
 
-  return <div className="app">
+  return <ActionScope reason={discoveryReason || "Wait for the current save to finish."}><div className="app">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">✦</span><div>Reqwizit</div></div>
       <div className="sidebar-label">YOUR WORKSPACE</div>
@@ -287,11 +289,11 @@ function App() {
       {showSettings && <section id="workspace-settings" className="settings-panel" aria-label="Settings">
         <AppearanceSettings />
         <AIConnections request={api} disabled={pending} accountID={connectionID} modelID={model} onSelect={(account, selectedModel) => { setConnectionID(account); setModel(selectedModel); }}>
-          {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Explore next gaps and question help."}</p><button disabled={busy || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
+          {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Explore next gaps and question help."}</p><button title={busyReason || (!model ? "Choose a model first." : !connectionChanged ? "This connection and model are already saved." : undefined)} disabled={busy || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
         </AIConnections>
         {project && !creating ? <><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p></> : <p>Your selected connection and model will be used when you create a project.</p>}
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
-        {project && !creating && <WorkspaceConnection project={project} scanJob={lastScan} workspace={data?.workspace ?? null} request={api} disabled={pending || !!data?.active} run={act} />}
+        {project && !creating && <WorkspaceConnection project={project} scanJob={lastScan} workspace={data?.workspace ?? null} request={api} disabled={busy} run={act} />}
       </section>}
       <div hidden={showSettings}>
       {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => navigate("settings")}>Review connection settings</button></div>}
@@ -306,7 +308,7 @@ function App() {
           {initializeFolder && <p>Source files will be sent to your selected AI connection in bounded batches. Review the generated feature and requirement proposals first. {workspacePath.trim() ? "" : "Select a local folder to initialize."}</p>}
           <div className="connection-summary">{connectionID ? "Direct ChatGPT plan" : "OpenCode connection"} · {model || "Choose a model in Settings"} <button type="button" className="quiet" onClick={() => navigate("settings")}>Choose AI connection</button></div>
           <label className="research-toggle"><input type="checkbox" checked={!connectionID && research} disabled={!!connectionID} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted web research</label>
-          <button className="primary" disabled={pending || !model || initializeFolder && (!workspacePath.trim() || previewBusy || !folderPreview)}>{pending && <Spinner />}{pending ? "Creating…" : initializeFolder ? "Create & initialize existing project →" : "Create & explore →"}</button>
+          <button className="primary" title={pending ? "Creating your project. Wait for this request to finish." : !model ? "Choose an AI model in Settings first." : initializeFolder && (!workspacePath.trim() || previewBusy || !folderPreview) ? "Select an existing folder and wait for its preview to finish." : undefined} disabled={pending || !model || initializeFolder && (!workspacePath.trim() || previewBusy || !folderPreview)}>{pending && <Spinner />}{pending ? "Creating…" : initializeFolder ? "Create & initialize existing project →" : "Create & explore →"}</button>
         </form>
       </section> : !project || !summary ? <div className="empty">Loading your workspace…</div> : <>
         <div className="workspace-status" role="status"><span>{data.workspace ? `${data.workspace.status === "saved" ? "Saved" : data.workspace.status === "pending" ? "Saving" : data.workspace.status === "conflict" ? "Conflict" : "Unavailable"} · ${data.workspace.path}${data.workspace.savedRevision ? ` · r${data.workspace.savedRevision}` : ""}` : "No local folder connected"}</span><button className="quiet" onClick={() => navigate("settings")}>{data.workspace ? "Workspace settings" : "Connect workspace"}</button>{data.workspace?.diagnostic && <span>{data.workspace.diagnostic}</span>}</div>
@@ -317,7 +319,7 @@ function App() {
             {needsInitialization && tab !== "implementation" && <p role="status">Initialization must complete before gap discovery. Retry the folder scan below.</p>}
             {tab !== "implementation" && data.workspace && (!project.scans.length || tab === "requirements") && <WorkspaceScan project={project} scanJob={lastScan} disabled={busy || connectionChanged} scan={(resumeJobID) => act(async () => { await api(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); setTab("requirements"); })} />}
             {tab === "implementation" && <ImplementationTab key={project.id} project={project} state={data.execution} active={data.implementationActive} disabled={pending || data.active} discoveryActive={data.active} connected={!!data.workspace} workspaceID={data.workspace?.bindingID} epicID={epicID} inspectRepository={() => api<WorkspaceRepository>(`projects/${project.id}/execution-repository`)} action={(name, body) => act(async () => { await api(`projects/${project.id}/${name}`, { ...(name === "execution-start" || name === "execution-config" ? { revision: project.revision } : {}), ...body }); })} />}
-            {(tab === "history" || tab === "research") && <div className="filter-row"><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Revisions</button><button className={tab === "research" ? "active" : ""} onClick={() => setTab("research")}>Research sources</button></div>}
+            {(tab === "history" || tab === "research") && <div className="filter-row"><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Changes & outcomes</button><button className={tab === "research" ? "active" : ""} onClick={() => setTab("research")}>Research sources</button></div>}
             {tab === "discover" && <>
               <QuestionCleanup project={project} disabled={busy || connectionChanged} queuedIDs={protectedQuestionIDs} replaceDisabled={!project.scans.length} retire={(ids, regenerate) => act(() => dismissQuestions(ids, regenerate))} />
               <div className="filter-row" aria-label="Question filters">{([ ["open", "To answer"], ["answered", "Previous answers"], ["later", "Deferred / delegated"], ["submitted", "Submitted"] ] as const).map(([key, label]) => <button key={key} aria-pressed={questionFilter === key} className={questionFilter === key ? "active" : ""} onClick={() => { setQuestionFilter(key); setExpandedQuestion(null); }}>{label} <span>{scopedQuestions.filter((q) => key === "submitted" ? queuedQuestionIDs.has(q.id) : !queuedQuestionIDs.has(q.id) && (key === "open" ? q.status === "pending" : key === "answered" ? q.status === "answered" : ["deferred", "delegated"].includes(q.status))).length}</span></button>)}</div>
@@ -331,10 +333,10 @@ function App() {
                 const source = project.sources.find((item) => item.id === question.sourceID);
                 return <QuestionCard key={`${project.id}:${question.id}:${submission?.id ?? question.sourceID ?? "new"}`} question={question} area={areaTitle(epics.find((epic) => epic.id === question.epicID))} purpose={epics.find((epic) => epic.id === question.epicID)?.purpose} expanded={activeQuestionID === question.id} onToggle={() => setExpandedQuestion(activeQuestionID === question.id ? null : question.id)} onCancel={() => { drafts.current.delete(question.id); setExpandedQuestion(null); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={response?.text ?? source?.text} initialKind={response?.kind ?? (source && ["answer", "delegation", "deferral"].includes(source.kind) ? source.kind as Draft["kind"] : undefined)} number={index + 1} disabled={sending.includes(question.id)} dismissDisabled={busy || connectionChanged} onDismiss={question.status === "pending" && !question.sourceID && !protectedQuestionIDs.has(question.id) ? () => act(() => dismissQuestions([question.id])) : undefined} status={sending.includes(question.id) ? "Saving…" : responseStatus(question.id)} onSave={(kind, text) => saveAnswer(question, kind, text)} />;
               })}
-              <details className="add-information"><summary>Add information</summary><form className="note-card" onSubmit={(event) => { event.preventDefault(); const submitted = note; void submit({ type: "note", text: submitted, epicID: epicID === "all" ? "project" : epicID }, "note").then((saved) => { if (saved) setNote((current) => current === submitted ? "" : current); }); }}><label>Add an idea, correction, or constraint<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Something else the project should consider…" maxLength={12000} required /></label><button className="secondary" disabled={sending.includes("note") || !note.trim()}>{sending.includes("note") ? "Saving…" : "Add to project →"}</button></form></details>
+              <details className="add-information"><summary>Add information</summary><form className="note-card" onSubmit={(event) => { event.preventDefault(); const submitted = note; void submit({ type: "note", text: submitted, epicID: epicID === "all" ? "project" : epicID }, "note").then((saved) => { if (saved) setNote((current) => current === submitted ? "" : current); }); }}><label>Add an idea, correction, or constraint<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Something else the project should consider…" maxLength={12000} required /></label><button className="secondary" title={sending.includes("note") ? "Your note is being saved." : !note.trim() ? "Write an idea, correction or constraint first." : undefined} disabled={sending.includes("note") || !note.trim()}>{sending.includes("note") ? "Saving…" : "Add to project →"}</button></form></details>
             </>}
             <div hidden={tab !== "review"}><ReviewQueue key={project.id} project={project} submissions={data.submissions} epicID={epicID} sending={sending} submit={submit}
-              disabled={busy || !!data.active || connectionChanged || needsInitialization}
+               disabled={busy || !!data.active || connectionChanged || needsInitialization} disabledReason={discoveryReason}
               refine={() => void act(async () => { await api(`projects/${project.id}/analyze`, { revision: project.revision, refinementOnly: true, research: false, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) }); })}
               reviewRefinement={async (proposalID, accept) => {
                 let saved = false;
@@ -343,7 +345,7 @@ function App() {
               }} /></div>
             {tab === "requirements" && <>
               <p className="view-intro">Features group related requirements and decisions. Open a feature to explore it; suggestions stay proposed until you confirm them.</p>
-              <ImplementationProgress project={project} requirements={requirements} disabled={pending} save={(requirementID, value) => act(() => mutate("implementation", { requirementID, ...value }))} />
+              <ImplementationProgress project={project} requirements={requirements} disabled={busy} save={(requirementID, value) => act(() => mutate("implementation", { requirementID, ...value }))} />
               <details className="project-overview"><summary>Project overview</summary><p>{project.summary || "Your answers will help clarify the project scope."}</p>{project.analysisRevision !== project.revision && <small>New information has been saved since this overview was generated.</small>}</details>
               <button className="secondary" onClick={() => setNewEpic(!newEpic)}>{newEpic ? "Cancel" : "+ Add feature"}</button>
               {newEpic && <EpicForm disabled={busy} onSave={(title, purpose) => act(async () => { await mutate("epic", { title, purpose }); setNewEpic(false); })} />}
@@ -360,7 +362,7 @@ function App() {
                 </details>;
               })}
             </>}
-            {tab === "history" && <div className="history-list">{history.map((entry) => <article key={entry.revision}><span className="history-dot" /><div><strong>Revision {entry.revision}</strong><p>{entry.reason}</p></div></article>)}</div>}
+            {tab === "history" && <ProjectActivityFeed key={`${project.id}:${epicID}`} projectID={project.id} feature={epicID} updateToken={`${project.revision}:${data.execution.version}:${data.jobs.map((job) => `${job.id}:${job.status}`).join(",")}:${data.helpJobs.map((job) => `${job.id}:${job.status}`).join(",")}:${data.submissions.map((item) => `${item.id}:${item.status}`).join(",")}`} request={api} activeFeatureIDs={epics.map((epic) => epic.id)} openFeature={(feature) => { setEpicID(feature); setTab("requirements"); }} />}
             {tab === "research" && <><div className="research-intro"><label><input type="checkbox" checked={!project.model.connectionID && research} disabled={!!project.model.connectionID} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label><p>{project.model.connectionID ? "Direct ChatGPT discovery runs without web research. Existing sources remain available below." : "Search and page retrieval are limited to relevant uncertainties. Sources inform choices; they do not decide your preferences. The round stops if it exceeds the monitored tool budget."}</p></div>{project.research.filter((item) => epicID === "all" || item.epicID === epicID).map((finding) => <article className="requirement-card" key={finding.id}><span className="badge">{finding.kind === "fetched-page" ? "Retrieved page" : "Search-result evidence"}</span><h3><a href={finding.url} target="_blank" rel="noreferrer">{finding.title} ↗</a></h3><p>{finding.finding}</p><small>{new URL(finding.url).hostname} · {new Date(finding.retrievedAt).toLocaleString()}</small><details><summary>Source excerpt</summary><p className="source-excerpt">{finding.excerpt}</p></details></article>)}{!project.research.length && <div className="empty-card"><h3>No sources collected yet.</h3><p>{project.model.connectionID ? "Web research is not yet available for direct ChatGPT connections." : "Enable research and explore a concrete area. Vague ideas may need clarification before external research is useful."}</p></div>}</>}
           </div>
           {tab !== "discover" && <aside className="insight-column">
@@ -376,7 +378,7 @@ function App() {
       </>}
       </div>
     </main>
-  </div>;
+  </div></ActionScope>;
 }
 
 function areaTitle(epic?: Project["epics"][number]) {
@@ -398,20 +400,30 @@ function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, h
     finally { explanationInFlight.current = false; setExplaining(false); }
   }
   const annotated = (text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => <AnnotatedText text={text} concepts={question.concepts?.filter((c) => c.field === field && c.optionIndex === optionIndex)} onExplain={explain} onCancel={help.cancel} busy={explaining || help.busy} jobs={help.jobs.filter((job) => job.helpRequest?.questionID === question.id)} revision={help.revision} />;
+  const render = () => {
   return <article className={`question-card ${expanded ? "expanded" : "collapsed"}`}><div className="question-meta"><span>{area}{question.category ? ` · ${dimensionLabels[question.category]}` : ""}</span><span role="status">{status ?? (question.status === "pending" ? "To answer" : question.status === "answered" ? "Answered" : question.status)}</span></div><div className="question-title"><h3 aria-label={question.text}>{expanded ? annotated(question.text, "text") : <button aria-expanded={false} onClick={onToggle}>{question.text}</button>}</h3>{expanded && currentQuestion ? <span className="quiet">Current question</span> : <button className="quiet" aria-expanded={expanded} onClick={onToggle}>{expanded ? "Collapse" : initialText ? "Edit answer" : "Answer"}</button>}</div>{!expanded && initialText && <p className="answer-preview">{initialText}</p>}{expanded && <div className="question-body"><p>{annotated(question.whyItMatters, "whyItMatters")}</p>{purpose && <details className="question-context"><summary>About this feature</summary><p>{purpose}</p></details>}{status === "processing" && <p className="correction-hint">This response is being reviewed. A correction will be saved for the next round.</p>}{status === "queued" && <p className="correction-hint">Saving changes replaces this waiting response. Its earlier version stays in history.</p>}<div className="options">{question.options.map((option, index) => <div className={`option ${kind === "answer" && text === option.label ? "chosen" : ""}`} key={index}><span className="option-circle">{String.fromCharCode(65 + index)}</span><div className="option-copy"><strong>{annotated(option.label, "label", index)}</strong><small>{annotated(option.consequence, "consequence", index)}</small></div><button type="button" className="option-choose" aria-label={`Choose ${option.label}. ${option.consequence}`} aria-pressed={kind === "answer" && text === option.label} disabled={disabled} onClick={() => { setKind("answer"); setText(option.label); onDraft({ kind: "answer", text: option.label }); }}>{kind === "answer" && text === option.label ? "✓ Selected" : "Choose"}</button></div>)}</div>
     {disabled && <ActivityFeedback label="Saving response…" />}
     <p className="word-help-hint">Unclear wording? Click any word, then ? to ask what it means. Underlined concepts explain instantly.</p>
     <QuestionHelp questionID={question.id} help={help} reveal={helpReveal} requesting={explaining} />
-    <form onSubmit={(event) => { event.preventDefault(); if (!disabled) void onSave(kind, text); }}><label className="sr-only">Your answer to {question.text}</label><textarea aria-label={`Your answer to ${question.text}`} value={text} onChange={(event) => updateText(event.target.value)} rows={2} maxLength={12000} placeholder={kind === "delegation" ? "Describe exactly which choice the AI may make, and its limits…" : kind === "deferral" ? "What should remain open, and why?" : "Choose an option above, or write it in your own words…"} required /><div className="answer-actions"><select aria-label={`Response type for ${question.text}`} value={kind} disabled={disabled} onChange={(event) => updateKind(event.target.value as typeof kind)}><option value="answer">My answer</option><option value="deferral">Defer for now</option><option value="delegation">Delegate within limits</option></select><button type="button" className="quiet" disabled={disabled} onClick={() => { setText(initialText ?? ""); setKind(initialKind ?? "answer"); onCancel(); }}>Cancel</button>{onDismiss && <button type="button" className="quiet" disabled={disabled || dismissDisabled} onClick={() => void onDismiss()} aria-label={`Dismiss unrelated question: ${question.text}`}>Unrelated / dismiss</button>}<button className="primary" disabled={disabled || !text.trim()}>{initialText ? "Save changes →" : "Save response →"}</button></div>{kind === "delegation" && <small className="delegation-note">Delegation records permission within your stated limits. It does not turn this text into a confirmed product preference.</small>}</form></div>}
+    <form onSubmit={(event) => { event.preventDefault(); if (!disabled && text.trim()) void onSave(kind, text); }}>
+      <label className="sr-only">Your answer to {question.text}</label><textarea aria-label={`Your answer to ${question.text}`} value={text} onChange={(event) => updateText(event.target.value)} rows={2} maxLength={12000} placeholder={kind === "delegation" ? "Describe exactly which choice the AI may make, and its limits…" : kind === "deferral" ? "What should remain open, and why?" : "Choose an option above, or write it in your own words…"} required />
+      <div className="answer-actions"><select aria-label={`Response type for ${question.text}`} value={kind} disabled={disabled} onChange={(event) => updateKind(event.target.value as typeof kind)}><option value="answer">My answer</option><option value="deferral">Defer for now</option><option value="delegation">Delegate within limits</option></select>
+        <button type="button" className="quiet" disabled={disabled} onClick={() => { setText(initialText ?? ""); setKind(initialKind ?? "answer"); onCancel(); }}>Cancel</button>
+        {onDismiss && <button type="button" className="quiet" disabled={disabled || dismissDisabled} onClick={() => void onDismiss()} aria-label={`Dismiss unrelated question: ${question.text}`}>Unrelated / dismiss</button>}
+        <button className="primary" title={!disabled && !text.trim() ? "Choose an option or write a response first." : undefined} disabled={disabled || !text.trim()}>{initialText ? "Save changes →" : "Save response →"}</button></div>
+      {kind === "delegation" && <small className="delegation-note">Delegation records permission within your stated limits. It does not turn this text into a confirmed product preference.</small>}
+    </form></div>}
   </article>;
+  };
+  return <ActionScope reason={disabled ? "Your response is being saved. Wait for it to finish." : undefined}>{render()}</ActionScope>;
 }
 function ReviewForm({ disabled, onReview }: { disabled: boolean; onReview: (action: "accepted" | "rejected", note: string) => Promise<void> }) {
   const [note, setNote] = useState("");
-  return <div className="review-form"><label>Review rationale (optional)<input maxLength={12000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Anything to add or change?" /></label><div className="button-row"><button className="secondary" disabled={disabled} onClick={() => void onReview("accepted", note)}>Confirm requirement</button><button className="quiet" disabled={disabled} onClick={() => void onReview("rejected", note)}>Reject</button></div></div>;
+  return <ActionScope reason="This review is being saved or already waiting for processing."><div className="review-form"><label>Review rationale (optional)<input maxLength={12000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Anything to add or change?" /></label><div className="button-row"><button className="secondary" disabled={disabled} onClick={() => void onReview("accepted", note)}>Confirm requirement</button><button className="quiet" disabled={disabled} onClick={() => void onReview("rejected", note)}>Reject</button></div></div></ActionScope>;
 }
 function EpicForm({ disabled, onSave, title: initialTitle = "", purpose: initialPurpose = "" }: { disabled: boolean; title?: string; purpose?: string; onSave: (title: string, purpose: string) => Promise<void> }) {
   const [title, setTitle] = useState(initialTitle); const [purpose, setPurpose] = useState(initialPurpose);
-  return <form className="epic-form" onSubmit={(event) => { event.preventDefault(); void onSave(title, purpose); }}><label>Feature name<input required value={title} onChange={(event) => setTitle(event.target.value)} maxLength={150} /></label><label>Purpose<textarea required value={purpose} onChange={(event) => setPurpose(event.target.value)} maxLength={4000} rows={3} /></label><button className="secondary" disabled={disabled}>{initialTitle ? "Save feature" : "Add feature"}</button></form>;
+  return <ActionScope><form className="epic-form" onSubmit={(event) => { event.preventDefault(); if (!disabled) void onSave(title, purpose); }}><label>Feature name<input required value={title} onChange={(event) => setTitle(event.target.value)} maxLength={150} /></label><label>Purpose<textarea required value={purpose} onChange={(event) => setPurpose(event.target.value)} maxLength={4000} rows={3} /></label><button className="secondary" disabled={disabled}>{initialTitle ? "Save feature" : "Add feature"}</button></form></ActionScope>;
 }
 function Evidence({ id, project }: { id: string; project: Project }) {
   const source = project.sources.find((item) => item.id === id);

@@ -1,4 +1,7 @@
 import Database from "better-sqlite3";
+import { activityPage, activitySnapshot, saveActivity } from "./activity.js";
+import { revisionActivity, jobActivity, submissionActivity, executionActivities, type ActivityQuery } from "../core/project-activity.js";
+import { discoveryBlockReason, executionBlockReason, OperationConflictError } from "../core/operations.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { z } from "zod";
@@ -12,7 +15,7 @@ import { applyRound } from "../core/round.js";
 import { reviewRefinement } from "../core/refinement.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
-import { reviewFingerprint, answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
+import { reviewFingerprint, validateRequirementEvidence, answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
   submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type ScanWork, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
 
 /** Also used on a disposable project copy before accepting a batch checkpoint. */
@@ -101,12 +104,14 @@ export class ProjectStore {
   saveExecution(id: string, state: ExecutionState, owner?: string) {
     if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution data format. Refresh before saving.");
     this.db.transaction(() => {
+      if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
       const live = this.db.prepare("SELECT owner FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()) as { owner: string } | undefined;
       if (live && live.owner !== owner || owner && !live) throw new Error("Implementation worker lease changed or expired.");
       if (this.execution(id).version !== state.version) throw new Error("Implementation state changed. Refresh before continuing.");
       const next = { ...state, version: state.version + 1 };
       this.db.prepare("INSERT INTO execution_state VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET version = excluded.version, payload = excluded.payload")
         .run(id, next.version, JSON.stringify(next));
+      for (const entry of executionActivities(next, this.get(id), (revision) => activitySnapshot(this.db, id, revision))) saveActivity(this.db, id, entry);
       this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(id);
       state.version = next.version;
     }).immediate();
@@ -114,6 +119,7 @@ export class ProjectStore {
 
   claimExecution(id: string, resource: string, owner: string) {
     this.db.transaction(() => {
+      if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
       if (this.db.prepare("SELECT 1 FROM execution_leases WHERE (resource = ? OR project_id = ?) AND lease_until > ?").get(resource, id, Date.now())) throw new Error("This project or repository already has an active implementation worker.");
       this.db.prepare("DELETE FROM execution_leases WHERE resource = ? OR project_id = ?").run(resource, id);
       this.db.prepare("INSERT INTO execution_leases VALUES (?, ?, ?, ?)").run(resource, id, owner, Date.now() + 120_000);
@@ -126,6 +132,22 @@ export class ProjectStore {
 
   releaseExecution(id: string, owner: string) { this.db.prepare("DELETE FROM execution_leases WHERE project_id = ? AND owner = ?").run(id, owner); }
   executionActive(id: string) { return !!this.db.prepare("SELECT 1 FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()); }
+  executionExpired(id: string) { return !!this.db.prepare("SELECT 1 FROM execution_leases WHERE project_id = ? AND lease_until <= ?").get(id, Date.now()); }
+  acknowledgeExpiredExecution(id: string) { this.db.prepare("DELETE FROM execution_leases WHERE project_id = ? AND lease_until <= ?").run(id, Date.now()); }
+
+  discoveryActive(id: string) { return this.jobs(id).some((job) => !job.helpRequest && ["pending", "running"].includes(job.status) && (job.leaseUntil ?? 0) > Date.now()); }
+  assertNoExecution(id: string) { if (this.executionActive(id)) throw new OperationConflictError(executionBlockReason); }
+
+  /** Upgrade a startup reservation to the canonical repository resource atomically. */
+  bindExecution(id: string, resource: string, owner: string) {
+    this.db.transaction(() => {
+      const live = this.db.prepare("SELECT owner FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()) as { owner: string } | undefined;
+      if (live?.owner !== owner) throw new Error("Implementation worker lease changed or expired.");
+      if (this.db.prepare("SELECT 1 FROM execution_leases WHERE resource = ? AND owner != ? AND lease_until > ?").get(resource, owner, Date.now())) throw new OperationConflictError("This repository already has an active implementation worker.");
+      this.db.prepare("DELETE FROM execution_leases WHERE resource = ? AND owner != ? AND lease_until <= ?").run(resource, owner, Date.now());
+      this.db.prepare("UPDATE execution_leases SET resource = ? WHERE project_id = ? AND owner = ?").run(resource, id, owner);
+    }).immediate();
+  }
 
   workspace(id: string): Workspace | null {
     const row = this.db.prepare("SELECT payload, dirty FROM workspaces WHERE project_id = ?").get(id) as { payload: string; dirty: number } | undefined;
@@ -168,7 +190,8 @@ export class ProjectStore {
   }
 
   private assertWorkspaceIdle(id: string) {
-    if (this.executionActive(id)) throw new Error("Stop implementation before changing the workspace connection.");
+    this.assertNoExecution(id);
+    if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
     const row = this.db.prepare("SELECT lease_until FROM workspaces WHERE project_id = ?").get(id) as { lease_until: number | null } | undefined;
     if ((row?.lease_until ?? 0) > Date.now()) throw new Error("Workspace is saving. Retry shortly.");
   }
@@ -243,6 +266,15 @@ export class ProjectStore {
       .map((row) => JSON.parse(row.payload) as Submission);
   }
 
+  /** The wake-up loop must not parse every project's specification on each tick. */
+  automaticQueueProjects(): string[] {
+    return (this.db.prepare(`SELECT DISTINCT s.project_id FROM submissions s
+      LEFT JOIN queue_state q ON q.project_id = s.project_id
+      WHERE COALESCE(q.paused, 0) = 0 AND json_extract(s.payload, '$.auto') = 1
+        AND json_extract(s.payload, '$.status') IN ('queued', 'saved')`).all() as { project_id: string }[])
+      .map((row) => row.project_id);
+  }
+
   queuePaused(id: string): boolean {
     return !!(this.db.prepare("SELECT paused FROM queue_state WHERE project_id = ?").get(id) as { paused: number } | undefined)?.paused;
   }
@@ -252,7 +284,13 @@ export class ProjectStore {
   }
 
   saveSubmission(item: Submission) {
-    this.db.prepare("UPDATE submissions SET payload = ? WHERE id = ? AND project_id = ?").run(JSON.stringify(item), item.id, item.projectID);
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE submissions SET payload = ? WHERE id = ? AND project_id = ?").run(JSON.stringify(item), item.id, item.projectID);
+      if (item.status === "needs-attention") {
+        const project = this.get(item.projectID), entry = submissionActivity(item, project);
+        if (entry) saveActivity(this.db, item.projectID, { ...entry, revision: entry.revision ?? project.revision, at: new Date().toISOString(), atLabel: "Recorded" });
+      }
+    })();
   }
 
   enqueue(id: string, raw: unknown): Submission {
@@ -296,6 +334,7 @@ export class ProjectStore {
 
   applyQueued(id: string, submissionIDs?: string[]): Submission[] {
     return this.db.transaction(() => {
+      this.assertNoExecution(id);
       const selected = (item: Submission) => !submissionIDs || submissionIDs.includes(item.id);
       for (const item of this.submissions(id).filter((s) => s.status === "queued" && selected(s))) {
         if (item.applied) { item.status = "saved"; this.saveSubmission(item); continue; }
@@ -360,7 +399,9 @@ export class ProjectStore {
   }
 
   private record(project: Project, reason: string) {
+    const previous = this.db.prepare("SELECT payload FROM revisions WHERE project_id = ? ORDER BY revision DESC LIMIT 1").get(project.id) as { payload: string } | undefined;
     this.db.prepare("INSERT INTO revisions VALUES (?, ?, ?, ?)").run(project.id, project.revision, reason, JSON.stringify(project));
+    saveActivity(this.db, project.id, { ...revisionActivity(project, previous ? projectSchema.parse(JSON.parse(previous.payload)) : undefined, reason), at: new Date().toISOString(), atLabel: "Recorded" });
     this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(project.id);
     // Nested queue/job transactions must commit before filesystem publication.
     queueMicrotask(() => { if (this.db.open) this.syncWorkspaces(); });
@@ -369,6 +410,15 @@ export class ProjectStore {
   history(id: string) {
     this.get(id);
     return this.db.prepare("SELECT revision, reason FROM revisions WHERE project_id = ? ORDER BY revision DESC").all(id) as Array<{ revision: number; reason: string }>;
+  }
+
+  activity(id: string, query: ActivityQuery = {}) {
+    this.get(id);
+    return this.db.transaction(() => activityPage(this.db, id, query))();
+  }
+
+  activityHead(id: string) {
+    return { latest: (this.db.prepare("SELECT COALESCE(MAX(sequence), 0) AS latest FROM project_activity WHERE project_id = ?").get(id) as { latest: number }).latest };
   }
 
   note(id: string, revision: number, text: string, epicID = "project") {
@@ -424,6 +474,7 @@ export class ProjectStore {
 
   private mutate(id: string, expectedRevision: number, reason: string, change: (project: Project) => void): Project {
     return this.db.transaction(() => {
+      this.assertNoExecution(id);
       const project = this.get(id);
       if (project.revision !== expectedRevision) throw new StaleRevisionError();
       change(project);
@@ -487,11 +538,12 @@ export class ProjectStore {
 
   beginJob(id: string, revision: number, helpRequest?: QuestionHelpRequest, scan = false): { project: Project; job: Job } {
     return this.db.transaction(() => {
+      this.recoverExpiredJobs();
       const project = this.get(id);
       if (project.revision !== revision) throw new StaleRevisionError();
       if (!helpRequest) {
-        const active = this.jobs(id).filter((j) => !j.helpRequest && (j.status === "pending" || (j.status === "running" && (j.leaseUntil ?? 0) > Date.now())));
-        if (active.some((j) => scan || j.kind === "scan")) throw new Error("This project already has active work. Wait or stop it before scanning/discovery.");
+        this.assertNoExecution(id);
+        if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
       }
       if (helpRequest) {
         helpRequest = questionHelpRequestSchema.parse(helpRequest);
@@ -499,7 +551,7 @@ export class ProjectStore {
         if (this.jobs(id).some((j) => j.helpRequest && (j.status === "pending" || (j.status === "running" && (j.leaseUntil ?? 0) > Date.now())))) throw new Error("This project already has an active question-help request.");
       }
       const job: Job = { id: randomUUID(), projectID: id, expectedRevision: revision,
-        status: "pending", model: project.model, leaseUntil: null, ...(helpRequest ? { helpRequest } : {}), ...(scan ? { kind: "scan" as const } : {}) };
+        status: "pending", model: project.model, leaseUntil: Date.now() + 360_000, ...(helpRequest ? { helpRequest } : {}), ...(scan ? { kind: "scan" as const } : {}) };
       this.db.prepare("INSERT INTO jobs VALUES (?, ?, ?)").run(job.id, id, JSON.stringify(job));
       return { project, job };
     }).immediate();
@@ -519,13 +571,19 @@ export class ProjectStore {
   }
 
   private saveJob(job: Job) {
-    this.db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(job), job.id);
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(job), job.id);
+      if (["failed", "cancelled", "interrupted", "stale"].includes(job.status)) {
+        const entry = jobActivity(job, activitySnapshot(this.db, job.projectID, job.expectedRevision));
+        if (entry) saveActivity(this.db, job.projectID, { ...entry, at: new Date().toISOString(), atLabel: "Recorded" });
+      }
+    })();
   }
 
   claimJob(id: string, leaseUntil: number) {
     this.db.transaction(() => {
       const job = this.getJob(id);
-      if (job.status !== "pending" || leaseUntil <= Date.now()) throw new Error("Job cannot be claimed.");
+      if (job.status !== "pending" || (job.leaseUntil ?? 0) <= Date.now() || leaseUntil <= Date.now()) throw new Error("Job cannot be claimed.");
       job.status = "running";
       job.leaseUntil = leaseUntil;
       this.saveJob(job);
@@ -692,7 +750,11 @@ export class ProjectStore {
             } else if (!job.context?.includedIDs.includes(change.requirementID)) throw new Error("Cannot change a requirement outside detailed context.");
           }
           if (project.scans.length && result.questions.some((q) => !q.evidenceIDs?.length || q.evidenceIDs.some((evidenceID) => !job.context?.includedIDs.includes(evidenceID)))) throw new Error("Existing-project questions must cite evidence in the current detailed working context. No proposals applied.");
-          if (job.context && result.requirements.some((item) => item.sourceIDs.some((id) => !job.context!.includedIDs.includes(id)))) throw new Error("Requirement cites evidence outside this round's context.");
+          validateRequirementEvidence(project, result.requirements);
+          for (const [index, item] of result.requirements.entries()) {
+            const missing = job.context && item.sourceIDs.find((sourceID) => !job.context!.includedIDs.includes(sourceID));
+            if (missing) throw new Error(`Requirement ${index + 1} cites evidence ${JSON.stringify(missing)} outside this round's context. No proposals were applied; saved submissions are retained.`);
+          }
           if (job.context && result.assessments?.some((item) =>
             (!item.epicID.startsWith("new:") && job.context!.epicIDs && !job.context!.epicIDs.includes(item.epicID)) ||
             item.checks.some((check) => check.evidenceIDs.some((id) => !id.startsWith("new:") && !job.context!.includedIDs.includes(id))))) {
@@ -771,7 +833,7 @@ export class ProjectStore {
       let recovered = 0;
       for (const row of this.db.prepare("SELECT payload FROM jobs").all() as Array<{ payload: string }>) {
         const job = JSON.parse(row.payload) as Job;
-        if (job.status === "running" && (job.leaseUntil ?? 0) <= now) {
+        if (["pending", "running"].includes(job.status) && (job.leaseUntil ?? 0) <= now) {
           job.status = "interrupted";
           job.leaseUntil = null;
           job.diagnostic = "Worker lease expired. Retry explicitly; no automatic duplicate model call.";

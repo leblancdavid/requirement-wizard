@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { reviewFingerprint, type Project, type Submission } from "../core/model.js";
+import { ActionButton, ActionScope } from "./action-button.js";
 
 export function pendingReviews(project: Project, submissions: Submission[]) {
   const waiting = new Set(submissions.filter((s) => s.input.type === "review" && ["queued", "saved", "processing"].includes(s.status)).map((s) => s.input.type === "review" ? s.input.requirementID : ""));
@@ -23,10 +24,10 @@ export function reviewItems(project: Project, submissions: Submission[], filter:
 
 const requirementStatus = (status: Project["requirements"][number]["status"]) => ({ accepted: "Approved", rejected: "Rejected", proposed: "Proposed", "needs-review": "Needs review" })[status];
 
-export function ReviewQueue({ project, submissions, epicID, sending, submit, disabled, refine, reviewRefinement }: {
+export function ReviewQueue({ project, submissions, epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement }: {
   project: Project; submissions: Submission[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
-  disabled: boolean; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
+  disabled: boolean; disabledReason?: string; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
 }) {
   const [filter, setFilter] = useState<ReviewFilter>("pending");
   const [expanded, setExpanded] = useState<string | null | undefined>(undefined);
@@ -50,10 +51,10 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
     setExpanded((visible[index + 1] ?? visible.find((item) => item.id !== id))?.id);
     focusNext.current = true;
   };
-  return <section aria-label="Requirement review">
+  return <ActionScope reason={disabledReason}><section aria-label="Requirement review">
     <div className="review-toolbar">
       <p className="view-intro">Review new requirements, revisions, and refinement proposals one item at a time. A refinement keeps current wording active until you approve its replacement.</p>
-      <button className="secondary" disabled={disabled} onClick={refine}>Refine requirements</button>
+      <ActionButton className="secondary" disabled={disabled} onClick={refine}>Refine requirements</ActionButton>
     </div>
     <div className="filter-row" aria-label="Review filters">{([ ["pending", "To review", pending.length], ["refinements", "Refinements", refinements.length], ["submitted", "Submitted", submitted.length], ["reviewed", "Reviewed", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { setFilter(key); setExpanded(undefined); }}>{label} <span>{count}</span></button>)}</div>
     {message && <p className="save-notice" role="status">{message}</p>}
@@ -83,7 +84,7 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
             <details><summary>Supporting evidence</summary>{p.original.sourceIDs.map((id) => <p className="source-excerpt" key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
             {stale && <p role="status">The requirement changed. Keep current wording to dismiss this outdated suggestion, then refine again for current wording.</p>}
             {pending && waiting && <p role="status">Finish the pending requirement review before approving this refinement.</p>}
-            {pending ? <div className="button-row"><button className="primary" disabled={disabled || stale || waiting} onClick={() => void save(true)}>Approve refinement</button><button className="secondary" disabled={disabled} onClick={() => void save(false)}>Keep current wording</button></div>
+            {pending ? <div className="button-row"><ActionButton className="primary" disabled={disabled || stale || waiting} reason={disabled ? undefined : stale ? "The requirement changed. Keep current wording to dismiss this outdated proposal, then refine again." : "Finish the pending requirement review before approving this refinement."} onClick={() => void save(true)}>Approve refinement</ActionButton><ActionButton className="secondary" disabled={disabled} onClick={() => void save(false)}>Keep current wording</ActionButton></div>
               : <p className="save-notice">{p.status === "accepted" ? "This replacement was approved. Later requirement decisions may have changed its wording." : "This refinement was dismissed; the active requirement was kept unchanged by this decision."}</p>}
           </div>}
         </article>;
@@ -109,7 +110,7 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
           {r.reviewNote && <p>{r.reviewNote}</p>}{response && <p className="save-notice"><strong>AI response:</strong> {response}</p>}
           <label>Anything to add? (optional)<textarea rows={3} maxLength={12000} value={draft?.note ?? ""} onChange={(event) => setDrafts((current) => ({ ...current, [r.id]: { note: event.target.value, fingerprint: current[r.id]?.fingerprint ?? fingerprint } }))} placeholder="I approve this, but we also need to consider…" /></label>
           {changed && <p role="alert">This requirement changed while you were writing. Your note is retained. Read the updated wording, then <button className="quiet" onClick={() => setDrafts((current) => ({ ...current, [r.id]: { note: draft!.note, fingerprint } }))}>Use note with updated requirement</button>.</p>}
-          <div className="button-row"><button className="primary" disabled={blocked} onClick={() => void save("accepted")}>Approve</button><button className="secondary" disabled={blocked} onClick={() => void save("rejected")}>Reject</button></div>
+          <div className="button-row"><ActionButton className="primary" disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton><ActionButton className="secondary" disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : "This review is being saved or is already waiting for processing."} onClick={() => void save("rejected")}>Reject</ActionButton></div>
         </div>}
       </article>;
     })}</div>
@@ -119,5 +120,5 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
       const response = s.response;
       return <article className="requirement-card" key={s.id}><span className={`badge ${s.status}`}>{s.status === "needs-attention" && s.contextBlock ? "Context blocked" : s.status}</span><h3>{s.input.requirementText}</h3><p>{s.input.action === "accepted" ? "Approved" : "Rejected"}{s.input.note ? ` — ${s.input.note}` : ""}</p>{response && <p><strong>AI response:</strong> {response}</p>}{s.status === "completed" && !response && <p>Follow-up saved. See Latest changes and the Project map.</p>}{s.status === "saved" && <p>Decision saved. Use Explore next gaps to process follow-up.</p>}{s.diagnostic && <p role="status">{s.diagnostic} {s.conflict ? "Return to To review or Reviewed to submit against the current requirement." : s.contextBlock ? "Review the feature's context scope in Project map, then resume to recheck. Your decision is retained." : "Use Resume discovery to retry follow-up; your decision is retained."}</p>}</article>;
     })}
-  </section>;
+  </section></ActionScope>;
 }

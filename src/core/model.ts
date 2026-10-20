@@ -197,25 +197,44 @@ export class StaleRevisionError extends Error {
   constructor() { super("Project changed. Refresh it before retrying; no newer decisions were overwritten."); }
 }
 
+/** A source may be relevant history without authorizing a new requirement. */
+function requirementEvidenceIssues(project: Project): Map<string, string | undefined> {
+  const superseded = new Set(project.sources.flatMap((source) => source.supersedes ? [source.supersedes] : []));
+  const accepted = new Set(project.requirements.filter((item) => item.status === "accepted").flatMap((item) => item.sourceIDs));
+  return new Map(project.sources.map((source) => {
+    const issue = superseded.has(source.id) ? "superseded source; historical evidence cannot authorize new requirements"
+      : ["initial", "note", "answer", "workspace"].includes(source.kind) || source.kind === "rejection" && source.requirementID
+        || source.kind === "confirmation" && accepted.has(source.id) ? undefined
+      : source.kind === "delegation" ? "delegated choice; permission is not a resolved product decision"
+      : source.kind === "deferral" ? "deferred decision; the choice remains unresolved"
+      : "review source does not support a currently accepted requirement";
+    return [source.id, issue];
+  }));
+}
+
+export function requirementEvidenceIDs(project: Project): string[] {
+  return [...requirementEvidenceIssues(project)].filter(([, issue]) => !issue).map(([id]) => id);
+}
+
+export function validateRequirementEvidence(project: Project, requirements: Analysis["requirements"]) {
+  const issues = requirementEvidenceIssues(project);
+  for (const [index, item] of requirements.entries()) {
+    const seen = new Set<string>();
+    for (const id of item.sourceIDs) {
+      const issue = seen.has(id) ? "duplicate source ID" : issues.has(id) ? issues.get(id) : "missing source (question, requirement and research IDs are not source IDs)";
+      if (issue) throw new Error(`Requirement ${index + 1}${item.localID ? ` (${item.localID})` : ""} cites invalid evidence ${JSON.stringify(id)}: ${issue}. No proposals were applied; saved submissions are retained.`);
+      seen.add(id);
+    }
+  }
+}
+
 export function validateAnalysisReferences(project: Project, result: Analysis) {
   const knownEvidence = new Set([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => r.id));
   for (const question of result.questions) {
     validateConcepts(question);
     if (question.evidenceIDs?.some((id) => !knownEvidence.has(id))) throw new Error("Question references missing project evidence.");
   }
-  const superseded = new Set(project.sources.flatMap((item) => item.supersedes ? [item.supersedes] : []));
-  const normative = new Set(project.sources.filter((item) => {
-    if (superseded.has(item.id)) return false;
-    if (["initial", "note", "answer", "workspace"].includes(item.kind)) return true;
-    if (item.kind === "rejection" && item.requirementID) return true;
-    return item.kind === "confirmation" && project.requirements.some((requirement) =>
-      requirement.status === "accepted" && requirement.sourceIDs.includes(item.id));
-  }).map((item) => item.id));
-  for (const item of result.requirements) {
-    if (new Set(item.sourceIDs).size !== item.sourceIDs.length || item.sourceIDs.some((id) => !normative.has(id))) {
-      throw new Error("Requirement references missing, deferred, delegated, or superseded human evidence.");
-    }
-  }
+  validateRequirementEvidence(project, result.requirements);
   const retired = new Set<string>();
   for (const item of result.retireQuestions) {
     const question = project.questions.find((question) => question.id === item.questionID);

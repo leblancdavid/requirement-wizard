@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { appearanceKey, applyAppearance, contrast, defaultAppearance, fonts, loadAppearance, paletteFor, parseAppearance, themes, type Appearance, type Palette } from "./appearance.js";
+import { ActionScope } from "./action-button.js";
 
 // Apply before the first React render, including when opening directly into a workspace.
 applyAppearance(loadAppearance());
@@ -23,7 +24,7 @@ export function AppearanceSettings() {
   }
   const palette = paletteFor(value);
   const lowContrast = Math.min(contrast(palette.text, palette.background), contrast(palette.text, palette.surface)) < 4.5;
-  return <section className="appearance-settings" aria-labelledby="appearance-heading">
+  return <ActionScope reason="The custom theme is already selected. Edit its colors below."><section className="appearance-settings" aria-labelledby="appearance-heading">
     <div className="appearance-heading"><div><h2 id="appearance-heading">Appearance</h2><p>Make this workspace yours. Changes apply instantly to all projects on this device.</p></div><button type="button" className="secondary" onClick={() => update(structuredClone(defaultAppearance))}>Reset appearance</button></div>
     {(["light", "dark"] as const).map((mode) => <fieldset key={mode} className="theme-fieldset"><legend>{mode === "light" ? "Light themes" : "Dark themes"}</legend><div className="theme-grid">{themes.filter((item) => item.mode === mode).map((item) => <button key={item.id} type="button" className="theme-card" aria-pressed={value.theme === item.id} aria-label={`${item.name} theme`} onClick={() => update({ ...value, theme: item.id })}>
       <span className="theme-preview" aria-hidden="true" style={{ "--preview-bg": item.palette.background, "--preview-surface": item.palette.surface, "--preview-text": item.palette.text, "--preview-accent": item.palette.accent } as CSSProperties}><span className="preview-sidebar" /><span className="preview-content"><span /><span /><i /></span></span><span>{item.name}<span aria-hidden="true">{value.theme === item.id ? " ✓" : ""}</span></span>
@@ -33,5 +34,5 @@ export function AppearanceSettings() {
     <div className="typography-controls"><label>Interface font<select aria-label="Interface font" value={value.font} onChange={(event) => update({ ...value, font: event.target.value as Appearance["font"] })}>{Object.entries(fonts).map(([id, font]) => <option key={id} value={id}>{font.name}</option>)}</select><small>Uses fonts installed on your device, with local fallbacks.</small></label><label>Text size <output htmlFor="appearance-size">{value.size}px</output><input id="appearance-size" aria-label="Text size" type="range" min={12} max={20} step={1} value={value.size} onChange={(event) => update({ ...value, size: Number(event.target.value) })} /><small>12px · Compact <span>Comfortable · 20px</span></small></label></div>
     <div className="appearance-sample"><strong>Your next idea starts here.</strong><p>A comfortable space to explore questions and shape your project.</p><span className="badge accepted">Confirmed</span> <span className="badge needs-review">Needs review</span></div>
     {storageError && <p role="status">Appearance changed for this session, but browser storage is unavailable. It could not be saved for next time.</p>}
-  </section>;
+  </section></ActionScope>;
 }

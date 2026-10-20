@@ -74,15 +74,18 @@ export class ImplementationService {
     if (!this.store.workspace(id)) throw new Error("Connect a local Git workspace first.");
     if (!this.store.execution(id).config) throw new Error("Save implementation settings first.");
     if (operation !== "continue" && !eligibleRequirements(this.store.get(id)).some((r) => (!scope.epicID || r.epicID === scope.epicID) && (!scope.requirementID || r.id === scope.requirementID))) throw new Error("No approved requirements in the selected scope. Approve requirements in Review or choose another feature before assessing.");
+    const owner = randomUUID();
+    this.store.claimExecution(id, `startup:${id}`, owner);
     const controller = new AbortController();
-    const promise = this.perform(id, revision, operation, scope, controller.signal, options.force ?? false, options.preview ?? false);
+    const promise = this.perform(id, revision, operation, scope, controller.signal, options.force ?? false, options.preview ?? false, owner);
     this.work.set(id, { controller, promise, operation });
-    void promise.finally(() => this.work.delete(id)).catch(() => {});
+    void promise.catch(() => this.store.pauseQueue(id, true))
+      .finally(() => { this.store.releaseExecution(id, owner); this.work.delete(id); }).catch(() => {});
   }
   isActive(id: string) { return this.work.has(id) || this.store.executionActive(id); }
   operation(id: string) { return this.work.get(id)?.operation; }
-  private async perform(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope, signal: AbortSignal, force: boolean, preview: boolean) {
-    const owner = randomUUID(); let claimed = false, timer: ReturnType<typeof setInterval> | undefined;
+  private async perform(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope, signal: AbortSignal, force: boolean, preview: boolean, owner: string) {
+    let timer: ReturnType<typeof setInterval> | undefined;
     let state = this.store.execution(id);
     const binding = this.store.workspace(id)!;
     const git = this.gitFactory(binding.path, state.config!, signal);
@@ -94,7 +97,7 @@ export class ImplementationService {
     });
     let assessmentRun = operation === "continue" ? undefined : newAssessmentRun(operation === "check" ? "assess" : operation);
     let localSummary = "";
-    const save = () => { signal.throwIfAborted(); this.store.saveExecution(id, state, claimed ? owner : undefined); };
+    const save = () => { signal.throwIfAborted(); this.store.saveExecution(id, state, owner); };
     const current = () => {
       signal.throwIfAborted();
       if (this.store.workspace(id)?.bindingID !== binding.bindingID) throw new Error(operation === "continue"
@@ -109,6 +112,8 @@ export class ImplementationService {
       save();
     };
     try {
+      if (project.revision !== revision) throw new StaleRevisionError();
+      timer = setInterval(() => { try { this.store.renewExecution(id, owner); } catch { this.stop(id); } }, 30_000);
       if (assessmentRun) {
         state.assessmentRuns = [...(state.assessmentRuns ?? []).slice(-19), assessmentRun];
         state.assessmentStatus = `Starting ${assessmentRun.operation === "assess" ? "workspace assessment" : "main verification"} for ${requirements.length} approved requirements…`;
@@ -116,9 +121,8 @@ export class ImplementationService {
       }
       // Claim before fetching/creating worktrees. Canonical common-dir serializes linked workspaces too.
       const resource = await git.git(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-      this.store.claimExecution(id, directoryKey(resource), owner); claimed = true;
+      this.store.bindExecution(id, directoryKey(resource), owner);
       if (this.store.execution(id).version !== state.version) throw new Error("Implementation settings changed during startup. Retry.");
-      timer = setInterval(() => { try { this.store.renewExecution(id, owner); } catch { this.stop(id); } }, 30_000);
       current();
       if (operation !== "continue") {
         const phases: AssessmentRun["operation"][] = operation === "check" ? ["assess", "verify-main"] : [operation];
@@ -398,10 +402,6 @@ export class ImplementationService {
         if (error instanceof ExecutionContextError) assessmentRun.contextBlock = error.context;
         state.assessmentStatus = `${localSummary}${assessmentRun.operation === "assess" ? "Workspace assessment" : "Main verification"} ${assessmentRun.status}: ${assessmentRun.completedIDs.length}/${assessmentRun.requirementIDs.length} requirements assessed. ${message}`;
       }
-      if (!claimed) {
-        try { if (!assessmentRun) state.assessmentStatus = message; this.store.saveExecution(id, state); } catch { /* Another worker owns publication. */ }
-        return;
-      }
       try {
         if (operation !== "continue") { /* Structured assessment outcome was recorded above. */ }
         else if (state.run) {
@@ -413,7 +413,12 @@ export class ImplementationService {
         } else state.assessmentStatus = message;
         this.store.saveExecution(id, state, owner);
       } catch { /* A new owner/version takes precedence. */ }
-    } finally { if (timer) clearInterval(timer); if (claimed) { this.store.releaseExecution(id, owner); this.store.syncWorkspace(id); } }
+    } finally {
+      if (timer) clearInterval(timer);
+      const unsuccessful = signal.aborted || (assessmentRun ? assessmentRun.status !== "completed" : !state.run || ["failed", "blocked", "interrupted", "paused"].includes(state.run.status));
+      if (unsuccessful && this.store.submissions(id).some((item) => ["queued", "saved"].includes(item.status))) this.store.pauseQueue(id, true);
+      this.store.releaseExecution(id, owner); this.store.syncWorkspace(id);
+    }
   }
   private async assess(project: Project, id: string, git: GitDelivery, scope: Assessment["scope"], signal: AbortSignal, progress: (text: string) => void, captured?: AssessmentCapture, onSession: (id: string) => void = () => {}, onContext: (context: ExecutionContextManifest) => void = () => {}): Promise<Assessment> {
     const r = project.requirements.find((r) => r.id === id)!;

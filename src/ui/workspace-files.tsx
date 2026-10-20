@@ -3,6 +3,7 @@ import type { Project, Job } from "../core/model.js";
 import { implementationNeedsReview } from "../core/implementation.js";
 import type { Workspace } from "../storage/workspace.js";
 import { ActivityFeedback, Spinner, useActivity } from "./activity.js";
+import { ActionScope } from "./action-button.js";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
 type Directories = { path: string; parent: string | null; directories: string[] };
@@ -24,19 +25,19 @@ export function WorkspacePicker({ path, create, onChange, request, disabled, exi
     catch (error) { setError(error instanceof Error ? error.message : "Unable to browse directory."); }
     finally { setLoading(false); }
   }
-  return <div className="workspace-picker">
+  return <ActionScope reason={!disabled && loading ? "Wait for the folder listing or folder picker to finish." : undefined}><div className="workspace-picker">
     <label>Local workspace directory<input value={path} maxLength={4096} disabled={disabled} onChange={(event) => onChange(event.target.value, create)} placeholder="D:\Projects\my-app" /></label>
     <div className="button-row"><button type="button" className="secondary" disabled={disabled || loading} onClick={() => void browse(path || undefined)}>{loading && <Spinner />}Browse folders</button>
       {!existingOnly && <label><input type="checkbox" checked={create} disabled={disabled} onChange={(event) => onChange(path, event.target.checked)} /> Create directory if needed</label>}</div>
     {loading && <ActivityFeedback label="Browsing local folders…" />}
     {error && <p role="alert">{error}</p>}
     {listing && <div className="folder-browser" aria-label="Local folders"><strong>{listing.path}</strong><div className="button-row">
-      <button type="button" disabled={disabled || loading || !listing.parent} onClick={() => void browse(listing.parent!)}>↑ Parent</button>
+      <button type="button" title={!listing.parent ? "This is the top-level folder; there is no parent directory." : loading ? "Wait for the folder listing to finish loading." : undefined} disabled={disabled || loading || !listing.parent} onClick={() => void browse(listing.parent!)}>↑ Parent</button>
       <button type="button" disabled={disabled || loading} onClick={() => { onChange(listing.path, false); setListing(null); }}>Use this folder</button>
       <button type="button" onClick={() => setListing(null)}>Close browser</button></div>
       <div className="folder-list">{listing.directories.map((name) => <button type="button" key={name} disabled={disabled || loading} onClick={() => void browse(`${listing.path.replace(/[\\/]$/, "")}${listing.path.includes("\\") ? "\\" : "/"}${name}`)}>▸ {name}</button>)}{!listing.directories.length && <p>No subdirectories.</p>}</div></div>}
     <small>Requirements and progress are saved under .requirement-wizard in this folder. Git commits are managed in your repo.</small>
-  </div>;
+  </div></ActionScope>;
 }
 
 export function WorkspaceConnection({ project, workspace, request, disabled, run, scanJob }: {
@@ -52,16 +53,16 @@ export function WorkspaceConnection({ project, workspace, request, disabled, run
     try { await run(async () => { await request(`projects/${project.id}/workspace`, body); }); }
     finally { setWorking(false); }
   };
-  return <section className="workspace-connection" aria-label="Project workspace"><h2>Project workspace</h2>
+  return <ActionScope><section className="workspace-connection" aria-label="Project workspace"><h2>Project workspace</h2>
     <p>{workspace ? `${workspace.status === "saved" ? "Saved" : workspace.status === "pending" ? "Saving" : workspace.status === "conflict" ? "Conflict" : "Unavailable"} · Revision ${workspace.savedRevision ?? "not yet saved"} · ${workspace.path}` : "Connect a local folder to automatically save this project's requirements and progress."}</p>
     {workspace?.diagnostic && <p role="status">{workspace.diagnostic}</p>}
     {(working || workspace?.status === "pending") && <ActivityFeedback label="Updating workspace files…" />}
     <WorkspacePicker path={path} create={create} onChange={(value, make) => { setPath(value); setCreate(make); }} request={request} disabled={disabled} />
-    <div className="button-row"><button className="secondary" disabled={disabled || !path.trim()} onClick={() => void action({ operation: "connect", revision: project.revision, path, create })}>{workspace ? "Reconnect workspace" : "Connect workspace"}</button>
+    <div className="button-row"><button className="secondary" title={!disabled && !path.trim() ? "Choose or enter a local folder first." : undefined} disabled={disabled || !path.trim()} onClick={() => void action({ operation: "connect", revision: project.revision, path, create })}>{workspace ? "Reconnect workspace" : "Connect workspace"}</button>
       {workspace && <><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "sync" })}>Retry sync</button><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "disconnect", revision: project.revision })}>Disconnect folder</button></>}</div>
     {workspace && <WorkspaceScan project={project} scanJob={scanJob} disabled={disabled} scan={(resumeJobID) => run(async () => { await request(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); })} />}
     <small>Disconnecting keeps the generated files and all app data. To resolve a conflict, preserve external edits and restore the generated files, or choose a new folder.</small>
-  </section>;
+  </section></ActionScope>;
 }
 
 export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: Project; disabled: boolean; scan: (resumeJobID?: string) => Promise<void>; scanJob?: Job }) {
@@ -74,7 +75,7 @@ export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: P
   }
   const latest = project.scans.at(-1);
   const incomplete = !latest && (project.origin || scanJob) && !["running", "pending"].includes(scanJob?.status ?? "");
-  return <section aria-label="Source initialization" className="insight-card workspace-scan">
+  return <ActionScope reason={!disabled && active ? "A folder scan is already running. Wait for it to finish, or stop it in Processing & queue." : undefined}><section aria-label="Source initialization" className="insight-card workspace-scan">
     <h3>{latest ? "Folder scan" : "Initialize from existing project"}</h3>
     {active && <ActivityFeedback label="Scanning project folder…" completed={progress?.completed} total={progress?.total} />}
     {incomplete && <p role="status"><strong>Initialization incomplete.</strong> {scanJob?.diagnostic ?? "Complete the source scan before exploring gaps."} Existing questions are not a reconstructed baseline.</p>}
@@ -90,7 +91,7 @@ export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: P
       <details><summary>File changes</summary>{latest.changes.map((change) => <p key={change.path}>{change.kind}: {change.path}</p>)}</details>
       <details><summary>Exclusions and omissions</summary>{latest.omitted.map((item) => <p key={item.path}>{item.path}: {item.reason}</p>)}</details>
     </details>}
-  </section>;
+  </section></ActionScope>;
 }
 
 const labels = { "not-started": "Not started", "in-progress": "In progress", blocked: "Blocked", implemented: "Code complete (manual claim)", verified: "Verified (manual assessment)" } as const;
@@ -113,14 +114,14 @@ function ImplementationEditor({ requirement, item, needsReview, disabled, save }
   save: (id: string, value: { status: string; notes: string; evidence: string }) => Promise<void>;
 }) {
   const [status, setStatus] = useState(item?.status ?? "not-started"); const [notes, setNotes] = useState(item?.notes ?? ""); const [evidence, setEvidence] = useState(item?.evidence ?? "");
-  return <details className="implementation-item"><summary>{requirement.statement} <span>{labels[item?.status ?? "not-started"]}{needsReview ? " · Needs review" : ""}</span></summary>
+  return <ActionScope><details className="implementation-item"><summary>{requirement.statement} <span>{labels[item?.status ?? "not-started"]}{needsReview ? " · Needs review" : ""}</span></summary>
     <small>{requirement.id} · Requirements review: {requirement.status}</small>
     {needsReview && <p>The requirement or its review status changed. Review the implementation and save an updated assessment.</p>}
-    <form onSubmit={(event) => { event.preventDefault(); void save(requirement.id, { status, notes, evidence }); }}>
+    <form onSubmit={(event) => { event.preventDefault(); if (!disabled) void save(requirement.id, { status, notes, evidence }); }}>
       <label>Implementation status<select aria-label="Implementation status" disabled={disabled} value={status} onChange={(event) => setStatus(event.target.value as typeof status)}>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label>Implementation notes<textarea maxLength={12000} rows={2} value={notes} disabled={disabled} onChange={(event) => setNotes(event.target.value)} /></label>
       <label>Verification evidence<textarea maxLength={12000} rows={2} value={evidence} required={status === "verified"} disabled={disabled} onChange={(event) => setEvidence(event.target.value)} placeholder="Commands, outcomes, or acceptance scenarios checked" /></label>
-      <button className="secondary" disabled={disabled || status === "verified" && !evidence.trim()}>Save implementation progress</button>
+      <button className="secondary" title={!disabled && status === "verified" && !evidence.trim() ? "Add verification evidence before marking this manually verified." : undefined} disabled={disabled || status === "verified" && !evidence.trim()}>Save implementation progress</button>
     </form>
-  </details>;
+  </details></ActionScope>;
 }

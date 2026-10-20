@@ -450,7 +450,19 @@ try {
   await expect(implementationPanel.getByRole("button", { name: "Check implementation", exact: true })).toBeDisabled();
   await expect(implementationPanel.getByRole("button", { name: "Verify main & refresh delivery", exact: true })).toHaveCount(0);
   await expect(implementationPanel.getByRole("status", { name: "Implementation availability" })).toContainText("Save implementation settings below before assessing");
-  await expect(implementationPanel.getByRole("button", { name: "Check implementation", exact: true })).toHaveAttribute("aria-describedby", "implementation-action-reason");
+  const unavailableCheck = implementationPanel.getByRole("button", { name: "Check implementation", exact: true });
+  await expect(unavailableCheck).toHaveAttribute("aria-describedby", /\S+/);
+  await unavailableCheck.focus();
+  await expect(page.getByRole("tooltip")).toContainText("Save implementation settings below before assessing");
+  await expect(unavailableCheck).toHaveAccessibleDescription(/Save implementation settings below before assessing/);
+  await page.keyboard.press("Escape"); await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await page.getByRole("tab", { name: /Implement/ }).focus();
+  await unavailableCheck.hover(); await expect(page.getByRole("tooltip")).toContainText("Save implementation settings");
+  const disabledBounds = await unavailableCheck.boundingBox(); assert.ok(disabledBounds);
+  await page.touchscreen.tap(disabledBounds.x + disabledBounds.width / 2, disabledBounds.y + disabledBounds.height / 2);
+  await expect(page.getByRole("tooltip")).toBeVisible();
+  assert.equal(store.execution(store.list()[0]!.id).assessmentRuns?.length ?? 0, 0, "Touch on a disabled action cannot launch assessment");
+  await page.mouse.move(0, 0); await page.keyboard.press("Escape");
   await expect(implementationPanel.locator(".feature-group")).toHaveCount(1);
   await expect(implementationPanel.getByLabel("GitHub repository", { exact: true })).toHaveValue("fixture/browser-sample");
   await expect(implementationPanel.getByText("Detected from workspace origin: fixture/browser-sample", { exact: true })).toBeVisible();
@@ -1023,8 +1035,9 @@ try {
        let queueImplementationActive = true, queueHelpActive = true;
        const snapshotRoute = `**/api/projects/${listing.id}`;
        await page.route(snapshotRoute, async (route) => {
-         const response = await route.fetch();
-         await route.fulfill({ response, json: { ...await response.json(), execution: queueState, implementationActive: queueImplementationActive, implementationOperation: "check",
+          const response = await route.fetch();
+          await route.fulfill({ response, json: { ...await response.json(), execution: queueState, implementationActive: queueImplementationActive, implementationOperation: "check",
+            queuePaused: false, submissions: [{ id: "waiting-note", projectID: listing.id, input: { type: "note", epicID: "project", text: "Retained while assessment works" }, auto: true, research: false, applied: false, status: "queued", submittedAt: new Date().toISOString() }],
            helpJobs: [{ id: "queue-help-fixture", projectID: listing.id, expectedRevision: listing.revision, model: listing.model, leaseUntil: null, status: queueHelpActive ? "running" : "cancelled" }] } });
        });
        await page.route(`**/api/projects/${listing.id}/cancel-help`, async (route) => {
@@ -1084,7 +1097,13 @@ try {
         const sharedQueueTrigger = page.locator(".queue-trigger");
        await expect(sharedQueueTrigger).toContainText("2 tasks processing");
        await sharedQueueTrigger.click();
-       const sharedQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+        const sharedQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+        await expect(sharedQueue).toContainText("Responses are saved and waiting for assessment or implementation to finish");
+        const waitingAction = sharedQueue.getByRole("button", { name: "Process waiting answers", exact: true });
+        await expect(waitingAction).toBeDisabled(); await waitingAction.focus();
+        await expect(sharedQueue.getByRole("tooltip")).toContainText("Assessment or implementation is running");
+        await page.keyboard.press("Escape"); await expect(sharedQueue).toBeVisible();
+        await expect(sharedQueue.getByRole("tooltip")).toHaveCount(0);
        await expect(sharedQueue.getByRole("region", { name: "Checking implementation", exact: true })).toContainText("1 / 4 requirements assessed");
        await expect(sharedQueue.getByRole("region", { name: "Question help", exact: true })).toBeVisible();
        await sharedQueue.getByRole("button", { name: "Stop question help", exact: true }).click();
@@ -1118,7 +1137,7 @@ try {
         // Current badges, filters and evidence must all invalidate consistently.
         listing = store.note(listing.id, listing.revision, "New global acceptance constraint", "project");
         await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
-        await expect(listPanel).toContainText("You can keep answering questions during assessment");
+         await expect(listPanel).toContainText("Responses wait in the queue until assessment finishes");
          await listPanel.getByRole("button", { name: "Needs reassessment", exact: true }).click();
          await expectImplementationRows(4);
         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 assessed");
@@ -1178,7 +1197,43 @@ try {
          await expect(listPanel.locator(".feature-group")).toHaveCount(10);
          await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
          console.log(`Large-project check: 500 requirements, ${Math.round(switchMilliseconds)} ms Playwright-observed initial tab switch; collapsed DOM below 500 elements.`);
-         await page.unroute(snapshotRoute);
-         assert.deepEqual(errors, []);
+          await page.unroute(snapshotRoute);
+          // Real paginated activity API with 1,000 routine revisions and meaningful older input.
+          let activityProject = store.create("Activity paging fixture", "Keep useful history", { providerID: "openai", modelID: "fixture" });
+          activityProject = store.organize(activityProject.id, activityProject.revision, [{ type: "upsert", epicID: "activity-files", title: "Activity files", purpose: "Retain work", dependencies: [] }]);
+          for (let index = 0; index < 61; index++) activityProject = store.note(activityProject.id, activityProject.revision, `Activity decision ${index}${index === 0 ? " unique historical needle" : ""}`, "activity-files");
+          for (let index = 0; index < 1000; index++) activityProject = store.setModel(activityProject.id, activityProject.revision, activityProject.model);
+          await page.evaluate((id) => localStorage.setItem("reqwizit-project", id), activityProject.id);
+          await page.reload(); await page.getByRole("tab", { name: "Activity", exact: true }).click();
+          const feed = page.getByRole("region", { name: "Project activity feed", exact: true });
+          await expect(feed.locator(".activity-entry")).toHaveCount(25);
+          await expect(feed.getByRole("navigation").first()).toContainText("Page 1 of 3 · 63 entries");
+          await expect(feed.locator(".activity-comparison")).toHaveCount(0);
+          await feed.getByRole("button", { name: "Older →", exact: true }).first().click();
+          await expect(feed.getByRole("navigation").first()).toContainText("Page 2 of 3");
+          const olderTitles = await feed.locator(".activity-entry").allTextContents();
+          activityProject = store.note(activityProject.id, activityProject.revision, "Arrived while browsing history", "activity-files");
+          await expect(feed.getByRole("button", { name: /New activity available/ })).toBeVisible();
+          assert.deepEqual(await feed.locator(".activity-entry").allTextContents(), olderTitles, "Polling leaves an older page in place");
+          await feed.getByRole("button", { name: /New activity available/ }).click();
+          await expect(feed.getByRole("navigation").first()).toContainText("Page 1 of 3 · 64 entries");
+          await feed.getByLabel("Activity view", { exact: true }).selectOption("all");
+          await expect(feed.getByRole("navigation").first()).toContainText("1,064 entries");
+          await feed.getByLabel("Search activity", { exact: true }).fill("unique historical needle");
+          await feed.getByRole("button", { name: "Search", exact: true }).click();
+          await expect(feed.locator(".activity-entry")).toHaveCount(1);
+          await feed.locator(".activity-entry > details > summary").click();
+          await expect(feed).toContainText("Recorded");
+          await feed.locator(".activity-entry details details > summary").click();
+          await expect(feed.locator(".activity-comparison")).toContainText("unique historical needle");
+          await feed.getByLabel("Activity type", { exact: true }).selectOption("problems");
+          await expect(feed).toContainText("No matching activity.");
+          await feed.getByLabel("Activity type", { exact: true }).selectOption("");
+          await page.getByLabel("Filter by feature", { exact: true }).selectOption("activity-files");
+          await expect(feed.getByRole("navigation").first()).toContainText("63 entries");
+          await page.setViewportSize({ width: 390, height: 844 });
+          assert.equal(await feed.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Activity filters and paging fit mobile width");
+          await page.screenshot({ path: ".reqwizit-state/browser-activity-mobile.png" });
+          assert.deepEqual(errors, []);
    console.log("Browser checks passed: appearance presets, custom colors, fonts/text size, persistence, cross-tab sync, reset, contrast hints, keyboard dropdowns and mobile sizing; local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; Implementation tab count/actions, four delivery strategies, saved settings, matching dark theme and mobile layout; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation; explicit existing-project entry, local identity autofill, preserved manual edits across folders, initialization failure/retry, review-first project map, manual rescan, retained IDs, question dismissal and evidence-grounded replacements, reload and mobile width. Screenshots include .reqwizit-state/browser-implementation{,-dark,-mobile}.png");
 } finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); await rm(scanDirectory, { recursive: true, force: true }); }

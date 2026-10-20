@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Concept, Job, QuestionHelpRequest } from "../core/model.js";
 import { ActivityFeedback, useActivity } from "./activity.js";
+import { ActionScope } from "./action-button.js";
 
 function ConceptTip({ concept }: { concept: Concept }) {
   const id = useId();
@@ -60,7 +61,7 @@ export function AnnotatedText({ text, concepts = [], onExplain, onCancel, busy =
           <button type="button" className="word-help-close" aria-label="Close word explanation" title="Close" onClick={(event) => { event.currentTarget.closest(".explain-word")?.querySelector<HTMLButtonElement>(".word-trigger")?.focus(); setSelected(null); setError(""); }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
           {loading ? <span id={tooltipID} role="tooltip" className="help-loading"><span className="help-spinner" aria-hidden="true" /> Explaining “{part}”…</span>
             : response ? <><span id={tooltipID} role="tooltip" className="word-help-summary"><b>“{part}” in this context</b><span>{tooltipSummary(response.explanation)}</span>{response.assumptions.length > 0 && <small>Assumptions to check — see the full explanation below.</small>}{job && job.expectedRevision !== revision && <small>Earlier project context · revision {job.expectedRevision}</small>}</span><small>Full explanation saved in the help panel below.</small></>
-            : <>{job && <span role="status">{job.status}: {job.diagnostic ?? "Request an explanation again to retry."}</span>}<button type="button" className="word-help-action" disabled={busy} aria-label={`What do you mean by “${part}”?`} title="What do you mean by this?" onClick={() => { setRequesting(start); setError(""); void onExplain(part, text).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not request help. Try again.")).finally(() => setRequesting(null)); }}><span className="word-help-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 8a3 3 0 0 1 6 0c0 2-3 2-3 5" /><path d="M12 17h.01" /></svg></span><span>What do you mean by this?</span></button></>}
+            : <>{job && <span role="status">{job.status}: {job.diagnostic ?? "Request an explanation again to retry."}</span>}<button type="button" className="word-help-action" disabled={busy} aria-label={`What do you mean by “${part}”?`} title={busy ? "Another question-help request is running. Wait for it to finish, or stop the clarification." : "What do you mean by this?"} onClick={() => { setRequesting(start); setError(""); void onExplain(part, text).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not request help. Try again.")).finally(() => setRequesting(null)); }}><span className="word-help-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 8a3 3 0 0 1 6 0c0 2-3 2-3 5" /><path d="M12 17h.01" /></svg></span><span>What do you mean by this?</span></button></>}
           {error && <span role="alert">{error}</span>}
           {loading && job && ["pending", "running"].includes(job.status) && onCancel && <button type="button" className="word-help-cancel" disabled={cancelling} onClick={() => { setCancelling(true); setError(""); void onCancel(job.id).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not cancel explanation. Try again.")).finally(() => setCancelling(false)); }}>{cancelling ? "Cancelling…" : "Canceled"}</button>}
         </span>}
@@ -77,7 +78,7 @@ export function AnnotatedText({ text, concepts = [], onExplain, onCancel, busy =
     cursor = start + concept.phrase.length;
   }
   parts.push(words(text.slice(cursor), cursor));
-  return <span ref={wrapper} onKeyDown={(event) => { if (event.key === "Escape") { setSelected(null); event.stopPropagation(); } }}>{parts}</span>;
+  return <ActionScope reason="A question-help request is running. Wait for it to finish, or stop the clarification."><span ref={wrapper} onKeyDown={(event) => { if (event.key === "Escape") { setSelected(null); event.stopPropagation(); } }}>{parts}</span></ActionScope>;
 }
 
 const actions = [
@@ -111,7 +112,7 @@ export function QuestionHelp({ questionID, help, reveal = 0, requesting = false 
     } catch (error) { setError(error instanceof Error ? error.message : "Could not request help. Try again."); }
     finally { setSending(false); }
   }
-  return <details className="question-help" ref={panel}>
+  return <ActionScope reason="A question-help request is already running. Wait for it to finish, or stop the clarification."><details className="question-help" ref={panel}>
     <summary>Help me with this question</summary>
     <p>Get a simpler explanation or work through the tradeoffs. Your answer stays yours.</p>
     <div className="help-actions">{actions.map(([action, label]) => <button type="button" className="secondary" key={action} disabled={disabled} onClick={() => void request(action)}>{label}</button>)}</div>
@@ -130,7 +131,7 @@ export function QuestionHelp({ questionID, help, reveal = 0, requesting = false 
     {error && <p role="alert" className="job-error">{error}</p>}
     <form onSubmit={(event) => { event.preventDefault(); if (!disabled && message.trim()) void request("follow-up"); }}>
       <label>Ask a follow-up<textarea rows={2} maxLength={4000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="What is unclear, or what would help you decide?" required /></label>
-      <button className="secondary" disabled={disabled || !message.trim()}>Ask for clarification</button>
+      <button className="secondary" title={!disabled && !message.trim() ? "Write your follow-up question first." : undefined} disabled={disabled || !message.trim()}>Ask for clarification</button>
     </form>
-  </details>;
+  </details></ActionScope>;
 }

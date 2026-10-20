@@ -7,6 +7,7 @@ import { reviewFingerprint, StaleRevisionError, type Analysis, type Project } fr
 import { planContext } from "../core/working-set.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { DiscoveryService } from "../service/discovery.js";
+import Database from "better-sqlite3";
 
 const testDirectory = join(process.cwd(), ".reqwizit-state", "tests");
 mkdirSync(testDirectory, { recursive: true });
@@ -24,11 +25,72 @@ export function proposal(project: Project): Analysis {
 function complete(store: ProjectStore, project: Project, result = proposal(project)) {
   const { job } = store.beginJob(project.id, project.revision);
   store.claimJob(job.id, Date.now() + 60_000);
-  store.finishJob(job.id, result);
+  try { store.finishJob(job.id, result); }
+  catch (error) { store.failJob(job.id, "failed", error instanceof Error ? error.message : "Invalid result"); throw error; }
   return store.get(project.id);
 }
 
 const selection = { providerID: "openai", modelID: "example" } as const;
+
+test("legacy pending jobs without a startup lease recover explicitly without changing saved decisions or completed work", () => {
+  const directory = mkdtempSync(join(testDirectory, "legacy-pending-")), path = join(directory, "project.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const project = complete(store, store.create("Legacy pending", "Keep the exact human input", selection));
+    const history = store.history(project.id), completed = store.jobs(project.id)[0]!;
+    const pending = store.beginJob(project.id, project.revision).job;
+    store.enqueue(project.id, { id: "10000000-0000-4000-8000-000000000002", input: { type: "note", epicID: "project", text: "Original queued response" }, auto: true, research: false });
+    store.close();
+    const legacy = new Database(path);
+    try { legacy.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify({ ...pending, leaseUntil: null }), pending.id); }
+    finally { legacy.close(); }
+    store = new ProjectStore(path);
+    assert.equal(store.recoverExpiredJobs(), 1);
+    assert.equal(store.getJob(pending.id).status, "interrupted");
+    assert.deepEqual(store.getJob(completed.id), completed);
+    assert.deepEqual(store.get(project.id), project); assert.deepEqual(store.history(project.id), history);
+    assert.equal(store.submissions(project.id)[0]!.status, "queued");
+    store.close(); store = new ProjectStore(path);
+    assert.equal(store.recoverExpiredJobs(), 0);
+    assert.equal(store.getJob(pending.id).status, "interrupted");
+    assert.deepEqual(store.getJob(completed.id), completed); assert.deepEqual(store.history(project.id), history);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("transactional operation guards protect startup, linked repositories and queued input across connections and reopen", () => {
+  const directory = mkdtempSync(join(testDirectory, "operation-guards-")), path = join(directory, "project.sqlite");
+  let first = new ProjectStore(path), second = new ProjectStore(path);
+  try {
+    const p = first.create("One", "Save work", selection), other = first.create("Two", "Other work", selection);
+    first.claimExecution(p.id, `startup:${p.id}`, "first-worker");
+    assert.throws(() => second.beginJob(p.id, p.revision), /Assessment or implementation is running/);
+    assert.throws(() => second.note(p.id, p.revision, "Do not change a frozen snapshot"), /Assessment or implementation is running/);
+    const input = { id: "10000000-0000-4000-8000-000000000001", input: { type: "note", text: "Keep this queued", epicID: "project" }, auto: true, research: false };
+    second.enqueue(p.id, input);
+    assert.throws(() => second.applyQueued(p.id), /Assessment or implementation is running/);
+    first.bindExecution(p.id, "canonical-common-dir", "first-worker");
+    second.claimExecution(other.id, `startup:${other.id}`, "other-worker");
+    assert.throws(() => second.bindExecution(other.id, "canonical-common-dir", "other-worker"), /repository already/);
+    second.releaseExecution(other.id, "other-worker");
+    first.close(); second.close(); first = new ProjectStore(path); second = new ProjectStore(path);
+    assert.equal(second.executionActive(p.id), true, "Reopening must not steal a live startup/repository lease");
+    assert.equal(second.submissions(p.id)[0]!.input.type, "note");
+    assert.equal(second.submissions(p.id)[0]!.status, "queued");
+    first.releaseExecution(p.id, "wrong-owner"); assert.equal(second.executionActive(p.id), true);
+    first.releaseExecution(p.id, "first-worker");
+    second.applyQueued(p.id); assert.equal(second.get(p.id).sources.at(-1)!.text, "Keep this queued");
+    const discovery = first.beginJob(p.id, first.get(p.id).revision).job;
+    assert.throws(() => second.claimExecution(p.id, "canonical-common-dir", "worker"), /active work/);
+    assert.throws(() => second.beginJob(p.id, first.get(p.id).revision), /active work/);
+    const now = Date.now();
+    assert.equal(second.recoverExpiredJobs(now), 0, "A pending worker's startup lease is live");
+    assert.equal(second.recoverExpiredJobs(now + 400000), 1);
+    assert.equal(first.getJob(discovery.id).status, "interrupted");
+    second.claimExecution(p.id, "canonical-common-dir", "worker"); second.releaseExecution(p.id, "worker");
+    const recovered = first.beginJob(p.id, first.get(p.id).revision).job; first.failJob(recovered.id, "cancelled", "Fixture cleanup");
+    assert.equal(first.get(p.id).sources.filter((s) => s.text === "Keep this queued").length, 1);
+  } finally { first.close(); second.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("queued reviews allow no addendum, are idempotent, and reject changed requirement snapshots", () => {
   const store = new ProjectStore(":memory:");
@@ -302,7 +364,8 @@ test("expired job recovery after reopening does not steal a live lease or accept
   try {
     const project = store.create("Jobs", "Track jobs", selection);
     const old = store.beginJob(project.id, 1).job;
-    const live = store.beginJob(project.id, 1).job;
+    const other = store.create("Other", "An independent project", selection);
+    const live = store.beginJob(other.id, 1).job;
     const now = Date.now();
     store.claimJob(old.id, now + 1_000);
     store.claimJob(live.id, now + 60_000);

@@ -207,9 +207,12 @@ are not reread to validate source evidence. Over-budget genuine evidence/require
 still block explicitly rather than being silently truncated.
 
 Assessment freezes the specification and selected approved requirements when the action
-starts; both local and main phases use that same revision. You can keep answering
-questions while it runs. Unrelated answers do not interrupt assessment or invalidate
-unchanged results. Changes to relevant answers, feature/project notes, requirements or
+starts; both local and main phases use that same revision. You can keep submitting
+answers, notes and reviews while it runs; these wait durably until the worker finishes.
+Storage rejects direct snapshot mutations during execution, including from terminal
+clients and other app processes. Automatic follow-up respects manual pauses; failed,
+cancelled and expired workers require explicit resume for waiting work. Unrelated answers
+do not invalidate unchanged results when subsequently applied. Changes to relevant answers, feature/project notes, requirements or
 dependency guardrails mark affected results **Needs reassessment**; they cannot establish
 current main delivery. Results retain their original specification revision, and the
 completion summary reports outdated results. Run **Check implementation** again to
