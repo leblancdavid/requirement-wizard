@@ -4,10 +4,12 @@ import { ProjectStore } from "../storage/store.js";
 import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext } from "../core/working-set.js";
+import { addRelatedRecordHints } from "../core/similarity.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { refinementContextKey } from "./refinement-tasks.js";
+import { pairQuestions, resolutionContextKey } from "../core/resolution.js";
 import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanWindowTimeout, scanLeaseDuration } from "./scan-batches.js";
 
 export interface DiscoveryAdapter {
@@ -185,7 +187,7 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; helpRequest?: QuestionHelpRequest;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; helpRequest?: QuestionHelpRequest;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
     if (!options.helpRequest) this.assertCanDiscover(projectID);
@@ -197,18 +199,25 @@ export class DiscoveryService {
     const abort = () => controller.abort();
     options.signal?.addEventListener("abort", abort, { once: true });
     const timer = setTimeout(abort, 300_000);
-    const refinementTarget = options.refinementOnly ? project.requirements.find((r) => options.recordIDs?.length
+    const refinementTarget = options.refinementOnly && !options.refinementPair ? project.requirements.find((r) => options.recordIDs?.length
       ? options.recordIDs.includes(r.id) : !options.focusEpicID || r.epicID === options.focusEpicID) : undefined;
     try {
       options.onJob?.(job);
       const question = options.helpRequest ? project.questions.find((q) => q.id === options.helpRequest!.questionID)! : undefined;
-      if (options.refinementOnly && !refinementTarget) throw new Error("No requirement available for refinement in this scope.");
+      const pair = options.refinementPair;
+      if (pair && (!options.refinementOnly || options.helpRequest || new Set(pair).size !== 2 || pair.some((id) => !project.requirements.some((r) => r.id === id && r.status === "accepted" && project.epics.some((e) => e.id === r.epicID && !e.archived))))) throw new Error("Resolution tasks require two approved active requirements in a refinement-only pass.");
+      if (options.refinementOnly && !refinementTarget && !pair) throw new Error("No requirement available for refinement in this scope.");
+      const linkedQuestions = pair ? pairQuestions(project, pair) : [];
+      const pairRecords = pair ? [...pair, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
       const context = planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
-        requiredEpicIDs: options.requiredEpicIDs, recordIDs: question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs,
+        requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
+        recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
         isolatedTask: options.refinementOnly || options.isolatedTask,
         budget: options.helpRequest ? 36000 : 48000, advisory: !!options.helpRequest, expandMandatory: !options.helpRequest });
       context.manifest.submissionIDs = options.submissionIDs;
       context.manifest.refinementOnly = options.refinementOnly;
+      if (pair) context.manifest.refinementPair = { requirementIDs: pair, contextKey: resolutionContextKey(project, pair) };
+      if (!options.helpRequest && !options.refinementOnly) addRelatedRecordHints(project, context);
       if (refinementTarget) context.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
       // Detailed context can include historical reviews. Only the job's current
       // submission batch authorizes review follow-up, matching publication checks.
@@ -246,6 +255,7 @@ export class DiscoveryService {
       const submitted = options.submissionIDs?.map((id) => this.store.submissions(projectID).find((item) => item.id === id))[0];
       const feature = project.epics.find((epic) => epic.id === options.focusEpicID)?.title;
       const task = question ? `Explaining: ${shorten(question.text)}`
+        : pair ? "Resolving a possible requirement duplicate or conflict"
         : refinementTarget ? `Refining: ${shorten(refinementTarget.statement)}`
         : submitted?.input.type === "answer" ? `Reviewing your response: ${shorten(submitted.input.questionText)}`
         : submitted?.input.type === "review" ? `Following up on your review: ${shorten(submitted.input.requirementText)}`

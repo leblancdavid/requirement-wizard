@@ -59,6 +59,20 @@ future work. See [implementation-workspace.md](implementation-workspace.md).
 
 ## Requirement refinement (DEC-022)
 
+Confirmed October 20, 2026: integrate duplicate/conflict candidates into Refine, with
+AI-prepared fixes requiring human approval. Consolidate true duplicates while preserving
+scenarios/evidence, propose coordinated corrections when explicit current human decisions
+resolve an inconsistency, and ask one targeted question when intent is ambiguous. Do not
+silently choose a product preference or overwrite approved requirements. Implemented as
+bounded checkpointed pair tasks, retained resolution comparisons and atomic approve/keep
+both actions; queued concrete clarification answers return to the same resolution path.
+See [resolution workflow](browser-workspace.md#resolve-candidates-through-refine) and
+the [migration ledger](migrations.md#reviewable-requirement-resolutions-v1-2026-10-20).
+
+Confirmed simplification: remove the standalone approved-requirement audit section;
+Refine is the single duplicate/conflict resolution entry point. Retain its internal
+candidate scan and all existing review/approval safeguards and saved work.
+
 Confirmed review presentation: refinement proposals are individual expandable items
 in the shared Review queue, with a Refinements filter, approve/keep-current actions,
 automatic advance and retained comparisons in Reviewed history. Display pending-work

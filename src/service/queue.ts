@@ -4,7 +4,9 @@ import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
 import { planContext } from "../core/working-set.js";
 import { ContextBudgetError } from "../core/context.js";
-import { refinementContextKey } from "./refinement-tasks.js";
+import { refinementContextKey, resolutionPairEligible } from "./refinement-tasks.js";
+import { auditApprovedRequirements } from "../core/similarity.js";
+import { resolutionPairForAnswer } from "../core/resolution.js";
 import { OperationConflictError } from "../core/operations.js";
 
 type Work = { controller: AbortController; promise: Promise<void> };
@@ -109,13 +111,31 @@ export class DiscoveryQueue {
     // Defer to a microtask so active is installed before any round can finish.
     const promise = Promise.resolve().then(async () => {
       if (manual?.refinementOnly) {
-        const project = this.service.store.get(id);
+        let project = this.service.store.get(id);
+        const priorJobs = this.service.store.jobs(id);
+        const overlaps = await auditApprovedRequirements(project, { signal: controller.signal,
+          candidateFilter: (finding) => (!manual.focusEpicID || project.requirements.some((r) => [finding.leftID, finding.rightID].includes(r.id) && r.epicID === manual.focusEpicID))
+            && resolutionPairEligible(project, [finding.leftID, finding.rightID], priorJobs),
+        });
+        let pairsChecked = 0;
+        for (const finding of overlaps.findings) {
+          if (this.closing || controller.signal.aborted || pairsChecked === 20) break;
+          const current = this.service.store.get(id);
+          const pair: [string, string] = [finding.leftID, finding.rightID];
+          if (!resolutionPairEligible(current, pair, this.service.store.jobs(id))) continue;
+          report(`Checking requirement overlap ${++pairsChecked} (at most 20 pair checks per Refine action). Fixes require approval; unclear intent produces a Design question.`);
+          const job = await this.service.analyze(id, current.revision, { signal: controller.signal, refinementOnly: true, refinementPair: pair, research: false, onProgress: report });
+          if (job.status !== "completed") { this.service.store.pauseQueue(id, true); report(job.diagnostic ?? `Resolution ${job.status}.`); return; }
+          if (job.result?.resolutionCheck?.outcome === "blocked") { report(`Resolution needs attention: ${job.result.resolutionCheck.explanation} Run Refine requirements again after addressing this blocker.`); return; }
+        }
+        if (controller.signal.aborted || this.closing) return;
+        project = this.service.store.get(id);
         const completed = this.service.store.jobs(id).filter((j) => j.status === "completed" && j.context?.refinementOnly)
           .flatMap((j) => j.context?.refinementTarget ? [j.context.refinementTarget] : []);
         const targets = refinementCandidates(project).filter((r) => (!manual.focusEpicID || r.epicID === manual.focusEpicID)
           && !completed.some((target) => target.requirementID === r.id && target.fingerprint === reviewFingerprint(r)
             && target.contextKey === refinementContextKey(project, r))).map((r) => r.id);
-        if (!targets.length) { report("No unchecked requirements in this scope. Completed checks and pending/dismissed suggestions are retained."); return; }
+        if (!targets.length) { report(`Overlap checks: ${pairsChecked} completed. No unchecked individual wording tasks in this scope. Review resolution proposals in Refine/To review or answer their Design questions, then Refine again for remaining overlaps. Completed checks and dismissed suggestions are retained.`); return; }
         for (const [index, requirementID] of targets.entries()) {
           if (this.closing || controller.signal.aborted) break;
           const current = this.service.store.get(id);
@@ -125,7 +145,7 @@ export class DiscoveryQueue {
             recordIDs: [requirementID], research: false, onProgress: report });
           if (job.status !== "completed") { this.service.store.pauseQueue(id, true); report(job.diagnostic ?? `Refinement ${job.status}.`); return; }
         }
-        if (!controller.signal.aborted) report(`Refinement finished: ${targets.length} individual requirement tasks considered. Suggestions await review; active wording is unchanged.`);
+        if (!controller.signal.aborted) report(`Refinement finished: ${pairsChecked} overlap checks and ${targets.length} individual wording tasks considered. Review proposed resolutions/refinements or answer targeted Design questions, then Refine again for remaining overlaps. Active wording is unchanged.`);
         return;
       }
       let explicit = manual;
@@ -155,15 +175,19 @@ export class DiscoveryQueue {
         const focusEpicID = manual?.focusEpicID;
         explicit = undefined;
         const project = this.service.store.get(id);
-        const task = (items: Submission[]) => ({ focusEpicID,
+        const task = (items: Submission[]) => {
+          const input = items.length === 1 ? items[0]!.input : undefined;
+          const pair = input?.type === "answer" && input.answer.kind === "answer" ? resolutionPairForAnswer(project, input.questionID, this.service.store.jobs(id)) : undefined;
+          return { focusEpicID,
+          ...(pair ? { refinementOnly: true, refinementPair: pair } : {}),
           isolatedTask: items.length === 1,
-          requiredEpicIDs: [...new Set(items.map((item) => {
+          requiredEpicIDs: [...new Set([...project.requirements.filter((r) => pair?.includes(r.id)).map((r) => r.epicID), ...items.map((item) => {
             const epicID = submissionEpic(project, item);
             if (!epicID) throw new Error("A submitted question is no longer available. Review the retained response.");
             return epicID;
-          }))],
-          recordIDs: items.flatMap((s) => [s.appliedSourceID!, ...(s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : [])]),
-        });
+          })])],
+          recordIDs: [...(pair ?? []), ...items.flatMap((s) => [s.appliedSourceID!, ...(s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : [])])],
+        }; };
         // Preflight before starting a job. An indivisible response is retained
         // with a durable budget diagnostic; it cannot starve fitting responses.
         const block = (item: Submission, error: ContextBudgetError) => {

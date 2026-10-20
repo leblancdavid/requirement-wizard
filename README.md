@@ -36,15 +36,20 @@ committed automatically using GitHub PR-per-requirement, PR-per-epic, named-bran
 direct-main delivery. Its count only decreases for verified delivery to main; PRs
 wait for your merge. See the [implementation pilot](docs/implementation-workspace.md)
 for setup, deterministic verification and remaining live-qualification gaps.
-**Prepare implementation plan** proposes requirement-linked work packages, hard
+The Implement tab groups **Check progress**, **Prepare plan**, and **Start implementation**
+(or **Resume implementation** / **Verify delivery** for a saved run). A next-step message
+guides the workflow; **Check options** holds **Preview changes** and **Recheck everything**
+(**Recheck feature** for a selected feature). Checks follow the feature selection;
+planning covers all approved requirements.
+**Prepare plan** proposes requirement-linked work packages, hard
 prerequisites, preferred ordering, technical steps and verification. Review dependency
 reasons, resolve questions and adjust ordering before approval; deterministic ordering
 keeps prerequisites first. Interrupted planning retains completed packages for explicit
 retry. Planning uses one bounded OpenCode request per approved requirement.
-Implementation checks reuse current saved assessments; **Reassess all**, feature and
-individual controls explicitly bypass reuse. Owned OpenCode assessment/coding sessions
+Implementation checks reuse current saved assessments; **Recheck everything**, **Recheck
+feature** and individual **Reassess** controls explicitly bypass reuse. Owned OpenCode assessment/coding sessions
 load bundled role-specific skills, while Reqwizit owns state and Git delivery.
-**Preview assessment queue** shows pending/reusable requirements and reasons without
+**Preview changes** shows pending/reusable requirements and reasons without
 model calls. Reviewed code boundaries can be applied per feature/requirement in
 Implementation settings to avoid rechecking unrelated changes; blank boundaries keep
 repository-wide checking. Equivalent-content commits reuse evidence, and optional
@@ -72,7 +77,14 @@ propose additional requirements/questions, revise wording for another review, or
 archive features when explicitly requested in a review note.
 **Review → Refine requirements** proposes behavior-focused replacements for technical
 wording and incidental tuning constants, including in approved requirements. Discovery
-also checks for cleanup opportunities. Refinements appear as individual expandable
+also checks for cleanup opportunities. Refine now checks overlapping approved requirements
+and proposes consolidations/coordinated fixes under **Refinements**; choose **Approve
+resolution** or **Keep both unchanged**. Ambiguous intent produces a targeted Design
+question whose processed answer returns to resolution; approved wording never changes
+without review. Choose **All project areas** to refine across the project, or select a
+feature to limit the work. The separate duplicate/conflict check section was removed;
+Refine is the single entry point.
+Refinements appear as individual expandable
 **Refinement proposed** items in **To review**, with a **Refinements** filter. Compare
 original/proposed wording and scenarios, then choose **Approve refinement** or **Keep
 current wording**. Review advances to the next item; both outcomes and their comparisons

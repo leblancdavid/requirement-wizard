@@ -1,5 +1,16 @@
 import { createHash } from "node:crypto";
-import { reviewFingerprint, type Project } from "../core/model.js";
+import { reviewFingerprint, type Job, type Project } from "../core/model.js";
+import { pairQuestions, refinementIsStale, resolutionContextKey } from "../core/resolution.js";
+
+export function resolutionPairEligible(project: Project, ids: [string, string], jobs: Job[]) {
+  if (ids.some((id) => !project.requirements.some((r) => r.id === id && r.status === "accepted" && project.epics.some((e) => e.id === r.epicID && !e.archived)))) return false;
+  if (pairQuestions(project, ids).some((q) => ["pending", "deferred", "delegated"].includes(q.status))) return false;
+  if (project.refinements.some((p) => p.resolution && p.status === "pending" && !refinementIsStale(project, p)
+    && [p.requirementID, p.resolution.relatedRequirementID].some((id) => ids.includes(id)))) return false;
+  const key = resolutionContextKey(project, ids);
+  if (project.refinements.some((p) => p.resolutionContextKey === key)) return false;
+  return !jobs.some((j) => j.status === "completed" && j.context?.refinementPair?.contextKey === key && j.result?.resolutionCheck?.outcome !== "blocked");
+}
 
 /** Invalidate completed checks when applicable human evidence or guardrails change. */
 export function refinementContextKey(project: Project, target: Project["requirements"][number]) {

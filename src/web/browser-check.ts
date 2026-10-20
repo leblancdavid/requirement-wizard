@@ -55,6 +55,19 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
   return JSON.stringify({ summary: "Build dependency-safe slices", packages: [{ requirementID: request.requirementID, title: `Planning package ${index + 1}`, reason: "Unlocks a usable workflow", steps: ["Implement the approved outcome"], verification: ["Verify the acceptance scenario"],
     prerequisites: index < 2 ? [{ requirementID: other.id, kind: "hard", reason: "Needs the supporting contract", evidenceIDs: [other.id], confidence: "medium" }] : [], questions: index === 0 ? ["Which shared contract comes first?"] : [] }] });
 } }, adapter: { async analyze(project, options) {
+  if (["Resolution workflow fixture", "Resolution ambiguity fixture"].includes(project.name)) {
+    const pair = options.context.manifest.refinementPair?.requirementIDs;
+    if (!pair) return analysisSchema.parse({ summary: "Individual wording is unchanged", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], refinements: [] });
+    const answer = project.sources.find((s) => s.kind === "answer");
+    if (project.name === "Resolution ambiguity fixture" && !answer) return analysisSchema.parse({ summary: "Ask for the intended access policy", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], refinements: [],
+      questions: [{ text: "Should guests be allowed to access private reports?", whyItMatters: "The approved allow and deny rules conflict", epicID: "inbox", evidenceIDs: pair, options: [{ label: "Allow private reports", consequence: "The allow rule supersedes denial" }, { label: "Deny private reports", consequence: "The deny rule supersedes access" }] }],
+      resolutionCheck: { format: 1, outcome: "question", explanation: "Two current conflicting approvals need a human choice" } });
+    const [primary, related] = pair.map((id) => project.requirements.find((r) => r.id === id)!);
+    return analysisSchema.parse({ summary: "Propose a reviewed resolution", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
+      refinements: [{ requirementID: primary!.id, statement: "Guests can access private reports under the reviewed access policy", rationale: "Consolidates duplicate access rules or applies the explicit human clarification", acceptance: answer ? ["Guests can access private reports"] : [...primary!.acceptance, ...related!.acceptance], reason: answer ? "The human explicitly allowed access, superseding the conflicting denial" : "Preserves both original access scenarios in one requirement",
+        resolution: { format: 1, relatedRequirementID: related!.id, basis: answer ? "human-decision" : "duplicate", evidenceIDs: [answer?.id ?? project.sources[0]!.id], change: { type: "consolidate" } } }],
+      resolutionCheck: { format: 1, outcome: "proposal", explanation: "Review the combined access rule before applying it" } });
+  }
   if (project.name === "Cleanup fixture") {
     assert.equal(options.context.manifest.refinementOnly, true);
     return analysisSchema.parse({ summary: "Unchanged", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
@@ -477,11 +490,11 @@ try {
   await mapEpic.getByRole("button", { name: "Open Implement", exact: false }).click();
   const implementationPanel = page.locator(".implementation-tab");
    await expect(page.getByRole("tab", { name: /Implement/ })).toContainText("1");
-  await expect(implementationPanel.getByRole("button", { name: /Continue implementation/ })).toBeDisabled();
-  await expect(implementationPanel.getByRole("button", { name: "Check implementation", exact: true })).toBeDisabled();
+   await expect(implementationPanel.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
+   await expect(implementationPanel.getByRole("button", { name: "Check progress", exact: true })).toBeDisabled();
   await expect(implementationPanel.getByRole("button", { name: "Verify main & refresh delivery", exact: true })).toHaveCount(0);
   await expect(implementationPanel.getByRole("status", { name: "Implementation availability" })).toContainText("Save implementation settings below before assessing");
-  const unavailableCheck = implementationPanel.getByRole("button", { name: "Check implementation", exact: true });
+   const unavailableCheck = implementationPanel.getByRole("button", { name: "Check progress", exact: true });
   await expect(unavailableCheck).toHaveAttribute("aria-describedby", /\S+/);
   await unavailableCheck.focus();
   await expect(page.getByRole("tooltip")).toContainText("Save implementation settings below before assessing");
@@ -520,8 +533,14 @@ try {
    await implementationPanel.getByRole("button", { name: "Apply boundary to 1 requirements", exact: true }).click();
    await expect(implementationPanel.getByText(/Assessment reuse boundaries ·/, { exact: false })).toContainText("1 / 1 scoped");
    await implementationPanel.getByRole("button", { name: "Save implementation settings", exact: true }).click();
-  await expect(implementationPanel.getByRole("button", { name: /Continue implementation/ })).toBeEnabled();
-   await expect(implementationPanel.getByRole("button", { name: "Check implementation", exact: true })).toBeEnabled();
+   await expect(implementationPanel.getByRole("button", { name: "Start implementation", exact: true })).toBeEnabled();
+    await expect(implementationPanel.getByRole("button", { name: "Check progress", exact: true })).toBeEnabled();
+    const implementationActions = implementationPanel.getByRole("region", { name: "Implementation actions", exact: true });
+    await expect(implementationActions.getByRole("button")).toHaveCount(3);
+    await expect(implementationActions.getByRole("status", { name: "Implementation next step" })).toContainText("Check progress");
+    await expect(implementationActions).toContainText("Plan scope: all approved requirements");
+    await expect(implementationPanel.getByRole("button", { name: "Preview changes", exact: true })).toBeHidden();
+    await implementationPanel.getByText("Check options", { exact: true }).click();
    const featureFilter = page.getByRole("combobox", { name: "Filter by feature", exact: true });
    const forcedFeature = await featureFilter.inputValue();
    assert.notEqual(forcedFeature, "all", "Earlier feature selection is retained in the implementation view");
@@ -531,18 +550,18 @@ try {
     implementationCheckRequest = route.request().postDataJSON();
     await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
    }, { times: 5 });
-   await implementationPanel.getByRole("button", { name: "Preview assessment queue", exact: true }).click();
+    await implementationPanel.getByRole("button", { name: "Preview changes", exact: true }).click();
    await expect.poll(() => implementationCheckRequest?.preview).toBe(true);
    assert.equal(implementationCheckRequest?.operation, "assess"); assert.equal(implementationCheckRequest?.force, undefined);
-  await implementationPanel.getByRole("button", { name: "Check implementation", exact: true }).click();
+   await implementationPanel.getByRole("button", { name: "Check progress", exact: true }).click();
   await expect.poll(() => implementationCheckRequest?.operation).toBe("check");
    assert.equal(typeof implementationCheckRequest?.revision, "number");
    assert.equal(implementationCheckRequest?.force, undefined, "Normal check is incremental");
-   await implementationPanel.getByRole("button", { name: "Reassess all", exact: true }).click();
+    await implementationPanel.getByRole("button", { name: "Recheck everything", exact: true }).click();
    await expect.poll(() => implementationCheckRequest?.force).toBe(true);
    assert.equal(implementationCheckRequest?.requirementID, undefined); assert.equal(implementationCheckRequest?.epicID, undefined);
    await featureFilter.selectOption(forcedFeature);
-   await implementationPanel.getByRole("button", { name: "Reassess feature", exact: true }).click();
+    await implementationPanel.getByRole("button", { name: "Recheck feature", exact: true }).click();
    await expect.poll(() => implementationCheckRequest?.epicID).toBe(forcedFeature);
    assert.equal(implementationCheckRequest?.force, true);
    await featureFilter.selectOption("all");
@@ -868,7 +887,76 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Context diagnostics must fit mobile width");
       await page.screenshot({ path: ".reqwizit-state/browser-context-blocked.png", fullPage: true });
       await page.getByRole("button", { name: "Close processing queue" }).click();
-     let cleanup = store.create("Cleanup fixture", "Jump and aim", { providerID: "openai", modelID: "fixture" });
+      const overlapProject = store.create("Overlap review fixture", "Control guest access to private reports", { providerID: "openai", modelID: "fixture" });
+      const overlapSeed = store.beginJob(overlapProject.id, overlapProject.revision).job;
+      store.claimJob(overlapSeed.id, Date.now() + 60000);
+      store.finishJob(overlapSeed.id, { summary: "Report access", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Guests can access private reports", "Guests cannot access private reports"].map((statement) => ({ statement, rationale: "Compare access policy", sourceIDs: [overlapProject.sources[0]!.id], acceptance: [statement] })) });
+      const overlapBefore = store.get(overlapProject.id);
+      await page.reload();
+      await page.locator(".sidebar").getByRole("button", { name: /Overlap review fixture/ }).click();
+      await page.getByRole("tab", { name: /Review/ }).click();
+      const overlapPanel = page.getByRole("region", { name: "Requirement review", exact: true });
+      const overlapDisclosure = overlapPanel.getByText("Possible overlaps or conflicts (1)", { exact: true });
+      await overlapDisclosure.click();
+      await expect(overlapPanel.getByRole("heading", { name: "Guests cannot access private reports", exact: true })).toBeVisible();
+      await expect(overlapPanel.getByText(/Similar wording does not prove duplication/)).toBeVisible();
+      assert.deepEqual(store.get(overlapProject.id), overlapBefore, "comparison must not change decisions or evidence");
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Overlap comparison must fit mobile width");
+      await page.reload();
+      await page.getByRole("tab", { name: /Review/ }).click();
+      await expect(overlapPanel.getByText("Possible overlaps or conflicts (1)", { exact: true })).toBeVisible();
+      assert.deepEqual(store.get(overlapProject.id), overlapBefore);
+      for (const ambiguous of [false, true]) {
+        let resolutionProject = store.create(ambiguous ? "Resolution ambiguity fixture" : "Resolution workflow fixture", "Keep reviewed report access rules", { providerID: "openai", modelID: "fixture" });
+        const resolutionSeed = store.beginJob(resolutionProject.id, resolutionProject.revision).job;
+        store.claimJob(resolutionSeed.id, Date.now() + 60000);
+        store.finishJob(resolutionSeed.id, { summary: "Report access", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Guests can access private reports", ambiguous ? "Guests cannot access private reports" : "Guests may access private reports"].map((statement) => ({ statement, rationale: "Reviewed access behavior", sourceIDs: [resolutionProject.sources[0]!.id], acceptance: [statement] })) });
+        resolutionProject = store.get(resolutionProject.id);
+        for (const r of resolutionProject.requirements) resolutionProject = store.review(resolutionProject.id, resolutionProject.revision, r.id, "accepted", "Preserve this reviewed scenario");
+        const originals = structuredClone(resolutionProject.requirements);
+        await page.reload();
+        await page.locator(".sidebar").getByRole("button", { name: new RegExp(resolutionProject.name) }).click();
+        await page.getByRole("tab", { name: /Review/ }).click();
+        await expect(reviewPanel.getByRole("region", { name: "Approved requirement audit", exact: true })).toHaveCount(0);
+        await expect(reviewPanel.getByRole("button", { name: "Check approved requirements for duplicates and conflicts", exact: true })).toHaveCount(0);
+        await page.getByLabel("Filter by feature").selectOption("all");
+        await reviewPanel.getByRole("button", { name: "Refine requirements", exact: true }).click();
+        await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
+        if (ambiguous) {
+          await expect.poll(() => store.get(resolutionProject.id).questions.length).toBe(1);
+          assert.deepEqual(store.get(resolutionProject.id).requirements, originals);
+          await page.getByRole("tab", { name: /^Design/ }).click();
+          const clarification = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Should guests be allowed to access private reports?", exact: true }) });
+          await clarification.getByRole("button", { name: /Choose Allow private reports/ }).click();
+          await clarification.getByRole("button", { name: /^Save response/ }).click();
+          await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+          await page.getByRole("tab", { name: /Review/ }).click();
+          await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
+        }
+        await expect(reviewPanel).toContainText("Resolution proposed");
+        await expect(reviewPanel.getByRole("region", { name: "Related requirement resolution", exact: true })).toContainText("reject the redundant");
+        assert.deepEqual(store.get(resolutionProject.id).requirements, originals, "AI resolution must not alter approved records before review");
+        await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).not.toHaveAttribute("aria-disabled", "true");
+        if (!ambiguous) {
+          await reviewPanel.getByRole("button", { name: "Keep both unchanged", exact: true }).click();
+          assert.deepEqual(store.get(resolutionProject.id).requirements, originals);
+          const dismissedProject = store.get(resolutionProject.id);
+          store.note(dismissedProject.id, dismissedProject.revision, "Please consolidate these duplicate access rules while retaining both scenarios");
+          await page.reload(); await page.getByRole("tab", { name: /Review/ }).click();
+          await reviewPanel.getByRole("button", { name: "Refine requirements", exact: true }).click();
+          await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
+          await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).toBeVisible();
+          await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).not.toHaveAttribute("aria-disabled", "true");
+          await page.screenshot({ path: ".reqwizit-state/browser-resolution.png", fullPage: true });
+        }
+        await reviewPanel.getByRole("button", { name: "Approve resolution", exact: true }).click();
+        await expect.poll(() => store.get(resolutionProject.id).requirements.filter((r) => r.status === "rejected").length).toBe(1);
+        assert.equal(store.get(resolutionProject.id).requirements.length, 2);
+        await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
+        await expect(reviewPanel).toContainText("Resolution approved");
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Resolution workflow must fit mobile width");
+      }
+      let cleanup = store.create("Cleanup fixture", "Jump and aim", { providerID: "openai", modelID: "fixture" });
      const cleanupSeed = store.beginJob(cleanup.id, cleanup.revision).job; store.claimJob(cleanupSeed.id, Date.now() + 60000);
      store.finishJob(cleanupSeed.id, { summary: "Game", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Jump() sets velocity to 420 for 0.15 seconds", "AimPivot.Update() clamps rotation to 60 degrees", "The player can pause the game"].map((statement) => ({ statement, rationale: "Static implementation", sourceIDs: [cleanup.sources[0]!.id], acceptance: ["The behavior is observable"] })) });
      cleanup = store.get(cleanup.id);
@@ -1168,7 +1256,7 @@ try {
         // Current badges, filters and evidence must all invalidate consistently.
         listing = store.note(listing.id, listing.revision, "New global acceptance constraint", "project");
         await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
-         await expect(listPanel).toContainText("Responses wait in the queue until assessment finishes");
+         await expect(listPanel).toContainText("Answers and reviews saved during assessment wait in the queue until it finishes");
          await listPanel.getByRole("button", { name: "Needs reassessment", exact: true }).click();
          await expectImplementationRows(4);
         await expect(listPanel.locator(".feature-group > summary").first()).toContainText("0 / 2 assessed");
@@ -1232,8 +1320,11 @@ try {
           await expect(page.locator(".epic-overview")).toHaveCount(10);
           await expect(page.locator(".epic-map-details .requirement-detail")).toHaveCount(0);
           await expect(page.locator(".implementation-item")).toHaveCount(0);
-          assert.ok(await page.locator(".epic-overview *").count() < 500, "Collapsed epic overview must keep 500-requirement details unmounted");
-          await page.unroute(snapshotRoute);
+           assert.ok(await page.locator(".epic-overview *").count() < 500, "Collapsed epic overview must keep 500-requirement details unmounted");
+           await page.getByRole("tab", { name: /Review/ }).click();
+           await expect(page.getByRole("region", { name: "Approved requirement audit", exact: true })).toHaveCount(0);
+           await expect(reviewPanel.getByRole("button", { name: "Refine requirements", exact: true })).toBeVisible();
+           await page.unroute(snapshotRoute);
           // Real paginated activity API with 1,000 routine revisions and meaningful older input.
           let activityProject = store.create("Activity paging fixture", "Keep useful history", { providerID: "openai", modelID: "fixture" });
           activityProject = store.organize(activityProject.id, activityProject.revision, [{ type: "upsert", epicID: "activity-files", title: "Activity files", purpose: "Retain work", dependencies: [] }]);
@@ -1289,11 +1380,12 @@ try {
             await page.reload();
            await page.getByRole("tab", { name: /Implement/ }).click();
            const planningPanel = page.getByRole("region", { name: "Implementation planning", exact: true });
-           await planningPanel.getByRole("button", { name: "Prepare implementation plan", exact: true }).click();
+            await page.getByRole("button", { name: "Prepare plan", exact: true }).click();
            await expect(planningPanel.getByRole("list", { name: "Proposed work packages" }).locator(":scope > li")).toHaveCount(3);
            await expect(planningPanel.getByRole("alert")).toContainText("cycle");
            const approvePlan = planningPanel.getByRole("button", { name: "Approve implementation plan", exact: true });
-           await expect(approvePlan).toBeDisabled();
+            await expect(approvePlan).toBeDisabled();
+            await expect(page.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
            const packages = planningPanel.getByRole("list", { name: "Proposed work packages" });
            await packages.locator("summary").first().click();
            await packages.getByRole("checkbox").first().uncheck();
@@ -1303,7 +1395,9 @@ try {
            await expect(approvePlan).toBeEnabled();
            await planningPanel.getByRole("button", { name: "Move Planning package 3 earlier", exact: true }).click();
            await approvePlan.click();
-           await expect(planningPanel.getByText("approved", { exact: true })).toBeVisible();
+            await expect(planningPanel.getByText("approved", { exact: true })).toBeVisible();
+            await expect(page.getByRole("status", { name: "Implementation next step" })).toContainText("Your plan is approved");
+            await expect(page.getByRole("button", { name: "Start implementation", exact: true })).toBeEnabled();
            const approvedPlanState = store.execution(planningProject.id), firstID = planningProject.requirements[0]!.id, secondID = planningProject.requirements[1]!.id;
            assert.deepEqual(approvedPlanState.planning!.acceptedEdges, [planningEdgeID(secondID, firstID)]);
            assert.deepEqual(approvedPlanState.config!.dependencies[secondID], [firstID]);
@@ -1325,8 +1419,30 @@ try {
                 { ...snapshot.project.epics[0], id: "map-empty", title: "Future reporting", purpose: "Explain trends at a glance.", archived: false, dependencies: [] },
                 { ...snapshot.project.epics[0], id: "map-archived", title: "Archived capability", archived: true, dependencies: [] }] } } });
             });
-            await page.getByRole("tab", { name: "Project map", exact: true }).click();
-            const emptyEpic = page.getByRole("article", { name: "Future reporting", exact: true });
+             mapState.run = { id: "action-label-fixture", revision: planningProject.revision, bindingID: "fixture-binding", repositoryRoot: planningDirectory,
+               config: mapState.config!, scope: {}, requirementIDs: mapRequirements.map((r) => r.id), units: [], status: "interrupted", progress: [], createdAt: new Date().toISOString() };
+             await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
+             await expect(page.getByRole("button", { name: "Resume implementation", exact: true })).toBeEnabled();
+             await expect(page.getByRole("button", { name: "Prepare plan", exact: true })).toBeDisabled();
+             await expect(page.getByRole("status", { name: "Implementation next step" })).toContainText("Resume the saved implementation run");
+             let continuedRuns = 0;
+             await page.route(`**/api/projects/${planningProject.id}/execution-start`, async (route) => {
+               assert.equal(route.request().postDataJSON().operation, "continue");
+               continuedRuns++; await route.fulfill({ json: {} });
+             }, { times: 2 });
+             await page.getByRole("button", { name: "Resume implementation", exact: true }).click();
+             await expect.poll(() => continuedRuns).toBe(1);
+             mapState.run.status = "awaiting-merge";
+             await expect(page.getByRole("button", { name: "Verify delivery", exact: true })).toBeEnabled();
+             await expect(page.getByRole("status", { name: "Implementation next step" })).toContainText("Merge the delivery branch or PR");
+             await page.getByRole("button", { name: "Verify delivery", exact: true }).click();
+             await expect.poll(() => continuedRuns).toBe(2);
+             await page.getByText("Check options", { exact: true }).click();
+             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Consolidated implementation actions and expanded options fit mobile width");
+             await page.screenshot({ path: ".reqwizit-state/browser-implementation-actions.png", fullPage: true });
+             mapState.run = undefined;
+             await page.getByRole("tab", { name: "Project map", exact: true }).click();
+             const emptyEpic = page.getByRole("article", { name: "Future reporting", exact: true });
             await expect(emptyEpic.getByText("Explain trends at a glance.", { exact: true })).toBeVisible();
             await expect(emptyEpic).toContainText("Scope not defined yet");
             await expect(emptyEpic.getByRole("meter")).toHaveCount(0);

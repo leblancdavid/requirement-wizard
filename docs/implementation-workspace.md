@@ -8,12 +8,32 @@ assessment and real GitHub delivery/installer integration remain unqualified.
 
 ## Browser workflow
 
+The main action group is **Check progress → Prepare plan → Start implementation**.
+The coding action becomes **Resume implementation** for an unfinished run and
+**Verify delivery** while awaiting a merge. A next-step message explains setup,
+planning review or continuation. **Check options** is collapsed by default and holds
+**Preview changes** (local impact preview without model calls) and **Recheck everything**
+or **Recheck feature** (forced assessment). Checks follow the selected feature;
+planning covers all approved requirements. Search/status filters only change the list.
+Stop remains available beside the main actions while a worker is active.
+
+These are presentation changes to the existing operations. Existing assessments,
+plans, sessions and delivery evidence retain their formats and freshness semantics;
+no data migration or repeated model calls are required.
+
+Consolidated-action verification (2026-10-19): type checking, all 240 deterministic
+tests, production UI build and Playwright browser checks passed. Browser checks cover
+collapsed options, incremental/forced/preview request routing and feature scope,
+planning approval, Start/Resume/Verify labels and continuation routing, and 390px
+layout with options expanded. Screenshot: `.reqwizit-state/browser-implementation-actions.png`.
+No live model calls were made.
+
 ### Prepare and review implementation order (DEC-025)
 
-**Prepare implementation plan** operates on all approved requirements in active epics
+**Prepare plan** operates on all approved requirements in active epics
 (up to 500), independently of the list's feature/search/status filters. Save execution
 settings and connect the local Git root first. Existing-project users should run
-**Check implementation** for evidence before planning. Planning itself does not capture
+**Check progress** for evidence before planning. Planning itself does not capture
 new code, fetch main, run checks, modify source or establish branch availability.
 
 - The saved OpenCode model proposes one work package per approved requirement, with
@@ -62,7 +82,7 @@ layout; screenshot `.reqwizit-state/browser-implementation-planning.png`. The ma
 fixture also verifies reviewed order and package guidance reach sequential coding. No
 live model calls were made.
 
-**Check implementation** requires a connected workspace and saved Implementation
+**Check progress** requires a connected workspace and saved Implementation
 settings (OpenCode model, delivery strategy and at least one verification command).
 The local phase does not execute those commands; the main phase does. Detecting the
 repository fills the form but does not save it. When an action is disabled, a message
@@ -128,7 +148,7 @@ dialog. Mobile layout was checked at 390px; screenshot:
    retained on redetection; **Use suggested commands** explicitly replaces the draft.
    Add
    requirement prerequisites where needed; existing epic dependencies also apply.
-3. **Check implementation** captures bounded file evidence from the working folder and
+3. **Check progress** captures bounded file evidence from the working folder and
    assesses approved requirements sequentially. It does not execute checks or establish
    main delivery. Each scenario needs evidence; omitted scope stays unknown. A real
    run reports its stage, selected/completed counts and code-status summary. Empty
@@ -146,9 +166,10 @@ dialog. Mobile layout was checked at 390px; screenshot:
    **Stop implementation** cancels the same worker. Coding, verification and delivery
    also appear there alongside discovery/scans and concurrent question help. Recent
    background work retains outcomes and diagnostics after processing stops.
-5. Use **Implement**, **Implement epic** or **Continue implementation**. Individual/epic
-   actions freeze that scope. Continue resumes it; after completion, another Continue
-   plans remaining approved requirements.
+5. Use **Implement**, **Implement epic** or **Start implementation**. Individual/epic
+   actions freeze that scope. **Resume implementation** resumes it; **Verify delivery**
+   continues after a merge. After completion, **Start implementation** plans remaining
+   approved requirements.
 6. Expand **Execution & delivery details** for worktree/session IDs, commits, check
    results, PR links and progress. Stop/app closure retains checkpoints; restart never
    automatically repeats work. **Archive run & replan** retains history, branches,
@@ -156,15 +177,15 @@ dialog. Mobile layout was checked at 390px; screenshot:
 
 ### Assessment results, errors and retry
 
-**Check implementation** is incremental: current saved results are reused, including
-missing, partial and unknown results. **Reassess all** bypasses reuse for every approved
-requirement; with a Feature filter selected it becomes **Reassess feature**. Each
+**Check progress** is incremental: current saved results are reused, including
+missing, partial and unknown results. **Check options → Recheck everything** bypasses reuse for every approved
+requirement; with a Feature filter selected it becomes **Recheck feature**. Each
 requirement also has **Reassess** for a forced local/main check of that requirement only.
 These actions share the same lease, cancellation and evidence checks as normal checks.
 Force never bypasses approval, source validation or main verification and is rejected
 for coding execution. Main verification commands still run on every check.
 
-**Preview assessment queue** performs a local capture and deterministic impact pass,
+**Check options → Preview changes** performs a local capture and deterministic impact pass,
 without model calls, fetching main or running verification commands. It lists pending
 and reusable requirements with reasons before expensive assessment. It shares the
 worker lease/cancellation rules and saves an explicitly labeled preview, not a
@@ -269,7 +290,7 @@ cancelled and expired workers require explicit resume for waiting work. Unrelate
 do not invalidate unchanged results when subsequently applied. Changes to relevant answers, feature/project notes, requirements or
 dependency guardrails mark affected results **Needs reassessment**; they cannot establish
 current main delivery. Results retain their original specification revision, and the
-completion summary reports outdated results. Run **Check implementation** again to
+completion summary reports outdated results. Run **Check progress** again to
 assess current decisions; assessment does not require archiving a coding run.
 
 Completed requirement assessments are checkpointed individually. Running the same

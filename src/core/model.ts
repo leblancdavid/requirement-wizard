@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { folderPreviewSchema } from "./folder-preview.js";
+import { wordingKey } from "./similarity.js";
 import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal } from "./epics.js";
 
 const text = z.string().trim().min(1).max(12000);
@@ -63,10 +64,21 @@ export type ResearchEvidence = z.infer<typeof researchEvidenceSchema>;
 export const refinementProposalSchema = z.object({
   requirementID: z.string().min(1), statement: text, rationale: text,
   acceptance: z.array(text).min(1).max(8), reason: text,
+  resolution: z.object({
+    format: z.literal(1), relatedRequirementID: z.string().min(1),
+    basis: z.enum(["duplicate", "human-decision"]), evidenceIDs: z.array(z.string().min(1)).min(1).max(20),
+    change: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("consolidate") }).strict(),
+      z.object({ type: z.literal("revise"), statement: text, rationale: text, acceptance: z.array(text).min(1).max(8) }).strict(),
+    ]),
+  }).strict().optional(),
 }).strict();
 const refinementSchema = refinementProposalSchema.extend({
   id: z.string(), fingerprint: z.string(), original: requirement,
+  relatedOriginal: requirement.optional(), resolutionContextKey: z.string().optional(),
   status: z.enum(["pending", "accepted", "dismissed"]), createdAtRevision: z.number().int(),
+}).superRefine((value, ctx) => {
+  if (value.resolution && (!value.relatedOriginal || value.relatedOriginal.id !== value.resolution.relatedRequirementID || !value.resolutionContextKey)) ctx.addIssue({ code: "custom", message: "Resolution provenance is incomplete." });
 });
 
 export const projectSchema = z.object({
@@ -115,6 +127,7 @@ export const analysisSchema = z.object({
   researchFindings: z.array(z.object({ localID: z.string().optional(), url: z.string().url(), title: text, finding: text, epicID: z.string() }).strict()).max(6).optional(),
   reviewResponses: z.array(z.object({ sourceID: z.string(), text }).strict()).max(30).optional(),
   refinements: z.array(refinementProposalSchema).max(10).optional(),
+  resolutionCheck: z.object({ format: z.literal(1), outcome: z.enum(["distinct", "proposal", "question", "blocked"]), explanation: text }).strict().optional(),
   reviewChanges: z.array(z.discriminatedUnion("type", [
     z.object({ type: z.literal("revise"), sourceID: z.string(), requirementID: z.string(), statement: text, rationale: text, acceptance: z.array(text).min(1).max(8), reason: text }).strict(),
     z.object({ type: z.literal("reject"), sourceID: z.string(), requirementID: z.string(), reason: text }).strict(),
@@ -199,6 +212,7 @@ export type Job = {
     isolatedTask?: boolean;
     refinementOnly?: boolean;
     refinementTarget?: { requirementID: string; fingerprint: string; contextKey?: string };
+    refinementPair?: { requirementIDs: [string, string]; contextKey: string };
     submissionIDs?: string[];
     reviewSourceIDs?: string[];
     reviewChangeSourceIDs?: string[];
@@ -220,7 +234,7 @@ export class StaleRevisionError extends Error {
 }
 
 /** A source may be relevant history without authorizing a new requirement. */
-function requirementEvidenceIssues(project: Project): Map<string, string | undefined> {
+export function requirementEvidenceIssues(project: Project): Map<string, string | undefined> {
   const superseded = new Set(project.sources.flatMap((source) => source.supersedes ? [source.supersedes] : []));
   const accepted = new Set(project.requirements.filter((item) => item.status === "accepted").flatMap((item) => item.sourceIDs));
   return new Map(project.sources.map((source) => {
@@ -267,17 +281,17 @@ export function validateAnalysisReferences(project: Project, result: Analysis) {
   }
   // Exact duplicate prevention is deterministic; semantic duplicates still need review.
   const seen = new Set(project.questions.filter((item) => item.status !== "retired" && !retired.has(item.id))
-    .map((item) => item.text.toLowerCase().trim()));
+    .map((item) => wordingKey(item.text)));
   for (const item of result.questions) {
-    const key = item.text.toLowerCase().trim();
+    const key = wordingKey(item.text);
     if (seen.has(key)) throw new Error("Analysis repeated an existing question without retiring it.");
     seen.add(key);
   }
   const pending = project.questions.filter((item) => item.status === "pending" && !retired.has(item.id)).length;
   if (pending + result.questions.length > 5) throw new Error("Analysis exceeds the five-question active batch limit.");
-  const requirements = new Set(project.requirements.map((item) => item.statement.toLowerCase().trim()));
+  const requirements = new Set(project.requirements.map((item) => wordingKey(item.statement)));
   for (const item of result.requirements) {
-    const key = item.statement.toLowerCase().trim();
+    const key = wordingKey(item.statement);
     if (requirements.has(key)) throw new Error("Analysis repeated an existing requirement instead of preserving its stable ID.");
     requirements.add(key);
   }

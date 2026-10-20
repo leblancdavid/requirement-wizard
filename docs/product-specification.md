@@ -196,11 +196,22 @@ and allow editing, accepting, or rejecting proposed requirements.
   and applicable human guardrails. Save each completed check, including no-change
   results, and resume unfinished work on explicit retry without repeating unchanged
   completed checks. Never discard mandatory constraints to fit an individual task.
+- Refinement also checks candidate approved-requirement pairs for redundancy/conflicts.
+  Propose a reviewed consolidation or coordinated correction when supported; ask a
+  targeted clarification when intent is unresolved. Concrete queued clarification
+  answers return to pair resolution. Approval applies the exact pair changes atomically;
+  dismissal changes neither record. Preserve both IDs, original evidence/scenarios and
+  history; stale or pending human input blocks approval. Bound/checkpoint pair calls
+  independently of compatible completed individual cleanup checks (DEC-022 extension).
 
 **RW-013 — Coverage and conflicts.** Review applicable areas such as goals, workflows,
 data lifecycle, permissions, integrations, quality constraints, and operations.
 
 - Show contradictions and missing acceptance scenarios with record references.
+- Offer an explicit read-only, project-wide approved-requirement wording audit with
+  unique candidate pairs, inspectable scenarios/evidence, progress/cancellation and
+  revision-labelled results. Similarity flags possible duplication/conflict, not a
+  semantic verdict; never automatically merge or alter approved requirements.
 - Track areas as reviewed, unresolved, deferred, or not applicable, with explanations.
 - Report checklist coverage rather than claiming exhaustive discovery of all requirements.
 

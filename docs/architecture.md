@@ -7,6 +7,18 @@ implemented under `src/`. See [decisions.md](decisions.md),
 ## Implemented slice
 
 - `src/core/model.ts`: project/evidence/proposal schemas and reference rules.
+- `src/core/similarity.ts`: wording identity, project-wide lexical candidate retrieval,
+  advisory proposal warnings and read-only requirement comparisons. Discovery adds
+  bounded navigation hints without changing citation authority or mandatory evidence;
+  Review compares the expanded requirement against saved records across features.
+  The asynchronous approved-pair scan is internal candidate planning for Refine: it
+  evaluates active approved pairs locally, yields for cancellation and bounds retained
+  candidates. There is no separate bulk-audit UI; per-requirement comparisons remain.
+- `src/core/resolution.ts`: exact pair/current-human-evidence identity, stale/pending
+  input guards and clarification routing. Refinement adds optional versioned resolution
+  proposals; existing storage transactions publish and approve both records atomically.
+  The discovery queue runs bounded pair tasks before compatible individual cleanup and
+  retains completed pair outcomes independently; no automatic approval or startup replay.
 - `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`, `working-set.ts`: organization, material
   change review, deterministic coverage, and bounded working sets.
 - `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.

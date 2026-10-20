@@ -1,6 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { reviewFingerprint, type Project, type Submission } from "../core/model.js";
+import { relatedRequirements } from "../core/similarity.js";
 import { ActionButton, ActionScope } from "./action-button.js";
+import { refinementIsStale, resolutionHasWaitingInput } from "../core/resolution.js";
 
 export function pendingReviews(project: Project, submissions: Submission[]) {
   const waiting = new Set(submissions.filter((s) => s.input.type === "review" && ["queued", "saved", "processing"].includes(s.status)).map((s) => s.input.type === "review" ? s.input.requirementID : ""));
@@ -13,7 +15,8 @@ type ReviewItem = { id: string; kind: "requirement"; requirement: Project["requi
 
 export function reviewItems(project: Project, submissions: Submission[], filter: ReviewFilter, epicID = "all"): ReviewItem[] {
   const scoped = (id: string) => epicID === "all" || id === epicID;
-  const refinements = project.refinements.filter((p) => scoped(project.requirements.find((r) => r.id === p.requirementID)?.epicID ?? p.original.epicID)
+  const refinements = project.refinements.filter((p) => (scoped(project.requirements.find((r) => r.id === p.requirementID)?.epicID ?? p.original.epicID)
+    || !!p.relatedOriginal && scoped(p.relatedOriginal.epicID))
     && (filter === "reviewed" ? p.status !== "pending" : ["pending", "refinements"].includes(filter) && p.status === "pending"));
   const requirements = (filter === "pending" ? pendingReviews(project, submissions).filter((r) =>
     !refinements.some((p) => p.requirementID === r.id && p.fingerprint === reviewFingerprint(r)))
@@ -41,6 +44,7 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
   const reviewed = reviewItems(project, submissions, "reviewed", epicID);
   const visible = filter === "pending" ? pending : filter === "refinements" ? refinements : filter === "reviewed" ? reviewed : [];
   const active = expanded === null ? null : visible.some((r) => r.id === expanded) ? expanded : ["pending", "refinements"].includes(filter) ? visible[0]?.id : null;
+  const related = useMemo(() => relatedRequirements(project, active?.startsWith("requirement:") ? active.slice("requirement:".length) : ""), [project.requirements, active]);
   const list = useRef<HTMLDivElement>(null);
   const focusNext = useRef(false);
   useEffect(() => {
@@ -53,8 +57,8 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
   };
   return <ActionScope reason={disabledReason}><section aria-label="Requirement review">
     <div className="review-toolbar">
-      <p className="view-intro">Review new requirements, revisions, and refinement proposals one item at a time. A refinement keeps current wording active until you approve its replacement.</p>
-      <ActionButton className="secondary" disabled={disabled} onClick={refine}>Refine requirements</ActionButton>
+      <p className="view-intro">Refine requirements checks wording and possible duplicates/conflicts. Review proposed fixes here or answer clarification questions in Design. Approved requirements stay unchanged until you approve a replacement or resolution.</p>
+      <ActionButton className="secondary" disabled={disabled} onClick={() => refine()}>Refine requirements</ActionButton>
     </div>
     <div className="filter-row" aria-label="Review filters">{([ ["pending", "To review", pending.length], ["refinements", "Refinements", refinements.length], ["submitted", "Submitted", submitted.length], ["reviewed", "Reviewed", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { setFilter(key); setExpanded(undefined); }}>{label} <span>{count}</span></button>)}</div>
     {message && <p className="save-notice" role="status">{message}</p>}
@@ -64,27 +68,32 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
         const p = item.refinement;
         const target = project.requirements.find((r) => r.id === p.requirementID);
         const pending = p.status === "pending";
-        const stale = pending && (!target || reviewFingerprint(target) !== p.fingerprint || !project.epics.some((e) => e.id === target.epicID && !e.archived));
-        const waiting = submissions.some((s) => s.input.type === "review" && s.input.requirementID === p.requirementID && ["queued", "saved", "processing"].includes(s.status));
+        const stale = pending && refinementIsStale(project, p);
+        const waiting = resolutionHasWaitingInput(project, p, submissions) || submissions.some((s) => s.input.type === "review" && s.input.requirementID === p.requirementID && ["queued", "saved", "processing"].includes(s.status));
         const save = async (accept: boolean) => {
           setMessage("");
           if (await reviewRefinement(p.id, accept)) {
-            advance(item.id); setMessage(accept ? "Refinement approved. Replacement wording is now active; the comparison is saved under Reviewed." : "Current wording kept. The dismissed refinement is saved under Reviewed.");
+            advance(item.id); setMessage(p.resolution ? accept ? "Resolution approved. The reviewed changes were applied together; original records and evidence remain in history." : "Resolution dismissed. Both requirements were kept unchanged." : accept ? "Refinement approved. Replacement wording is now active; the comparison is saved under Reviewed." : "Current wording kept. The dismissed refinement is saved under Reviewed.");
           }
         };
         return <article className="question-card review-card refinement-card" key={item.id}>
           <button className="review-card-heading" aria-expanded={active === item.id} onClick={() => setExpanded(active === item.id ? null : item.id)}>
-            <span className="badge">{pending ? "Refinement proposed" : p.status === "accepted" ? "Refinement approved" : "Current wording kept"}{stale ? " · Outdated" : ""}</span>
+            <span className="badge">{p.resolution ? pending ? "Resolution proposed" : p.status === "accepted" ? "Resolution approved" : "Resolution dismissed" : pending ? "Refinement proposed" : p.status === "accepted" ? "Refinement approved" : "Current wording kept"}{stale ? " · Outdated" : ""}</span>
             <strong>{p.statement}</strong><small>{project.epics.find((e) => e.id === (target?.epicID ?? p.original.epicID))?.title} · Current requirement: {requirementStatus(target?.status ?? p.original.status)}</small>
           </button>
           {active === item.id && <div className="requirement-card">
             <p><strong>Why refine:</strong> {p.reason}</p>
             <h4>{pending && !stale ? "Current wording" : "Original wording"} ({requirementStatus(p.original.status).toLowerCase()})</h4><p>{p.original.statement}</p><ul>{p.original.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul>
             <h4>Proposed wording</h4><p>{p.statement}</p><ul>{p.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><p>{p.rationale}</p>
+            {p.resolution && p.relatedOriginal && <section aria-label="Related requirement resolution"><h4>Other original requirement · {p.relatedOriginal.id}</h4><p>{p.relatedOriginal.statement}</p><ul>{p.relatedOriginal.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul>
+              {p.resolution.change.type === "consolidate" ? <p><strong>On approval:</strong> keep {p.requirementID} with the proposed combined behavior and reject the redundant {p.relatedOriginal.id}. Both IDs, original evidence and history are retained.</p>
+                : <><h4>Other proposed replacement</h4><p>{p.resolution.change.statement}</p><ul>{p.resolution.change.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><p>{p.resolution.change.rationale}</p><p>On approval, both replacements are applied atomically and remain approved.</p></>}
+              <details><summary>Other supporting evidence and resolution basis</summary>{[...new Set([...p.relatedOriginal.sourceIDs, ...p.resolution.evidenceIDs])].map((id) => <p className="source-excerpt" key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
+            </section>}
             <details><summary>Supporting evidence</summary>{p.original.sourceIDs.map((id) => <p className="source-excerpt" key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
-            {stale && <p role="status">The requirement changed. Keep current wording to dismiss this outdated suggestion, then refine again for current wording.</p>}
-            {pending && waiting && <p role="status">Finish the pending requirement review before approving this refinement.</p>}
-            {pending ? <div className="button-row"><ActionButton className="primary" disabled={disabled || stale || waiting} reason={disabled ? undefined : stale ? "The requirement changed. Keep current wording to dismiss this outdated proposal, then refine again." : "Finish the pending requirement review before approving this refinement."} onClick={() => void save(true)}>Approve refinement</ActionButton><ActionButton className="secondary" disabled={disabled} onClick={() => void save(false)}>Keep current wording</ActionButton></div>
+            {stale && <p role="status">A requirement or its human context changed. Dismiss this outdated suggestion, then refine again for current wording.</p>}
+            {pending && waiting && <p role="status">Finish the pending human input before approving this refinement or resolution.</p>}
+            {pending ? <div className="button-row"><ActionButton className="primary" disabled={disabled || stale || waiting} reason={disabled ? undefined : stale ? "A requirement or its human context changed. Dismiss this outdated proposal, then refine again." : "Finish the pending requirement review before approving this refinement."} onClick={() => void save(true)}>{p.resolution ? "Approve resolution" : "Approve refinement"}</ActionButton><ActionButton className="secondary" disabled={disabled} onClick={() => void save(false)}>{p.resolution ? "Keep both unchanged" : "Keep current wording"}</ActionButton></div>
               : <p className="save-notice">{p.status === "accepted" ? "This replacement was approved. Later requirement decisions may have changed its wording." : "This refinement was dismissed; the active requirement was kept unchanged by this decision."}</p>}
           </div>}
         </article>;
@@ -106,7 +115,11 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
       };
       return <article className="question-card review-card" key={item.id}>
         <button className="review-card-heading" aria-expanded={active === item.id} onClick={() => setExpanded(active === item.id ? null : item.id)}><span className={`badge ${r.status}`}>{r.status === "proposed" ? "New requirement" : r.status === "needs-review" ? "Revised requirement" : requirementStatus(r.status)}</span><strong>{r.statement}</strong><small>{project.epics.find((e) => e.id === r.epicID)?.title}</small></button>
-        {active === item.id && <div className="requirement-card"><p>{r.rationale}</p><h4>Acceptance scenarios</h4><ul>{r.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{r.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
+         {active === item.id && <div className="requirement-card"><p>{r.rationale}</p><h4>Acceptance scenarios</h4><ul>{r.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{r.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
+          {related.length > 0 && <details className="save-notice"><summary>Possible overlaps or conflicts ({related.length})</summary>
+            <p>Similar wording does not prove duplication. Compare scope, decisions and scenarios before approving. No records have been merged or changed. Use your review note to explain a conflict or requested correction.</p>
+            {related.map((other) => <section key={other.id} aria-label={`Compare requirement ${other.id}`}><h4>{other.statement}</h4><p>{requirementStatus(other.status)} · {project.epics.find((e) => e.id === other.epicID)?.title} · {other.id}</p><p>{other.rationale}</p><ul>{other.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{other.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details></section>)}
+          </details>}
           {r.reviewNote && <p>{r.reviewNote}</p>}{response && <p className="save-notice"><strong>AI response:</strong> {response}</p>}
           <label>Anything to add? (optional)<textarea rows={3} maxLength={12000} value={draft?.note ?? ""} onChange={(event) => setDrafts((current) => ({ ...current, [r.id]: { note: event.target.value, fingerprint: current[r.id]?.fingerprint ?? fingerprint } }))} placeholder="I approve this, but we also need to consider…" /></label>
           {changed && <p role="alert">This requirement changed while you were writing. Your note is retained. Read the updated wording, then <button className="quiet" onClick={() => setDrafts((current) => ({ ...current, [r.id]: { note: draft!.note, fingerprint } }))}>Use note with updated requirement</button>.</p>}

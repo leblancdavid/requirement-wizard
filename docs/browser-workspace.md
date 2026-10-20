@@ -1,5 +1,108 @@
 # Browser workspace, epics, and estimated completeness
 
+## Repeated questions and overlapping requirements
+
+### Resolve candidates through Refine
+
+Use **Review → Refine requirements** for both wording cleanup and duplicate/conflict
+resolution. The separate **Check approved requirements for duplicates and conflicts**
+section was removed. Choose **All project areas** for project-wide checks; a selected
+feature limits Refine to pairs touching that feature, including cross-feature
+counterparts and their full evidence. Only approved requirements in active features
+participate in pair resolution; proposed, rejected, needs-review and archived-feature
+records are excluded from that stage. Refine checks candidate approved pairs first,
+then unfinished individual wording tasks, using bounded AI requests.
+
+- **Resolution proposed** appears under **To review / Refinements**. Compare both
+  originals, both sets of scenarios, the proposed wording and cited supporting decisions.
+- **Approve resolution** applies exactly the reviewed changes together. Consolidation
+  retains one stable requirement ID with combined behavior/evidence and rejects the
+  redundant record; its ID, original wording, evidence and history remain. Coordinated
+  corrections replace both requirements and keep both approved.
+- **Keep both unchanged** dismisses the proposal without editing either requirement.
+  A changed target, relevant human input, clarification or dependency context makes an
+  old proposal outdated; it cannot be approved. Pending human input must be processed first.
+- If intent is ambiguous, AI asks one targeted question in **Design** instead of choosing
+  between human preferences. A concrete queued answer automatically returns to that
+  pair check when processing runs (or when resumed if automatic processing is off).
+  Resulting fixes still require approval. Deferred/delegated answers do not settle intent.
+
+Each Refine action runs at most **20** unchecked pair calls; progress explains how to
+continue with another Refine action. Candidate retrieval retains at most 200 eligible
+pairs per pass; previously completed/pending/dismissed pairs are filtered before that
+bound so subsequent actions can reach later candidates. A current pending resolution
+prevents competing pair proposals or fresh independent cleanup against either record.
+Approve/dismiss pending work, answer clarification questions, then refine again for
+remaining overlaps. Unchanged completed pair checks and dismissed fixes are reused;
+failed/cancelled work resumes only explicitly. No-change individual cleanup checks
+from earlier app versions remain valid and are not replayed for this workflow change.
+
+Checks preserve exact pair evidence, applicable human guardrails and linked clarification
+history within the existing hard context bounds. Missing/oversized evidence blocks the
+task rather than dropping decisions. Five pending questions remains the project-wide
+limit; blocked clarifications explain the prerequisite and remain retryable. Lexical
+retrieval can still miss paraphrases; model reconciliation is advisory, not a guarantee
+of complete or correct conflict resolution. Live resolution quality is not yet qualified.
+
+Resolution proposal citations use an explicit basis-specific **source-ID allowlist** in
+both the prompt schema and publication checks. Requirement IDs motivate clarification
+questions but cannot substitute for source IDs on a proposed fix. Superseded evidence,
+deferrals/delegations, unknown/out-of-context IDs and repeated citations are rejected;
+workspace observations cannot establish a human-decision basis. Diagnostics identify
+the offending `resolution.evidenceIDs` entry and reason without echoing source text.
+After a stopped resolution check, restart an older running app to load updates and use
+**Refine requirements** again. Saved approvals/input and compatible completed checks are
+retained; no data reset or automatic repeat model call is required.
+
+Verification (2026-10-20): type checking, all **268 deterministic tests**, the UI
+build, Playwright browser checks and diff checks passed. Resolution checks cover
+atomic consolidation/coordinated correction, both-target/context staleness, missing or
+out-of-task evidence, pending human review, cancellation/context bounds, question limits,
+clarification-answer routing, bounded/resumable calls, legacy/new proposal reopening and
+rejection of future formats without overwriting saved jobs, and source-only citation
+allowlists/diagnostics with explicit retry. Browser checks exercise Refine as the sole
+check action, all-feature scope, dismissal, reviewed consolidation and ambiguous
+intent → Design answer → proposed fix → approval. Screenshot:
+`.reqwizit-state/browser-resolution.png`. Tests used the available Node 20.11 environment;
+the development baseline remains Node 22.12+. No live model calls were made.
+
+### Discovery safeguards and individual comparisons
+
+Discovery now retrieves up to twelve related-record navigation hints from the whole
+saved project, including older answered, retired and rejected records outside the
+recent index. Ranking uses at most 24 current task/working-record texts; it is lexical,
+not embedding-based semantic search. Hints use only spare context space (at most
+8,000 additional characters), never displace mandatory evidence or authorize new
+citations, and are omitted when they cannot fit. Suspected already-covered decisions
+should wait for focused discovery rather than be inferred from incomplete labels.
+New decisions should explain their distinct scope or changed/conflicting evidence.
+Question help, refinement-only passes and scan prompts keep their existing context
+policies; this retrieval applies to ordinary discovery and queued follow-up.
+
+Duplicate wording checks now ignore repeated whitespace and terminal sentence/question
+punctuation as well as case. Internal punctuation, operators, numbers and negation
+are preserved. Near matches are **not** automatically blocked, merged or deleted:
+opposite rules can look almost identical. New close matches produce advisory notices
+with record IDs under **Design → Latest changes**. The expanded requirement in
+**Review** shows **Possible overlaps or conflicts**, with up to three cross-feature
+comparisons, statuses, scenarios and supporting decisions. This also works for
+existing records under Reviewed without repeating model calls. Use review notes to
+request a correction or clarify a conflict; existing review/revision safeguards apply.
+
+Limits: lexical matching can miss paraphrases and flag legitimate related rules.
+There is no semantic conflict verdict, automatic project-wide cleanup or guarantee
+against repetition. Exact duplicates still reject a discovery round atomically;
+saved human responses are retained. Historical data and approval/freshness remain
+unchanged; see [compatibility details](migrations.md#discovery-wording-similarity-safeguards-2026-10-20).
+
+Verification (2026-10-20): type checking, all **247 deterministic tests**, UI build
+and Playwright browser checks passed. New deterministic checks cover old
+out-of-index retrieval, hard budgets/citation boundaries, opposite rules, unchanged
+evidence, Review rendering and repeated SQLite reopening. No live model calls were
+made, so reduction in actual model repetition has not yet been measured. Browser
+checks also open opposite-rule comparisons, verify mobile width and reload, and
+assert that comparison does not mutate the saved project.
+
 ## Operation availability and disabled-action explanations
 
 Assessment, main verification and coding hold a stable specification from startup
@@ -213,14 +316,22 @@ Assessment/verification show explicit run state, selected/completed counts, code
 assessment totals and **Assessment details** with command exit codes/output, capture
 scope and progress. Failed or zero-assessed runs do not imply missing implementation.
 **Complete in code** filters existing code separately from confirmed main delivery.
-**Check implementation** performs local assessment followed by remote-main verification
+The Implement tab shows three main actions: **Check progress**, **Prepare plan**, and
+**Start implementation**. The last becomes **Resume implementation** for an unfinished
+run or **Verify delivery** when awaiting a merge. A next-step message explains what is
+needed, and Stop stays visible while working. **Check options** hides the less-common
+**Preview changes** and **Recheck everything** / **Recheck feature** controls by default.
+Check scope follows the selected feature; plan scope is explicitly all approved
+requirements. These labels preserve existing operations and saved-data compatibility.
+
+**Check progress** performs local assessment followed by remote-main verification
 in one action, automatically choosing the strongest supported status. Local/main
 evidence is retained separately; failed remote access or checks preserve local results
 and previous dated delivery evidence. Only complete, verified main counts as implemented.
 Unchanged assessments are reused independently per scope on explicit retry; main checks
 still run each time.
 This includes missing, partial and unknown results: being assessed is separate from
-being complete. **Reassess all**, **Reassess feature** (with a Feature filter), and the
+being complete. **Recheck everything**, **Recheck feature** (with a Feature filter), and the
 per-requirement **Reassess** button bypass reuse explicitly. Run details show reused
 versus freshly assessed counts and forced attempts. Completed checkpoints survive
 restart; failed/cancelled retries retain older dated evidence. Freshness reasons identify
@@ -231,7 +342,7 @@ finish before changing the starting specification snapshot. Unrelated answers pr
 current results and reuse when applied afterward. Changed
 supporting decisions, feature/project notes or dependency guardrails mark affected
 results **Needs reassessment** and invalidate new delivery evidence's current credit,
-even when requirement wording is unchanged. Retry **Check implementation** against
+even when requirement wording is unchanged. Retry **Check progress** against
 current decisions; assessment does not require archiving a coding run.
 
 Coding and assessment process one requirement at a time with independent contexts.

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectSchema, reviewFingerprint, type Project, type Submission } from "../core/model.js";
-import { reviewItems } from "./review.js";
+import { ReviewQueue, reviewItems } from "./review.js";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 function fixture(): Project {
   const project = projectSchema.parse({ id: "project", name: "Game", revision: 1, model: { providerID: "openai", modelID: "fixture" },
@@ -12,6 +14,19 @@ function fixture(): Project {
     fingerprint: reviewFingerprint(r), status: "pending", statement: `Refined ${r.id}`, rationale: "Observable behavior", acceptance: ["Behavior is preserved"], reason: "Abstracted code", createdAtRevision: 1 }));
   return project;
 }
+
+test("Review uses Refine as the single duplicate/conflict workflow without running it on render", () => {
+  const p = fixture(), before = structuredClone(p);
+  let calls = 0;
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
+    refine: () => { calls++; }, submit: async () => true, reviewRefinement: async () => true }));
+  assert.match(html, /Refine requirements/);
+  assert.match(html, /possible duplicates\/conflicts/);
+  assert.ok(!html.includes("Check approved requirements for duplicates and conflicts"));
+  assert.ok(!html.includes("Approved requirement audit"));
+  assert.equal(calls, 0);
+  assert.deepEqual(p, before);
+});
 
 test("unified review includes approved-target refinements without duplicating their pending original and restores the original after dismissal", () => {
   const p = fixture();

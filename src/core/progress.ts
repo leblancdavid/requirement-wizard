@@ -1,6 +1,7 @@
 import { coverage } from "./coverage.js";
 import { assessmentFreshness, createExecutionIndex, deliveredRequirement, eligibleRequirements, type ExecutionIndex, type ExecutionState } from "./execution.js";
-import { reviewFingerprint, type Project } from "./model.js";
+import type { Project } from "./model.js";
+import { pendingRefinementRequirementIDs } from "./resolution.js";
 
 export type LocalAssessmentCounts = {
   total: number; assessed: number; complete: number; partial: number; missing: number; unknown: number;
@@ -37,8 +38,7 @@ export function projectProgress(project: Project, execution: ExecutionState, def
   const ratio = (done: number, total: number) => total ? Math.min(done === total ? 100 : 99, Math.round(100 * done / total)) : 0;
   const active = project.epics.filter((epic) => !epic.archived);
   const requirements = project.requirements.filter((r) => active.some((e) => e.id === r.epicID));
-  const refinements = new Set(project.refinements.filter((f) => f.status === "pending" &&
-    requirements.some((r) => r.id === f.requirementID && f.fingerprint === reviewFingerprint(r))).map((f) => f.requirementID));
+  const refinements = pendingRefinementRequirementIDs(project);
   const reviewScore = (items: typeof requirements): ProgressScore => {
     const reviewed = items.filter((r) => ["accepted", "rejected"].includes(r.status) && !refinements.has(r.id)).length;
     return { percent: ratio(reviewed, items.length),

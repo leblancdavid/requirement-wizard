@@ -41,6 +41,128 @@ match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
 
+### Single Refine entry point (2026-10-20)
+
+Source/target: SQLite **3 → 3**, resolution envelopes **1 → 1**, project/execution
+payloads and workspace artifacts unchanged. Remove the separate session-only approved
+audit UI and its redundant action. Refine retains the internal approved-pair candidate
+scan, checkpointed model checks, pending/dismissed proposals and human approval flow.
+No saved audit state existed to migrate; all saved evidence, approval status, history,
+fingerprints and completed checks remain unchanged. This is presentation/navigation
+cleanup, not a semantic invalidation or an instruction to repeat model calls.
+
+The earlier approved-audit UI entry below records historical behavior; it is no longer
+an available user action. Browser checks now enter resolution directly through Refine
+and assert that the redundant section is absent. Core large-pair, cancellation and
+upgrade-preservation checks remain in place for internal candidate planning.
+
+### Resolution citation contract alignment (2026-10-20)
+
+Source/target: SQLite **3 → 3**, resolution envelopes **1 → 1**; no serialization,
+workspace, fingerprint, freshness or assessment compatibility change. The existing
+source-only/current-evidence policy is shared between resolution prompts, basis-specific
+schema enums and publication validation. Clarification question evidence IDs retain
+their separate record-reference rules. This fixes unconstrained proposal citation
+strings/ambiguous instructions and replaces the generic eligible-evidence failure with
+a field/index/ID-specific reason; invalid references are never mapped or replaced.
+
+There is no persisted-data transformation or startup inference. Original failures remain
+historical failures; existing valid proposals, approvals, IDs and completed pair/individual
+checks remain reusable. Explicit Refine retry handles the failed pair without resetting
+data or replaying unchanged completed work. Regression checks cover valid source-only
+citations, requirement/question/research IDs, duplicate/superseded/deferred/delegated and
+outside-context sources, human-vs-workspace basis, prompt/validator agreement, empty
+allowlists, atomic rejection and explicit retry. Existing reopen/upgrade checks remain
+applicable; no new format recovery path is needed.
+
+### Reviewable requirement resolutions v1 (2026-10-20)
+
+Source/target: SQLite **3 → 3**, execution JSON **1 → 1**, existing project/refinement
+records preserved. Add an optional `resolution` envelope (`format: 1`) to new refinement
+proposals, with the second requirement ID, explicit consolidation/coordinated-revision
+action, cited evidence and basis. Saved resolutions also require the second original
+snapshot and a `resolutionContextKey`. Missing optional resolution fields on legacy
+refinements mean ordinary cleanup, with unchanged semantics; no data backfill, new
+approval, repeated individual cleanup/model call, reassessment or reset is required.
+Unsupported future resolution formats and incomplete new provenance are rejected on
+project load without rewriting evidence. Saved job readers also reject future resolution
+formats rather than reusing them as completed checks.
+
+New job manifests optionally contain `refinementPair`, and new pair results contain
+`resolutionCheck` (`format: 1`, proposal/question/distinct/blocked). Existing completed
+single-requirement checks retain their original fingerprint/context identity. Pair
+checks use independent `resolution-evidence-v1` identity: exact requirement review
+snapshots, immutable source IDs for linked/current applicable human evidence, active
+area/dependency structure, and linked clarification statuses/answer IDs. Human sources
+are append-only: corrections retain old evidence and get new IDs/supersedes links.
+Workflow prose and app versions are not evidence changes. No identity/provenance is
+invented for older checks; a new pair task is not a replay of an old individual check.
+Unchanged completed/dismissed pair checks survive reopen; blocked/failed checks remain
+explicitly retryable. Unanswered/deferred/delegated clarifications suppress re-asking.
+
+Proposal publication uses existing revision/lease transactions and validates both exact
+task IDs, full supporting context and current eligible citations. A workspace observation
+cannot be cited as a human decision. Approval is a single existing CAS transaction:
+check both original snapshots/current human context and pending input, add human approval
+sources, then apply both changes or neither. Consolidation rejects (never deletes) the
+redundant record and unions evidence on the survivor. Coordinated correction retains
+both IDs and adds evidence/approval to each. Original proposals, snapshots, sources and
+history remain inspectable. Changed behavior invalidates applicable coverage and existing
+implementation/delivery freshness through the normal requirement/decision fingerprints;
+untouched completed work is not globally invalidated. Workspace artifact formats stay
+unchanged. Failure/cancellation never grants approval or repeats model calls at startup.
+
+Upgrade checks exercise legacy ordinary proposals alongside new resolution proposals,
+repeated SQLite reopening, approval after reopening, preservation of originals/history,
+future formats and missing provenance. Deterministic checks also cover stale/atomic
+rejection, malformed/missing/out-of-task evidence, pending reviews, cancellation/context
+failure, completed-task reuse after failure, clarification follow-up and the 20-call bound.
+Live model resolution quality remains unverified; fixtures do not establish semantic
+correctness or subscription compatibility.
+
+### Approved-requirement wording audit (2026-10-20)
+
+Source/target: SQLite **3 → 3**, project/execution JSON and workspace artifacts
+unchanged. The explicit bulk audit derives read-only candidate pairs from an in-memory
+project snapshot. Results are session-only, revision-labelled, and not new saved
+assessments, approvals, findings or freshness evidence. Revision changes show a stale
+snapshot warning; reload/project switching clears the report. No startup rewrite,
+migration transaction, model call, reset, reassessment or invalidation of valid completed
+work is required. Cancellation/failure affects only the local check.
+
+Legacy approved records participate without modification, including equivalent wording
+with different IDs/scenarios. Existing upgrade/reopen tests now exercise the audit and
+verify unchanged original snapshots/history and approvals. New tests cover eligible
+active-feature scope, pair uniqueness, bounded output, cancellation, no-match results
+and complete 500-requirement pair evaluation. Browser checks verify all-feature scope,
+paging, lazy comparison details, unchanged state/history/jobs, stale results, reload,
+mobile width and cancellation/retry. Similarity remains advisory, not semantic proof.
+
+### Discovery wording-similarity safeguards (2026-10-20)
+
+Source/target: SQLite **3 → 3**, project/execution JSON unchanged. New rounds use
+Unicode NFC/case/whitespace/terminal-question-and-sentence-punctuation normalization
+for duplicate wording checks. Internal punctuation, operators, numbers and negation
+remain significant. Scans use the same key when skipping already-existing wording.
+These checks apply only to new output; saved duplicates, approved wording, original
+evidence, IDs, revisions, assessments, fingerprints and delivery records are not rewritten
+or invalidated. No upgrade model calls or reassessment are required.
+
+Related-record hints are optional bounded navigation context, recorded through existing
+job manifest character counts/indexed IDs. They do not authorize evidence citations.
+New question citations are checked against detailed context for concept projects as
+well as scanned projects; saved question evidence is preserved, not revalidated or
+invalidated on upgrade.
+New round similarity notices use existing `roundChanges` strings. Review comparisons
+are computed read-only from current records, including legacy records, without new
+persisted state or a migration/startup transaction. Existing stale-result and atomic
+publication checks remain authoritative. Failed discovery preserves saved input.
+
+Checks: repeated SQLite reopening preserves original snapshots/history and approvals;
+bounded-context, exact-duplicate atomicity, opposite-rule warnings and read-only review
+tests pass. Similarity is lexical and advisory, not semantic reconciliation; saved
+records are never automatically merged or rejected.
+
 ### Implementation planning v1 (2026-10-19)
 
 Source/target: SQLite **3 → 3**, execution payload **1 → 1**. Add optional `planning`

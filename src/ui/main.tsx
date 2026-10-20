@@ -7,6 +7,7 @@ import "./appearance.css";
 import "./review.css";
 import "./action-button.css";
 import { ReviewQueue, reviewItems } from "./review.js";
+import { pendingRefinementRequirementIDs } from "../core/resolution.js";
 import { ProcessingQueue } from "./processing-queue.js";
 import { queueActivities } from "./queue-activity.js";
 import { ImplementationTab } from "./implementation.js";
@@ -110,6 +111,7 @@ function App() {
   const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<{ id: string; text: string } | null>(null);
   const project = data?.project;
+  const pendingRefinementIDs = useMemo(() => project ? pendingRefinementRequirementIDs(project) : new Set<string>(), [project]);
   const summary = data?.coverage;
   const mapProgress = useMemo(() => project && data ? projectProgress(project, data.execution, data.coverage) : null, [project, data?.execution, data?.coverage]);
   const busy = pending || !!data?.active || !!data?.implementationActive;
@@ -361,7 +363,7 @@ function App() {
                 const review = mapProgress!.stages.find((stage) => stage.id === "review")!.epics.find((score) => score.epicID === epic.id)!;
                 const definition = mapProgress!.stages.find((stage) => stage.id === "definition")!.epics.find((score) => score.epicID === epic.id);
                 const inProgress = !!data.execution.run?.units.some((unit) => unit.items.some((item) => members.some((r) => r.id === item.requirementID) && item.status !== "queued"));
-                const pendingRequirements = members.filter((r) => ["proposed", "needs-review"].includes(r.status) || project.refinements.some((f) => f.requirementID === r.id && f.status === "pending" && f.fingerprint === reviewFingerprint(r))).length;
+                const pendingRequirements = members.filter((r) => ["proposed", "needs-review"].includes(r.status) || pendingRefinementIDs.has(r.id)).length;
                 return <EpicOverview key={epic.id} epic={{ ...epic, dependencies: epic.dependencies.map((id) => epics.find((item) => item.id === id)?.title ?? id) }} title={areaTitle(epic)} implementation={implementation} review={review} definition={definition} inProgress={inProgress} hasRequirements={!!members.length} pendingRequirements={pendingRequirements} openQuestions={related.filter((q) => ["pending", "deferred", "delegated"].includes(q.status)).length} navigate={(next) => { setEpicID(epic.id); setTab(next); if (next === "discover") setQuestionFilter("open"); }}>{() => <>
                 <div className="button-row"><button className="quiet" onClick={() => setEpicID(epic.id)}>Focus definition details</button>{!["project", "inbox"].includes(epic.id) && <button className="quiet" onClick={() => setEditingEpic(editingEpic === epic.id ? null : epic.id)}>Edit feature</button>}</div>
                 {editingEpic === epic.id && <EpicForm title={epic.title} purpose={epic.purpose} disabled={busy} onSave={(title, purpose) => act(async () => { await mutate("epic", { epicID: epic.id, title, purpose }); setEditingEpic(null); })} />}

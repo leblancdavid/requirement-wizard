@@ -12,11 +12,22 @@ import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, rea
 import { dirname } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
+import { wordingKey } from "../core/similarity.js";
+import { resolutionHasWaitingInput, validateResolutionEvidence } from "../core/resolution.js";
 import { reviewRefinement } from "../core/refinement.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
 import { reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
   submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type ScanWork, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
+
+/** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
+function readStoredJob(payload: string): Job {
+  const job = JSON.parse(payload) as Job;
+  const envelopes = [...(job.result?.resolutionCheck ? [job.result.resolutionCheck] : []),
+    ...(job.result?.refinements ?? []).flatMap((p) => p.resolution ? [p.resolution] : [])];
+  if (envelopes.some((value) => value.format !== 1)) throw new Error("Unsupported requirement-resolution format in saved job. Upgrade the app; saved evidence was not overwritten.");
+  return job;
+}
 
 /** Also used on a disposable project copy before accepting a batch checkpoint. */
 function applyScanResults(project: Project, scan: NonNullable<Job["scan"]>, outputs: unknown[]) {
@@ -34,7 +45,7 @@ function applyScanResults(project: Project, scan: NonNullable<Job["scan"]>, outp
     });
     for (const r of result.requirements) if (r.epicID) r.epicID = aliases.get(r.epicID) ?? r.epicID;
     for (const op of result.organization ?? []) if (op.type === "upsert") op.dependencies = op.dependencies.map((id) => aliases.get(id) ?? id);
-    result.requirements = result.requirements.filter((r) => !project.requirements.some((old) => old.statement.trim().toLowerCase() === r.statement.trim().toLowerCase()));
+    result.requirements = result.requirements.filter((r) => !project.requirements.some((old) => wordingKey(old.statement) === wordingKey(r.statement)));
     applyRound(project, result, randomUUID);
   }
 }
@@ -562,14 +573,14 @@ export class ProjectStore {
   getJob(id: string): Job {
     const row = this.db.prepare("SELECT payload FROM jobs WHERE id = ?").get(id) as { payload: string } | undefined;
     if (!row) throw new Error("Job not found.");
-    return JSON.parse(row.payload) as Job;
+    return readStoredJob(row.payload);
   }
 
   jobs(projectID: string, limit?: number): Job[] {
     const rows = limit === undefined
       ? this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid").all(projectID)
       : this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid DESC LIMIT ?").all(projectID, Math.max(1, Math.min(200, limit))).reverse();
-    return (rows as Array<{ payload: string }>).map((row) => JSON.parse(row.payload) as Job);
+    return (rows as Array<{ payload: string }>).map((row) => readStoredJob(row.payload));
   }
 
   private saveJob(job: Job) {
@@ -711,7 +722,9 @@ export class ProjectStore {
   reviewRefinement(id: string, revision: number, proposalID: string, accept: boolean) {
     return this.mutate(id, revision, "Human reviewed requirement cleanup", (project) => {
       const proposal = project.refinements.find((p) => p.id === proposalID);
-      if (accept && this.submissions(id).some((s) => s.input.type === "review" && s.input.requirementID === proposal?.requirementID && ["queued", "saved", "processing"].includes(s.status))) throw new Error("Process the pending human review before approving cleanup.");
+      if (accept && proposal && resolutionHasWaitingInput(project, proposal, this.submissions(id))) throw new Error("Process the pending human input before approving this resolution.");
+      const targets = [proposal?.requirementID, proposal?.resolution?.relatedRequirementID];
+      if (accept && this.submissions(id).some((s) => s.input.type === "review" && targets.includes(s.input.requirementID) && ["queued", "saved", "processing"].includes(s.status))) throw new Error("Process the pending human review before approving cleanup.");
       reviewRefinement(project, proposalID, accept, randomUUID);
     });
   }
@@ -731,11 +744,26 @@ export class ProjectStore {
       } else {
         this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
           const reviews = this.submissions(project.id).filter((s) => s.applied && s.input.type === "review" && job.context?.submissionIDs?.includes(s.id));
-          if (job.context?.refinementOnly && (result.questions.length || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length || result.researchFindings?.length)) throw new Error("Refinement-only passes may only propose requirement cleanup.");
+          const pair = job.context?.refinementPair?.requirementIDs;
+          if (job.context?.refinementOnly && ((!pair && result.questions.length) || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length || result.researchFindings?.length)) throw new Error("Refinement-only passes may only propose requirement cleanup.");
+          if (result.resolutionCheck && !pair) throw new Error("Resolution outcomes require an explicit pair task.");
+          if (pair) {
+            const check = result.resolutionCheck;
+            if (!check || result.questions.length > 1 || (result.refinements?.length ?? 0) > 1) throw new Error("Resolution tasks need a bounded explicit outcome.");
+            if ((check.outcome === "proposal") !== !!result.refinements?.length || (check.outcome === "question") !== !!result.questions.length) throw new Error("Resolution outcome does not match its proposal or question.");
+            if (result.questions.some((q) => pair.some((id) => !q.evidenceIDs?.includes(id)))) throw new Error("Resolution clarification must link both requirements.");
+          }
           for (const proposal of result.refinements ?? []) {
+            if (proposal.resolution && (!pair || !pair.includes(proposal.requirementID) || proposal.resolution.relatedRequirementID !== pair.find((id) => id !== proposal.requirementID))) throw new Error("Resolution cannot change requirements outside its exact pair task.");
+            if (pair && !proposal.resolution) throw new Error("Pair tasks must propose an explicit resolution, not independent cleanup.");
+            validateResolutionEvidence(project, proposal, job.context?.includedIDs);
             if (job.context?.refinementTarget && proposal.requirementID !== job.context.refinementTarget.requirementID) throw new Error("Refinement cannot change a requirement outside its individual task.");
             const target = project.requirements.find((r) => r.id === proposal.requirementID);
             if (!job.context?.includedIDs.includes(proposal.requirementID) || target?.sourceIDs.some((sourceID) => !job.context!.includedIDs.includes(sourceID))) throw new Error("Refinement requires the detailed requirement and all supporting evidence.");
+            if (proposal.resolution) {
+              const related = project.requirements.find((r) => r.id === proposal.resolution!.relatedRequirementID);
+              if (!related || !job.context?.includedIDs.includes(related.id) || [...related.sourceIDs, ...proposal.resolution.evidenceIDs].some((id) => !job.context!.includedIDs.includes(id))) throw new Error("Resolution requires both detailed requirements and all supporting evidence.");
+            }
           }
           const authorized = (sourceID: string, changes = false) => reviews.some((s) => s.appliedSourceID === sourceID && s.input.type === "review" && (!changes || !!s.input.note.trim()) &&
             !project.sources.some((source) => source.supersedes === sourceID));
@@ -752,6 +780,7 @@ export class ProjectStore {
             } else if (!job.context?.includedIDs.includes(change.requirementID)) throw new Error("Cannot change a requirement outside detailed context.");
           }
           if (project.scans.length && result.questions.some((q) => !q.evidenceIDs?.length || q.evidenceIDs.some((evidenceID) => !job.context?.includedIDs.includes(evidenceID)))) throw new Error("Existing-project questions must cite evidence in the current detailed working context. No proposals applied.");
+          if (job.context && result.questions.some((q) => q.evidenceIDs?.some((id) => !job.context!.includedIDs.includes(id)))) throw new Error("Question citations require evidence in the current detailed working context, not related-record hints or index labels. No proposals applied.");
           validateRequirementEvidence(project, result.requirements);
           for (const [index, item] of result.requirements.entries()) {
             const missing = job.context && item.sourceIDs.find((sourceID) => !job.context!.includedIDs.includes(sourceID));
@@ -789,6 +818,7 @@ export class ProjectStore {
           const interpretation = job.context?.partial || job.context?.refinementOnly ? { summary: project.summary, analysisRevision: project.analysisRevision,
             goals: project.goals, actors: project.actors, assumptions: project.assumptions, scopeAssessment: project.scopeAssessment } : undefined;
           applyRound(project, result, randomUUID, job.researchEvidence);
+          if (result.resolutionCheck) project.roundChanges.push(`Requirement overlap check (${result.resolutionCheck.outcome}): ${result.resolutionCheck.explanation}`);
           if (omittedConcepts) project.roundChanges.push(`Omitted ${omittedConcepts} malformed concept annotations; question wording was preserved.`);
           if (job.context?.refinementOnly) project.roundChanges.push(`Requirement refinement (bounded working set): ${result.summary}`);
           if (interpretation) Object.assign(project, interpretation);

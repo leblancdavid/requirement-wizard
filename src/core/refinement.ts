@@ -1,9 +1,12 @@
 import { reviewFingerprint, StaleRevisionError, type Analysis, type Project } from "./model.js";
+import { refinementIsStale, resolutionContextKey, validateResolutionEvidence } from "./resolution.js";
 
 export function refinementCandidates(project: Project) {
   return project.requirements.filter((r) => r.status !== "rejected"
     && project.epics.some((e) => e.id === r.epicID && !e.archived)
-    && !project.refinements.some((p) => p.requirementID === r.id && p.fingerprint === reviewFingerprint(r)));
+    && !project.refinements.some((p) => p.resolution && p.status === "pending" && !refinementIsStale(project, p)
+      && [p.requirementID, p.resolution.relatedRequirementID].includes(r.id))
+    && !project.refinements.some((p) => !p.resolution && p.requirementID === r.id && p.fingerprint === reviewFingerprint(r)));
 }
 
 export function proposeRefinements(project: Project, proposals: NonNullable<Analysis["refinements"]>, newID: () => string) {
@@ -15,9 +18,20 @@ export function proposeRefinements(project: Project, proposals: NonNullable<Anal
     seen.add(target.id);
     const fingerprint = reviewFingerprint(target);
     // A dismissed suggestion is not permission to try the same cleanup again.
-    if (project.refinements.some((r) => r.requirementID === target.id && r.fingerprint === fingerprint)) continue;
-    if (proposal.statement === target.statement && JSON.stringify(proposal.acceptance) === JSON.stringify(target.acceptance)) continue;
-    project.refinements.push({ ...proposal, id: newID(), fingerprint, original: structuredClone(target), status: "pending", createdAtRevision: project.revision + 1 });
+    const related = proposal.resolution && project.requirements.find((r) => r.id === proposal.resolution!.relatedRequirementID);
+    if (proposal.resolution && (!related || related.id === target.id || target.status !== "accepted" || related.status !== "accepted"
+      || !project.epics.some((e) => e.id === related.epicID && !e.archived))) throw new Error("Resolution requires two distinct approved requirements in active features.");
+    const contextKey = related ? resolutionContextKey(project, [target.id, related.id]) : undefined;
+    if (proposal.resolution) {
+      if (proposal.resolution.basis === "duplicate" && proposal.resolution.change.type !== "consolidate") throw new Error("Duplicate resolutions must explicitly consolidate the redundant requirement.");
+      validateResolutionEvidence(project, proposal);
+    }
+    if (project.refinements.some((r) => proposal.resolution
+      ? r.resolutionContextKey === contextKey && r.resolution
+      : !r.resolution && r.requirementID === target.id && r.fingerprint === fingerprint)) continue;
+    if (!proposal.resolution && proposal.statement === target.statement && JSON.stringify(proposal.acceptance) === JSON.stringify(target.acceptance)) continue;
+    project.refinements.push({ ...proposal, id: newID(), fingerprint, original: structuredClone(target), status: "pending", createdAtRevision: project.revision + 1,
+      ...(related ? { relatedOriginal: structuredClone(related), resolutionContextKey: contextKey } : {}) });
     project.roundChanges.push(`Proposed requirement cleanup: ${target.statement} — ${proposal.reason}`);
   }
 }
@@ -27,7 +41,28 @@ export function reviewRefinement(project: Project, id: string, accept: boolean, 
   if (!proposal) throw new Error("Pending refinement not found.");
   if (!accept) { proposal.status = "dismissed"; return; }
   const target = project.requirements.find((r) => r.id === proposal.requirementID);
-  if (!target || reviewFingerprint(target) !== proposal.fingerprint || !project.epics.some((e) => e.id === target.epicID && !e.archived)) throw new StaleRevisionError();
+  if (!target || refinementIsStale(project, proposal)) throw new StaleRevisionError();
+  if (proposal.resolution) {
+    const related = project.requirements.find((r) => r.id === proposal.resolution!.relatedRequirementID)!;
+    const changes = JSON.stringify({ requirementID: target.id, statement: proposal.statement, rationale: proposal.rationale, acceptance: proposal.acceptance, reason: proposal.reason, resolution: proposal.resolution });
+    const evidence = [...new Set([...target.sourceIDs, ...related.sourceIDs, ...proposal.resolution.evidenceIDs])];
+    for (const [record, rejected] of [[target, false], [related, proposal.resolution.change.type === "consolidate"]] as const) {
+      const sourceID = newID();
+      const previous = project.sources.filter((s) => s.requirementID === record.id && ["confirmation", "rejection"].includes(s.kind) && !project.sources.some((next) => next.supersedes === s.id)).at(-1);
+      project.sources.push({ id: sourceID, kind: rejected ? "rejection" : "confirmation", requirementID: record.id, epicID: record.epicID,
+        ...(previous ? { supersedes: previous.id } : {}),
+        text: `Human approved requirement resolution ${proposal.id}. Original snapshots are retained in the proposal and revision history. Reviewed changes: ${changes}\n${rejected ? `Consolidated into requirement ${target.id}; original record retained.` : `Updated requirement ${record.id}.`}` });
+      record.sourceIDs = [...new Set([...record.sourceIDs, ...proposal.resolution.evidenceIDs, ...(record.id === target.id ? evidence : []), sourceID])];
+      record.reviewNote = rejected ? `Consolidated into ${target.id}. ${proposal.reason}` : proposal.reason;
+      record.status = rejected ? "rejected" : "accepted";
+    }
+    Object.assign(target, { statement: proposal.statement, rationale: proposal.rationale, acceptance: [...proposal.acceptance] });
+    if (proposal.resolution.change.type === "revise") Object.assign(related, { statement: proposal.resolution.change.statement, rationale: proposal.resolution.change.rationale, acceptance: [...proposal.resolution.change.acceptance] });
+    proposal.status = "accepted";
+    project.assessments = project.assessments.filter((a) => !a.checks.some((c) => c.evidenceIDs.some((id) => [target.id, related.id].includes(id))));
+    project.roundChanges = [`Approved requirement resolution: ${target.id} and ${related.id}. ${proposal.reason}`];
+    return;
+  }
   const sourceID = newID();
   const previous = project.sources.filter((s) => s.requirementID === target.id || (s.kind === "confirmation" && target.sourceIDs.includes(s.id))).at(-1);
   project.sources.push({ id: sourceID, kind: "confirmation", requirementID: target.id, epicID: target.epicID,
