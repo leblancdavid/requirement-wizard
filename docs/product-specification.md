@@ -221,6 +221,17 @@ requirements, with dependencies, acceptance scenarios, constraints, and delivera
 - Every in-scope requirement maps to work; technical tasks have a recorded rationale.
 - Validate references and reject dependency cycles.
 - Material changes mark affected plans as needing review.
+- Propose hard prerequisites separately from preferred ordering, with evidence references,
+  confidence, reasons and unresolved questions. Human review selects new hard edges and
+  resolves questions before approval; deterministic sequencing enforces prerequisite order.
+- Retain reviewed order and package implementation/verification guidance against a
+  specification revision. Checkpoint bounded proposal work; interrupted retries preserve
+  completed packages when inputs still match. Preserve legacy manual planning on upgrade.
+
+Implemented DEC-025 slice: one package per approved active requirement in the integrated
+Implementation workspace, with review and execution guidance. Phased readiness baselines,
+multi-requirement packages, executable subpackages and portable planning exports remain
+future work. Existing broad epic dependencies remain guardrails.
 
 **RW-016 — Portable handoffs.** Export human-readable Markdown and structured JSON
 for the selected baseline and implementation phases.
@@ -243,6 +254,10 @@ clickable questions, free-form input, requirement review, progress, and cancella
 - Replace waiting answers atomically; processing-time corrections wait for the next
   round. Never let a correction silently overwrite a newer answer or active snapshot.
 - Group requirements under expandable features in Project map; show progress,
+  epic purposes, delivery counts/percentages, outstanding reviews/questions and
+  epic-scoped links to Design, Review and Implement. Keep estimated definition
+  coverage separate from verified main delivery; show undefined scope explicitly.
+  Mount detailed requirement/evidence lists on expansion. Show
   supporting evidence, settings, and diagnostics on demand rather than as permanent
   competing columns. Use plain-language labels without implying build readiness.
 

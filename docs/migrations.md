@@ -41,6 +41,59 @@ match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
 
+### Implementation planning v1 (2026-10-19)
+
+Source/target: SQLite **3 → 3**, execution payload **1 → 1**. Add optional `planning`
+and `planningHistory` envelopes with independent `format: 1`, and optional
+`config.implementationOrder`. Missing fields mean the existing manual-planning workflow;
+no data rewrite, model call, new approval requirement or evidence invalidation occurs on
+upgrade. Startup validation rejects unsupported future planning formats, including
+history, without replacing saved payloads.
+
+Proposal checkpoints preserve original requirement IDs, evidence references, steps,
+verification guidance, session IDs, model, specification revision, workspace binding,
+settings identity and creation time. Approval records selected hard edges, notes and
+approval time while retaining original proposals. Replacement/retry retains old plans.
+Interrupted retries reuse completed packages only against the exact same planning
+inputs; no missing provenance is invented. Approved dependencies use existing semantic
+freshness rules; changed prerequisites can genuinely invalidate affected assessment
+context. Ordering alone does not change assessment identity or delivered evidence.
+Planning settings identity canonicalizes object keys and prerequisite/path sets; equivalent
+serialization does not require repeating proposal calls. Execution order remains ordered.
+
+Writes use existing transactional execution CAS/worker leases. Review also checks the
+current specification revision and workspace binding; crashes leave checkpoints for
+explicit retry and never automatically repeat model calls. Existing code/delivery runs
+must be archived before a replacement plan. No workspace artifact format changes.
+Deterministic checks exercise legacy migration preservation, unsupported planning
+formats, failed/interrupted checkpoint retry, approved-plan repeated reopen, stale/CAS
+rejection and browser review. Live planning output quality remains unqualified.
+
+### Discovery glossary cleanup and validation diagnostics (2026-10-19)
+
+Source/target formats unchanged: SQLite **3 → 3**, existing project/job JSON and
+workspace formats unchanged. New discovery results may omit schema-malformed
+individual concept annotations before strict analysis validation; valid annotations
+and all substantive proposal fields remain validated normally. Existing phrase-reference
+cleanup still applies. Omission counts use the existing revision `roundChanges`
+strings; blocking failures use the existing job `diagnostic` string with bounded field
+paths and expected-shape details, without model values.
+
+No forward data transformation is needed. Existing snapshots, completed/failed jobs,
+evidence, stable IDs, assessments, fingerprints and worker leases are untouched.
+Reopening does not replay old failures or repeat model calls. Old failed rounds remain
+failed and require explicit follow-up; this change does not reconstruct missing results
+or certify them as applied. New result publication retains the existing revision/lease
+checks and atomic transaction. Regression coverage exercises old completed work and
+history preservation across repeated reopen, durable cleanup reporting, and atomic
+rejection of substantive errors alongside malformed annotations.
+
+Verification (2026-10-19): `npm run check`, all **235 tests** under `npm test`,
+and scoped `git diff --check` passed. Read-only replay of the original failed
+Rust Grind Galaxy response through the new parser omitted its single dummy entry,
+retained its valid annotation, question and requirement, and passed schema validation.
+This did not publish that response or make a live model call.
+
 ### Project activity index v1 (2026-10-19)
 
 Source/target: SQLite **2 → 3** (older supported databases run migration 2 first).

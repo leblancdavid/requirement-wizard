@@ -15,7 +15,7 @@ import { applyRound } from "../core/round.js";
 import { reviewRefinement } from "../core/refinement.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
-import { reviewFingerprint, validateRequirementEvidence, answerSchema, analysisSchema, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
+import { reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
   submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type ScanWork, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
 
 /** Also used on a disposable project copy before accepting a batch checkpoint. */
@@ -101,9 +101,11 @@ export class ProjectStore {
     return row ? JSON.parse(row.payload) as ExecutionState : emptyExecution();
   }
 
-  saveExecution(id: string, state: ExecutionState, owner?: string) {
+  saveExecution(id: string, state: ExecutionState, owner?: string, expected?: { revision: number; bindingID?: string }) {
     if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution data format. Refresh before saving.");
     this.db.transaction(() => {
+      if (expected && this.get(id).revision !== expected.revision) throw new StaleRevisionError();
+      if (expected?.bindingID && this.workspace(id)?.bindingID !== expected.bindingID) throw new Error("Workspace changed before the implementation update could be saved.");
       if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
       const live = this.db.prepare("SELECT owner FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()) as { owner: string } | undefined;
       if (live && live.owner !== owner || owner && !live) throw new Error("Implementation worker lease changed or expired.");
@@ -715,7 +717,7 @@ export class ProjectStore {
   }
 
   finishJob(id: string, raw: unknown): Job {
-    const result = analysisSchema.parse(raw);
+    const { result, omittedConcepts } = parseDiscoveryAnalysis(raw);
     return this.db.transaction(() => {
       const job = this.getJob(id);
       if (job.helpRequest || job.kind === "scan") throw new Error("Question help and scans cannot apply ordinary discovery proposals.");
@@ -787,6 +789,7 @@ export class ProjectStore {
           const interpretation = job.context?.partial || job.context?.refinementOnly ? { summary: project.summary, analysisRevision: project.analysisRevision,
             goals: project.goals, actors: project.actors, assumptions: project.assumptions, scopeAssessment: project.scopeAssessment } : undefined;
           applyRound(project, result, randomUUID, job.researchEvidence);
+          if (omittedConcepts) project.roundChanges.push(`Omitted ${omittedConcepts} malformed concept annotations; question wording was preserved.`);
           if (job.context?.refinementOnly) project.roundChanges.push(`Requirement refinement (bounded working set): ${result.summary}`);
           if (interpretation) Object.assign(project, interpretation);
         });

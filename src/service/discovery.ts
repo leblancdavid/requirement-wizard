@@ -1,4 +1,5 @@
-import { analysisSchema, reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Telemetry, type ResearchEvidence } from "../core/model.js";
+import { z } from "zod";
+import { reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Telemetry, type ResearchEvidence } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
 import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
@@ -23,6 +24,19 @@ export interface DiscoveryAdapter {
   }): Promise<unknown>;
 }
 export type DiscoveryOptions = Parameters<DiscoveryAdapter["analyze"]>[1];
+
+function schemaDiagnostic(error: z.ZodError): string {
+  // Do not echo model values, unknown keys, or custom messages into diagnostics.
+  const details = error.issues.slice(0, 4).map((issue) => {
+    const path = issue.path.map((part) => typeof part === "number" ? `[${part}]` : part).join(".").replace(/\.\[/g, "[") || "response";
+    const reason = issue.code === "invalid_type" ? `expected ${issue.expected}`
+      : issue.code === "invalid_enum_value" ? `expected one of ${issue.options.join(", ")}`
+      : issue.code === "too_small" ? "too few items or characters"
+      : issue.code === "too_big" ? "too many items or characters" : issue.code;
+    return `${path}: ${reason}`;
+  }).join("; ");
+  return safeMessage(`Model output failed schema validation. No proposals were applied; saved human input was preserved. ${details}${error.issues.length > 4 ? `; ${error.issues.length - 4} more issues` : ""}`);
+}
 
 /** Shared application boundary. No model or storage operations belong in UI components. */
 export class DiscoveryService {
@@ -251,7 +265,7 @@ export class DiscoveryService {
         : await this.adapter.analyze(project, adapterOptions);
       controller.signal.throwIfAborted();
       report("Checking returned proposals and references before saving…");
-      return options.helpRequest ? this.store.finishHelp(job.id, output) : this.store.finishJob(job.id, analysisSchema.parse(output));
+      return options.helpRequest ? this.store.finishHelp(job.id, output) : this.store.finishJob(job.id, output);
     } catch (error) {
       if (error instanceof ContextBudgetError) {
         error.manifest.submissionIDs = options.submissionIDs;
@@ -262,7 +276,7 @@ export class DiscoveryService {
       const cancelled = controller.signal.aborted;
       this.store.failJob(job.id, cancelled ? "cancelled" : "failed",
         cancelled ? "Request cancelled or timed out. Human input was preserved." :
-          error instanceof Error && error.name === "ZodError" ? "Model output failed schema validation. No proposals were applied." : safeMessage(error instanceof Error ? error.message : error));
+          error instanceof z.ZodError ? schemaDiagnostic(error) : safeMessage(error instanceof Error ? error.message : error));
       return this.store.getJob(job.id);
     } finally {
       clearTimeout(timer);

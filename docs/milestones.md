@@ -6,6 +6,13 @@ coverage/context slice implemented with readiness work pending. Requirements ref
 [product-specification.md](product-specification.md). Complete and verify each
 vertical slice before expanding it. The integrated build pilot follows the initial release.
 
+DEC-025 planning slice: reviewable requirement-linked work packages, dependency
+proposals/reasons, selected hard-edge validation and deterministic sequence now feed the
+integrated executor. Planning is checkpointed and explicitly reviewed; broad epic
+guardrails remain. Multi-requirement packages, executable subpackages, adaptive coding-time
+dependency discovery and live planning qualification remain follow-on checks. This does
+not complete portable handoff/readiness milestones.
+
 ## M1 — OpenCode runtime integration spike
 
 Progress: version-pinned runner, provider discovery, live ChatGPT JSON-text response,

@@ -250,7 +250,9 @@ operations require that explicitly configured pilot; normal folder sync/manual
 terminal commands do not commit or push. See
 [implementation-workspace.md](implementation-workspace.md).
 
-Open **Project map → Implementation progress**. The feature filter scopes the list.
+Open **Project map → Manual implementation records → Implementation progress**.
+The feature filter scopes the list. The map's epic delivery percentages use verified
+main delivery instead of these manual records.
 For each requirement, record **Not started**, **In progress**, **Blocked**,
 **Implemented**, or **Verified**, plus notes and verification evidence. Verified
 requires nonblank evidence. These are manual assessments, not executed test results.

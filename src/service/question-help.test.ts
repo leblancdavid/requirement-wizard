@@ -63,6 +63,45 @@ test("concept references reject missing, ambiguous, overlapping, and misplaced p
   assert.equal(questionHelpRequestSchema.safeParse({ questionID: "q", action: "follow-up", message: "  " }).success, false);
 });
 
+test("malformed glossary entries do not lose a discovery round and cleanup survives reopening", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "reqwizit-glossary-"));
+  const path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const project = seed(store);
+    const history = store.history(project.id);
+    const previousJob = store.jobs(project.id)[0]!;
+    const valid = { field: "text", phrase: "engine-gated travel", meaning: "Travel requires a suitable engine.", impact: "Damage can prevent travel." };
+    const output = { summary: "Recovery", goals: [], actors: [], assumptions: [], retireQuestions: [],
+      requirements: [{ statement: "Repairs restore damaged equipment.", rationale: "Preserve recovery.", sourceIDs: [project.sources[0]!.id], acceptance: ["Paid repairs restore equipment."] }],
+      questions: [{ text: "Should engine-gated travel remain available?", whyItMatters: "Preserve recovery access.",
+        options: [{ label: "Yes", consequence: "Keep travel" }, { label: "No", consequence: "Provide another route" }],
+        concepts: [valid, { field: "options", phrase: "unused", meaning: "unused", impact: "unused" },
+          null, "unused", { ...valid, meaning: 42 }, { ...valid, optionIndex: -1 }, { ...valid, extra: "unexpected" },
+          { ...valid, phrase: "absent" }],
+      }] };
+    const original = structuredClone(output);
+    const job = await new DiscoveryService(store, { async analyze() { return output; } }).analyze(project.id, project.revision);
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.deepEqual(output, original, "normalization must not mutate the adapter response");
+    const saved = store.get(project.id);
+    assert.equal(saved.questions.at(-1)!.text, output.questions[0]!.text);
+    assert.deepEqual(saved.questions.at(-1)!.options, output.questions[0]!.options);
+    assert.deepEqual(saved.questions.at(-1)!.concepts, [valid]);
+    assert.equal(saved.requirements.at(-1)!.statement, output.requirements[0]!.statement);
+    assert.ok(saved.roundChanges.includes("Omitted 6 malformed concept annotations; question wording was preserved."));
+    assert.ok(saved.roundChanges.includes("Omitted 1 invalid concept annotations; question wording was preserved."));
+    assert.deepEqual(job.result!.questions[0]!.concepts, [valid, { ...valid, phrase: "absent" }]);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.get(project.id), saved);
+      assert.deepEqual(store.getJob(job.id), job);
+      assert.deepEqual(store.getJob(previousJob.id), previousJob);
+      assert.deepEqual(store.history(project.id).filter((entry) => entry.revision <= project.revision), history);
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("help is durable, revision-linked advisory history and never changes decisions or coverage", async () => {
   const directory = mkdtempSync(join(tmpdir(), "reqwizit-help-"));
   const path = join(directory, "projects.sqlite");

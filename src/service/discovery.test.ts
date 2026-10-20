@@ -13,6 +13,37 @@ function result(project: Project): Analysis {
     ] }], requirements: [{ statement: "Persist jobs", rationale: "Track work", sourceIDs: [project.sources[0]!.id], acceptance: ["Saved jobs survive restart"] }] };
 }
 
+test("glossary cleanup keeps substantive validation atomic and reports bounded field diagnostics", async () => {
+  for (const failure of ["wording", "acceptance", "evidence", "concept-container", "concept-bound"] as const) {
+    const store = new ProjectStore(":memory:");
+    try {
+      const project = store.create("Validation", "Preserve the human idea", { providerID: "openai", modelID: "fixture" });
+      const snapshot = structuredClone(project);
+      const job = await new DiscoveryService(store, { async analyze(p) {
+        const output = result(p);
+        const question = { ...output.questions[0]!, concepts: [{ field: "options", phrase: "unused", meaning: "unused", impact: "unused" }] };
+        if (failure === "wording") return { ...output, questions: [{ ...question, text: 42 }] };
+        if (failure === "acceptance") return { ...output, questions: [question], requirements: [{ ...output.requirements[0]!, acceptance: [] }] };
+        if (failure === "evidence") return { ...output, questions: [question], requirements: [{ ...output.requirements[0]!, sourceIDs: ["missing-source"] }] };
+        if (failure === "concept-container") return { ...output, questions: [{ ...question, concepts: "invalid-container" }] };
+        return { ...output, questions: [{ ...question, concepts: Array(9).fill(question.concepts[0]) }] };
+      } }).analyze(project.id, project.revision);
+      assert.equal(job.status, "failed");
+      assert.deepEqual(store.get(project.id), snapshot);
+      assert.equal(store.history(project.id).length, 1);
+      assert.equal(job.result, undefined);
+      if (failure === "evidence") assert.match(job.diagnostic!, /missing-source/);
+      else {
+        assert.match(job.diagnostic!, /Model output failed schema validation.*No proposals were applied; saved human input was preserved/);
+        const field = failure === "wording" ? "questions[0].text" : failure === "acceptance" ? "requirements[0].acceptance" : "questions[0].concepts";
+        assert.ok(job.diagnostic!.includes(field), job.diagnostic);
+        assert.ok(job.diagnostic!.length <= 1200);
+        assert.ok(!job.diagnostic!.includes("invalid-container"));
+      }
+    } finally { store.close(); }
+  }
+});
+
 test("requirement citations use the same current evidence allowlist in prompts and precise validation diagnostics", () => {
   const store = new ProjectStore(":memory:");
   try {

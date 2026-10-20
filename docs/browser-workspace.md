@@ -29,6 +29,14 @@ detailed round context. Missing, superseded, deferred, delegated and duplicate c
 identify the proposal and source in validation diagnostics. Rejection remains atomic;
 saved input is retained and invalid citations are never silently replaced.
 
+Discovery omits individual malformed glossary annotations from otherwise valid-size
+concept arrays, as well as annotations with missing/ambiguous/overlapping phrase
+references. Valid explanations and question wording/options are retained, and the
+saved round changes report omission counts. Invalid containers or oversized arrays
+still fail validation. Substantive schema failures identify the failing field paths
+and expected shape without echoing model values; the entire round remains unapplied
+and saved human input is preserved. Cleanup adds no model calls.
+
 Verification (2026-10-19): type checking and all 228 deterministic tests passed, as
 did the UI build and Playwright browser checks. The browser checks cover hover,
 keyboard focus and touch explanations, accessible descriptions, blocked activation,
@@ -433,8 +441,8 @@ persistence, reset, contrast hints, actual picker keyboard selection/dismissal, 
 
 Projects can connect to a local folder during creation or through **Settings → Project
 workspace**. Generated requirements/progress files update after app and CLI changes;
-the header shows their saved revision or sync conflict. **Project map → Implementation
-progress** records manual build status and verification evidence independently of
+the header shows their saved revision or sync conflict. **Project map → Manual
+implementation records → Implementation progress** records manual build status and verification evidence independently of
 requirements review. See [local project workspaces](project-workspaces.md) for file
 layout, folder browsing, reconnect/retry, conflict resolution, and recovery behavior.
 
@@ -534,11 +542,45 @@ against its current answer source for the next round, leaving the active snapsho
 intact. Races/conflicts retain the draft and report an error instead of overwriting
 newer information. Drafts are in-page state, not persisted across reloads.
 
-**Project map** is a grouped feature outline with confirmed/to-review/open-question
-counts. Requirement details, acceptance scenarios, supporting evidence, feature
-editing, notes, and organization controls open on demand. **Definition progress**
-uses the existing coverage calculation and plain-language assessment labels; it is
-an estimate of identified work, not completeness or build readiness.
+**Project map** is an epic-level overview. Each active epic shows its saved purpose
+without expansion, lifecycle status, delivery percentage/count, and outstanding
+requirements/questions. **Open Design**, **Open Review** and **Open Implement** select
+that epic in the destination tab. Shared project decisions and unorganized items appear
+after the named epics with their own labels; empty special areas and archived epics
+are omitted, while named epics without requirements remain visible.
+
+Delivery reuses the same `projectProgress` calculation as Overall progress: current
+verified delivery to the configured repository's main branch divided by all identified,
+non-rejected requirements, including those awaiting approval. Manual assessments,
+unmerged work and complete local code do not earn delivery credit. An empty epic says
+**Scope not defined yet** rather than showing a misleading 0% bar; an area containing
+only rejected requirements says **No active implementation scope**. Status labels are
+Defining, No active scope, Needs review, Approved to build, In progress and Delivered.
+Approved to build indicates reviewed scope, not runtime configuration/readiness.
+Started coding, current partial/complete local evidence, or partial delivery make an
+epic In progress. Outstanding reviews/questions remain visible alongside that status.
+
+**View details** mounts requirement lists, acceptance scenarios, supporting evidence,
+feature editing, dependencies, notes and organization controls only when opened.
+Definition coverage remains a separately labeled estimate, with local assessment
+counts distinguishing complete, partial, missing, unknown, unassessed and stale work.
+The sidebar's **Definition progress** also retains its existing calculation; neither
+definition measure certifies completeness or build readiness. Source scan controls
+follow the overview. **Manual implementation records** retains the existing manual
+editor behind a lazy disclosure, separately from automatic delivery tracking.
+
+This is a presentation-only upgrade: persisted project/execution formats, stable IDs,
+manual notes, assessment/delivery evidence and freshness rules are unchanged. Existing
+projects display the overview directly without migration or additional model calls.
+
+Verification (2026-10-19): type checking, all six progress calculation tests, the UI
+build and deterministic Chromium browser checks passed. The map checks cover visible
+purpose text, scoped navigation, lazy requirement/manual editors at 500 requirements,
+empty and archived epics, mobile width, manual records earning no delivery credit,
+33%/100% delivery and removal of stale delivery credit through polling. Screenshots:
+`.reqwizit-state/browser-map.png` and `.reqwizit-state/browser-map-mobile.png`.
+These checks ran on the available Node 20.11 environment; the documented development
+baseline remains Node 22.12+. No live model calls were made.
 
 Each round is bounded and stops for the human. It does not autonomously run an
 unlimited sequence of calls: automatic follow-ups run only for new saved submissions.

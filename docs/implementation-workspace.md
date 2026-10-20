@@ -8,6 +8,60 @@ assessment and real GitHub delivery/installer integration remain unqualified.
 
 ## Browser workflow
 
+### Prepare and review implementation order (DEC-025)
+
+**Prepare implementation plan** operates on all approved requirements in active epics
+(up to 500), independently of the list's feature/search/status filters. Save execution
+settings and connect the local Git root first. Existing-project users should run
+**Check implementation** for evidence before planning. Planning itself does not capture
+new code, fetch main, run checks, modify source or establish branch availability.
+
+- The saved OpenCode model proposes one work package per approved requirement, with
+  implementation steps, acceptance-linked verification, dependency reasons and evidence
+  IDs, confidence and unresolved questions. Supporting foundations stay within the
+  approved outcome; multi-requirement packages and independently executable subpackages
+  remain future work.
+- Each target uses a fresh read-only planning session and bundled planning skill. Exact
+  target/human evidence and dependency guardrails are retained; the cross-requirement
+  index includes exact approved behavior and acceptance scenarios. Other targets' human
+  histories are explicitly omitted. Oversized mandatory context blocks before inference.
+  Each request consumes provider allowance; the UI explains the per-requirement calls.
+- Package checkpoints and session IDs persist after each successful response. Explicit
+  retry skips completed packages only when specification revision, workspace binding and
+  saved settings still match. Cancellation, malformed output and stale responses retain
+  prior packages and diagnostics without changing reviewed dependencies or delivery.
+- **Hard prerequisites** are individually selectable; **preferred ordering** is advisory.
+  Initial suggestions apply compatible preferred edges, ignoring preferences that would
+  create a cycle. Move packages earlier/later to adjust tie-breaking. The separately
+  displayed dependency-safe sequence always honors selected hard edges and existing
+  configured/epic guardrails. Cyclic proposals remain reviewable, but approval rejects
+  cycles (including incompatible epic-PR grouping). Existing broad epic dependencies
+  remain intact; planning does not silently narrow them.
+- Questions require human resolution notes before approval. **Approve implementation
+  plan** atomically saves selected hard prerequisites and the deterministic order using
+  specification-revision and execution-version checks. Proposal text and rejected edges
+  remain original evidence; accepted edges, notes and approval time are recorded.
+- Coding uses the approved package's steps/verification as guidance; approved requirement
+  behavior remains authoritative. The executor retains its sequential verification and
+  merge/branch prerequisite barriers. A new run is blocked by an unreviewed or stale plan.
+  An already frozen run retains its existing scope; archive it before preparing a plan.
+- **Dismiss plan proposal** retains the proposal/history and permits the existing manual
+  prerequisite workflow. Legacy projects acquire no implicit AI dependencies or approval
+  requirement on upgrade. Changing specification, workspace or settings makes a plan
+  stale; completed code/evidence is retained. Replacement proposals retain prior plans.
+
+Planning format 1 is additive within execution schema 1; see [migrations.md](migrations.md).
+Deterministic service/runtime and browser checks cover validation, cyclic-edge rejection,
+review notes, order, checkpoint retry/reopen and mobile rendering. Live planning quality
+and effective live planning permission enforcement remain unqualified.
+
+Verification (2026-10-19): `npm run check`, all 240 deterministic tests, the UI build
+and Playwright browser checks passed. Browser coverage includes preparing proposals,
+rejecting a cyclic edge, resolving questions, approving/reloading the plan and 390px
+layout; screenshot `.reqwizit-state/browser-implementation-planning.png`. The main-delivery
+fixture also verifies reviewed order and package guidance reach sequential coding. No
+live model calls were made.
+
 **Check implementation** requires a connected workspace and saved Implementation
 settings (OpenCode model, delivery strategy and at least one verification command).
 The local phase does not execute those commands; the main phase does. Detecting the

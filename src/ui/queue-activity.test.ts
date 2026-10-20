@@ -47,6 +47,19 @@ test("coding startup ignores old assessment progress and durable phases work wit
   assert.equal(coding.total, undefined, "Startup must not reuse an older task's progress");
 });
 
+test("planning has its own progress and cancellation without reusing old assessment counts", () => {
+  const state = assessment();
+  state.assessmentRuns![0]!.status = "completed";
+  state.planning = { format: 1, id: "plan", revision: 1, bindingID: "binding", createdAt: "2026-10-19", status: "generating", configFingerprint: "settings", model: { providerID: "openai", modelID: "fixture" } };
+  const task = queueActivities(project, state, true, [], "plan")[0]!;
+  assert.equal(task.title, "Planning implementation"); assert.equal(task.completed, 0); assert.equal(task.total, 1);
+  assert.deepEqual(task.stop, { action: "execution-stop", body: {} });
+  assert.equal(queueActivities(project, state, true, [])[0]!.title, task.title, "Another process can read the durable planning phase");
+  state.planning.status = "interrupted"; state.planning.diagnostic = "Stopped; completed packages retained";
+  const saved = queueActivities(project, state, false, []).find((task) => task.id === "plan")!;
+  assert.equal(saved.active, false); assert.equal(saved.status, "interrupted"); assert.equal(saved.stage, state.planning.diagnostic);
+});
+
 test("failed, blocked, interrupted and completed assessments remain outcomes, and awaiting merge is not active", () => {
   const state = assessment();
   for (const status of ["failed", "blocked", "interrupted", "completed"] as const) {

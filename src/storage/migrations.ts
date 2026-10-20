@@ -16,6 +16,7 @@ const savedAssessment = savedIdentity.extend({ contextPolicy: z.string().optiona
   semanticOrigin: z.object({ scope: z.enum(["workspace", "main"]), head: z.string(), capturedAt: z.string() }).strict().optional(),
   skill: z.object({ name: z.string(), version: z.string() }).passthrough().optional() });
 const executionEnvelope = z.object({ schemaVersion: z.number().int().nonnegative().optional(), version: z.number().int().nonnegative(),
+  planning: z.object({ format: z.literal(1) }).passthrough().optional(), planningHistory: z.array(z.object({ format: z.literal(1) }).passthrough()).optional(),
   assessments: z.record(savedAssessment), workspaceAssessments: z.record(savedAssessment).optional(), mainAssessments: z.record(savedAssessment).optional(),
   delivered: z.record(savedIdentity), deliveryHistory: z.array(savedIdentity).optional(), history: z.array(z.unknown()) }).passthrough();
 

@@ -12,8 +12,8 @@ const config = executionConfigSchema.parse({ repository: "fixture/repository", s
 function request(extra: Partial<ExecutionRequest> = {}): ExecutionRequest {
   return { directory: "unused", config, coding: true, requirementID: "r1", prompt: "Reqwizit task r1/attempt\nImplement only r1", signal: new AbortController().signal, onSession: () => {}, onProgress: () => {}, ...extra };
 }
-function runtime(messages: unknown[] = [], options: { coding?: boolean; missing?: boolean; loaded?: boolean; versionMismatch?: boolean; permissions?: ReturnType<typeof executionPermissions> } = {}) {
-  const skill = executionSkill(options.coding ?? true), skillPath = resolve("fixture-skills", skill.name, "SKILL.md");
+function runtime(messages: unknown[] = [], options: { coding?: boolean; planning?: boolean; missing?: boolean; loaded?: boolean; versionMismatch?: boolean; permissions?: ReturnType<typeof executionPermissions> } = {}) {
+  const skill = executionSkill(options.coding ?? true, options.planning), skillPath = resolve("fixture-skills", skill.name, "SKILL.md");
   const calls = { starts: 0, prompts: 0, creates: 0, closes: 0, permissions: [] as unknown[], toolMaps: [] as Record<string, boolean>[], updates: 0 };
   const factory = async () => {
     calls.starts++;
@@ -36,6 +36,17 @@ test("oversized full prompts block before starting a runtime or creating a sessi
   const { calls, adapter } = runtime();
   await assert.rejects(adapter.perform(request({ prompt: "x".repeat(48000) })), ExecutionContextError);
   assert.equal(calls.starts, 0); assert.equal(calls.prompts, 0); assert.equal(calls.creates, 0);
+});
+
+test("planning has a distinct read-only skill and rejects coding or resumed sessions", async () => {
+  const { calls, adapter } = runtime([], { coding: false, planning: true });
+  await adapter.perform(request({ coding: false, planning: true, prompt: "Propose a dependency plan" }));
+  assert.deepEqual(calls.toolMaps[0], { skill: true, read: false, bash: false, task: false, webfetch: false });
+  assert.deepEqual(calls.permissions[0], executionPermissions(false, true));
+  await assert.rejects(adapter.perform(request({ planning: true })), /fresh read-only/);
+  await assert.rejects(adapter.perform(request({ coding: false, planning: true, sessionID: "old" })), /fresh read-only/);
+  await assert.rejects(adapter.perform(request({ coding: false, planning: true, prompt: "x".repeat(48000) })), ExecutionContextError);
+  assert.equal(calls.starts, 1);
 });
 
 test("resumed requirement transcripts count toward preflight and cannot grow silently beyond the budget", async () => {

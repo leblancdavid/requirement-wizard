@@ -18,14 +18,14 @@ function executable(): string {
   return "opencode";
 }
 
-export async function startRuntime(model?: string, workspace = ".spike-workspace", signal?: AbortSignal, research = false, coding = false, assessment = false) {
+export async function startRuntime(model?: string, workspace = ".spike-workspace", signal?: AbortSignal, research = false, coding = false, assessment = false, planning = false) {
   signal?.throwIfAborted();
   const directory = resolve(workspace);
   await mkdir(directory, { recursive: true });
-  const stagedSkill = coding || assessment ? await stageExecutionSkill(coding) : undefined;
+  const stagedSkill = coding || assessment || planning ? await stageExecutionSkill(coding, planning) : undefined;
   const permission = { "*": "deny", ...(research ? { websearch: "allow", webfetch: "allow" } : {}),
     ...(coding ? Object.fromEntries(codingTools.map((id) => [id, "allow"])) : {}),
-    ...(stagedSkill ? { skill: { "*": "deny", [executionSkill(coding).name]: "allow" } } : {}), external_directory: "deny" };
+    ...(stagedSkill ? { skill: { "*": "deny", [executionSkill(coding, planning).name]: "allow" } } : {}), external_directory: "deny" };
   const config = {
     $schema: "https://opencode.ai/config.json",
     share: "disabled",
@@ -34,6 +34,7 @@ export async function startRuntime(model?: string, workspace = ".spike-workspace
     ...(stagedSkill ? { skills: { paths: [stagedSkill.directory] } } : {}),
     ...(model ? { model, small_model: model } : {}),
     agent: {
+      ...(planning ? { "reqwizit-planning": { mode: "primary", description: "Propose implementation dependencies and sequence", permission, prompt: executionAgentPrompt(false, true) } } : {}),
       ...(coding ? { "reqwizit-implementation": { mode: "primary", description: "Implement one approved requirement", permission,
         prompt: executionAgentPrompt(true) } } : {}),
       ...(assessment ? { "reqwizit-assessment": { mode: "primary", description: "Assess one approved requirement", permission, prompt: executionAgentPrompt(false) } } : {}),

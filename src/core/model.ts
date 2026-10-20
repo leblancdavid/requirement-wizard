@@ -122,6 +122,28 @@ export const analysisSchema = z.object({
   ])).max(30).optional(),
 }).strict();
 export type Analysis = z.infer<typeof analysisSchema>;
+
+/** Tooltips are explanatory metadata; malformed entries must not discard product proposals. */
+export function parseDiscoveryAnalysis(raw: unknown): { result: Analysis; omittedConcepts: number } {
+  let omittedConcepts = 0;
+  let input = raw;
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && "questions" in raw && Array.isArray(raw.questions)) {
+    input = { ...raw, questions: raw.questions.map((question: unknown) => {
+      if (!question || typeof question !== "object" || Array.isArray(question) || !("concepts" in question) || !Array.isArray(question.concepts)) return question;
+      // Keep array bounds and container validation strict. Only individual entries
+      // in an otherwise valid-size metadata array may be omitted.
+      if (question.concepts.length > 8) return question;
+      const concepts = question.concepts.filter((concept: unknown) => {
+        const valid = conceptSchema.safeParse(concept).success;
+        if (!valid) omittedConcepts++;
+        return valid;
+      });
+      return { ...question, concepts };
+    }) };
+  }
+  return { result: analysisSchema.parse(input), omittedConcepts };
+}
+
 export const scanAnalysisSchema = analysisSchema.extend({ requirements: analysisSchema.shape.requirements.max(100) });
 export const scanBatchAnalysisSchema = scanAnalysisSchema.extend({
   requirements: scanAnalysisSchema.shape.requirements.max(20),

@@ -12,6 +12,7 @@ import type { ExecutionAdapter, ExecutionRequest } from "../runtime/execution.js
 import type { DeliveryUnit, ExecutionConfig } from "../core/execution.js";
 import Database from "better-sqlite3";
 import { legacyAssessmentSkillDocument } from "../storage/fixtures/assessment-skill-v1.js";
+import { planningConfigFingerprint, planningCurrent, planningEdgeID, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanningOutput } from "../core/implementation-planning.js";
 
 function seed(store: ProjectStore, count = 2) {
   let p = store.create("Implementation fixture", "Save and reopen work", { providerID: "openai", modelID: "fixture" });
@@ -22,6 +23,127 @@ function seed(store: ProjectStore, count = 2) {
   return p;
 }
 const config = (strategy: ExecutionConfig["strategy"] = "requirement-pr") => executionConfigSchema.parse({ repository: "fixture/repository", strategy, branch: "delivery", providerID: "openai", modelID: "fixture", checks: ['node -e "process.exit(0)"'] });
+
+function planningOutput(ids: string[]): ImplementationPlanningOutput {
+  return { summary: "Build usable slices", packages: ids.map((requirementID) => ({ requirementID, title: `Package ${requirementID}`, reason: "Unlocks the next workflow", steps: ["Implement the approved behavior"], verification: ["Verify persistence after restart"], prerequisites: [], questions: [] })) };
+}
+
+test("planning validates complete coverage and evidence, separates preferred order, and rejects hard cycles atomically", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 3), state = emptyExecution(); state.config = config();
+    const ids = p.requirements.map((r) => r.id), [a, b, c] = ids as [string, string, string];
+    const output = planningOutput(ids);
+    output.packages[0]!.prerequisites = [{ requirementID: b, kind: "hard", reason: "Requires the durable record", evidenceIDs: [a, b], confidence: "high" }];
+    output.packages[1]!.prerequisites = [{ requirementID: c, kind: "preferred", reason: "Resolve uncertainty first", evidenceIDs: [c], confidence: "medium" }];
+    assert.deepEqual(validateImplementationPlanning(output, p, ids), output);
+    assert.deepEqual(suggestedPlanningOrder(p, state, output), [c, b, a]);
+    const reviewed = reviewedPlanningConfig(p, state, output, [planningEdgeID(a, b)]);
+    assert.deepEqual(reviewed.dependencies[a], [b]); assert.equal(reviewed.dependencies[b], undefined);
+    assert.deepEqual(state.config.dependencies, {}, "Proposal/review calculation never mutates saved settings");
+    assert.throws(() => validateImplementationPlanning({ ...output, packages: output.packages.slice(1) }, p, ids), /every approved/);
+    assert.throws(() => validateImplementationPlanning({ ...output, packages: [output.packages[0], output.packages[0], output.packages[2]] }, p, ids), /every approved/);
+    const bad = structuredClone(output); bad.packages[0]!.prerequisites[0]!.evidenceIDs = ["not-supplied"];
+    assert.throws(() => validateImplementationPlanning(bad, p, ids), /evidence/);
+    bad.packages[0]!.prerequisites[0]!.requirementID = a;
+    assert.throws(() => validateImplementationPlanning(bad, p, ids), /distinct/);
+    output.packages[1]!.prerequisites.push({ requirementID: a, kind: "hard", reason: "Circular proposal", evidenceIDs: [a], confidence: "low" });
+    assert.throws(() => reviewedPlanningConfig(p, state, output, [planningEdgeID(a, b), planningEdgeID(b, a)]), /cycle/);
+    assert.doesNotThrow(() => reviewedPlanningConfig(p, state, output, [planningEdgeID(a, b)]), "Reviewer can reject the cyclic edge");
+    assert.throws(() => reviewedPlanningConfig(p, state, output, ["invented"]), /Unknown/);
+    const equivalent = structuredClone(state);
+    state.config.dependencies = { [a]: [b, c], [c]: [] }; equivalent.config!.dependencies = { [c]: [], [a]: [c, b] };
+    assert.equal(planningConfigFingerprint(state), planningConfigFingerprint(equivalent), "Equivalent object and prerequisite-set ordering does not force new model calls");
+  } finally { store.close(); }
+});
+
+test("planning checkpoints survive failure/reopen, retry skips completed packages, and approval enforces freshness and CAS", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = await mkdtemp(resolve(".reqwizit-state/tests/planning-")), root = join(directory, "repo"); await mkdir(root);
+  let store = new ProjectStore(join(directory, "state.sqlite")), service: ImplementationService | undefined;
+  let fail = true, calls: string[] = [];
+  const git = async (args: string[]) => { const result = await command(root, "git", args, AbortSignal.timeout(10000)); assert.equal(result.code, 0, result.output); };
+  const adapter: ExecutionAdapter = { async perform(request) {
+    assert.equal(request.planning, true); assert.equal(request.coding, false);
+    calls.push(request.requirementID!); request.onSession(`planning-session-${calls.length}`);
+    if (fail && calls.length === 2) throw new Error("Fixture planning failure");
+    return JSON.stringify(planningOutput([request.requirementID!]));
+  } };
+  try {
+    await git(["init", "-b", "main"]); await writeFile(join(root, "README.md"), "Fixture");
+    await git(["add", "."]); await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Initial"]);
+    const p = seed(store); store.connectWorkspace(p.id, p.revision, root);
+    service = new ImplementationService(store, adapter); service.configure(p.id, p.revision, config());
+    service.start(p.id, p.revision, "plan"); await until(service, p.id);
+    let state = store.execution(p.id); assert.equal(state.planning?.status, "failed"); assert.equal(state.planning?.output?.packages.length, 1);
+    assert.deepEqual(state.config!.dependencies, {}); assert.equal(state.run, undefined);
+    await service.close(); store.close(); store = new ProjectStore(join(directory, "state.sqlite"));
+    service = new ImplementationService(store, adapter); fail = false;
+    service.start(p.id, p.revision, "plan"); await until(service, p.id);
+    state = store.execution(p.id); assert.equal(state.planning?.status, "proposed"); assert.equal(state.planning.output?.packages.length, 2);
+    assert.deepEqual(calls, [p.requirements[0]!.id, p.requirements[1]!.id, p.requirements[1]!.id]);
+    assert.throws(() => service!.start(p.id, p.revision, "continue"), /approve a current/);
+    assert.throws(() => store.saveExecution(p.id, state, undefined, { revision: p.revision - 1 }), /changed|stale/i);
+    assert.throws(() => store.saveExecution(p.id, state, undefined, { revision: p.revision, bindingID: "another-workspace" }), /Workspace changed/);
+    assert.equal(store.execution(p.id).version, state.version, "Transactional input guards leave saved state and CAS unchanged");
+    assert.throws(() => service!.reviewPlan(p.id, p.revision, state.version - 1, state.planning!.id, "approve", [], ""), /changed/);
+    const output = state.planning.output!; output.packages[0]!.questions = ["Which contract is authoritative?"]; store.saveExecution(p.id, state);
+    assert.throws(() => service!.reviewPlan(p.id, p.revision, state.version, state.planning!.id, "approve", [], ""), /questions were resolved/);
+    state = service.reviewPlan(p.id, p.revision, state.version, state.planning!.id, "approve", [], "Use the approved acceptance contract.", p.requirements.map((r) => r.id).reverse());
+    assert.equal(state.planning?.status, "approved"); assert.equal(planningCurrent(p, state, store.workspace(p.id)?.bindingID), true);
+    assert.deepEqual(state.config!.implementationOrder, p.requirements.map((r) => r.id).reverse());
+    assert.equal(planningCurrent({ ...p, revision: p.revision + 1 }, state, store.workspace(p.id)?.bindingID), false);
+    const saved = structuredClone(state); await service.close(); store.close(); store = new ProjectStore(join(directory, "state.sqlite"));
+    assert.deepEqual(store.execution(p.id), saved, "Repeated startup preserves approved plan, evidence and history");
+  } finally { await service?.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("planning rejects stale and malformed responses, supports cancellation, and never mutates execution settings", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = await mkdtemp(resolve(".reqwizit-state/tests/planning-failures-"));
+  for (const scenario of ["stale", "cancel", "malformed", "oversized"] as const) {
+    const root = join(directory, scenario); await mkdir(root);
+    const store = new ProjectStore(":memory:");
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((accept) => { entered = accept; }), gate = new Promise<void>((accept) => { release = accept; });
+    let calls = 0;
+    const adapter: ExecutionAdapter = { async perform(request) {
+      calls++; entered();
+      if (scenario === "cancel") await new Promise<void>((_accept, reject) => request.signal.addEventListener("abort", () => reject(new Error("Stopped")), { once: true }));
+      if (scenario === "stale") await gate;
+      return scenario === "malformed" ? JSON.stringify(planningOutput(["invented-target"])) : JSON.stringify(planningOutput([request.requirementID!]));
+    } };
+    const fakeGit = () => ({ async localPreflight() {}, async git() { return root; } }) as unknown as GitDelivery;
+    const service = new ImplementationService(store, adapter, fakeGit);
+    try {
+      let p = seed(store, 1); store.connectWorkspace(p.id, p.revision, root);
+      if (scenario === "oversized") for (let i = 0; i < 5; i++) p = store.note(p.id, p.revision, "Mandatory human constraint. ".repeat(400));
+      service.configure(p.id, p.revision, config());
+      const original = structuredClone(store.execution(p.id).config);
+      service.start(p.id, p.revision, "plan");
+      if (scenario === "stale" || scenario === "cancel") {
+        await started;
+        if (scenario === "stale") {
+          assert.throws(() => store.note(p.id, p.revision, "An ordinary concurrent edit is blocked."), /implementation is running/);
+          // Simulate a newer snapshot arriving from an external integration despite
+          // the normal mutation guard, exercising the defensive stale-result check.
+          const get = store.get.bind(store);
+          store.get = (id) => { const current = get(id); return { ...current, revision: current.revision + 1 }; };
+          release();
+        }
+        else service.stop(p.id);
+      }
+      await until(service, p.id);
+      const state = store.execution(p.id);
+      assert.equal(state.planning?.status, scenario === "cancel" ? "interrupted" : "failed");
+      assert.equal(state.planning?.output, undefined);
+      assert.deepEqual(state.config, original); assert.deepEqual(state.assessments, {}); assert.deepEqual(state.delivered, {}); assert.equal(state.run, undefined);
+      if (scenario === "stale") assert.match(state.planning!.diagnostic!, /changed during planning/);
+      if (scenario === "oversized") { assert.equal(calls, 0); assert.match(state.planning!.diagnostic!, /Context blocked before inference/); }
+    } finally { release(); await service.close(); store.close(); }
+  }
+  await rm(directory, { recursive: true, force: true });
+});
 
 test("GitHub origin parsing supports HTTPS and SSH without accepting credential URLs or other hosts", () => {
   for (const remote of ["https://github.com/Owner/my-repo.git", "git@github.com:Owner/my-repo.git", "ssh://git@github.com/Owner/my-repo.git", "ssh://git@github.com:22/Owner/my-repo", "https://GitHub.com/Owner/my-repo/"]) assert.equal(githubRepository(remote), "Owner/my-repo");
@@ -714,9 +836,11 @@ for (const strategy of ["requirement-pr", "epic-pr", "branch", "main"] as const)
   const adapter: ExecutionAdapter = { async perform(request) {
     activeRequests++; maxRequests = Math.max(maxRequests, activeRequests);
     try {
+    if (request.planning) return JSON.stringify(planningOutput([request.requirementID!]));
     if (request.coding) {
       const data = JSON.parse(request.prompt.split("\n")[1]!) as { requirement: { id: string } };
       assert.equal(request.requirementID, data.requirement.id);
+      if (strategy === "main") { assert.match(request.prompt, /Reviewed implementation guidance/); assert.match(request.prompt, /Verify persistence after restart/); }
       const previousSession = sessions.get(data.requirement.id);
       assert.equal(request.sessionID, previousSession, "Resume uses only this requirement's saved session");
       if (strategy !== "branch") for (const other of targets.filter((r) => r.id !== data.requirement.id)) assert.equal(request.prompt.includes(other.statement), false, "Sibling requirement text is not carried into the next task");
@@ -746,6 +870,12 @@ for (const strategy of ["requirement-pr", "epic-pr", "branch", "main"] as const)
     const settings = config(strategy);
     if (strategy === "branch") { settings.dependencies[p.requirements[1]!.id] = [p.requirements[0]!.id]; settings.checks = ['node -e "process.exit(process.env.REQWIZIT_FAIL_CHECK ? 1 : 0)"']; process.env.REQWIZIT_FAIL_CHECK = "1"; }
     service.configure(p.id, p.revision, settings);
+    if (strategy === "main") {
+      service.start(p.id, p.revision, "plan"); await until(service, p.id);
+      const proposal = store.execution(p.id);
+      targets = [...p.requirements].reverse();
+      service.reviewPlan(p.id, p.revision, proposal.version, proposal.planning!.id, "approve", [], "Prioritize the second outcome.", targets.map((r) => r.id));
+    }
     service.start(p.id, p.revision, "continue");
     if (strategy === "epic-pr") {
       for (let i = 0; i < 300 && !store.execution(p.id).run?.units[0]?.items[0]?.sessionID; i++) await new Promise((accept) => setTimeout(accept, 10));

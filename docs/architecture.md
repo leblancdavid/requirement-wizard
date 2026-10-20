@@ -254,6 +254,25 @@ tool counts and final-trace validation. Source URLs must originate in actual too
 results; snippets and fetched pages are distinguished. Live webfetch is verified;
 websearch and adversarial enforcement still need qualification.
 
+## Reviewable implementation planning
+
+`src/core/implementation-planning.ts` validates package coverage and evidence references,
+separates hard prerequisites from soft ordering preferences, checks selected graphs and
+derives dependency-safe order through the existing execution planner. Configuration's
+optional `implementationOrder` is a tie-breaking input, never a prerequisite bypass.
+`ImplementationService` runs one bounded read-only proposal session per approved target,
+checkpoints packages in execution state, and applies human-reviewed edges/order atomically
+under revision/version checks. A separate bundled planning skill and agent share the
+owned runtime lifecycle with assessment/coding but grant only their exact skill tool.
+Planning adds no source inspection or coding tools. Existing dated assessments are
+explicitly historical context; omitted human history cannot support new proposals.
+
+Execution schema 1 optionally retains planning-format-1 proposals/history and approval
+provenance. Legacy state is equivalent to absent planning; assessment/delivery identity
+is unchanged by package order. Approved steps/verification feed the target's coding
+prompt. See [implementation workflow](implementation-workspace.md#prepare-and-review-implementation-order-dec-025)
+and the [migration ledger](migrations.md).
+
 ## Epic organization, assessment, and context
 
 Epics and typed memberships live in revisioned snapshots. A pure round applier

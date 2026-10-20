@@ -30,6 +30,19 @@ every technical detail proposed in the planning documents.
 | DEC-021 | Process queued AI follow-up one submission at a time, each with its own focused revision-linked context. Do not combine the queue or include unrelated feature history solely because it shares an area. Retain exact target evidence and explicit guardrails; preserve omitted records and request wider context when needed. | User requested individual processing/contexts after repeated queue-size blockers |
 | DEC-021 | Split generated requirements by stable feature ID, keep original evidence in shared referenced files, and avoid rewriting unchanged outputs. Retain an on-demand combined specification export. | User reported large generated files and confirmed both reading/coding-agent context and disk/Git efficiency as goals after the feature-based export recommendation |
 
+## Reviewable implementation planning (DEC-025)
+
+Confirmed direction: discover and explain dependencies before coding, distinguish hard
+prerequisites from preferred order and unresolved decisions, review work packages and
+derive a deterministic dependency-safe sequence. User approved the proposed workflow.
+
+Implemented first slice: one requirement-linked package with technical steps and
+verification per approved requirement, bounded checkpointed proposal sessions, individual
+hard-edge review, order adjustments and cycle/freshness validation. Approved guidance
+feeds sequential execution. Existing epic guardrails remain; cross-requirement packages,
+independently executable subpackages and automatic dependency discovery during coding
+remain follow-on work. No new live model qualification is claimed.
+
 ## Incremental implementation assessment (DEC-024)
 
 Confirmed direction: minimize repeated requirement assessments with durable per-target

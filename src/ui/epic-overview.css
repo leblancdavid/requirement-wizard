@@ -1,0 +1,14 @@
+.epic-overview { margin-top: 14px; padding: 18px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); overflow-wrap: anywhere; }
+.epic-overview-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.epic-overview-heading h3 { margin: 0; font-size: 1.1rem; }
+.epic-overview .epic-purpose { margin: 12px 0 16px; line-height: 1.6; }
+.epic-delivery { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.epic-delivery strong { color: var(--text); }
+.epic-delivery span, .epic-outstanding { font-size: .9rem; }
+.epic-overview .button-row { flex-wrap: wrap; margin: 10px 0; }
+.epic-map-details { border-top: 1px solid var(--border); padding-top: 12px; }
+.epic-map-details > summary { color: var(--accent); }
+.epic-map-details > p { line-height: 1.6; }
+.map-supporting { margin-top: 18px; padding: 14px 0; border-top: 1px solid var(--border); }
+.map-supporting > summary { color: var(--muted); }
+.map-supporting .implementation-progress { margin-top: 12px; }

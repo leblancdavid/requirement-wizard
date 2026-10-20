@@ -14,11 +14,12 @@ import { directoryKey } from "../storage/workspace.js";
 import { assessmentPrompt, assessmentContextFingerprint, checkExecutionContext, executionContextPolicy, ExecutionContextError, requirementTaskContext, type ExecutionContextManifest } from "../core/execution-context.js";
 import { assessmentSkill } from "../core/execution-skills.js";
 import { assessmentCompatibility } from "../core/assessment-identity.js";
+import { planningConfigFingerprint, planningCurrent, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanning } from "../core/implementation-planning.js";
 
 const codeResult = z.object({ outcome: z.enum(["complete", "blocked"]), summary: z.string().min(1).max(12000) }).strict();
 type Scope = { requirementID?: string; epicID?: string };
 export class ImplementationService {
-  private work = new Map<string, { controller: AbortController; promise: Promise<void>; operation: "check" | "assess" | "verify-main" | "continue" }>();
+  private work = new Map<string, { controller: AbortController; promise: Promise<void>; operation: "plan" | "check" | "assess" | "verify-main" | "continue" }>();
   constructor(private store: ProjectStore, private adapter: ExecutionAdapter = new OpenCodeExecution(),
     private gitFactory = (path: string, config: ExecutionConfig, signal: AbortSignal) => new GitDelivery(path, config, signal)) {}
   snapshot(id: string) {
@@ -28,6 +29,7 @@ export class ImplementationService {
       if (state.assessmentStatus === "Assessing…") state.assessmentStatus = "Assessment interrupted. Refresh explicitly; saved requirement assessments are retained.";
       const assessment = state.assessmentRuns?.at(-1);
       if (assessment?.status === "running") { assessment.status = "interrupted"; assessment.diagnostic = "Assessment worker stopped. Run the action again to reuse unchanged completed assessments."; }
+      if (state.planning?.status === "generating") { state.planning.status = "interrupted"; state.planning.diagnostic = "Planning worker stopped. Prepare the plan again explicitly."; }
     }
     return state;
   }
@@ -42,6 +44,7 @@ export class ImplementationService {
       if (!project.requirements.some((r) => r.id === target) || dependencies.some((dependency) => !project.requirements.some((r) => r.id === dependency) || dependency === target)) throw new Error("Dependencies must reference existing distinct requirements.");
     }
     if (Object.keys(config.assessmentScopes ?? {}).some((id) => !project.requirements.some((r) => r.id === id))) throw new Error("Assessment scopes must reference existing requirements.");
+    if (config.implementationOrder && (new Set(config.implementationOrder).size !== config.implementationOrder.length || config.implementationOrder.some((id) => !project.requirements.some((r) => r.id === id)))) throw new Error("Implementation order must reference distinct existing requirements.");
     if (config.strategy === "branch" && config.branch === "main") throw new Error("Select Commit to main for direct main delivery.");
     state.config = config; implementationPlan(project, state); this.store.saveExecution(id, state); return state;
   }
@@ -66,24 +69,106 @@ export class ImplementationService {
     this.work.get(id)?.controller.abort();
   }
   async close() { for (const work of this.work.values()) work.controller.abort(); await Promise.allSettled([...this.work.values()].map((w) => w.promise)); }
-  start(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope = {}, options: { force?: boolean; preview?: boolean } = {}) {
+  reviewPlan(id: string, revision: number, expectedVersion: number, planID: string, decision: "approve" | "dismiss", acceptedEdges: string[], resolution: string, order?: string[]) {
+    const project = this.store.get(id), state = this.store.execution(id);
+    if (project.revision !== revision) throw new StaleRevisionError();
+    if (this.isActive(id)) throw new Error("Stop active implementation before reviewing the plan.");
+    if (state.version !== expectedVersion || state.planning?.id !== planID) throw new Error("Implementation plan changed. Refresh before reviewing.");
+    if (state.run && state.run.status !== "completed") throw new Error("Archive the current run before reviewing a plan.");
+    const plan = state.planning;
+    if (decision === "dismiss") {
+      if (plan.status === "approved") throw new Error("Prepare a replacement plan to revise an approved plan.");
+      plan.status = "dismissed";
+    } else {
+      if (plan.status !== "proposed" || !plan.output || !planningCurrent(project, state, this.store.workspace(id)?.bindingID)) throw new Error("Plan is stale or unavailable. Prepare it again against current decisions and settings.");
+      if (plan.output.packages.some((p) => p.questions.length) && !resolution.trim()) throw new Error("Record how the planning questions were resolved before approving.");
+      const output = structuredClone(plan.output);
+      if (order) {
+        if (order.length !== output.packages.length || new Set(order).size !== order.length || order.some((id) => !output.packages.some((p) => p.requirementID === id))) throw new Error("Reviewed order must contain every package exactly once.");
+        output.packages.sort((a, b) => order.indexOf(a.requirementID) - order.indexOf(b.requirementID));
+      }
+      state.config = reviewedPlanningConfig(project, state, output, acceptedEdges);
+      plan.status = "approved"; plan.approvedAt = new Date().toISOString(); plan.acceptedEdges = acceptedEdges;
+      plan.configFingerprint = planningConfigFingerprint(state);
+    }
+    plan.resolution = z.string().trim().max(6000).parse(resolution);
+    this.store.saveExecution(id, state, undefined, { revision, ...(decision === "approve" ? { bindingID: plan.bindingID } : {}) }); return state;
+  }
+  start(id: string, revision: number, operation: "plan" | "check" | "assess" | "verify-main" | "continue", scope: Scope = {}, options: { force?: boolean; preview?: boolean } = {}) {
     if (options.preview && (operation !== "assess" || options.force)) throw new Error("Queue preview is a non-forced workspace assessment only.");
     if (options.force && operation === "continue") throw new Error("Force reassessment applies only to assessment, not coding execution.");
     if (this.work.has(id) || this.store.executionActive(id)) throw new Error("Implementation is already active for this project.");
     if (this.store.get(id).revision !== revision) throw new StaleRevisionError();
     if (!this.store.workspace(id)) throw new Error("Connect a local Git workspace first.");
     if (!this.store.execution(id).config) throw new Error("Save implementation settings first.");
+    const state = this.store.execution(id);
+    if (operation === "plan" && (scope.epicID || scope.requirementID || options.force || options.preview)) throw new Error("Prepare implementation plans for the whole approved project.");
+    if (operation === "plan" && eligibleRequirements(this.store.get(id)).length > 500) throw new Error("Implementation planning currently supports up to 500 approved active requirements.");
+    if (operation === "plan" && state.run && state.run.status !== "completed") throw new Error("Archive the current run before preparing a new plan.");
+    if (operation === "continue" && (!state.run || state.run.status === "completed") && state.planning && state.planning.status !== "dismissed"
+      && (state.planning.status !== "approved" || !planningCurrent(this.store.get(id), state, this.store.workspace(id)?.bindingID))) throw new Error("Review and approve a current implementation plan before coding, or dismiss the proposal to retain manual planning.");
     if (operation !== "continue" && !eligibleRequirements(this.store.get(id)).some((r) => (!scope.epicID || r.epicID === scope.epicID) && (!scope.requirementID || r.id === scope.requirementID))) throw new Error("No approved requirements in the selected scope. Approve requirements in Review or choose another feature before assessing.");
     const owner = randomUUID();
     this.store.claimExecution(id, `startup:${id}`, owner);
     const controller = new AbortController();
-    const promise = this.perform(id, revision, operation, scope, controller.signal, options.force ?? false, options.preview ?? false, owner);
+    const promise = operation === "plan" ? this.preparePlan(id, revision, controller.signal, owner)
+      : this.perform(id, revision, operation, scope, controller.signal, options.force ?? false, options.preview ?? false, owner);
     this.work.set(id, { controller, promise, operation });
     void promise.catch(() => this.store.pauseQueue(id, true))
       .finally(() => { this.store.releaseExecution(id, owner); this.work.delete(id); }).catch(() => {});
   }
   isActive(id: string) { return this.work.has(id) || this.store.executionActive(id); }
   operation(id: string) { return this.work.get(id)?.operation; }
+  private async preparePlan(id: string, revision: number, signal: AbortSignal, owner: string) {
+    const state = this.store.execution(id), project = this.store.get(id), binding = this.store.workspace(id)!;
+    const previous = state.planning;
+    const resumable = previous && ["failed", "interrupted", "generating"].includes(previous.status) && planningCurrent(project, state, binding.bindingID);
+    if (state.planning) (state.planningHistory ??= []).push(structuredClone(state.planning));
+    const plan: ImplementationPlanning = state.planning = { format: 1, id: randomUUID(), revision, bindingID: binding.bindingID!, createdAt: new Date().toISOString(),
+      status: "generating", configFingerprint: planningConfigFingerprint(state), output: resumable ? structuredClone(previous.output) : undefined,
+      sessions: resumable ? [...previous.sessions ?? []] : [], model: { providerID: state.config!.providerID, modelID: state.config!.modelID } };
+    const save = (checkInputs = false) => this.store.saveExecution(id, state, owner, checkInputs ? { revision, bindingID: binding.bindingID } : undefined);
+    const timer = setInterval(() => { try { this.store.renewExecution(id, owner); } catch { this.stop(id); } }, 30_000);
+    try {
+      save();
+      const git = this.gitFactory(binding.path, state.config!, signal);
+      await git.localPreflight();
+      this.store.bindExecution(id, directoryKey(await git.git(["rev-parse", "--path-format=absolute", "--git-common-dir"])), owner);
+      const requirements = eligibleRequirements(project);
+      const current = () => {
+        signal.throwIfAborted();
+        if (this.store.get(id).revision !== revision || this.store.workspace(id)?.bindingID !== binding.bindingID) throw new Error("Specification or workspace changed during planning. Prepare a new plan.");
+      };
+      // One fresh, bounded request per target. The exact cross-requirement behavior
+      // index supports dependency reasoning; unrelated human history is not evidence.
+      for (const r of requirements) {
+        current();
+        if (plan.output?.packages.some((p) => p.requirementID === r.id)) continue;
+        const context = requirementTaskContext(project, r.id, state.config!.dependencies[r.id] ?? [], false, state.config!.dependencies);
+        const index = requirements.map((r) => ({ id: r.id, epicID: r.epicID, statement: r.statement, acceptance: r.acceptance }));
+        const allowedIDs = [...new Set([...requirements.map((r) => r.id), ...context.data.evidence.map((s) => s.id), ...context.data.questions.map((q) => q.id), ...context.data.research.map((r) => r.id), ...project.epics.map((e) => e.id)])];
+        const assessment = { current: assessmentCurrent(project, state, r.id), evidence: state.assessments[r.id] };
+        const prompt = `Propose exactly ONE work package for approved target ${r.id}, using the behavior index to identify prerequisites among approved requirements. Include supporting technical steps and verification tied to acceptance scenarios. Do not add scope. Hard dependencies require concrete necessity; preferences only guide order. Existing epic and configured prerequisites remain guardrails. Shared foundations belong in the earliest supporting requirement; expose inseparable or ambiguous scope as questions. Assessments are historical and dated, not proof of current code or execution-branch availability. No new source capture was performed. Suggest Check implementation when availability is uncertain. Cite only supplied evidenceIDs. Unrelated omitted human history cannot justify proposals.\n${JSON.stringify({ project: { name: project.name, summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions, epics: project.epics }, target: context.data, behaviorIndex: index, evidenceIDs: allowedIDs, existingDependencies: state.config!.dependencies, assessment })}`;
+        checkExecutionContext(prompt, false, r.id, 0, true);
+        const result = await this.adapter.perform({ directory: binding.path, config: state.config!, prompt, coding: false, planning: true, signal, requirementID: r.id,
+          onSession: (sessionID) => { plan.sessionID = sessionID; plan.sessions!.push(sessionID); save(); }, onProgress: () => {} });
+        current();
+        const output = validateImplementationPlanning(JSON.parse(result), project, allowedIDs, [r.id]);
+        plan.output ??= { summary: "Dependency proposals and requirement-linked work packages. Review prerequisites and order before coding.", packages: [] };
+        plan.output.packages.push(...output.packages);
+        try { save(true); } catch (error) { plan.output.packages.pop(); throw error; }
+      }
+      // Cycles are reviewable proposals; approval validates the selected graph.
+      if (plan.output) try {
+        const order = suggestedPlanningOrder(project, state, plan.output);
+        plan.output.packages.sort((a, b) => order.indexOf(a.requirementID) - order.indexOf(b.requirementID));
+      } catch { /* Retain cyclic hard-edge proposals for explicit review. */ }
+      plan.status = "proposed"; save(true);
+    } catch (error) {
+      plan.status = signal.aborted ? "interrupted" : "failed"; plan.diagnostic = safeMessage(error instanceof Error ? error.message : error); save();
+      throw error;
+    } finally { clearInterval(timer); }
+  }
   private async perform(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope, signal: AbortSignal, force: boolean, preview: boolean, owner: string) {
     let timer: ReturnType<typeof setInterval> | undefined;
     let state = this.store.execution(id);
@@ -340,7 +425,9 @@ export class ImplementationService {
           if (!item.response) {
             item.promptID ??= randomUUID(); item.status = "running"; save(); progress(`Implementing: ${r.statement}`);
             const context = JSON.stringify(requirementTaskContext(project, requirementID, dependencies, true, run.config.dependencies).data);
-            const prompt = `Reqwizit task ${run.id}/${requirementID}/${item.promptID}\n${context}\n${item.diagnostic ? `Previous attempt stopped: ${item.diagnostic}. Resolve this before claiming completion.\n` : ""}Work only on this requirement, inspect the current worktree before changing anything, and preserve existing changes from this task. Do not commit, push, merge, switch branches, create PRs or edit .requirement-wizard artifacts. Stop on blockers. Verification commands: ${JSON.stringify(run.config.checks)}. Finish with only JSON {"outcome":"complete"|"blocked","summary":"acceptance evidence or blocker"}.`;
+            const workPackage = state.planning?.status === "approved" ? state.planning.output?.packages.find((p) => p.requirementID === requirementID) : undefined;
+            const guidance = workPackage ? `Reviewed implementation guidance (approved requirement remains authoritative): ${JSON.stringify({ steps: workPackage.steps, verification: workPackage.verification, reviewNotes: state.planning!.resolution })}\n` : "";
+            const prompt = `Reqwizit task ${run.id}/${requirementID}/${item.promptID}\n${context}\n${guidance}${item.diagnostic ? `Previous attempt stopped: ${item.diagnostic}. Resolve this before claiming completion.\n` : ""}Work only on this requirement, inspect the current worktree before changing anything, and preserve existing changes from this task. Do not commit, push, merge, switch branches, create PRs or edit .requirement-wizard artifacts. Stop on blockers. Verification commands: ${JSON.stringify(run.config.checks)}. Finish with only JSON {"outcome":"complete"|"blocked","summary":"acceptance evidence or blocker"}.`;
             item.context = checkExecutionContext(prompt, true, requirementID); item.contextBlock = undefined; save();
             const response = await this.adapter.perform({ directory: unit.directory, config: run.config, coding: true, signal, sessionID: item.sessionID, requirementID,
               onSession: (sessionID) => { checkSession(sessionID); item.sessionID = sessionID; save(); }, onProgress: progress,

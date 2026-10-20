@@ -25,14 +25,22 @@ Use `npm run --silent reqwizit -- export --project "your-project-id" [--json]` f
 combined specification on demand.
 Folder scans process small sequential batches and save checkpoints; **Resume scan**
 continues interrupted work using the saved file snapshot without repeating completed batches.
-Track manual implementation status and verification evidence under **Project map →
-Implementation progress**. See [local project workspaces](docs/project-workspaces.md).
+**Project map** shows each epic's purpose, lifecycle status, delivery percentage,
+outstanding reviews/questions, and links into Design, Review and Implement. Expand
+**View details** for requirements and evidence. Historical/manual build notes remain
+under **Manual implementation records → Implementation progress**; they do not count
+as delivered. See [local project workspaces](docs/project-workspaces.md).
 **Implement**, beside Review, adds evidence-backed assessment, dependency order,
 per-requirement/epic execution and resumable local OpenCode runs. Verified work is
 committed automatically using GitHub PR-per-requirement, PR-per-epic, named-branch or
 direct-main delivery. Its count only decreases for verified delivery to main; PRs
 wait for your merge. See the [implementation pilot](docs/implementation-workspace.md)
 for setup, deterministic verification and remaining live-qualification gaps.
+**Prepare implementation plan** proposes requirement-linked work packages, hard
+prerequisites, preferred ordering, technical steps and verification. Review dependency
+reasons, resolve questions and adjust ordering before approval; deterministic ordering
+keeps prerequisites first. Interrupted planning retains completed packages for explicit
+retry. Planning uses one bounded OpenCode request per approved requirement.
 Implementation checks reuse current saved assessments; **Reassess all**, feature and
 individual controls explicitly bypass reuse. Owned OpenCode assessment/coding sessions
 load bundled role-specific skills, while Reqwizit owns state and Git delivery.

@@ -5,6 +5,7 @@ import { assessmentContextFingerprint, executionContextPolicy, type ExecutionCon
 import { assessmentSkill } from "./execution-skills.js";
 import { assessmentCompatibility, executionSchemaVersion } from "./assessment-identity.js";
 import { assessmentImpactPolicy, assessmentPathSchema, reviewedAssessmentPaths, type AssessmentFootprint, type AssessmentImpact } from "./assessment-impact.js";
+import type { ImplementationPlanning } from "./implementation-planning.js";
 
 const branch = z.string().trim().min(1).max(200).refine((s) => !s.startsWith("-") && !/[\s~^:?*\[\\]|\.\.|@\{|\/\/|\/$|\.$/.test(s), "Invalid branch name");
 export const executionConfigSchema = z.object({
@@ -14,6 +15,7 @@ export const executionConfigSchema = z.object({
   providerID: z.string().refine((s) => s === "openai", "Use the initial ChatGPT/OpenAI provider"), modelID: z.string().min(1).max(200),
   checks: z.array(z.string().trim().min(1).max(2000)).min(1).max(12),
   dependencies: z.record(z.array(z.string().min(1)).max(50)).default({}),
+  implementationOrder: z.array(z.string().min(1)).max(500).optional(),
   assessmentScopes: z.record(z.array(assessmentPathSchema).max(50)).optional(),
   sharedAssessmentPaths: z.array(assessmentPathSchema).max(100).optional(),
   reuseEquivalentScopes: z.boolean().optional(),
@@ -75,6 +77,7 @@ export type ExecutionRun = {
 };
 export type MainDelivery = { fingerprint: string; contextFingerprint?: string; legacyContextFingerprint?: string; main: string; at: string; repository: string; checks: CheckResult[] };
 export type ExecutionState = {
+  planning?: ImplementationPlanning; planningHistory?: ImplementationPlanning[];
   schemaVersion: number; version: number; config?: ExecutionConfig; assessments: Record<string, Assessment>;
   workspaceAssessments?: Record<string, Assessment>; mainAssessments?: Record<string, Assessment>;
   delivered: Record<string, MainDelivery>; deliveryHistory?: (MainDelivery & { requirementID: string })[];
@@ -184,6 +187,7 @@ export function implementationPlan(project: Project, state: ExecutionState, inde
     visiting.delete(id); visited.add(id);
     const r = requirements.find((r) => r.id === id); if (r) ordered.push(r);
   }
+  for (const id of state.config?.implementationOrder ?? []) if (edges.has(id)) visit(id);
   for (const epic of project.epics.filter((e) => !e.archived)) for (const r of requirements.filter((r) => r.epicID === epic.id)) visit(r.id);
   if (state.config?.strategy === "epic-pr") {
     const epicOrder: string[] = [], path = new Set<string>(), seen = new Set<string>();

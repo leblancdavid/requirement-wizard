@@ -10,7 +10,8 @@ import { planContext } from "../core/working-set.js";
 import { command } from "../service/git-delivery.js";
 import { requirementFingerprint } from "../core/implementation.js";
 import { assessmentContextFingerprint } from "../core/execution-context.js";
-import { assessmentCurrent, emptyExecution } from "../core/execution.js";
+import { assessmentCurrent, emptyExecution, executionConfigSchema } from "../core/execution.js";
+import { planningEdgeID } from "../core/implementation-planning.js";
 
 // Deterministic UI exercise: no model inference, provider credentials, or billing.
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -28,6 +29,8 @@ await writeFile(resolve(scanDirectory, "project.godot"), '[application]\nconfig/
 await mkdir(resolve(scanDirectory, "docs"));
 await writeFile(resolve(scanDirectory, "docs/GAME_VISION.md"), "# Tracker vision\n\nAn existing Godot game with persistent job tracking.");
 const store = new ProjectStore(":memory:");
+let planningProjectID = "";
+const planningDirectory = await mkdtemp(resolve(".reqwizit-state/browser-planning-"));
 const releases: Array<() => void> = [];
 const reviewReleases: Array<() => void> = [];
 let rounds = 0;
@@ -45,7 +48,13 @@ const connections: Connections = {
   async test() { if (blockTest) await new Promise<void>((_accept, reject) => { cancelTest = () => reject(new Error("Fixture test cancelled.")); }); },
   cancelTest() { cancelTest?.(); }, async disconnect() { connected = false; }, async close() { cancelTest?.(); },
 };
-const app = await startApp({ store, connections, port: 0, adapter: { async analyze(project, options) {
+const app = await startApp({ store, connections, port: 0, executionAdapter: { async perform(request) {
+  assert.equal(request.planning, true, "Browser fixture only permits planning; no coding or model calls");
+  const project = store.get(planningProjectID), index = project.requirements.findIndex((r) => r.id === request.requirementID);
+  const other = project.requirements[index === 0 ? 1 : 0]!;
+  return JSON.stringify({ summary: "Build dependency-safe slices", packages: [{ requirementID: request.requirementID, title: `Planning package ${index + 1}`, reason: "Unlocks a usable workflow", steps: ["Implement the approved outcome"], verification: ["Verify the acceptance scenario"],
+    prerequisites: index < 2 ? [{ requirementID: other.id, kind: "hard", reason: "Needs the supporting contract", evidenceIDs: [other.id], confidence: "medium" }] : [], questions: index === 0 ? ["Which shared contract comes first?"] : [] }] });
+} }, adapter: { async analyze(project, options) {
   if (project.name === "Cleanup fixture") {
     assert.equal(options.context.manifest.refinementOnly, true);
     return analysisSchema.parse({ summary: "Unchanged", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
@@ -427,12 +436,19 @@ try {
   await expect(card.locator(".answer-preview")).toHaveText("Owner and office team");
   await page.getByRole("tab", { name: "Project map", exact: true }).click();
   await expect(page.locator(".definition-details")).not.toHaveAttribute("open", "");
-  await page.locator(".feature-group > summary").click();
+  const mapEpic = page.getByRole("article", { name: "Job tracking", exact: true });
+  await expect(mapEpic.getByText("Create and manage contractor jobs.", { exact: true })).toBeVisible();
+  await expect(mapEpic.getByText("Needs review", { exact: true })).toBeVisible();
+  await expect(mapEpic.getByRole("meter", { name: "Job tracking delivered to main", exact: true })).toHaveAttribute("aria-valuenow", "0");
+  await expect(mapEpic.locator(".requirement-detail")).toHaveCount(0);
+  await mapEpic.getByText("View details", { exact: true }).click();
   await expect(page.getByText("Create and manage contractor jobs.", { exact: true })).toBeVisible();
   await page.locator(".requirement-detail > summary").click();
   await page.getByLabel("Review rationale").fill("Saving jobs is essential.");
   await page.getByRole("button", { name: "Confirm requirement" }).click();
   await expect(page.locator(".badge.accepted")).toHaveText("Confirmed");
+  await expect(mapEpic).toContainText("1 not assessed");
+  await page.getByText("Manual implementation records", { exact: true }).click();
   await page.locator(".implementation-progress > summary").click();
   await page.locator(".implementation-item > summary").click();
   await page.getByLabel("Implementation status", { exact: true }).selectOption("verified");
@@ -442,8 +458,23 @@ try {
   await expect(page.locator(".implementation-progress > summary")).toContainText("1 verified");
   const progressFile = resolve(workspaceDirectory, ".requirement-wizard/progress.json");
   await expect.poll(async () => JSON.parse(await readFile(progressFile, "utf8")).implementation[0].status).toBe("verified");
+  await expect(mapEpic.getByRole("meter")).toHaveAttribute("aria-valuenow", "0");
+  await expect(mapEpic).toContainText("0 / 1 delivered to main");
+  await mapEpic.getByText("View details", { exact: true }).click();
+  await page.getByText("Manual implementation records", { exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Epic overview must fit mobile width");
+  await page.screenshot({ path: ".reqwizit-state/browser-map-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await mapEpic.getByRole("button", { name: "Open Design", exact: false }).click();
+  await expect(page.getByRole("tab", { name: "Design", exact: false })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("Filter by feature").locator("option:checked")).toHaveText("Job tracking");
+  await page.getByRole("tab", { name: "Project map", exact: true }).click();
+  await mapEpic.getByRole("button", { name: "Open Review", exact: false }).click();
+  await expect(page.getByRole("tab", { name: "Review", exact: false })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Project map", exact: true }).click();
   await page.screenshot({ path: ".reqwizit-state/browser-map.png", fullPage: true });
-   await page.getByRole("tab", { name: /Implement/ }).click();
+  await mapEpic.getByRole("button", { name: "Open Implement", exact: false }).click();
   const implementationPanel = page.locator(".implementation-tab");
    await expect(page.getByRole("tab", { name: /Implement/ })).toContainText("1");
   await expect(implementationPanel.getByRole("button", { name: /Continue implementation/ })).toBeDisabled();
@@ -1196,7 +1227,12 @@ try {
          await page.getByRole("tab", { name: /Implement/ }).click();
          await expect(listPanel.locator(".feature-group")).toHaveCount(10);
          await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
-         console.log(`Large-project check: 500 requirements, ${Math.round(switchMilliseconds)} ms Playwright-observed initial tab switch; collapsed DOM below 500 elements.`);
+          console.log(`Large-project check: 500 requirements, ${Math.round(switchMilliseconds)} ms Playwright-observed initial tab switch; collapsed DOM below 500 elements.`);
+          await page.getByRole("tab", { name: "Project map", exact: true }).click();
+          await expect(page.locator(".epic-overview")).toHaveCount(10);
+          await expect(page.locator(".epic-map-details .requirement-detail")).toHaveCount(0);
+          await expect(page.locator(".implementation-item")).toHaveCount(0);
+          assert.ok(await page.locator(".epic-overview *").count() < 500, "Collapsed epic overview must keep 500-requirement details unmounted");
           await page.unroute(snapshotRoute);
           // Real paginated activity API with 1,000 routine revisions and meaningful older input.
           let activityProject = store.create("Activity paging fixture", "Keep useful history", { providerID: "openai", modelID: "fixture" });
@@ -1234,6 +1270,78 @@ try {
           await page.setViewportSize({ width: 390, height: 844 });
           assert.equal(await feed.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Activity filters and paging fit mobile width");
           await page.screenshot({ path: ".reqwizit-state/browser-activity-mobile.png" });
-          assert.deepEqual(errors, []);
+           // Full planning API/worker/review flow with an injected read-only adapter.
+           let planningProject = store.create("Implementation planning fixture", "Build three linked outcomes", { providerID: "openai", modelID: "fixture" });
+           planningProjectID = planningProject.id;
+           const planningJob = store.beginJob(planningProject.id, planningProject.revision).job; store.claimJob(planningJob.id, Date.now() + 60000);
+           store.finishJob(planningJob.id, { summary: "Three capabilities", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Create durable records", "Edit saved records", "Export saved records"].map((statement) => ({ statement, rationale: "Approved outcome", sourceIDs: [planningProject.sources[0]!.id], acceptance: ["The outcome survives restart"] })) });
+           planningProject = store.get(planningProject.id);
+           for (const r of planningProject.requirements) planningProject = store.review(planningProject.id, planningProject.revision, r.id, "accepted", "");
+           await writeFile(resolve(planningDirectory, "README.md"), "Planning fixture");
+           for (const args of [["init", "-b", "main"], ["add", "."], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Initial"], ["remote", "add", "origin", "git@github.com:fixture/planning.git"]]) {
+             const result = await command(planningDirectory, "git", args, AbortSignal.timeout(10000)); assert.equal(result.code, 0, result.output);
+           }
+           store.connectWorkspace(planningProject.id, planningProject.revision, planningDirectory);
+           const planningState = store.execution(planningProject.id);
+           planningState.config = executionConfigSchema.parse({ repository: "fixture/planning", strategy: "requirement-pr", providerID: "openai", modelID: "fixture", checks: ["npm test"] });
+           store.saveExecution(planningProject.id, planningState);
+            await page.evaluate((id) => localStorage.setItem("reqwizit-project", id), planningProject.id);
+            await page.reload();
+           await page.getByRole("tab", { name: /Implement/ }).click();
+           const planningPanel = page.getByRole("region", { name: "Implementation planning", exact: true });
+           await planningPanel.getByRole("button", { name: "Prepare implementation plan", exact: true }).click();
+           await expect(planningPanel.getByRole("list", { name: "Proposed work packages" }).locator(":scope > li")).toHaveCount(3);
+           await expect(planningPanel.getByRole("alert")).toContainText("cycle");
+           const approvePlan = planningPanel.getByRole("button", { name: "Approve implementation plan", exact: true });
+           await expect(approvePlan).toBeDisabled();
+           const packages = planningPanel.getByRole("list", { name: "Proposed work packages" });
+           await packages.locator("summary").first().click();
+           await packages.getByRole("checkbox").first().uncheck();
+           await expect(planningPanel.getByRole("alert")).toHaveCount(0);
+           await expect(approvePlan).toBeDisabled();
+           await planningPanel.getByRole("textbox", { name: /Planning review notes/ }).fill("Create the durable record contract first, then edit it.");
+           await expect(approvePlan).toBeEnabled();
+           await planningPanel.getByRole("button", { name: "Move Planning package 3 earlier", exact: true }).click();
+           await approvePlan.click();
+           await expect(planningPanel.getByText("approved", { exact: true })).toBeVisible();
+           const approvedPlanState = store.execution(planningProject.id), firstID = planningProject.requirements[0]!.id, secondID = planningProject.requirements[1]!.id;
+           assert.deepEqual(approvedPlanState.planning!.acceptedEdges, [planningEdgeID(secondID, firstID)]);
+           assert.deepEqual(approvedPlanState.config!.dependencies[secondID], [firstID]);
+           assert.equal(approvedPlanState.config!.dependencies[firstID], undefined);
+           await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
+           await expect(planningPanel.getByText("approved", { exact: true })).toBeVisible();
+           await expect(planningPanel.getByRole("textbox", { name: /Planning review notes/ })).toHaveValue("Create the durable record contract first, then edit it.");
+           await page.setViewportSize({ width: 390, height: 844 });
+           assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Reviewable implementation plan fits mobile width");
+            await page.screenshot({ path: ".reqwizit-state/browser-implementation-planning.png", fullPage: true });
+            // Presentation fixtures exercise empty scope and delivery freshness without model/Git calls.
+            const mapState = structuredClone(store.execution(planningProject.id));
+            const mapRequirements = planningProject.requirements;
+            const mapDelivery = (r: typeof mapRequirements[number]) => ({ fingerprint: requirementFingerprint(r), main: "fixture-main", repository: mapState.config!.repository, at: new Date().toISOString(), checks: [] });
+            mapState.delivered[mapRequirements[0]!.id] = mapDelivery(mapRequirements[0]!);
+            await page.route(`**/api/projects/${planningProject.id}`, async (route) => {
+              const response = await route.fetch(), snapshot = await response.json();
+              await route.fulfill({ response, json: { ...snapshot, execution: mapState, project: { ...snapshot.project, epics: [...snapshot.project.epics,
+                { ...snapshot.project.epics[0], id: "map-empty", title: "Future reporting", purpose: "Explain trends at a glance.", archived: false, dependencies: [] },
+                { ...snapshot.project.epics[0], id: "map-archived", title: "Archived capability", archived: true, dependencies: [] }] } } });
+            });
+            await page.getByRole("tab", { name: "Project map", exact: true }).click();
+            const emptyEpic = page.getByRole("article", { name: "Future reporting", exact: true });
+            await expect(emptyEpic.getByText("Explain trends at a glance.", { exact: true })).toBeVisible();
+            await expect(emptyEpic).toContainText("Scope not defined yet");
+            await expect(emptyEpic.getByRole("meter")).toHaveCount(0);
+            await expect(page.getByRole("heading", { name: "Archived capability", exact: true })).toHaveCount(0);
+            const deliveryEpic = page.locator(".epic-overview").filter({ has: page.getByRole("meter") });
+            await expect(deliveryEpic.getByRole("meter")).toHaveAttribute("aria-valuenow", "33");
+            await expect(deliveryEpic).toContainText("1 / 3 delivered to main");
+            mapState.delivered[mapRequirements[0]!.id]!.fingerprint = "outdated-requirement";
+            await expect(deliveryEpic.getByRole("meter")).toHaveAttribute("aria-valuenow", "0");
+            for (const r of mapRequirements) mapState.delivered[r.id] = mapDelivery(r);
+            await expect(deliveryEpic.getByRole("meter")).toHaveAttribute("aria-valuenow", "100");
+            await expect(deliveryEpic.locator(".badge")).toHaveText("Delivered");
+            await page.getByLabel("Filter by feature", { exact: true }).selectOption("map-empty");
+            await expect(page.locator(".epic-overview")).toHaveCount(1);
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Empty epic overview fits mobile width");
+            assert.deepEqual(errors, []);
    console.log("Browser checks passed: appearance presets, custom colors, fonts/text size, persistence, cross-tab sync, reset, contrast hints, keyboard dropdowns and mobile sizing; local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; Implementation tab count/actions, four delivery strategies, saved settings, matching dark theme and mobile layout; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation; explicit existing-project entry, local identity autofill, preserved manual edits across folders, initialization failure/retry, review-first project map, manual rescan, retained IDs, question dismissal and evidence-grounded replacements, reload and mobile width. Screenshots include .reqwizit-state/browser-implementation{,-dark,-mobile}.png");
-} finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); await rm(scanDirectory, { recursive: true, force: true }); }
+} finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); await rm(scanDirectory, { recursive: true, force: true }); await rm(planningDirectory, { recursive: true, force: true }); }
