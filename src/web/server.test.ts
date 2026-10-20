@@ -107,10 +107,15 @@ test("execution ownership holds automatic discovery while submissions and adviso
     assert.equal((await post("question-help", { revision: project.revision, request: { questionID: question.id, action: "rephrase" } })).status, 202);
     await new Promise((accept) => setTimeout(accept, 650));
     assert.equal(calls, 0); assert.equal(store.get(project.id).revision, project.revision);
-    assert.ok(store.submissions(project.id).every((item) => item.status === "queued" && !item.applied));
+    assert.ok(store.submissions(project.id).every((item) => !item.applied));
+    assert.equal(store.submissions(project.id)[2]!.status, "needs-attention", "An overlapping approval is saved without applying a premature decision");
     assert.equal(store.jobs(project.id).at(-1)!.status, "completed", "Question help can complete independently");
     store.releaseExecution(project.id, "worker");
-    await until(() => store.submissions(project.id).every((item) => item.status === "completed"));
+    await until(() => store.submissions(project.id).slice(0, 2).every((item) => item.status === "completed"));
+    assert.equal(calls, 2); assert.equal(store.get(project.id).requirements[0]!.status, "proposed");
+    const current = store.get(project.id), reviewed = current.requirements[0]!;
+    assert.equal((await post("submit", { id: randomUUID(), auto: true, research: false, input: { type: "review", requirementID: reviewed.id, requirementText: reviewed.statement, fingerprint: reviewFingerprint(reviewed), action: "accepted", note: "", reviewedRevision: current.revision } })).status, 202);
+    await until(() => store.submissions(project.id).at(-1)!.status === "completed");
     assert.equal(calls, 3); assert.equal(store.get(project.id).requirements[0]!.status, "accepted");
     store.pauseQueue(project.id, true);
     store.claimExecution(project.id, "fixture-repository", "worker");
@@ -267,6 +272,33 @@ test("refinement action creates separate approved-requirement proposals and revi
     assert.equal(current.requirements[0]!.statement, "The player can jump.");
     assert.equal(current.requirements[0]!.status, "accepted");
     assert.equal(current.refinements[0]!.status, "accepted");
+  } finally { await app.close(); store.close(); }
+});
+
+test("duplicate removal API authenticates current human decisions without inference and rejects malformed/stale requests", async () => {
+  const store = new ProjectStore(":memory:");
+  let p = store.create("Duplicate API", "Preserve current reviewed rules", { providerID: "openai", modelID: "fixture" });
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { summary: "Rules", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Keep rule", "Duplicate rule"].map((statement) => ({ statement, rationale: "Human rule", acceptance: [statement], sourceIDs: [p.sources[0]!.id] })) });
+  p = store.get(p.id);
+  const before = structuredClone(p);
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { assert.fail("Human removal must not call AI"); } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const body = { revision: p.revision, removeID: p.requirements[1]!.id, keepID: p.requirements[0]!.id, note: "Same behavior" };
+  const post = (action: string, payload: unknown, authenticated = true) => fetch(`${app.origin}/api/projects/${p.id}/${action}`, { method: "POST", headers: authenticated ? headers : { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  try {
+    assert.equal((await post("remove-duplicate", body, false)).status, 403);
+    assert.equal((await post("remove-duplicate", { ...body, revision: p.revision - 1 })).status, 409);
+    assert.equal((await post("remove-duplicate", { ...body, keepID: body.removeID })).status, 400);
+    assert.equal((await post("remove-duplicate", { ...body, note: "x".repeat(12001) })).status, 400);
+    assert.equal((await post("refresh-refinement", { revision: p.revision, proposalID: "missing" })).status, 400);
+    assert.deepEqual(store.get(p.id), before);
+    assert.equal((await post("remove-duplicate", body)).status, 200);
+    const current = store.get(p.id);
+    assert.equal(current.requirements[1]!.status, "rejected");
+    assert.deepEqual(current.requirements[0], before.requirements[0]);
+    assert.equal(store.jobs(p.id).length, 1);
+    assert.equal((await post("remove-duplicate", body)).status, 409);
   } finally { await app.close(); store.close(); }
 });
 

@@ -69,6 +69,136 @@ match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
 
+### Completion-linked pending review reconciliation (2026-10-20)
+
+Source/target SQLite **3 → 3**, execution payload **1 → 1**, workspace **2 → 2**.
+Additive optional representations:
+
+- Analysis/job results: `pendingChanges: { format: 1, changes: [...] }`, at most ten
+  typed revise-question/revise-requirement/withdraw-requirement operations, each with
+  current batch human source IDs and a bounded reason. Older successful jobs omit it
+  and keep their original results. Unsupported future envelopes reject reads without
+  rewriting original jobs; malformed live output is rejected before publication.
+- Projects: optional `reviewUpdates: { format: 1, items: [...] }`, retaining the latest
+  notice per stable record/type with outcome, job, response IDs and publication revision.
+  Older notices remain in immutable revision snapshots. These are workflow/provenance
+  notices, not human decisions or assessment evidence. No schema default fabricates
+  notices for older projects; unsupported future envelopes reject project reads/writes.
+- Submissions: optional `appliedRevision` records the **exact** revision that first
+  applied their immutable source. New applications write it atomically with that source.
+  For older already-applied responses, completion derives the exact insertion boundary
+  from retained revisions rather than inventing a baseline or timestamp. Receipts are
+  checked against both adjacent source snapshots before use. A missing historical
+  boundary produces no invented input-impact claim. No startup backfill is required.
+- Answer input: optional `fingerprint` or `reviewedRevision` establishes exact question
+  wording/options and previous-answer identity. New browser requests reference the saved
+  reviewed revision; storage derives/checks its fingerprint without duplicating large
+  question/option text in the bounded HTTP body. Older inputs retain their existing
+  question-text/source checks, without manufacturing a historical fingerprint.
+
+Withdrawals reuse existing rejected-requirement/dismissed-proposal storage lifecycles,
+with an explicit completion notice distinguishing them from human rejections/dismissals.
+Records, IDs, original sources, prior wording, human choices and completed results remain
+saved. Never-approved proposals may be withdrawn; approved behavior is not removed by
+pendingChanges. Saved/unfinished responses prevent conflicting changes or retirement.
+Unsaved drafts are renderer state and remain editable/reviewable when their item changes
+or retires. Notice reasons are bounded summaries; original retirement reasons and record
+history remain available separately.
+
+No database rewrite, startup sweep, data reset or model replay occurs. Publication,
+pending updates, withdrawals, notices and receipts share the existing immediate SQLite
+transaction/expected-revision/lease checks. Failure rolls back the entire round and its
+notices, preserving human input. Completion can be retried explicitly after failure;
+already completed jobs cannot publish twice. Blocked pair results do not withdraw old
+work. Optional candidate context cannot starve the original response.
+
+The new project notices are excluded from model context and decision/assessment/cache
+identity projections; compatible completed checks and delivered evidence remain valid.
+Actual wording, choices, human sources or record eligibility changes still invalidate
+the relevant evidence normally. There is no assessment compatibility/version bump.
+
+Upgrade coverage includes old projects without notices, older applied-response shapes
+without a revision receipt, two reopens with new notices/jobs intact, original historical
+snapshots, unchanged context/assessment identities when only notices differ, and future
+project/job envelope rejection without replacement. No additional startup recovery path
+or paid reassessment is introduced.
+
+Verification (2026-10-20): `npm run check` and all **343 deterministic tests** passed,
+including the compatibility, atomic failure, stale-worker and retained-input cases above.
+Live-model reconciliation quality has not been qualified.
+
+### Human decision availability and evidence bases (2026-10-20)
+
+Source/target database **3 → 3**, execution **1 → 1**, workspace **2 → 2**. New queued
+review submissions and individual wording proposals add optional
+`decisionBasis: { format: 1, contextKey }`. The key identifies the exact target,
+relevant current human source IDs, linked clarification state, feature/dependency
+structure and confirmed dependency guardrails under `human-review-basis-v1`.
+Plain independent same-feature approvals and unrelated features are excluded; nonblank
+review addenda are conservatively feature-level guardrails. Browser review
+inputs add optional `reviewedRevision`; storage derives the basis from that immutable
+saved revision, not from a client-provided assertion of current evidence.
+New ordinary confirmation/rejection sources also record optional `reviewAddendum`
+from the actual submitted human note. AI cleanup/resolution explanations do not acquire
+this marker and are not mistaken for wider human change requests. Legacy sources keep
+their missing marker; upgrades do not reinterpret historical prose as structured scope.
+
+This is an additive forward-compatible read with **no startup rewrite/backfill**.
+Legacy submissions/proposals lacking this provenance retain their existing target
+fingerprint rules plus the current pending-input/worker safety checks. Do not manufacture
+a historical basis from today's state. New unsupported/malformed basis envelopes reject
+reads/saves without replacing original data; schema format is separate from project
+revision/CAS. Existing resolution identities, assessment/cache fingerprints and delivered
+evidence are unchanged, and completed work is not invalidated just by upgrading.
+
+New pending wording proposals become outdated only when captured relevant evidence
+actually differs. A genuinely new context may produce a new proposal for otherwise
+unchanged wording; old proposals/checks remain saved. This does not replay inference on
+startup. A review that is no longer safe is retained as unapplied `needs-attention` with
+`conflict: true` and its exact input/note; only explicit human re-review can replace it.
+The enqueue/application checks and writes share SQLite immediate transactions. Failed
+writes roll back normally; repeated opening needs no migration recovery or model calls.
+
+Upgrade coverage includes legacy queued reviews without a basis, new bases through two
+reopens, unchanged historical snapshots/completed work, and future-format rejection
+without payload replacement. Concurrency checks use independent SQLite connections and
+exercise both worker-first and human-first ordering. No production-data reset is needed.
+
+Verification: type check, all 321 deterministic tests (including upgrade/reopen and
+source/proposal provenance checks), UI build, Playwright browser checks and diff checks
+passed on Node 20.11. The new safeguards perform no model calls, and no live provider
+or additional Node 22/desktop qualification was attempted.
+
+### Human duplicate removal and targeted proposal refresh (2026-10-20)
+
+Source/target formats remain SQLite **3 → 3**, execution payload **1 → 1**, workspace
+format **2 → 2**. No startup transformation, new schema field, fingerprint change,
+backup rewrite, model replay or reassessment is introduced by upgrading. Existing
+proposals, completed checks, assessments and delivery evidence keep their semantics.
+
+An explicit duplicate-removal decision uses the existing rejected requirement,
+rejection source (superseding prior confirmation where present), review note and
+revision-history representation. The survivor ID is recorded in that evidence/note;
+it is not a new structured relationship field. Original sources/IDs/history are not
+rewritten. Only assessments citing the removed requirement are invalidated, as for
+other requirement decisions; unrelated evidence and execution history remain saved.
+Existing readers can read the result without migration. No cleanup runs on upgrade.
+
+Targeted refresh uses existing single-target/pair job envelopes. On successful
+non-blocked publication, stale proposals for that exact target/pair become dismissed
+in the same SQLite transaction. Failure, cancellation, stale output, validation errors
+and blocked outcomes do not retire the old proposal. Interrupted work is recovered by
+existing lease rules and requires explicit retry; startup never repeats model calls.
+Revisions remain the concurrency counter, not a migration version. Existing future-
+format rejection and transaction recovery remain unchanged.
+
+Coverage includes older saved project shapes with existing resolution proposals,
+direct removal followed by two reopens and historical-revision reads, and successful/
+blocked/failed/cancelled/stale refreshes. There is no new persisted format to transform.
+Verification: type check, all 307 deterministic tests, UI build, Playwright browser
+checks and diff whitespace check passed in the available Node 20.11 environment.
+No live model calls or new Node 22/desktop qualification were performed.
+
 ### Processing refresh transport and rendering (2026-10-20)
 
 Source/target: SQLite **3 → 3**, execution payload **1 → 1**, workspace format **2 → 2**.

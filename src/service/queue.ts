@@ -6,8 +6,10 @@ import { planContext } from "../core/working-set.js";
 import { ContextBudgetError } from "../core/context.js";
 import { refinementContextKey, resolutionPairEligible } from "./refinement-tasks.js";
 import { auditApprovedRequirements } from "../core/similarity.js";
-import { resolutionContextKey, resolutionTaskForAnswer } from "../core/resolution.js";
+import { refinementIsStale, resolutionContextKey, resolutionTaskForAnswer } from "../core/resolution.js";
 import { OperationConflictError } from "../core/operations.js";
+import { decisionAvailability } from "../core/decision-availability.js";
+import { reconciliationCandidates } from "../core/review-completion.js";
 
 type Work = { controller: AbortController; promise: Promise<void> };
 
@@ -86,12 +88,20 @@ export class DiscoveryQueue {
     return item;
   }
 
-  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean } = {}) {
+  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string } = {}) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
     if (this.isActive(id)) throw new Error("This project already has an active discovery job.");
     const project = this.service.store.get(id);
+    if (options.refreshProposalID) {
+      const proposal = project.refinements.find((p) => p.id === options.refreshProposalID && p.status === "pending");
+      if (!options.refinementOnly || !proposal || !refinementIsStale(project, proposal)) throw new Error("Choose an outdated pending proposal to refresh.");
+      const ids = [proposal.requirementID, ...(proposal.resolution ? [proposal.resolution.relatedRequirementID] : [])];
+      if (ids.some((id) => !project.requirements.some((r) => r.id === id && r.status !== "rejected" && project.epics.some((e) => e.id === r.epicID && !e.archived)))) throw new Error("This proposal refers to a removed requirement or archived feature. Dismiss it instead.");
+      const availability = decisionAvailability(project, ids, this.service.store.submissions(id));
+      if (availability.state !== "ready") throw new OperationConflictError(availability.reason);
+    }
     if (options.focusEpicID && !project.epics.some((e) => e.id === options.focusEpicID && !e.archived)) throw new Error("Focused epic does not exist.");
     this.service.store.recoverExpiredJobs();
     this.reconcile(id);
@@ -162,7 +172,7 @@ export class DiscoveryQueue {
     }
   }
 
-  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean }) {
+  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string }) {
     if (this.closing || this.isActive(id) || this.service.store.executionActive(id)) return;
     if (!manual && this.service.store.executionExpired(id)) {
       this.service.store.pauseQueue(id, true);
@@ -179,6 +189,19 @@ export class DiscoveryQueue {
     const promise = Promise.resolve().then(async () => {
       if (manual?.refinementOnly) {
         let project = this.service.store.get(id);
+        if (manual.refreshProposalID) {
+          const proposal = project.refinements.find((p) => p.id === manual.refreshProposalID)!;
+          const pair: [string, string] | undefined = proposal.resolution ? [proposal.requirementID, proposal.resolution.relatedRequirementID] : undefined;
+          Object.assign(refinement!, { phase: pair ? "overlaps" : "wording", total: 1 });
+          report(pair ? "Refreshing only this requirement comparison. The previous proposal remains in history." : "Refreshing only this requirement's wording.");
+          const job = await this.service.analyze(id, project.revision, { signal: controller.signal, refinementOnly: true, research: false, onProgress: report,
+            ...(pair ? { refinementPair: pair, includeUnapproved: true, resolutionTriggerSourceIDs: proposal.resolutionTriggerSourceIDs } : { recordIDs: [proposal.requirementID] }) });
+          if (job.status !== "completed") { refinement!.status = job.status === "cancelled" ? "stopped" : "failed"; report(job.diagnostic ?? `Refresh ${job.status}.`); return; }
+          if (job.result?.resolutionCheck?.outcome === "blocked") { refinement!.status = "blocked"; report(job.result.resolutionCheck.explanation); return; }
+          refinement!.completed = 1;
+          report(`Refresh complete. ${job.result?.resolutionCheck ? `${job.result.resolutionCheck.outcome}: ${job.result.resolutionCheck.explanation}` : job.result?.refinements?.length ? "Replacement wording awaits review." : "No replacement wording was proposed."} Review proposed fixes here or clarification questions in Design. Other refinement checks were not repeated.`);
+          return;
+        }
         const priorJobs = this.service.store.jobs(id);
         const overlaps = await auditApprovedRequirements(project, { signal: controller.signal,
           candidateFilter: (finding) => (!manual.focusEpicID || project.requirements.some((r) => [finding.leftID, finding.rightID].includes(r.id) && r.epicID === manual.focusEpicID))
@@ -259,7 +282,7 @@ export class DiscoveryQueue {
           const input = items.length === 1 ? items[0]!.input : undefined;
           const resolutionTask = input?.type === "answer" && input.answer.kind === "answer" ? resolutionTaskForAnswer(project, input.questionID, this.service.store.jobs(id)) : undefined;
           const pair = resolutionTask?.requirementIDs;
-          return { focusEpicID,
+          const planned = { focusEpicID,
           ...(pair ? { refinementOnly: true, refinementPair: pair, includeUnapproved: project.requirements.some((r) => pair.includes(r.id) && r.status !== "accepted"), resolutionTriggerSourceIDs: resolutionTask?.triggerSourceIDs } : {}),
           isolatedTask: items.length === 1,
           requiredEpicIDs: [...new Set([...project.requirements.filter((r) => pair?.includes(r.id)).map((r) => r.epicID), ...items.map((item) => {
@@ -268,7 +291,15 @@ export class DiscoveryQueue {
             return epicID;
           })])],
           recordIDs: [...(pair ?? []), ...items.flatMap((s) => [s.appliedSourceID!, ...(s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : [])])],
-        }; };
+          };
+          if (!pair) for (const candidate of items.flatMap((item) => reconciliationCandidates(project, item, this.service.store.submissions(id)))) {
+            if (planned.recordIDs.includes(candidate)) continue;
+            const recordIDs = [...planned.recordIDs, candidate];
+            try { planContext(project, { ...planned, recordIDs, expandMandatory: true }); planned.recordIDs = recordIDs; }
+            catch (error) { if (!(error instanceof ContextBudgetError)) throw error; } // Optional candidates cannot block the original response.
+          }
+          return planned;
+        };
         // Preflight before starting a job. An indivisible response is retained
         // with a durable budget diagnostic; it cannot starve fitting responses.
         const block = (item: Submission, error: ContextBudgetError) => {
@@ -322,7 +353,7 @@ export class DiscoveryQueue {
         if (job.status !== "completed" || batch.some((s) => s.status === "needs-attention")) { this.service.store.pauseQueue(id, true); break; }
         // Finish the finite selected work, then leave unrelated areas paused.
         if (scope && !continuing) {
-          const remaining = this.service.store.submissions(id).some((s) => ["queued", "saved", "needs-attention"].includes(s.status));
+          const remaining = this.service.store.submissions(id).some((s) => ["queued", "saved"].includes(s.status) || s.status === "needs-attention" && !s.conflict);
           this.service.store.pauseQueue(id, remaining);
           break;
         }

@@ -1,5 +1,6 @@
 import { reviewFingerprint, StaleRevisionError, type Analysis, type Project } from "./model.js";
 import { refinementIsStale, resolutionContextKey, validateResolutionEvidence } from "./resolution.js";
+import { decisionContextKey } from "./decision-availability.js";
 
 /** Volatile run telemetry, not saved evidence or specification completeness. */
 export type RefinementProgress = {
@@ -14,7 +15,8 @@ export function refinementCandidates(project: Project) {
     && project.epics.some((e) => e.id === r.epicID && !e.archived)
     && !project.refinements.some((p) => p.resolution && p.status === "pending" && !refinementIsStale(project, p)
       && [p.requirementID, p.resolution.relatedRequirementID].includes(r.id))
-    && !project.refinements.some((p) => !p.resolution && p.requirementID === r.id && p.fingerprint === reviewFingerprint(r)));
+    && !project.refinements.some((p) => !p.resolution && p.requirementID === r.id && p.fingerprint === reviewFingerprint(r)
+      && (!p.decisionBasis || p.decisionBasis.contextKey === decisionContextKey(project, [r.id]))));
 }
 
 export function proposeRefinements(project: Project, proposals: NonNullable<Analysis["refinements"]>, newID: () => string, triggerSourceIDs: string[] = []) {
@@ -25,6 +27,7 @@ export function proposeRefinements(project: Project, proposals: NonNullable<Anal
     if (seen.has(target.id)) throw new Error("Refinement repeats a target.");
     seen.add(target.id);
     const fingerprint = reviewFingerprint(target);
+    const decisionKey = decisionContextKey(project, [target.id]);
     // A dismissed suggestion is not permission to try the same cleanup again.
     const related = proposal.resolution && project.requirements.find((r) => r.id === proposal.resolution!.relatedRequirementID);
     if (proposal.resolution && (!related || related.id === target.id || related.status === "rejected"
@@ -36,9 +39,10 @@ export function proposeRefinements(project: Project, proposals: NonNullable<Anal
     }
     if (project.refinements.some((r) => proposal.resolution
       ? r.resolutionContextKey === contextKey && r.resolution
-      : !r.resolution && r.requirementID === target.id && r.fingerprint === fingerprint)) continue;
+      : !r.resolution && r.requirementID === target.id && r.fingerprint === fingerprint && (!r.decisionBasis || r.decisionBasis.contextKey === decisionKey))) continue;
     if (!proposal.resolution && proposal.statement === target.statement && JSON.stringify(proposal.acceptance) === JSON.stringify(target.acceptance)) continue;
     project.refinements.push({ ...proposal, id: newID(), fingerprint, original: structuredClone(target), status: "pending", createdAtRevision: project.revision + 1,
+      ...(!related ? { decisionBasis: { format: 1 as const, contextKey: decisionKey } } : {}),
       ...(related ? { relatedOriginal: structuredClone(related), resolutionContextKey: contextKey,
         ...(triggerSourceIDs.length ? { resolutionTriggerSourceIDs: [...triggerSourceIDs] } : {}) } : {}) });
     project.roundChanges.push(`Proposed requirement cleanup: ${target.statement} — ${proposal.reason}`);
@@ -83,4 +87,23 @@ export function reviewRefinement(project: Project, id: string, accept: boolean, 
   // Previously resolved coverage no longer establishes the revised wording.
   project.assessments = project.assessments.filter((a) => !a.checks.some((c) => c.evidenceIDs.includes(target.id)));
   project.roundChanges = [`Approved requirement cleanup: ${target.statement}`];
+}
+
+/** A current human decision, not approval of an AI replacement. Keep the survivor exact. */
+export function removeRequirementAsDuplicate(project: Project, removeID: string, keepID: string, note: string, newID: () => string) {
+  const removed = project.requirements.find((r) => r.id === removeID);
+  const kept = project.requirements.find((r) => r.id === keepID);
+  if (removeID === keepID || !removed || !kept || [removed, kept].some((r) => r.status === "rejected" || !project.epics.some((e) => e.id === r.epicID && !e.archived))) throw new Error("Choose two distinct active, non-rejected requirements.");
+  const previous = project.sources.filter((s) => s.requirementID === removeID && ["confirmation", "rejection"].includes(s.kind) && !project.sources.some((next) => next.supersedes === s.id)).at(-1);
+  const sourceID = newID();
+  const reason = `Removed as duplicate of ${keepID}. ${note.trim()}`.trim();
+  project.sources.push({ id: sourceID, kind: "rejection", requirementID: removeID, epicID: removed.epicID,
+    ...(previous ? { supersedes: previous.id } : {}),
+    text: `Human decision: ${reason}\nKept requirement (unchanged): ${kept.statement}\nRemoved requirement: ${removed.statement}\nOriginal evidence and revision history are retained.` });
+  removed.status = "rejected";
+  removed.reviewNote = reason;
+  removed.sourceIDs.push(sourceID);
+  for (const proposal of project.refinements) if (proposal.status === "pending" && (proposal.requirementID === removeID || proposal.resolution?.relatedRequirementID === removeID)) proposal.status = "dismissed";
+  project.assessments = project.assessments.filter((a) => !a.checks.some((c) => c.evidenceIDs.includes(removeID)));
+  project.roundChanges = [`${reason} The surviving requirement was not rewritten; no AI call was made.`];
 }

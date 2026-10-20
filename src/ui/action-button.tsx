@@ -45,12 +45,25 @@ export function ActionButton({ disabled, reason, title, onClick, onKeyDown, onBl
   const [dismissed, setDismissed] = useState(false);
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const trigger = useRef<HTMLButtonElement | null>(null);
   const cancelHide = () => { clearTimeout(hideTimer.current); };
   const hide = () => { cancelHide(); hideTimer.current = setTimeout(() => setAnchor(null), 180); };
   useEffect(() => () => clearTimeout(hideTimer.current), []);
+  useEffect(() => { if (!disabled) setAnchor(null); }, [disabled]);
+  useEffect(() => {
+    if (!anchor) return;
+    // A disabled action may remain mounted inside a hidden tab. Do not leave
+    // its body/dialog portal covering a different action after navigation.
+    const dismissOutside = (event: Event) => {
+      if (event.target instanceof Node && !trigger.current?.contains(event.target)) setAnchor(null);
+    };
+    document.addEventListener("pointerdown", dismissOutside, true);
+    document.addEventListener("focusin", dismissOutside, true);
+    return () => { document.removeEventListener("pointerdown", dismissOutside, true); document.removeEventListener("focusin", dismissOutside, true); };
+  }, [anchor]);
   const inheritedReason = useContext(DisabledReason);
   const explanation = disabled ? reason || title || inheritedReason : undefined;
-  const show = (element: HTMLButtonElement) => { cancelHide(); setDismissed(false); setAnchor(element.getBoundingClientRect()); setPortal(element.closest("dialog") ?? document.body); };
+  const show = (element: HTMLButtonElement) => { trigger.current = element; cancelHide(); setDismissed(false); setAnchor(element.getBoundingClientRect()); setPortal(element.closest("dialog") ?? document.body); };
   return <>
     <button {...props} aria-disabled={disabled || undefined} title={disabled ? undefined : title}
       aria-describedby={[props["aria-describedby"], explanation ? id : undefined].filter(Boolean).join(" ") || undefined}

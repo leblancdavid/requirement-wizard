@@ -1,4 +1,5 @@
 import { requirementEvidenceIDs, requirementEvidenceIssues, reviewFingerprint, type Analysis, type Job, type Project, type Submission } from "./model.js";
+import { decisionAvailability, decisionContextKey } from "./decision-availability.js";
 
 type ResolutionProposal = NonNullable<Analysis["refinements"]>[number];
 
@@ -89,17 +90,24 @@ export function resolutionContextKey(project: Project, ids: readonly string[], t
 export function resolutionHasWaitingInput(project: Project, proposal: Project["refinements"][number], submissions: Submission[]) {
   if (!proposal.resolution) return false;
   const ids = [proposal.requirementID, proposal.resolution.relatedRequirementID];
-  const { areas } = resolutionAreas(project, ids);
-  const questions = new Set(pairQuestions(project, ids).map((q) => q.id));
-  return submissions.some((s) => ["queued", "saved", "processing"].includes(s.status) && (s.input.type === "review" ? ids.includes(s.input.requirementID)
-    : !s.applied && (s.input.type === "note" ? areas.has(s.input.epicID) : questions.has(s.input.questionID))));
+  return decisionAvailability(project, ids, submissions).submissionIDs.length > 0;
 }
 
 export function refinementIsStale(project: Project, proposal: Project["refinements"][number]): boolean {
+  return refinementStaleReason(project, proposal) !== undefined;
+}
+
+export function refinementStaleReason(project: Project, proposal: Project["refinements"][number]): string | undefined {
   const target = project.requirements.find((r) => r.id === proposal.requirementID);
-  if (!target || reviewFingerprint(target) !== proposal.fingerprint || !project.epics.some((e) => e.id === target.epicID && !e.archived)) return true;
-  return !!proposal.resolution && (!proposal.relatedOriginal || !proposal.resolutionContextKey
-    || resolutionContextKey(project, [target.id, proposal.resolution.relatedRequirementID], proposal.resolutionTriggerSourceIDs) !== proposal.resolutionContextKey);
+  if (!target || !project.epics.some((e) => e.id === target.epicID && !e.archived)) return "The requirement or its feature is no longer active.";
+  if (reviewFingerprint(target) !== proposal.fingerprint) return "The requirement's wording, status or supporting evidence changed.";
+  if (!proposal.resolution && proposal.decisionBasis && proposal.decisionBasis.contextKey !== decisionContextKey(project, [target.id])) return "Relevant human evidence, clarification or feature dependencies changed since this wording proposal.";
+  if (proposal.resolution) {
+    const related = project.requirements.find((r) => r.id === proposal.resolution!.relatedRequirementID);
+    if (!related || !proposal.relatedOriginal || reviewFingerprint(related) !== reviewFingerprint(proposal.relatedOriginal)) return "The other requirement's wording, status or supporting evidence changed.";
+    if (!proposal.resolutionContextKey || resolutionContextKey(project, [target.id, related.id], proposal.resolutionTriggerSourceIDs) !== proposal.resolutionContextKey) return "Human evidence, clarification answers or feature/dependency context changed since this comparison.";
+  }
+  return undefined;
 }
 
 export function resolutionPairEligible(project: Project, ids: [string, string], jobs: Job[], options: { includeUnapproved?: boolean; triggerSourceIDs?: string[] } = {}) {

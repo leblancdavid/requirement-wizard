@@ -1,3 +1,7 @@
+.topbar .queue-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: 2 1 300px; min-width: 0; }
+.topbar .queue-header .queue-trigger { flex: 1 1 200px; width: auto; }
+.queue-header-action { flex: 0 1 auto; border: 1px solid var(--border); background: var(--surface); overflow-wrap: anywhere; }
+.queue-header-action:hover { background: var(--soft); }
 .topbar .queue-trigger { text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); }
 .topbar .queue-trigger:hover { background: var(--soft); }
 .queue-trigger .status-copy { flex: 1; }
@@ -17,6 +21,10 @@
 .queue-drawer p, .queue-drawer small { color: var(--muted); }
 .queue-drawer .job-error { color: var(--danger); }
 .queue-drawer .queue-item { min-width: 0; }
+@media (max-width: 800px) {
+  .topbar .queue-header { order: 3; flex-basis: 100%; }
+  .topbar .queue-header .queue-trigger { order: 0; flex-basis: 200px; }
+}
 @media (max-width: 540px) {
   .queue-drawer { width: 100%; border: 0; }
   .queue-drawer-heading, .queue-drawer .queue-panel { padding: 16px; }

@@ -96,12 +96,13 @@ test("queued reviews allow no addendum, are idempotent, and reject changed requi
   const store = new ProjectStore(":memory:");
   try {
     let project = complete(store, store.create("Reviews", "Track jobs", selection));
+    project = store.organize(project.id, project.revision, [{ type: "upsert", epicID: "unrelated", title: "Unrelated feature", purpose: "Separate scope", dependencies: [] }]);
     const r = project.requirements[0]!;
     const request = { id: crypto.randomUUID(), auto: false, research: false, input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "" } };
     const queued = store.enqueue(project.id, request);
     assert.deepEqual(store.enqueue(project.id, request), queued);
     assert.throws(() => store.enqueue(project.id, { ...request, id: crypto.randomUUID() }), /pending review/);
-    project = store.note(project.id, project.revision, "An unrelated detail");
+    project = store.note(project.id, project.revision, "An unrelated detail", "unrelated");
     store.applyQueued(project.id);
     project = store.get(project.id);
     assert.equal(project.requirements[0]!.status, "accepted");
@@ -110,12 +111,13 @@ test("queued reviews allow no addendum, are idempotent, and reject changed requi
     const previous = store.submissions(project.id)[0]!; previous.status = "completed"; store.saveSubmission(previous);
     const next = { ...request, id: crypto.randomUUID(), input: { ...request.input, fingerprint: reviewFingerprint(project.requirements[0]!), note: "  Also consider offline access\n" } };
     store.enqueue(project.id, next);
-    store.review(project.id, project.revision, r.id, "rejected", "Scope changed elsewhere");
+    assert.throws(() => store.review(project.id, project.revision, r.id, "rejected", "Scope changed elsewhere"), /pending human input/);
+    store.organize(project.id, project.revision, [{ type: "move", recordID: r.id, epicID: "project" }]);
     store.applyQueued(project.id);
     const conflict = store.submissions(project.id)[1]!;
     assert.equal(conflict.status, "needs-attention"); assert.equal(conflict.conflict, true); assert.equal(conflict.applied, false);
     assert.deepEqual(conflict.input, next.input);
-    assert.equal(store.get(project.id).requirements[0]!.status, "rejected");
+    assert.equal(store.get(project.id).requirements[0]!.status, "accepted");
     assert.throws(() => store.enqueue(project.id, { ...request, id: crypto.randomUUID() }), StaleRevisionError);
   } finally { store.close(); }
 });

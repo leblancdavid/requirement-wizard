@@ -4,6 +4,14 @@ import { wordingKey } from "./similarity.js";
 import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal } from "./epics.js";
 
 const text = z.string().trim().min(1).max(12000);
+export const decisionBasisSchema = z.object({ format: z.literal(1), contextKey: z.string().min(1) }).strict();
+export const reviewUpdatesSchema = z.object({ format: z.literal(1), items: z.array(z.object({
+  recordID: z.string().min(1), recordType: z.enum(["requirement", "question", "refinement"]),
+  kind: z.enum(["updated", "context-changed", "retired", "withdrawn"]),
+  jobID: z.string().min(1), revision: z.number().int().positive(), submissionIDs: z.array(z.string().min(1)),
+  reason: z.string().min(1).max(1200),
+}).strict()) }).strict();
+export type ReviewUpdate = z.infer<typeof reviewUpdatesSchema>["items"][number];
 export const modelSelection = z.object({
   providerID: z.enum(["openai", "github-copilot"]), modelID: z.string().min(1),
   connectionID: z.string().min(1).max(500).optional(),
@@ -14,6 +22,8 @@ const source = z.object({
    id: z.string(), kind: z.enum(["initial", "note", "answer", "delegation", "deferral", "confirmation", "rejection", "workspace"]),
   text: z.string().min(1), questionID: z.string().optional(), supersedes: z.string().optional(),
   requirementID: z.string().optional(),
+  /** Explicit ordinary review note, not an AI cleanup explanation. Absent on legacy evidence. */
+  reviewAddendum: z.boolean().optional(),
   epicID: z.string().default("project"),
 });
 export const conceptSchema = z.object({
@@ -75,7 +85,7 @@ export const refinementProposalSchema = z.object({
 }).strict();
 const refinementSchema = refinementProposalSchema.extend({
   id: z.string(), fingerprint: z.string(), original: requirement,
-  relatedOriginal: requirement.optional(), resolutionContextKey: z.string().optional(),
+  relatedOriginal: requirement.optional(), resolutionContextKey: z.string().optional(), decisionBasis: decisionBasisSchema.optional(),
   resolutionTriggerSourceIDs: z.array(z.string().min(1)).min(1).max(8).optional(),
   status: z.enum(["pending", "accepted", "dismissed"]), createdAtRevision: z.number().int(),
 }).superRefine((value, ctx) => {
@@ -88,6 +98,8 @@ export const projectSchema = z.object({
   model: modelSelection, sources: z.array(source), questions: z.array(question),
   requirements: z.array(requirement), summary: z.string(), goals: z.array(text),
   refinements: z.array(refinementSchema).default([]),
+  /** Latest per-item completion notices; revision history retains earlier notices. Not decision evidence. */
+  reviewUpdates: reviewUpdatesSchema.optional(),
   actors: z.array(text), assumptions: z.array(text),
   origin: z.object({ mode: z.literal("existing"), preview: folderPreviewSchema, descriptionEdited: z.boolean(), nameEdited: z.boolean() }).optional(),
   epics: z.array(epicSchema).default(initialEpics),
@@ -115,7 +127,18 @@ export function reviewFingerprint(item: Project["requirements"][number]): string
   return JSON.stringify([item.statement, item.rationale, item.acceptance, item.epicID, item.status, item.sourceIDs, item.reviewNote ?? ""]);
 }
 
+export function questionReviewFingerprint(item: Project["questions"][number]): string {
+  return JSON.stringify([item.text, item.whyItMatters, item.options, item.epicID, item.evidenceIDs ?? [], item.status, item.sourceID ?? null]);
+}
+
 // Every field is required so JSON-text output has one unambiguous shape.
+const pendingChangeEvidence = { sourceIDs: z.array(z.string().min(1)).min(1).max(8), reason: z.string().trim().min(1).max(1200) };
+export const pendingChangesSchema = z.object({ format: z.literal(1), changes: z.array(z.discriminatedUnion("type", [
+  question.pick({ text: true, whyItMatters: true, options: true }).extend({ type: z.literal("revise-question"), questionID: z.string().min(1), ...pendingChangeEvidence }).strict(),
+  requirement.pick({ statement: true, rationale: true, acceptance: true }).extend({ type: z.literal("revise-requirement"), requirementID: z.string().min(1), ...pendingChangeEvidence }).strict(),
+  z.object({ type: z.literal("withdraw-requirement"), requirementID: z.string().min(1), ...pendingChangeEvidence }).strict(),
+])).max(10) }).strict();
+
 export const analysisSchema = z.object({
   summary: text, goals: z.array(text).max(10), actors: z.array(text).max(10),
   assumptions: z.array(text).max(15),
@@ -129,6 +152,7 @@ export const analysisSchema = z.object({
   reviewResponses: z.array(z.object({ sourceID: z.string(), text }).strict()).max(30).optional(),
   refinements: z.array(refinementProposalSchema).max(10).optional(),
   resolutionCheck: z.object({ format: z.literal(1), outcome: z.enum(["distinct", "proposal", "question", "blocked"]), explanation: text }).strict().optional(),
+  pendingChanges: pendingChangesSchema.optional(),
   reviewChanges: z.array(z.discriminatedUnion("type", [
     z.object({ type: z.literal("revise"), sourceID: z.string(), requirementID: z.string(), statement: text, rationale: text, acceptance: z.array(text).min(1).max(8), reason: text }).strict(),
     z.object({ type: z.literal("reject"), sourceID: z.string(), requirementID: z.string(), reason: text }).strict(),
@@ -179,9 +203,9 @@ export type Answer = z.infer<typeof answerSchema>;
 export const submissionSchema = z.object({
   id: z.string().uuid(),
   input: z.discriminatedUnion("type", [
-    z.object({ type: z.literal("answer"), questionID: z.string(), questionText: z.string(), sourceID: z.string().nullable(), answer: answerSchema }).strict(),
+    z.object({ type: z.literal("answer"), questionID: z.string(), questionText: z.string(), sourceID: z.string().nullable(), answer: answerSchema, fingerprint: z.string().min(1).max(100000).optional(), reviewedRevision: z.number().int().positive().optional() }).strict(),
     z.object({ type: z.literal("note"), text: answerSchema.shape.text, epicID: z.string() }).strict(),
-    z.object({ type: z.literal("review"), requirementID: z.string(), requirementText: z.string().min(1).max(12000), fingerprint: z.string().min(1).max(100000), action: z.enum(["accepted", "rejected"]), note: z.string().max(12000) }).strict(),
+    z.object({ type: z.literal("review"), requirementID: z.string(), requirementText: z.string().min(1).max(12000), fingerprint: z.string().min(1).max(100000), action: z.enum(["accepted", "rejected"]), note: z.string().max(12000), reviewedRevision: z.number().int().positive().optional() }).strict(),
   ]),
   auto: z.boolean(), research: z.boolean(),
   replaces: z.string().uuid().optional(),
@@ -197,7 +221,11 @@ export const overlapFollowupSchema = z.object({
 export type Submission = z.infer<typeof submissionSchema> & {
   projectID: string; status: "queued" | "saved" | "processing" | "completed" | "needs-attention" | "superseded";
   applied: boolean; appliedSourceID?: string; conflict?: boolean; submittedAt: string; jobID?: string; diagnostic?: string;
+  /** Exact immutable revision that first applied this input; absent on older saved submissions. */
+  appliedRevision?: number;
   response?: string;
+  /** Server-captured evidence at submission/reviewed revision; absent on legacy submissions. */
+  decisionBasis?: z.infer<typeof decisionBasisSchema>;
   overlapFollowup?: z.infer<typeof overlapFollowupSchema>;
   /** Durable preflight result; input/approval is already saved, inference not started. */
   contextBlock?: Pick<NonNullable<Job["context"]>, "revision" | "characters" | "budget" | "epicIDs" | "sectionCharacters">;

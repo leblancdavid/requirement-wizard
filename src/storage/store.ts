@@ -13,13 +13,15 @@ import { dirname } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
 import { wordingKey } from "../core/similarity.js";
-import { resolutionHasWaitingInput, validateResolutionEvidence } from "../core/resolution.js";
+import { refinementIsStale, validateResolutionEvidence } from "../core/resolution.js";
 import { planIncrementalResolution } from "../core/incremental-resolution.js";
-import { overlapFollowupSchema } from "../core/model.js";
-import { reviewRefinement } from "../core/refinement.js";
+import { decisionBasisSchema, overlapFollowupSchema, pendingChangesSchema, requirementEvidenceIDs } from "../core/model.js";
+import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
+import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
+import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
-import { reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
+import { questionReviewFingerprint, reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
   submissionSchema, questionHelpRequestSchema, questionHelpResponseSchema, type ScanWork, type QuestionHelpRequest, type Submission, type Answer, type Analysis, type Job, type ModelSelection, type Project } from "../core/model.js";
 
 /** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
@@ -28,12 +30,15 @@ function readStoredJob(payload: string): Job {
   const envelopes = [...(job.result?.resolutionCheck ? [job.result.resolutionCheck] : []),
     ...(job.result?.refinements ?? []).flatMap((p) => p.resolution ? [p.resolution] : [])];
   if (envelopes.some((value) => value.format !== 1)) throw new Error("Unsupported requirement-resolution format in saved job. Upgrade the app; saved evidence was not overwritten.");
+  if (job.result?.pendingChanges !== undefined) pendingChangesSchema.parse(job.result.pendingChanges);
   return job;
 }
 
 function readStoredSubmission(payload: string): Submission {
   const item = JSON.parse(payload) as Submission;
   if (item.overlapFollowup !== undefined) overlapFollowupSchema.parse(item.overlapFollowup);
+  if (item.decisionBasis !== undefined) decisionBasisSchema.parse(item.decisionBasis);
+  if (item.appliedRevision !== undefined) z.number().int().min(2).parse(item.appliedRevision);
   return item;
 }
 
@@ -305,6 +310,8 @@ export class ProjectStore {
   }
 
   saveSubmission(item: Submission) {
+    if (item.appliedRevision !== undefined) z.number().int().min(2).parse(item.appliedRevision);
+    if (item.decisionBasis !== undefined) decisionBasisSchema.parse(item.decisionBasis);
     if (item.overlapFollowup !== undefined) overlapFollowupSchema.parse(item.overlapFollowup);
     this.db.transaction(() => {
       this.db.prepare("UPDATE submissions SET payload = ? WHERE id = ? AND project_id = ?").run(JSON.stringify(item), item.id, item.projectID);
@@ -327,6 +334,18 @@ export class ProjectStore {
     }).immediate();
   }
 
+  private answerMatches(id: string, project: Project, input: Extract<Submission["input"], { type: "answer" }>) {
+    const current = project.questions.find((q) => q.id === input.questionID);
+    if (!current || current.status === "retired" || current.text !== input.questionText || (current.sourceID ?? null) !== input.sourceID) return false;
+    const fingerprint = questionReviewFingerprint(current);
+    if (input.fingerprint !== undefined && input.fingerprint !== fingerprint) return false;
+    if (input.reviewedRevision !== undefined) {
+      const reviewed = this.get(id, input.reviewedRevision).questions.find((q) => q.id === input.questionID);
+      if (!reviewed || questionReviewFingerprint(reviewed) !== fingerprint) return false;
+    }
+    return true;
+  }
+
   enqueue(id: string, raw: unknown): Submission {
     const input = submissionSchema.parse(raw);
     return this.db.transaction(() => {
@@ -339,9 +358,7 @@ export class ProjectStore {
       const project = this.get(id);
       if (input.input.type === "answer") {
         // Compare the exact question and previous answer, not an unrelated project revision.
-        const response = input.input;
-        const current = project.questions.find((q) => q.id === response.questionID);
-        if (!current || current.status === "retired" || current.text !== response.questionText || (current.sourceID ?? null) !== response.sourceID) throw new StaleRevisionError();
+        if (!this.answerMatches(id, project, input.input)) throw new StaleRevisionError();
       } else if (input.input.type === "review") {
         const response = input.input;
         const current = project.requirements.find((r) => r.id === response.requirementID);
@@ -361,7 +378,18 @@ export class ProjectStore {
         this.saveSubmission(previous);
       }
       const item: Submission = { ...input, projectID: id, status: "queued", applied: false, submittedAt: new Date().toISOString() };
+      if (input.input.type === "review") {
+        const response = input.input;
+        const reviewed = response.reviewedRevision === undefined ? project : this.get(id, response.reviewedRevision);
+        item.decisionBasis = { format: 1, contextKey: decisionContextKey(reviewed, [response.requirementID]) };
+        const availability = decisionAvailability(project, [response.requirementID], this.submissions(id), [], { contextKey: item.decisionBasis.contextKey });
+        if (availability.state !== "ready") {
+          item.status = "needs-attention"; item.conflict = true;
+          item.diagnostic = `${availability.reason} Your review and note were retained, but the decision was not applied. Resubmit after reviewing the updated information.`;
+        }
+      }
       this.db.prepare("INSERT INTO submissions VALUES (?, ?, ?)").run(item.id, id, JSON.stringify(item));
+      if (item.status === "needs-attention") this.saveSubmission(item);
       return item;
     }).immediate();
   }
@@ -369,27 +397,35 @@ export class ProjectStore {
   applyQueued(id: string, submissionIDs?: string[]): Submission[] {
     return this.db.transaction(() => {
       this.assertNoExecution(id);
+      if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
       const selected = (item: Submission) => !submissionIDs || submissionIDs.includes(item.id);
       for (const item of this.submissions(id).filter((s) => s.status === "queued" && selected(s))) {
         if (item.applied) { item.status = "saved"; this.saveSubmission(item); continue; }
         const project = this.get(id);
         const input = item.input;
         if (input.type === "answer") {
-          const question = project.questions.find((q) => q.id === input.questionID);
-          if (!question || question.status === "retired" || question.text !== input.questionText || (question.sourceID ?? null) !== input.sourceID) {
+          if (!this.answerMatches(id, project, input)) {
             item.status = "needs-attention"; item.diagnostic = "Question or previous answer changed. Review this response and resubmit against the current question.";
             this.saveSubmission(item); continue;
           }
           const updated = this.answer(id, project.revision, input.questionID, input.answer);
           item.appliedSourceID = updated.questions.find((q) => q.id === input.questionID)!.sourceID!;
+          item.appliedRevision = updated.revision;
         } else if (input.type === "review") {
           const current = project.requirements.find((r) => r.id === input.requirementID);
           if (!current || reviewFingerprint(current) !== input.fingerprint) {
             item.status = "needs-attention"; item.conflict = true; item.diagnostic = "Requirement changed. Review the current wording and resubmit; your original decision and note are retained.";
             this.saveSubmission(item); continue;
           }
-          const updated = this.review(id, project.revision, input.requirementID, input.action, input.note);
+          const availability = decisionAvailability(project, [input.requirementID], this.submissions(id), [], { excludeSubmissionID: item.id, contextKey: item.decisionBasis?.contextKey });
+          if (availability.state !== "ready") {
+            item.status = "needs-attention"; item.conflict = true;
+            item.diagnostic = `${availability.reason} Your review and note were retained, but the decision was not applied. Resubmit after reviewing the updated information.`;
+            this.saveSubmission(item); continue;
+          }
+          const updated = this.applyReview(id, project.revision, input.requirementID, input.action, input.note, item.id);
           item.appliedSourceID = updated.sources.at(-1)!.id;
+          item.appliedRevision = updated.revision;
         } else {
           if (!project.epics.some((e) => e.id === input.epicID && !e.archived)) {
             item.status = "needs-attention"; item.diagnostic = "The note's project area changed. Review and resubmit the note.";
@@ -397,6 +433,7 @@ export class ProjectStore {
           }
           const updated = this.note(id, project.revision, input.text, input.epicID);
           item.appliedSourceID = updated.sources.at(-1)!.id;
+          item.appliedRevision = updated.revision;
         }
         item.applied = true; item.status = "saved"; this.saveSubmission(item);
       }
@@ -550,15 +587,22 @@ export class ProjectStore {
   }
 
   review(id: string, revision: number, requirementID: string, action: "accepted" | "rejected", note: string) {
+    return this.applyReview(id, revision, requirementID, action, note);
+  }
+
+  private applyReview(id: string, revision: number, requirementID: string, action: "accepted" | "rejected", note: string, submissionID?: string) {
     if (note.length > 12000) throw new Error("Review note must be at most 12000 characters.");
     if (action !== "accepted" && action !== "rejected") throw new Error("Choose accepted or rejected.");
     return this.mutate(id, revision, "Human requirement review", (project) => {
+      const availability = decisionAvailability(project, [requirementID], this.submissions(id), this.jobs(id), { excludeSubmissionID: submissionID });
+      if (availability.state !== "ready") throw new OperationConflictError(availability.reason);
       const requirement = project.requirements.find((item) => item.id === requirementID);
       if (!requirement) throw new Error("Requirement not found.");
       const previous = project.sources.filter((source) => source.requirementID === requirementID ||
         (!source.requirementID && source.kind === "confirmation" && requirement.sourceIDs.includes(source.id))).at(-1);
       const sourceID = randomUUID();
       project.sources.push({ id: sourceID, kind: action === "accepted" ? "confirmation" : "rejection", requirementID, epicID: requirement.epicID,
+        ...(note.trim() ? { reviewAddendum: true } : {}),
         text: `Requirement ${requirementID}: ${requirement.statement}\nAcceptance scenarios: ${JSON.stringify(requirement.acceptance)}\nHuman decision: ${action}\nAddendum: ${note}`,
         ...(previous ? { supersedes: previous.id } : {}) });
       if (action === "accepted") {
@@ -743,10 +787,36 @@ export class ProjectStore {
   reviewRefinement(id: string, revision: number, proposalID: string, accept: boolean) {
     return this.mutate(id, revision, "Human reviewed requirement cleanup", (project) => {
       const proposal = project.refinements.find((p) => p.id === proposalID);
-      if (accept && proposal && resolutionHasWaitingInput(project, proposal, this.submissions(id))) throw new Error("Process the pending human input before approving this resolution.");
       const targets = [proposal?.requirementID, proposal?.resolution?.relatedRequirementID];
-      if (accept && this.submissions(id).some((s) => s.input.type === "review" && targets.includes(s.input.requirementID) && ["queued", "saved", "processing"].includes(s.status))) throw new Error("Process the pending human review before approving cleanup.");
+      const availability = decisionAvailability(project, targets.filter((id): id is string => !!id), this.submissions(id), this.jobs(id));
+      if (availability.jobIDs.length || accept && availability.state !== "ready") throw new OperationConflictError(availability.reason);
       reviewRefinement(project, proposalID, accept, randomUUID);
+    });
+  }
+
+  removeDuplicate(id: string, revision: number, removeID: string, keepID: string, note: string) {
+    return this.mutate(id, revision, "Human removed duplicate requirement", (project) => {
+      const ids = [removeID, keepID];
+      if (removeID === keepID || ids.some((id) => !project.requirements.some((r) => r.id === id))) throw new Error("Choose two distinct active, non-rejected requirements.");
+      const availability = decisionAvailability(project, ids, this.submissions(id), this.jobs(id));
+      if (availability.state !== "ready") throw new OperationConflictError(availability.reason);
+      removeRequirementAsDuplicate(project, removeID, keepID, note, randomUUID);
+    });
+  }
+
+  /** Find the exact snapshots where this batch's immutable sources were first
+   * applied. This also supports older saved submissions without inventing dates
+   * or attributing another queued response's changes to this worker. */
+  private completionInputs(job: Job, submissions: Submission[]): AppliedInputChange[] {
+    return submissions.filter((s) => s.applied && s.appliedSourceID && job.context?.submissionIDs?.includes(s.id)).flatMap((s) => {
+      const row = s.appliedRevision !== undefined ? { revision: s.appliedRevision } : this.db.prepare(`SELECT revision FROM revisions WHERE project_id = ? AND revision <= ?
+        AND EXISTS (SELECT 1 FROM json_each(revisions.payload, '$.sources') WHERE json_extract(value, '$.id') = ?)
+        ORDER BY revision LIMIT 1`).get(job.projectID, job.expectedRevision, s.appliedSourceID!) as { revision: number } | undefined;
+      if (!row || row.revision <= 1) return [];
+      if (row.revision > job.expectedRevision) throw new Error("Input application receipt is newer than this worker snapshot; no reconciliation was applied.");
+      const before = this.get(job.projectID, row.revision - 1), after = this.get(job.projectID, row.revision);
+      if (before.sources.some((source) => source.id === s.appliedSourceID) || !after.sources.some((source) => source.id === s.appliedSourceID)) throw new Error("Input application receipt does not match its immutable source history; no reconciliation was applied.");
+      return [{ submissionID: s.id, before, after }];
     });
   }
 
@@ -767,7 +837,7 @@ export class ProjectStore {
           const before = structuredClone(project);
           const reviews = this.submissions(project.id).filter((s) => s.applied && s.input.type === "review" && job.context?.submissionIDs?.includes(s.id));
           const pair = job.context?.refinementPair?.requirementIDs;
-          if (job.context?.refinementOnly && ((!pair && result.questions.length) || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length || result.researchFindings?.length)) throw new Error("Refinement-only passes may only propose requirement cleanup.");
+          if (job.context?.refinementOnly && ((!pair && result.questions.length) || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length || result.pendingChanges?.changes.length || result.researchFindings?.length)) throw new Error("Refinement-only passes may only propose requirement cleanup.");
           if (result.resolutionCheck && !pair) throw new Error("Resolution outcomes require an explicit pair task.");
           if (pair) {
             if (new Set(pair).size !== 2 || pair.some((id) => !project.requirements.some((r) => r.id === id
@@ -792,6 +862,21 @@ export class ProjectStore {
           }
           const authorized = (sourceID: string, changes = false) => reviews.some((s) => s.appliedSourceID === sourceID && s.input.type === "review" && (!changes || !!s.input.note.trim()) &&
             !project.sources.some((source) => source.supersedes === sourceID));
+          const submissions = this.submissions(project.id);
+          const waiting = submissions.filter((s) => !s.conflict && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
+          const protects = (recordID: string) => waiting.some((s) => s.input.type === "answer" ? s.input.questionID === recordID : s.input.type === "review" && s.input.requirementID === recordID);
+          const taskSources = new Set(submissions.filter((s) => s.applied && job.context?.submissionIDs?.includes(s.id)
+            && (s.input.type === "note" || s.input.type === "answer" && s.input.answer.kind === "answer" || s.input.type === "review" && !!s.input.note.trim()))
+            .map((s) => s.appliedSourceID).filter((id): id is string => !!id && !project.sources.some((s) => s.supersedes === id)));
+          const eligible = new Set(requirementEvidenceIDs(project).filter((id) => project.sources.find((s) => s.id === id)?.kind !== "workspace"));
+          for (const change of result.pendingChanges?.changes ?? []) {
+            const recordID = change.type === "revise-question" ? change.questionID : change.requirementID;
+            if (!job.context?.includedIDs.includes(recordID) || protects(recordID)) throw new Error("Cannot update a pending item outside detailed context or with waiting human input. Human responses were retained.");
+            const evidence = change.type === "revise-question" ? project.questions.find((q) => q.id === recordID)?.evidenceIDs : project.requirements.find((r) => r.id === recordID)?.sourceIDs;
+            if (evidence?.some((id) => !job.context!.includedIDs.includes(id))) throw new Error("Pending-item updates require the target's complete supporting evidence.");
+            if (change.sourceIDs.some((id) => !taskSources.has(id) || !eligible.has(id) || !job.context!.includedIDs.includes(id))) throw new Error("Pending-item updates must cite current concrete human input from this batch. Original supporting links are retained separately; plain approvals, delegation and deferral do not authorize wider changes.");
+          }
+          if (result.retireQuestions.some((q) => protects(q.questionID))) throw new Error("Cannot retire a question with unfinished human input. Its response and the active question were retained.");
           for (const response of result.reviewResponses ?? []) if (!authorized(response.sourceID)) throw new Error("Review response must reference a current review in this batch.");
           for (const review of reviews.filter((s) => authorized(s.appliedSourceID!))) {
             if (result.reviewResponses?.filter((r) => r.sourceID === review.appliedSourceID).length !== 1) throw new Error("Each review needs one AI response describing its follow-up.");
@@ -799,7 +884,11 @@ export class ProjectStore {
           for (const change of result.reviewChanges ?? []) {
             if (!authorized(change.sourceID, true)) throw new Error("Wider changes need a current review addendum in this batch.");
             if (change.type === "archive-feature") {
-              if (this.submissions(project.id).some((s) => !s.applied && s.status === "queued" && s.input.type === "answer" && project.questions.some((q) => q.id === (s.input.type === "answer" ? s.input.questionID : "") && q.epicID === change.epicID))) throw new Error("Feature has waiting human answers. Process those responses before retiring it.");
+              if (waiting.some((s) => !job.context?.submissionIDs?.includes(s.id) && (() => {
+                const area = s.input.type === "note" ? s.input.epicID : s.input.type === "answer" ? project.questions.find((q) => q.id === (s.input.type === "answer" ? s.input.questionID : ""))?.epicID
+                  : project.requirements.find((r) => r.id === (s.input.type === "review" ? s.input.requirementID : ""))?.epicID;
+                return area === change.epicID || area === "project";
+              })())) throw new Error("Feature has unfinished human input. Process those responses before retiring it.");
               if (job.context?.partial || !job.context?.epicIDs?.includes(change.epicID) ||
                 [...project.requirements, ...project.questions.filter((q) => q.status !== "retired")].some((r) => r.epicID === change.epicID && !job.context!.includedIDs.includes(r.id))) throw new Error("Feature retirement needs its full detailed context.");
             } else if (!job.context?.includedIDs.includes(change.requirementID)) throw new Error("Cannot change a requirement outside detailed context.");
@@ -842,11 +931,23 @@ export class ProjectStore {
           }
           const interpretation = job.context?.partial || job.context?.refinementOnly ? { summary: project.summary, analysisRevision: project.analysisRevision,
             goals: project.goals, actors: project.actors, assumptions: project.assumptions, scopeAssessment: project.scopeAssessment } : undefined;
+          // Retire old comparisons only in the successful publication transaction.
+          // Failed/cancelled/stale/blocked checks leave the original proposal intact.
+          if (pair && result.resolutionCheck && result.resolutionCheck.outcome !== "blocked") {
+            for (const proposal of project.refinements) if (proposal.status === "pending" && proposal.resolution
+              && pair.includes(proposal.requirementID) && pair.includes(proposal.resolution.relatedRequirementID)
+              && refinementIsStale(project, proposal)) proposal.status = "dismissed";
+          }
+          if (job.context?.refinementTarget) {
+            for (const proposal of project.refinements) if (proposal.status === "pending" && !proposal.resolution
+              && proposal.requirementID === job.context.refinementTarget.requirementID && refinementIsStale(project, proposal)) proposal.status = "dismissed";
+          }
           applyRound(project, result, randomUUID, job.researchEvidence, job.context?.refinementPair?.triggerSourceIDs);
           if (result.resolutionCheck) project.roundChanges.push(`Requirement overlap check (${result.resolutionCheck.outcome}): ${result.resolutionCheck.explanation}`);
           if (omittedConcepts) project.roundChanges.push(`Omitted ${omittedConcepts} malformed concept annotations; question wording was preserved.`);
           if (job.context?.refinementOnly) project.roundChanges.push(`Requirement refinement (bounded working set): ${result.summary}`);
           if (interpretation) Object.assign(project, interpretation);
+          reconcileCompletedReview(before, project, { ...job, result }, this.completionInputs(job, submissions), submissions, this.jobs(project.id));
           if (!job.context?.refinementOnly) {
             // The receipt commits with discovery. A crash cannot lose the pair
             // stage or require replaying a successful (possibly paid) round.

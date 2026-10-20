@@ -302,6 +302,17 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const input = z.object({ revision, proposalID: z.string(), accept: z.boolean() }).strict().parse(raw);
         json(res, 200, options.store.reviewRefinement(id, input.revision, input.proposalID, input.accept)); return;
       }
+      if (action === "remove-duplicate") {
+        const input = z.object({ revision, removeID: z.string(), keepID: z.string(), note: z.string().max(12000).default("") }).strict().parse(raw);
+        json(res, 200, options.store.removeDuplicate(id, input.revision, input.removeID, input.keepID, input.note)); return;
+      }
+      if (action === "refresh-refinement") {
+        if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
+        const input = z.object({ revision, proposalID: z.string() }).strict().parse(raw);
+        if (project.revision !== input.revision) throw new StaleRevisionError();
+        queue.resume(id, { refinementOnly: true, refreshProposalID: input.proposalID });
+        json(res, 202, { started: true }); return;
+      }
       if (action === "model") {
         const input = z.object({ revision, model: modelSelection }).strict().parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();

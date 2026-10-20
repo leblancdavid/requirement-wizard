@@ -1,6 +1,6 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { z } from "zod";
-import { analysisSchema, scanBatchAnalysisSchema, questionHelpResponseSchema, requirementEvidenceIDs, type QuestionHelpRequest, type Project } from "../core/model.js";
+import { analysisSchema, pendingChangesSchema, scanBatchAnalysisSchema, questionHelpResponseSchema, requirementEvidenceIDs, type QuestionHelpRequest, type Project } from "../core/model.js";
 import { refinementCandidates } from "../core/refinement.js";
 import { resolutionEvidenceIDs } from "../core/resolution.js";
 import type { DiscoveryAdapter } from "../service/discovery.js";
@@ -134,6 +134,20 @@ export function discoveryPrompt(project: Project, context: ContextPack = buildCo
   const partial = !!context.manifest.partial;
   const reviewSourceIDs = context.manifest.reviewSourceIDs ?? [];
   const reviewChangeSourceIDs = (context.manifest.reviewChangeSourceIDs ?? []).filter((id) => reviewSourceIDs.includes(id));
+  const pendingInputSources = context.manifest.submissionIDs?.length ? allowedSources.filter((id) => context.manifest.taskRecordIDs?.includes(id)
+    && project.sources.some((s) => s.id === id && (["note", "answer"].includes(s.kind) || reviewChangeSourceIDs.includes(id)))) : [];
+  const pendingRequirements = project.requirements.filter((r) => ["proposed", "needs-review"].includes(r.status) && included.has(r.id) && r.sourceIDs.every((id) => included.has(id)));
+  const pendingQuestions = pending.filter((q) => !q.sourceID && included.has(q.id) && (q.evidenceIDs ?? []).every((id) => included.has(id))
+    && (q.evidenceIDs ?? []).filter((id) => project.requirements.some((r) => r.id === id)).length < 2);
+  const changeTypes = pendingChangesSchema.shape.changes.element.options;
+  const pendingEvidence = { sourceIDs: z.array(z.enum(pendingInputSources as [string, ...string[]])).min(1).max(8) };
+  const pendingOptions: z.ZodDiscriminatedUnionOption<"type">[] = [
+    ...(pendingQuestions.length ? [changeTypes[0].extend({ ...pendingEvidence, questionID: z.enum(pendingQuestions.map((q) => q.id) as [string, ...string[]]) })] : []),
+    ...(pendingRequirements.length ? [changeTypes[1].extend({ ...pendingEvidence, requirementID: z.enum(pendingRequirements.map((r) => r.id) as [string, ...string[]]) })] : []),
+    ...(pendingRequirements.some((r) => r.status === "proposed") ? [changeTypes[2].extend({ ...pendingEvidence, requirementID: z.enum(pendingRequirements.filter((r) => r.status === "proposed").map((r) => r.id) as [string, ...string[]]) })] : []),
+  ];
+  const [firstPending, ...otherPending] = pendingOptions;
+  const pendingOutput = !context.manifest.refinementOnly && pendingInputSources.length && firstPending ? pendingChangesSchema.extend({ changes: z.array(z.discriminatedUnion("type", [firstPending, ...otherPending])).max(10) }) : undefined;
   const changeOptions = analysisSchema.shape.reviewChanges.unwrap().element.options;
   const reviewChanges = reviewChangeSourceIDs.length ? (() => {
     const source = { sourceID: z.enum(reviewChangeSourceIDs as [string, ...string[]]) };
@@ -158,7 +172,8 @@ export function discoveryPrompt(project: Project, context: ContextPack = buildCo
   const resolutionOutput = duplicateResolution && humanResolution ? z.discriminatedUnion("basis", [duplicateResolution, humanResolution]) : duplicateResolution ?? humanResolution;
   const refinementOutput = pair ? resolutionOutput ? analysisSchema.shape.refinements.unwrap().element.extend({ resolution: resolutionOutput }) : undefined
     : analysisSchema.shape.refinements.unwrap().element.omit({ resolution: true });
-  const baseResponseSchema = analysisSchema.omit({ resolutionCheck: true }).extend({
+  const baseResponseSchema = analysisSchema.omit({ resolutionCheck: true, pendingChanges: true }).extend({
+    ...(pendingOutput ? { pendingChanges: pendingOutput.optional() } : {}),
     requirements: allowedSources.length ? z.array(analysisSchema.shape.requirements.element.extend({
       sourceIDs: z.array(z.enum(allowedSources as [string, ...string[]])).min(1),
     })).max(3) : z.tuple([]),
@@ -204,6 +219,7 @@ Ask up to three high-impact new questions with plain-language options and conseq
 Question budget for this revision: ${pending.length} pending across the ENTIRE project, including ${pending.length - retireable.length} outside this detailed working set; ${available} slots available without retirements. New questions must satisfy ${pending.length} - retired pending questions + questions.length <= 5. Only these detailed pending IDs can free slots: ${JSON.stringify(retireable.map((question) => question.id))}. Retiring deferred questions frees no slots. If no slots remain and no evidence justifies retirement, return questions: [] and continue the summary, requirements and assessment work. Never retire a relevant question merely to make room, and never assume a focused or partial context resets the global budget.
 Proactively supply concepts for technical terms, acronyms, jargon, and ordinary words with a specialized or context-dependent meaning in each new question, its rationale, and suggested answers. Assume the reader may be nontechnical: do not wait for them to ask what a term means. Prefer plain wording first; annotate remaining terms that could make a choice unclear (at most eight per question). An empty list is appropriate only when no term needs explanation. Each annotation has field (text, whyItMatters, label, consequence), phrase (an exact substring appearing ONCE in that field), meaning (short plain-language definition in this question's context), and impact (practical consequences for this project, including a concrete example when useful). Only label/consequence annotations need optionIndex (zero-based). Do not overlap highlights. Avoid explaining everyday words used in their ordinary sense. Help is explanatory, not a confirmed user preference.
 Keep still-relevant pending questions; do not copy them into new questions. Retire an existing pending/deferred question when answers or captured project evidence make it irrelevant; supply its exact ID and evidence-backed reason. Never retire an answered question.
+${pendingOutput ? `Before adding more work, reconcile existing pending items in this detailed context using pendingChanges {format:1,changes:[...]}, at most ten changes. revise-question updates an unanswered question's exact ID, text, whyItMatters and options; revise-requirement updates an unapproved requirement's exact ID, statement, rationale and acceptance. withdraw-requirement removes only a never-approved proposed requirement from active review; its original record/history are retained, and this is not a human rejection. Each change must explain why in reason and cite at least ONE sourceID, using ONLY the current concrete human input IDs ${JSON.stringify(pendingInputSources)}. Original supporting links are retained automatically; never replace or drop them. Never infer that deferral, delegation, a plain approval, or workspace facts authorize changing intent. Do not revise answered/deferred/delegated questions, approved/rejected requirements, items with waiting human input, or omitted records. Previously confirmed behavior cannot be withdrawn through this field. Preserve IDs and original human evidence. Do not combine pendingChanges, reviewChanges, retirement or refinement against one target. New wording still awaits human review. When intent is unclear, keep the item and ask for clarification rather than guessing or withdrawing it.` : ""}
 Propose up to three NEW requirements with concrete acceptance scenarios and sourceIDs of current human initial/note/answer/confirmation evidence or captured workspace file evidence. Workspace sources are static observations, not human intent or executed verification. Those links indicate relevance, not proof of human approval. If source-linked behavior conflicts with a human decision, ask about it rather than overriding the decision.
 Allowed requirement sourceIDs for this round: ${JSON.stringify(allowedSources)}. Copy only these exact IDs, once each per requirement. Superseded, deferred and delegated sources are background only. Question, requirement, submission, research and wire-table IDs are not requirement sourceIDs. If no eligible evidence supports a requirement, omit it; ask a targeted question instead.
 Do not repeat existing requirements. Review follow-up: the ONLY authorized review sourceIDs for THIS submission batch are ${JSON.stringify(reviewSourceIDs)}. Return exactly one reviewResponses [{sourceID,text}] entry per listed ID, with a concise direct response explaining what changed or what remains open. If the list is empty, reviewResponses and reviewChanges must both be empty arrays. Other confirmation/rejection sources in detailed context or taskRecordIDs are background evidence only; do not respond to them or use them to authorize reviewChanges. Copy the listed sourceID exactly, never a requirement ID or submission ID. No note is required for approval or rejection; do not invent a reason. A rejection can motivate a replacement requirement but never establishes unrelated preferences.
@@ -225,7 +241,7 @@ export function scanPrompt(project: Project, context: ContextPack): string {
   const { capturedFiles } = context.data as { capturedFiles: Project["sources"] };
   const sourceIDs = capturedFiles.map((source) => source.id);
   if (!sourceIDs.length) throw new Error("Scan batch has no captured file evidence.");
-  const batchSchema = scanBatchAnalysisSchema.extend({
+  const batchSchema = scanBatchAnalysisSchema.omit({ pendingChanges: true }).extend({
     requirements: scanBatchAnalysisSchema.shape.requirements.element.omit({ localID: true }).extend({
       sourceIDs: z.array(z.enum(sourceIDs as [string, ...string[]])).min(1),
     }).array().max(20),

@@ -36,6 +36,14 @@ export function revisionActivity(project: Project, previous: Project | undefined
     compare(project.epics, previous.epics, "feature", (e) => `${e.title}${e.archived ? " (archived)" : ""}: ${e.purpose}\nDependencies: ${e.dependencies.join(", ") || "None"}`);
     compare(project.research, previous.research, "research source", (r) => `${r.title}: ${r.finding}\n${r.url}`);
     compare(project.refinements.map((r) => ({ ...r, epicID: project.requirements.find((item) => item.id === r.requirementID)?.epicID })), previous.refinements.map((r) => ({ ...r, epicID: previous.requirements.find((item) => item.id === r.requirementID)?.epicID })), "refinement", (r) => `${r.status}: ${r.statement}`);
+    const previousUpdates = new Map((previous.reviewUpdates?.items ?? []).map((u) => [`${u.recordType}:${u.recordID}`, u]));
+    for (const update of project.reviewUpdates?.items ?? []) if (JSON.stringify(update) !== JSON.stringify(previousUpdates.get(`${update.recordType}:${update.recordID}`))) {
+      const targetID = update.recordType === "refinement" ? project.refinements.find((p) => p.id === update.recordID)?.requirementID : update.recordID;
+      const target = [...project.requirements, ...project.questions].find((r) => r.id === targetID);
+      if (target) featureIDs.add(target.epicID);
+      changes.push({ id: update.recordID, label: "review update", after: `${update.kind}: ${update.reason}\nProcessing job: ${update.jobID}\nSaved responses: ${update.submissionIDs.join(", ") || "None"}` });
+      counts.push("Review item reconciled");
+    }
     const oldProgress = new Map(previous.implementation.map((item) => [item.requirementID, item]));
     for (const item of project.implementation) if (JSON.stringify(item) !== JSON.stringify(oldProgress.get(item.requirementID))) {
       const requirement = project.requirements.find((r) => r.id === item.requirementID);

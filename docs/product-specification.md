@@ -178,6 +178,12 @@ and allow editing, accepting, or rejecting proposed requirements.
 - Apply clearly requested wider changes from review addenda with linked provenance;
   ask targeted questions when scope is ambiguous. Revised wording returns to review,
   and removed features retain their records/history (DEC-020).
+- When a queued response completes, reconcile related items awaiting human review:
+  revise unapproved wording/choices, withdraw never-approved proposals or retire
+  obsolete questions when current evidence justifies it. Preserve stable IDs, original
+  human input, drafts and revision history; explain what changed and which processing
+  caused it. Do not infer human approval/rejection or remove confirmed behavior through
+  automatic pending-item cleanup. Unresolved or ambiguous choices remain visible.
 - Discovery includes requirement refinement, with an explicit refinement action for
   existing projects. Proposed and approved requirements are eligible; rejected or
   archived requirements are excluded. Cleanup is a separate pending proposal showing
@@ -314,6 +320,10 @@ global information, focused epics, dependencies, exact evidence, and omission ma
 - Process queued responses individually, with one revision-linked AI job and focused
   context per submission. Preserve target evidence and project/dependency guardrails;
   explicitly omit unrelated same-feature history and checkpoint each completed item.
+- Select at most four related pending items for reconciliation in that same response
+  call, using explicit links or lexical candidates. Include each only when its complete
+  evidence fits; optional reconciliation cannot block the original response or justify
+  changes to omitted records. Candidate retrieval is not an exhaustive semantic audit.
 - Apply lossless text, identifier, and structural compaction against the normal
   target before expanding mandatory-only context. Single-submission follow-up must not
   refill recovered space with unrelated feature records or combine waiting responses.

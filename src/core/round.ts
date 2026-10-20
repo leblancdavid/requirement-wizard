@@ -2,6 +2,7 @@ import { affectsConfirmed, organize, requireOrganizationRecord, type Organizatio
 import { proposeRefinements } from "./refinement.js";
 import { proposalSimilarityWarnings } from "./similarity.js";
 import { validConcepts, validateAnalysisReferences, type Project, type Analysis, type ResearchEvidence } from "./model.js";
+import { applyPendingChanges } from "./pending-changes.js";
 
 export function applyRound(project: Project, result: Analysis, newID: () => string, research: ResearchEvidence[] = [], resolutionTriggerSourceIDs: string[] = []) {
   let omittedConcepts = 0;
@@ -11,7 +12,9 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
     omittedConcepts += question.concepts.length - concepts.length;
     return { ...question, concepts };
   }) };
-  validateAnalysisReferences(project, result);
+  const updated = result.pendingChanges?.changes.length ? structuredClone(project) : project;
+  if (updated !== project) applyPendingChanges(updated, result);
+  validateAnalysisReferences(updated, result);
   // Validate model-facing IDs before replacing aliases with durable IDs, so
   // rejected references retain the names needed to diagnose the model output.
   const newRecords = new Set([...result.questions, ...result.requirements, ...(result.researchFindings ?? [])].flatMap((item) => item.localID ? [item.localID] : []));
@@ -25,6 +28,7 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
     }
   }
   const before = structuredClone(project);
+  if (updated !== project) applyPendingChanges(project, result);
   const aliases = new Map<string, string>();
   const register = (alias: string | undefined) => {
     if (!alias) return newID();

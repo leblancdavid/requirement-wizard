@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectSchema, reviewFingerprint, type Project, type Submission } from "../core/model.js";
-import { ReviewQueue, reviewItems } from "./review.js";
+import { DuplicateRemovalForm, ReviewQueue, reviewItems } from "./review.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { pageWindow, PagedList } from "./pagination.js";
+import { ReviewUpdateNotice } from "./review-update.js";
 
 test("page windows bound large lists and clamp empty, negative and shortened pages", () => {
   assert.deepEqual(pageWindow(500, 25, 25), { page: 1, pages: 20, start: 25, end: 50 });
@@ -82,4 +83,60 @@ test("stale cleanup does not hide changed requirements or pending review submiss
   assert.ok(!reviewItems(p, [waiting], "pending").some((item) => item.id === "requirement:aim"));
   assert.ok(reviewItems(p, [waiting], "pending").some((item) => item.id === "refinement:cleanup-aim"));
   assert.equal(reviewItems(p, [waiting], "submitted").length, 0, "submitted records use their separate durable submission list");
+});
+
+test("outdated proposals expose explicit dismissal, targeted refresh and human duplicate removal without inference", () => {
+  const p = fixture();
+  p.requirements = p.requirements.filter((r) => r.id !== "pause");
+  p.requirements[0]!.statement = "Current jump wording";
+  const before = structuredClone(p);
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
+    refine: () => assert.fail("No model calls on render"), refreshRefinement: () => assert.fail("No refresh on render"),
+    removeDuplicate: async () => assert.fail("No decisions on render"), submit: async () => true, reviewRefinement: async () => true }));
+  assert.match(html, /Dismiss outdated proposal/);
+  assert.match(html, /Refresh this requirement/);
+  assert.match(html, /Remove as duplicate/);
+  assert.match(html, /No full refinement run is needed/);
+  const form = renderToStaticMarkup(createElement(DuplicateRemovalForm, { project: p, removeID: "aim", keepID: "jump", disabled: false,
+    save: async () => assert.fail("No automatic removal"), close: () => {} }));
+  assert.match(form, /Current jump wording/);
+  assert.match(form, /Confirm removal as duplicate/);
+  assert.match(form, /survivor will not be rewritten/);
+  assert.deepEqual(p, before);
+});
+
+test("review and duplicate removal explain pending evidence without invoking decisions or losing editable input", () => {
+  const p = fixture();
+  // Make a refinement the first expanded card.
+  p.requirements = p.requirements.filter((r) => r.id !== "pause");
+  const waiting: Submission = { id: "pending-note", projectID: p.id, status: "needs-attention", applied: true, auto: false, research: false, submittedAt: "2026-10-20",
+    input: { type: "note", epicID: "project", text: "A changed shared choice" } };
+  const before = structuredClone(p);
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [waiting], epicID: "all", sending: [], disabled: false,
+    refine: () => assert.fail("No model calls"), submit: async () => assert.fail("No submission on render"), reviewRefinement: async () => assert.fail("No approval on render") }));
+  assert.match(html, /Process the pending human input/);
+  assert.match(html, /aria-disabled="true"[^>]*>Approve refinement/);
+  const form = renderToStaticMarkup(createElement(DuplicateRemovalForm, { project: p, submissions: [waiting], removeID: "aim", keepID: "jump", disabled: false,
+    save: async () => assert.fail("No removal on render"), close: () => {} }));
+  assert.match(form, /pending human input/);
+  assert.match(form, /aria-disabled="true"[^>]*>Confirm removal as duplicate/);
+  p.refinements = [];
+  const ordinary = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [waiting], epicID: "all", sending: [], disabled: false,
+    refine: () => {}, submit: async () => true, reviewRefinement: async () => true }));
+  assert.match(ordinary, /A saved review will need your attention instead of applying automatically/);
+  assert.match(ordinary, /<textarea/);
+  assert.deepEqual({ ...p, refinements: before.refinements }, before);
+});
+
+test("completion notices expose job/revision provenance and withdrawn suggestions leave actionable review without losing history", () => {
+  const p = fixture(), proposal = p.refinements[0]!;
+  proposal.status = "dismissed";
+  p.reviewUpdates = { format: 1, items: [{ recordID: proposal.id, recordType: "refinement", kind: "withdrawn", jobID: "completed-job", revision: 2, submissionIDs: ["saved-response"], reason: "Related input changed its review basis; no human rejection was inferred." }] };
+  const before = structuredClone(p);
+  assert.ok(!reviewItems(p, [], "pending").some((item) => item.id === `refinement:${proposal.id}`));
+  assert.ok(reviewItems(p, [], "reviewed").some((item) => item.id === `refinement:${proposal.id}`));
+  const html = renderToStaticMarkup(createElement(ReviewUpdateNotice, { project: p, recordType: "refinement", recordID: proposal.id }));
+  assert.match(html, /Proposal withdrawn after processing/); assert.match(html, /no human rejection was inferred/);
+  assert.match(html, /completed-job/); assert.match(html, /saved-response/); assert.match(html, /revision 2/);
+  assert.deepEqual(p, before);
 });

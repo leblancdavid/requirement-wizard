@@ -41,6 +41,8 @@ export function ProcessingQueue({ active, progress, refinementProgress, submissi
   const outcome = recent.find((item) => item.title !== "Question help");
   const headline = taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? (!refinement && !active && !blocked.length && !paused && !attention.length && !failed && outcome ? `${outcome.title} · ${outcome.status}` : discoveryHeadline);
   const liveStage = running[0]?.stage ?? refinement?.label ?? stage.join(" ");
+  const canResume = !active && (paused || waiting.length > 0 || saved.length > 0);
+  const resumeLabel = paused ? "Resume discovery" : "Process waiting answers";
 
   useEffect(() => {
     if (!open) return;
@@ -66,13 +68,17 @@ export function ProcessingQueue({ active, progress, refinementProgress, submissi
   }
 
   return <ActionScope>
-    <button ref={trigger} className="round-status queue-trigger" aria-label={`Processing & queue: ${headline} · ${waiting.length} waiting${attention.length ? ` · ${attention.length} need attention` : ""}`}
-      aria-haspopup="dialog" aria-expanded={open} aria-controls="processing-queue" onClick={() => setOpen(true)}>
-      {working ? <Spinner /> : <span className="connection-dot" aria-hidden="true" />}
-      <span className="status-copy" role="status" aria-live="polite"><strong>{headline}</strong><small>{working ? `${active && !running.length && processing.length ? `${task} · ` : ""}${liveStage || "Working…"} · ` : ""}{waiting.length} waiting{attention.length ? ` · ${attention.length} need attention` : ""}{paused && active ? " · Paused" : ""}</small></span>
-      <span className="queue-chevron" aria-hidden="true">▾</span>
-      {working && <ActivityBar label={refinement && !running.length ? refinement.label : "Background task progress"} completed={taskCount === 1 ? active ? completed : running[0]?.completed : undefined} total={taskCount === 1 ? active ? total : running[0]?.total : undefined} />}
-    </button>
+    <div className="queue-header">
+      <button ref={trigger} className="round-status queue-trigger" aria-label={`Processing & queue: ${headline} · ${waiting.length} waiting${attention.length ? ` · ${attention.length} need attention` : ""}`}
+        aria-haspopup="dialog" aria-expanded={open} aria-controls="processing-queue" onClick={() => setOpen(true)}>
+        {working ? <Spinner /> : <span className="connection-dot" aria-hidden="true" />}
+        <span className="status-copy" role="status" aria-live="polite"><strong>{headline}</strong><small>{working ? `${active && !running.length && processing.length ? `${task} · ` : ""}${liveStage || "Working…"} · ` : ""}{waiting.length} waiting{attention.length ? ` · ${attention.length} need attention` : ""}{paused && active ? " · Paused" : ""}</small></span>
+        <span className="queue-chevron" aria-hidden="true">▾</span>
+        {working && <ActivityBar label={refinement && !running.length ? refinement.label : "Background task progress"} completed={taskCount === 1 ? active ? completed : running[0]?.completed : undefined} total={taskCount === 1 ? active ? total : running[0]?.total : undefined} />}
+      </button>
+      {active && <button className="secondary queue-header-action" disabled={stopDisabled} onClick={stop}>Stop discovery</button>}
+      {canResume && <button className="secondary queue-header-action" disabled={disabled} onClick={resume} aria-description={`Discovery scope: ${scope}`}>{resumeLabel}</button>}
+    </div>
     {open && createPortal(<ActionScope><dialog ref={dialog} id="processing-queue" className="queue-drawer" aria-labelledby="queue-title" onCancel={() => setOpen(false)} onClose={() => setOpen(false)} onClick={(event) => {
       if (event.target !== event.currentTarget) return;
       const bounds = event.currentTarget.getBoundingClientRect();
@@ -89,7 +95,7 @@ export function ProcessingQueue({ active, progress, refinementProgress, submissi
         {paused && <p role="status">Discovery is paused. Saved submissions are retained.</p>}
         {executionWaiting && !paused && waiting.length > 0 && <p role="status">Responses are saved and waiting for assessment or implementation to finish. Automatic follow-up resumes afterward for responses submitted with automatic processing enabled.</p>}
         {blocked.length > 0 && <p role="status">Context preflight stopped {blocked.length} {blocked.length === 1 ? "response" : "responses"} before starting an AI batch. Review that feature's cross-cutting notes and dependency scope in Project map, or split its work, then resume to recheck. The saved answers and approvals remain intact.</p>}
-        {!active && (paused || waiting.length > 0 || saved.length > 0) && <div className="queue-actions"><p><strong>Discovery scope:</strong> {scope}.{scope !== "All project areas" ? " Other areas remain pending." : ""} Change the feature filter in the workspace to choose a different scope.</p><button className="secondary" disabled={disabled} onClick={resume}>{paused ? "Resume discovery" : "Process waiting answers"}</button></div>}
+        {canResume && <div className="queue-actions"><p><strong>Discovery scope:</strong> {scope}.{scope !== "All project areas" ? " Other areas remain pending." : ""} Change the feature filter in the workspace to choose a different scope.</p><button className="secondary" disabled={disabled} onClick={resume}>{resumeLabel}</button></div>}
         {!submissions.length && <p>No responses submitted yet.</p>}
         {recent.length > 0 && <LazyDetails summary={<>Recent background work · {recent.length}</>}>{() => recent.map((item) => <article className="queue-item" key={item.id}><h3>{item.title} · {item.status}</h3>{item.stage && <p className={["failed", "blocked", "interrupted", "stale"].includes(item.status) ? "job-error" : undefined}>{item.stage}</p>}{item.detail && <p>{item.detail}</p>}</article>)}</LazyDetails>}
         {([[processing, "Currently processing"], [waiting, "Waiting next · submission order"], [attention, "Needs attention"], [saved, "Saved · awaiting discovery"]] as const).map(([entries, label]) => entries.length > 0 && <section key={label} aria-label={label}><h3>{label}</h3>{items(entries)}</section>)}

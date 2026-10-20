@@ -72,6 +72,14 @@ During assessment or coding, answers, notes and reviews are saved as waiting sub
 processing starts after the worker finishes. Conflicting actions explain their blockers
 on hover, keyboard focus or tap. Failures, cancellation and expired-worker recovery keep
 waiting follow-up paused for explicit resume.
+Requirement decisions also check related queued input, clarification and dependencies.
+Reviews with changed evidence are retained for another human review, not applied
+silently; direct approvals cannot invalidate a live discovery snapshot. See
+[decision safety](docs/browser-workspace.md#decision-safety-during-queued-work).
+Completed response rounds also reconcile related waiting review items: revise
+unapproved wording/choices, withdraw obsolete proposals, and retire questions when
+justified. Changes explain their processing source, preserve drafts/history, and
+never imply human approval. See [completion reconciliation](docs/browser-workspace.md#keeping-waiting-review-items-current-after-processing).
 Expand **Processing & queue** to inspect the questions
 and submitted answers being processed, waiting, or completed in **Activity**.
 Context preflight checks queued follow-up before starting an AI batch. Responses that

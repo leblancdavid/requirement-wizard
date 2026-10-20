@@ -52,6 +52,8 @@ const releases: Array<() => void> = [];
 const reviewReleases: Array<() => void> = [];
 const refinementReleases: Array<() => void> = [];
 let holdRefinement = true;
+let releaseCompletion: (() => void) | undefined;
+let completionCalls = 0;
 let rounds = 0;
 let failNextScan = false;
 let failAutomaticPair = false;
@@ -75,6 +77,21 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
   return JSON.stringify({ summary: "Build dependency-safe slices", packages: [{ requirementID: request.requirementID, title: `Planning package ${index + 1}`, reason: "Unlocks a usable workflow", steps: ["Implement the approved outcome"], verification: ["Verify the acceptance scenario"],
     prerequisites: index < 2 ? [{ requirementID: other.id, kind: "hard", reason: "Needs the supporting contract", evidenceIDs: [other.id], confidence: "medium" }] : [], questions: index === 0 ? ["Which shared contract comes first?"] : [] }] });
 } }, adapter: { async analyze(project, options) {
+  if (project.name === "Completion reconciliation fixture") {
+    completionCalls++;
+    await new Promise<void>((accept) => { releaseCompletion = accept; options.signal.addEventListener("abort", () => accept(), { once: true }); });
+    const source = project.sources.find((s) => s.kind === "note" && options.context.manifest.taskRecordIDs?.includes(s.id))!;
+    const [question, retired] = project.questions;
+    const [requirement, withdrawn] = project.requirements;
+    for (const id of [question!.id, retired!.id, requirement!.id, withdrawn!.id]) assert.ok(options.context.manifest.includedIDs.includes(id), "Reconciliation must use full candidate context");
+    return analysisSchema.parse({ summary: "Reconciled pending work", goals: [], actors: [], assumptions: [], questions: [], requirements: [],
+      retireQuestions: [{ questionID: retired!.id, reason: "The processed note removed this optional question" }],
+      pendingChanges: { format: 1, changes: [
+        { type: "revise-question", questionID: question!.id, text: "Which revised draft behavior is wanted?", whyItMatters: "The processed note changed the choice", options: [{ label: "New option", consequence: "Use the revised outcome" }, { label: "Other option", consequence: "Keep the alternative" }], sourceIDs: [source.id], reason: "The processed note updated the draft question" },
+        { type: "revise-requirement", requirementID: requirement!.id, statement: "Updated proposed behavior", rationale: "Current explicit note", acceptance: ["The corrected result is visible"], sourceIDs: [source.id], reason: "The processed note corrected the proposed behavior" },
+        { type: "withdraw-requirement", requirementID: withdrawn!.id, sourceIDs: [source.id], reason: "The processed note removed the optional proposal" },
+      ] } });
+  }
   if (["Resolution workflow fixture", "Resolution ambiguity fixture", "Automatic answer fixture", "Automatic review fixture"].includes(project.name)) {
     const pair = options.context.manifest.refinementPair?.requirementIDs;
     if (!pair) return analysisSchema.parse({ summary: "Individual wording is unchanged", goals: [], actors: [], assumptions: [], questions: [],
@@ -483,7 +500,20 @@ try {
   await page.locator(".requirement-detail > summary").click();
   await page.getByLabel("Review rationale").fill("Saving jobs is essential.");
   await page.getByRole("button", { name: "Confirm requirement" }).click();
+  const safetyProjectID = store.list()[0]!.id;
+  await expect.poll(() => store.submissions(safetyProjectID).some((s) => s.input.type === "review" && s.status === "needs-attention" && s.conflict && !s.applied)).toBe(true);
+  assert.equal(store.get(safetyProjectID).requirements[0]!.status, "proposed", "A review cannot bypass pending related human input");
+  await expect(page.locator(".review-form")).toContainText("A saved review will need your attention");
+  await page.screenshot({ path: ".reqwizit-state/browser-decision-safety.png", fullPage: true });
+  await page.getByRole("button", { name: "Process waiting answers", exact: true }).click();
+  await expect.poll(() => releases.length).toBe(1);
+  releases.shift()!(); // finish this safety exercise without shifting later queue-fixture indexes
+  await expect.poll(() => store.submissions(safetyProjectID).filter((s) => s.input.type === "answer" && s.status === "completed").length).toBe(1);
+  await expect(page.getByLabel("Review rationale")).toHaveValue("Saving jobs is essential.");
+  await expect(page.locator(".review-form")).not.toContainText("pending human input");
+  await page.locator('.review-form .button-row > button:not([aria-disabled])').filter({ hasText: "Confirm requirement" }).click();
   await expect(page.locator(".badge.accepted")).toHaveText("Confirmed");
+  await page.keyboard.press("Escape");
   await expect(mapEpic).toContainText("1 not assessed");
   await page.getByText("Manual implementation records", { exact: true }).click();
   await page.locator(".implementation-progress > summary").click();
@@ -662,11 +692,12 @@ try {
   await page.getByLabel("Automatically explore queued answers").check();
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /To answer/ }).click();
-  await page.getByRole("button", { name: "Explore next gaps" }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Process waiting answers", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
   await expect.poll(() => releases.length).toBe(1);
   const headerStatus = page.locator(".topbar .round-status");
   await expect(headerStatus.locator("strong")).toHaveText("Processing 1 response");
-  await expect(headerStatus.locator("small")).toContainText("Reviewing your response:");
+  await expect(headerStatus.locator("small")).toContainText("Following up on your review:");
   await expect(headerStatus.locator("small")).toContainText("Organizing sample project");
   await expect(headerStatus.locator(".activity-spinner")).toBeVisible();
   await expect(headerStatus.getByRole("progressbar", { name: "Background task progress" })).toBeVisible();
@@ -678,13 +709,14 @@ try {
   assert.ok(sidebarBounds && headerBounds);
   assert.ok(Math.abs(headerBounds.x - sidebarBounds.width) < 1, "Header starts at sidebar edge");
   assert.ok(Math.abs(headerBounds.x + headerBounds.width - 1440) < 1, "Header fills available width");
-  const queueBounds = await headerStatus.boundingBox();
+  const queueBounds = await page.locator(".queue-header").boundingBox();
   assert.ok(queueBounds && Math.abs(queueBounds.x + queueBounds.width / 2 - (headerBounds.x + headerBounds.width / 2)) < 1, "Queue control is centered in the header");
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 700 });
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await expect.poll(async () => Math.round((await header.boundingBox())!.y)).toBe(0);
     await expect(headerStatus).toBeInViewport();
+    await expect(header.getByRole("button", { name: "Stop discovery", exact: true })).toBeInViewport();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Sticky header fits viewport");
     await page.screenshot({ path: resolve(`.reqwizit-state/header-${width}.png`) });
     await headerStatus.click();
@@ -761,14 +793,37 @@ try {
   await expect(page.locator(".queue-panel")).toContainText("Keep offline work locally");
   await expect(details).toHaveCount(0);
   await expect(offline).toHaveCount(0);
+  // The safety exercise already completed the earlier answer. Keep an explicit
+  // additional note waiting so the later stop/resume check still cancels real work.
+  store.enqueue(safetyProjectID, { id: crypto.randomUUID(), auto: true, research: false,
+    input: { type: "note", epicID: "project", text: "Keep this cancellation/resume fixture note" } });
   releases[1]!();
   await expect.poll(() => releases.length).toBe(3);
   releases[2]!();
-  await expect(page.locator(".queue-panel > details > summary").filter({ hasText: "Recent completed work" })).toContainText("3");
+  await expect(page.locator(".queue-panel > details > summary").filter({ hasText: "Recent completed work" })).toContainText("4");
   await page.locator(".queue-panel > details > summary").filter({ hasText: "Recent completed work" }).click();
-  await expect(page.locator(".queue-item .badge.completed")).toHaveCount(3);
+  await expect(page.locator(".queue-item .badge.completed")).toHaveCount(4);
   await page.mouse.click(10, 10);
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
+  const headerControls = page.locator(".queue-header");
+  // Submission completion may precede the end of its background follow-up.
+  // Stop the still-active work rather than trying to start a concurrent round.
+  await expect(headerControls.getByRole("button", { name: "Stop discovery", exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await headerControls.getByRole("button", { name: "Stop discovery", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(headerControls.getByRole("button", { name: "Resume discovery", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
+  assert.equal(store.jobs(store.list()[0]!.id).at(-1)!.status, "cancelled", "Header Stop cancels discovery without opening the drawer");
+  await page.reload();
+  await expect(headerControls.getByRole("button", { name: "Resume discovery", exact: true })).toBeInViewport();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Header resume fits mobile width");
+  const callsBeforeResume = releases.length;
+  await headerControls.getByRole("button", { name: "Resume discovery", exact: true }).click();
+  await expect.poll(() => releases.length).toBe(callsBeforeResume + 1);
+  await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
+  await headerControls.getByRole("button", { name: "Stop discovery", exact: true }).click();
+  await expect(headerControls.getByRole("button", { name: "Resume discovery", exact: true })).toBeVisible();
    await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
@@ -863,17 +918,21 @@ try {
    await expect(reviewPanel.locator(".review-card").first()).toContainText("Send job notifications");
    await expect(addendum).toHaveValue("");
    await reviewPanel.getByRole("button", { name: "Reject", exact: true }).click();
-   await expect.poll(() => store.submissions(reviewProject.id).filter((s) => s.status === "queued").length).toBe(1);
+    await expect.poll(() => store.submissions(reviewProject.id).filter((s) => s.status === "needs-attention" && s.conflict && !s.applied).length).toBe(1);
    await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
    await expect(reviewPanel).toContainText("Also export jobs");
    await page.reload();
    await page.getByRole("tab", { name: /Review/ }).click();
    await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
    await expect(reviewPanel).toContainText("Also export jobs");
-   reviewReleases.shift()!();
-   await expect.poll(() => reviewReleases.length).toBe(1);
-   reviewReleases.shift()!();
-   await expect.poll(() => store.submissions(reviewProject.id).every((s) => s.status === "completed")).toBe(true);
+    reviewReleases.shift()!();
+    await expect.poll(() => store.submissions(reviewProject.id)[0]!.status).toBe("completed");
+    await reviewPanel.getByRole("button", { name: /To review/ }).click();
+    await expect(reviewPanel.locator(".review-card").first()).toContainText("Send job notifications");
+    await reviewPanel.getByRole("button", { name: "Reject", exact: true }).click();
+    await expect.poll(() => reviewReleases.length).toBe(1);
+    reviewReleases.shift()!();
+    await expect.poll(() => store.submissions(reviewProject.id).filter((s) => !s.conflict).every((s) => s.status === "completed")).toBe(true);
    await reviewPanel.getByRole("button", { name: /Reviewed/ }).click();
    await expect(reviewPanel).toContainText("Approved persistence and proposed CSV export for review.");
    await expect(reviewPanel).toContainText("Rejected the requirement; its history is retained.");
@@ -905,7 +964,7 @@ try {
     await page.reload();
     await expect(page.locator(".round-status")).toContainText("AI follow-up blocked by context size");
     await page.locator(".topbar .queue-trigger").click();
-    await page.getByRole("button", { name: "Resume discovery", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Resume discovery", exact: true }).click();
     await expect(page.locator(".round-status")).toContainText("AI follow-up blocked by context size");
     assert.equal(store.jobs(reviewProject.id).length, reviewJobs, "retrying unchanged context must not append a failed batch");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Context diagnostics must fit mobile width");
@@ -963,7 +1022,7 @@ try {
            assert.equal(store.getJob(receipt.discoveryJobID).status, "completed");
            await page.locator(".topbar .queue-trigger").click();
            await expect(page.getByRole("dialog")).toContainText("Discovery and human input were saved");
-           await page.getByRole("button", { name: "Resume discovery", exact: true }).click();
+           await page.getByRole("dialog").getByRole("button", { name: "Resume discovery", exact: true }).click();
            await page.getByRole("button", { name: "Close processing queue" }).click();
          }
          await expect.poll(() => store.submissions(automatic.id)[0]?.status).toBe("completed");
@@ -1013,8 +1072,19 @@ try {
         await expect(reviewPanel.getByRole("region", { name: "Related requirement resolution", exact: true })).toContainText("reject the redundant");
         assert.deepEqual(store.get(resolutionProject.id).requirements, originals, "AI resolution must not alter approved records before review");
         await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).not.toHaveAttribute("aria-disabled", "true");
-        if (!ambiguous) {
-          await reviewPanel.getByRole("button", { name: "Keep both unchanged", exact: true }).click();
+         if (!ambiguous) {
+           const currentComparison = store.get(resolutionProject.id);
+           const previousProposalID = currentComparison.refinements[0]!.id;
+           store.note(currentComparison.id, currentComparison.revision, "Compare using the latest report access context.");
+           await page.reload(); await page.getByRole("tab", { name: /Review/ }).click();
+           await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
+           await expect(reviewPanel.getByRole("button", { name: "Dismiss outdated proposal", exact: true })).toBeVisible();
+           const jobsBeforeRefresh = store.jobs(currentComparison.id).length;
+           await reviewPanel.getByRole("button", { name: "Refresh this comparison", exact: true }).click();
+           await expect.poll(() => store.get(currentComparison.id).refinements.find((p) => p.id === previousProposalID)?.status).toBe("dismissed");
+           assert.equal(store.jobs(currentComparison.id).length, jobsBeforeRefresh + 1, "Refreshing one comparison must not repeat broad refinement");
+           await expect(reviewPanel.getByRole("button", { name: "Keep both unchanged", exact: true })).toBeVisible();
+           await reviewPanel.getByRole("button", { name: "Keep both unchanged", exact: true }).click();
           assert.deepEqual(store.get(resolutionProject.id).requirements, originals);
           const dismissedProject = store.get(resolutionProject.id);
           store.note(dismissedProject.id, dismissedProject.revision, "Please consolidate these duplicate access rules while retaining both scenarios");
@@ -1110,8 +1180,20 @@ try {
      await page.getByRole("tab", { name: /Review/ }).click();
      await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
      await expect(reviewPanel.locator(".refinement-card")).toHaveCount(2);
-     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Cleanup comparison must fit mobile width");
-      let listing = store.create("Implementation list fixture", "Manage access and reports", { providerID: "openai", modelID: "fixture" });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Cleanup comparison must fit mobile width");
+      const beforeRemoval = store.get(cleanup.id), removalJobs = store.jobs(cleanup.id).length;
+      await reviewPanel.locator(".review-toolbar").getByRole("button", { name: "Remove as duplicate…", exact: true }).click();
+      const removalForm = reviewPanel.getByRole("form", { name: "Remove duplicate requirement", exact: true });
+      await removalForm.getByLabel("Remove", { exact: true }).selectOption(cleanup.requirements[1]!.id);
+      await removalForm.getByLabel("Keep unchanged", { exact: true }).selectOption(cleanup.requirements[0]!.id);
+      await expect(removalForm).toContainText(beforeRemoval.requirements[0]!.statement);
+      await expect(removalForm).toContainText(beforeRemoval.requirements[1]!.statement);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Duplicate removal must fit mobile width");
+      await removalForm.getByRole("button", { name: "Confirm removal as duplicate", exact: true }).click();
+      await expect.poll(() => store.get(cleanup.id).requirements[1]!.status).toBe("rejected");
+      assert.deepEqual(store.get(cleanup.id).requirements[0], beforeRemoval.requirements[0], "Human duplicate removal must not rewrite the survivor");
+      assert.equal(store.jobs(cleanup.id).length, removalJobs, "Human duplicate removal must not call a model");
+       let listing = store.create("Implementation list fixture", "Manage access and reports", { providerID: "openai", modelID: "fixture" });
       const listingJob = store.beginJob(listing.id, listing.revision).job; store.claimJob(listingJob.id, Date.now() + 60000);
       store.finishJob(listingJob.id, { summary: "Access and reports", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [],
         organization: [{ type: "upsert", epicID: "new:access", title: "Account access", purpose: "Manage identities", dependencies: [] }, { type: "upsert", epicID: "new:reports", title: "Business reports", purpose: "Financial history", dependencies: ["new:access"] }],
@@ -1669,6 +1751,51 @@ try {
             await page.getByLabel("Filter by feature", { exact: true }).selectOption("map-empty");
             await expect(page.locator(".epic-overview")).toHaveCount(1);
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Empty epic overview fits mobile width");
-            assert.deepEqual(errors, []);
+             // One queued note updates the already-open review list and question drafts.
+             let completion = store.create("Completion reconciliation fixture", "Keep pending work current", { providerID: "openai", modelID: "fixture" });
+             const completionSeed = store.beginJob(completion.id, completion.revision).job; store.claimJob(completionSeed.id, Date.now() + 60000);
+             store.finishJob(completionSeed.id, { summary: "Pending draft", goals: [], actors: [], assumptions: [], retireQuestions: [],
+               questions: ["Which draft behavior?", "Which old optional question?"].map((text) => ({ text, whyItMatters: "Choose the draft intent", options: [{ label: "Old one", consequence: "First path" }, { label: "Old two", consequence: "Second path" }] })),
+               requirements: ["Draft proposed behavior", "Old optional proposal"].map((statement) => ({ statement, rationale: "Unconfirmed idea", acceptance: ["Original outcome"], sourceIDs: [completion.sources[0]!.id] })) });
+             completion = store.get(completion.id);
+             const suggestion = store.beginJob(completion.id, completion.revision).job; store.claimJob(suggestion.id, Date.now() + 60000);
+             store.attachContext(suggestion.id, planContext(completion).manifest);
+             store.finishJob(suggestion.id, { summary: "Cleanup suggestion", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], refinements: [{ requirementID: completion.requirements[0]!.id, statement: "Old cleanup wording", rationale: "Same intent", acceptance: ["Original outcome"], reason: "Original draft suggestion" }] });
+             await page.evaluate((id) => { localStorage.setItem("reqwizit-project", id); localStorage.setItem("reqwizit-auto", "true"); }, completion.id);
+             await page.reload(); await page.setViewportSize({ width: 1440, height: 1000 });
+             await page.getByRole("tab", { name: /^Design/ }).click();
+             await page.getByRole("textbox", { name: "Your answer to Which draft behavior?", exact: true }).fill("Keep my draft through processing");
+             const oldQuestionCard = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Which old optional question?", exact: true }) });
+             await oldQuestionCard.getByRole("button", { name: "Answer", exact: true }).click();
+             await page.getByRole("textbox", { name: "Your answer to Which old optional question?", exact: true }).fill("Retain this retired-question draft too");
+             await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Which draft behavior?", exact: true }) }).getByRole("button", { name: "Answer", exact: true }).click();
+             await page.getByText("Add information", { exact: true }).click();
+             await page.getByLabel("Add an idea, correction, or constraint", { exact: true }).fill("Revise the draft behavior question and draft proposed behavior. Retire the old optional question and withdraw the old optional proposal.");
+             await page.getByRole("button", { name: /Add to project/ }).click();
+             await expect.poll(() => !!releaseCompletion).toBe(true);
+             releaseCompletion!(); releaseCompletion = undefined;
+             await expect.poll(() => store.get(completion.id).reviewUpdates?.items.some((u) => u.kind === "withdrawn")).toBe(true);
+             const updatedQuestion = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Which revised draft behavior is wanted?", exact: true }) });
+             await expect(updatedQuestion.getByRole("textbox")).toHaveValue("Keep my draft through processing");
+             await expect(updatedQuestion).toContainText("This question or its choices changed after processing");
+             await expect(updatedQuestion.getByRole("button", { name: "Save response", exact: false })).toHaveAttribute("aria-disabled", "true");
+             await updatedQuestion.getByRole("button", { name: "Use draft with updated question", exact: true }).click();
+             await expect(updatedQuestion.getByRole("button", { name: "Save response", exact: false })).not.toHaveAttribute("aria-disabled", "true");
+             await expect(page.getByRole("heading", { name: "Draft retained: Which old optional question?", exact: true })).toBeVisible();
+             await expect(page.getByText("Retain this retired-question draft too", { exact: true })).toBeVisible();
+             await page.getByRole("tab", { name: /^Review/ }).click();
+             await expect(reviewPanel).toContainText("Updated proposed behavior");
+             await expect(reviewPanel).toContainText("Updated after processing");
+             await expect(reviewPanel.locator(".refinement-card")).toHaveCount(0);
+             await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
+             await expect(reviewPanel).toContainText("Refinement withdrawn");
+             await reviewPanel.getByRole("button", { name: /Refinement withdrawn/ }).click();
+             await expect(reviewPanel).toContainText("It was not a human rejection");
+             await expect(reviewPanel).toContainText("Proposal withdrawn after processing");
+             await page.screenshot({ path: ".reqwizit-state/browser-review-completion.png", fullPage: true });
+             await page.reload(); await page.getByRole("tab", { name: /^Review/ }).click();
+             await expect(reviewPanel).toContainText("Updated proposed behavior");
+             assert.equal(completionCalls, 1, "Reconciliation used the original queued response call; reload did not repeat inference");
+             assert.deepEqual(errors, []);
    console.log("Browser checks passed: appearance presets, custom colors, fonts/text size, persistence, cross-tab sync, reset, contrast hints, keyboard dropdowns and mobile sizing; local folder browsing/connection, automatic files, implementation evidence, external-edit conflict/retry, disconnect/reconnect; Implementation tab count/actions, four delivery strategies, saved settings, matching dark theme and mobile layout; ChatGPT sign-in/cancel, accounts/models, test/cancel/retry, saved project selection and disconnect; concept help, answer drafts, discovery queue/reload, requirement confirmation; explicit existing-project entry, local identity autofill, preserved manual edits across folders, initialization failure/retry, review-first project map, manual rescan, retained IDs, question dismissal and evidence-grounded replacements, reload and mobile width. Screenshots include .reqwizit-state/browser-implementation{,-dark,-mobile}.png");
-} finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true }); await rm(scanDirectory, { recursive: true, force: true }); await rm(planningDirectory, { recursive: true, force: true }); }
+} finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await rm(scanDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await rm(planningDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }

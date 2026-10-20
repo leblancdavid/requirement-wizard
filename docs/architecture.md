@@ -19,6 +19,10 @@ implemented under `src/`. See [decisions.md](decisions.md),
   proposals; existing storage transactions publish and approve both records atomically.
   The discovery queue runs bounded pair tasks before compatible individual cleanup and
   retains completed pair outcomes independently; no automatic approval or startup replay.
+  Human duplicate removal is a separate model-free, revision-checked rejection decision
+  preserving the survivor exactly. Targeted outdated-proposal refresh uses the existing
+  isolated single-target/pair jobs and retires stale proposals atomically on successful
+  publication. Fingerprint semantics and saved check compatibility remain unchanged.
 - `src/core/incremental-resolution.ts`: publication-time affected-record selection and
   top-three uncached lexical pair planning after ordinary answers/reviews, including
   non-rejected proposals. `finishJob` saves optional version-1 submission receipts in
@@ -29,6 +33,17 @@ implemented under `src/`. See [decisions.md](decisions.md),
 - `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`, `working-set.ts`: organization, material
   change review, deterministic coverage, and bounded working sets.
 - `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.
+- `src/core/decision-availability.ts`: shared requirement-decision availability and
+  versioned relevant-evidence bases. Storage checks overlapping unfinished input,
+  linked clarification, dependency guardrails and live discovery snapshots inside
+  write transactions; browser review explains the same policy. New reviews/wording
+  proposals retain their basis without rewriting legacy provenance or completed checks.
+- `src/core/pending-changes.ts`, `review-completion.ts`: validated, current-input-bound
+  updates to unapproved records and a publication-time impact pass. Up to four optional
+  related candidates fit into the existing single-response context. Completion uses
+  exact source-application snapshots, retains withdrawn/retired items and records bounded
+  latest-per-item notices outside model/assessment evidence. Human pending input and
+  confirmed behavior remain protected; no retrospective startup sweep or extra inference.
 - `src/core/project-activity.ts`, `src/storage/activity.ts`: deterministic snapshot
   comparisons and durable activity projections. Database migration 3 backfills the index
   from retained revisions and saved job/execution outcomes. New entries are written in

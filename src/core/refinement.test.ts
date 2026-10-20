@@ -146,7 +146,7 @@ test("pending human reviews block cleanup approval, and refinement-only cannot i
       type: "review", requirementID: original.id, requirementText: original.statement,
       fingerprint: reviewFingerprint(original), action: "accepted", note: "Preserve ledge jumping",
     } });
-    assert.throws(() => store.reviewRefinement(p.id, p.revision, p.refinements[0]!.id, true), /pending human review/);
+    assert.throws(() => store.reviewRefinement(p.id, p.revision, p.refinements[0]!.id, true), /pending human input/);
     assert.deepEqual(store.get(p.id).requirements[0], original);
     const job = await new DiscoveryService(store, { async analyze(snapshot) {
       return { ...empty(), refinements: [proposal(snapshot)], requirements: [{ statement: "Add multiplayer", rationale: "Unrelated gap", sourceIDs: [snapshot.sources[0]!.id], acceptance: ["Multiplayer works"] }] };
@@ -258,6 +258,108 @@ function resolutionProposal(p: Project, pair: [string, string]): NonNullable<Ana
   return { requirementID: target!.id, statement: "Guests can access private reports under the explicitly approved policies", rationale: "One observable behavior preserves both approved scenarios", acceptance: [...target!.acceptance, ...other!.acceptance], reason: "Consolidate redundant wording without losing scenarios",
     resolution: { format: 1, relatedRequirementID: other!.id, basis: "duplicate", evidenceIDs: [p.sources[0]!.id], change: { type: "consolidate" } } };
 }
+
+test("human duplicate removal uses current records without AI, preserves survivor/history and rejects stale or invalid decisions", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "reqwizit-duplicate-"));
+  const file = join(directory, "projects.db");
+  let store = new ProjectStore(file);
+  try {
+    let p = approvedPair(store, 3);
+    assert.equal((await pairProposal(store, p)).status, "completed");
+    p = store.get(p.id);
+    const oldProposal = structuredClone(p.refinements[0]!);
+    p = store.note(p.id, p.revision, "The current duplicate decision is mine.");
+    const before = structuredClone(p), keep = p.requirements[0]!, removed = p.requirements[1]!;
+    assert.throws(() => store.removeDuplicate(p.id, p.revision - 1, removed.id, keep.id, "Duplicate"), /Project changed/);
+    assert.throws(() => store.removeDuplicate(p.id, p.revision, keep.id, keep.id, ""), /distinct/);
+    assert.throws(() => store.removeDuplicate(p.id, p.revision, "missing", keep.id, ""), /distinct/);
+    assert.deepEqual(store.get(p.id), before);
+    p = store.removeDuplicate(p.id, p.revision, removed.id, keep.id, "Same behavior; keep the first record");
+    assert.deepEqual(p.requirements[0], keep);
+    assert.deepEqual(p.requirements[2], before.requirements[2]);
+    assert.equal(p.requirements[1]!.status, "rejected");
+    assert.equal(p.requirements[1]!.statement, removed.statement);
+    assert.deepEqual(p.requirements[1]!.acceptance, removed.acceptance);
+    assert.ok(removed.sourceIDs.every((id) => p.requirements[1]!.sourceIDs.includes(id)));
+    assert.match(p.requirements[1]!.reviewNote!, new RegExp(keep.id));
+    assert.deepEqual(p.refinements[0], { ...oldProposal, status: "dismissed" });
+    assert.deepEqual(store.get(p.id, before.revision), before);
+    assert.throws(() => store.removeDuplicate(p.id, p.revision, keep.id, removed.id, ""), /distinct/);
+    store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.get(p.id), p);
+    store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.get(p.id), p);
+    assert.deepEqual(store.get(p.id, before.revision), before);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("duplicate removal does not override queued human reviews", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = approvedPair(store), r = p.requirements[0]!;
+    store.enqueue(p.id, { id: crypto.randomUUID(), auto: false, research: false, input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "Preserve this" } });
+    assert.throws(() => store.removeDuplicate(p.id, p.revision, p.requirements[1]!.id, r.id, ""), /pending human input/);
+    assert.deepEqual(store.get(p.id), p);
+  } finally { store.close(); }
+});
+
+for (const outcome of ["proposal", "distinct", "blocked", "failed", "cancelled", "stale"] as const) {
+  test(`targeted comparison refresh ${outcome} checks exactly one pair and preserves old evidence`, async () => {
+    const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+    try {
+      let p = approvedPair(store, 3);
+      assert.equal((await pairProposal(store, p)).status, "completed");
+      p = store.get(p.id);
+      const oldProposal = structuredClone(p.refinements[0]!);
+      p = store.note(p.id, p.revision, "Use the latest access constraints when comparing these policies.");
+      const before = structuredClone(p); let calls = 0;
+      queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
+        calls++;
+        assert.deepEqual(options.context.manifest.refinementPair?.requirementIDs, p.requirements.slice(0, 2).map((r) => r.id));
+        assert.equal(store.get(p.id).refinements[0]!.status, "pending");
+        if (outcome === "failed") throw new Error("Fixture refresh failure");
+        if (outcome === "cancelled") { queue!.stop(p.id); options.signal.throwIfAborted(); }
+        if (outcome === "stale") store.note(p.id, snapshot.revision, "A newer human decision arrived during comparison.");
+        return outcome === "proposal" ? { ...empty(), refinements: [resolutionProposal(snapshot, p.requirements.slice(0, 2).map((r) => r.id) as [string, string])], resolutionCheck: { format: 1, outcome: "proposal", explanation: "Latest comparison" } }
+          : { ...empty(), resolutionCheck: { format: 1, outcome: outcome === "blocked" ? "blocked" : "distinct", explanation: "Latest comparison" } };
+      } }));
+      queue.resume(p.id, { refinementOnly: true, refreshProposalID: oldProposal.id });
+      for (let i = 0; queue.isActive(p.id) && i < 1000; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(queue.isActive(p.id), false);
+      assert.equal(calls, 1);
+      const current = store.get(p.id);
+      assert.deepEqual(current.requirements, before.requirements);
+      assert.deepEqual(outcome === "stale" ? current.sources.slice(0, -1) : current.sources, before.sources);
+      const success = outcome === "proposal" || outcome === "distinct";
+      assert.deepEqual(current.refinements[0], { ...oldProposal, status: success ? "dismissed" : "pending" });
+      assert.equal(current.refinements.length, outcome === "proposal" ? 2 : 1);
+      if (outcome === "proposal") assert.equal(refinementIsStale(current, current.refinements[1]!), false);
+      assert.deepEqual(store.get(p.id, before.revision), before);
+    } finally { await queue?.close(); store.close(); }
+  });
+}
+
+test("targeted individual refresh retires the stale wording proposal atomically even when no new wording is needed", async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    let p = await seed(store);
+    assert.equal((await refine(store, p)).status, "completed");
+    p = store.get(p.id);
+    const old = p.refinements[0]!;
+    p = store.review(p.id, p.revision, old.requirementID, "accepted", "Preserve this exact current behavior");
+    const before = structuredClone(p); let calls = 0;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_snapshot, options) {
+      calls++; assert.equal(options.context.manifest.refinementTarget?.requirementID, old.requirementID);
+      assert.equal(options.context.manifest.refinementPair, undefined);
+      return empty();
+    } }));
+    queue.resume(p.id, { refinementOnly: true, refreshProposalID: old.id });
+    for (let i = 0; queue.isActive(p.id) && i < 1000; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(calls, 1);
+    assert.deepEqual(store.get(p.id).requirements, before.requirements);
+    assert.deepEqual(store.get(p.id).refinements, [{ ...old, status: "dismissed" }]);
+  } finally { await queue?.close(); store.close(); }
+});
 async function pairProposal(store: ProjectStore, p: Project, pair = p.requirements.slice(0, 2).map((r) => r.id) as [string, string]) {
   return new DiscoveryService(store, { async analyze(snapshot, options) {
     assert.deepEqual(options.context.manifest.refinementPair?.requirementIDs, pair);

@@ -2,6 +2,40 @@
 
 ## Repeated questions and overlapping requirements
 
+### Direct duplicate removal and outdated proposal recovery
+
+**Remove as duplicate…** is available in the Review toolbar, expanded active
+requirements (including Reviewed), and pending refinement/resolution cards. Select
+the record to remove and the requirement to keep, compare their **current** wording,
+scenarios and evidence, then confirm. This is a human decision with no model call:
+the survivor remains byte-for-byte unchanged, including its approval status. Unique
+scenarios on the removed record are not automatically merged into the survivor.
+The removed requirement becomes rejected, retaining its stable ID, original evidence,
+implementation history and a rejection source/review note referencing the survivor.
+Pending proposals involving the removed record are dismissed; previous revisions
+remain readable. Pending relevant human input must finish first. A changed revision
+requires explicitly reviewing the updated records rather than silently submitting
+against a newer snapshot.
+
+Outdated cards explain whether the primary/related requirement or broader human/
+feature context changed. They expose **Dismiss outdated proposal** and **Refresh
+this comparison** (or **Refresh this requirement** for individual wording). Refresh
+checks only that pair/requirement using current evidence; it does not run broad
+candidate retrieval or repeat other completed tasks. Successful non-blocked results
+retire old stale proposals in the same transaction as publication. Failed, cancelled,
+stale, malformed and blocked checks retain the old proposal for retry/dismissal.
+Saved jobs/results survive restart; inference never automatically resumes on startup.
+Distinct/no-change outcomes appear in saved job history and Processing & queue, not
+as an invented replacement proposal. Existing completed-check reuse is unchanged.
+
+Freshness remains conservative: feature/dependency human input can contain broader
+product constraints. This change explains that invalidation and provides local
+recovery; it does not ignore those decisions or change persisted fingerprint semantics.
+Deterministic tests cover direct removal, revision/input guards, exact survivor/history
+preservation, repeated SQLite reopen, and targeted refresh publication/failure/cancellation/
+staleness. Browser checks exercise stale-pair refresh, explicit dismissal availability,
+model-free removal and mobile layout. These checks use fixtures, not live inference.
+
 ### Automatic targeted checks after answers and reviews
 
 When an ordinary concrete answer or requirement review finishes discovery, the queue
@@ -143,6 +177,105 @@ checks also open opposite-rule comparisons, verify mobile width and reload, and
 assert that comparison does not mutate the saved project.
 
 ## Operation availability and disabled-action explanations
+
+### Keeping waiting review items current after processing
+
+Successful response completion now reconciles the existing waiting review list in the
+same SQLite transaction as publication. Changes are visible on the next browser poll;
+each affected item shows **Updated after processing**, **Supporting context updated**,
+or **Proposal withdrawn after processing**, with a reason, job, saved-response IDs and
+revision under **Why this changed**. Activity also records the per-item outcome.
+
+The existing response call may return version-1 `pendingChanges` to revise an unanswered
+question or an unapproved requirement in place, or withdraw a **never-approved** proposed
+requirement. Revised wording still needs human review. A withdrawn requirement keeps its
+ID/text/evidence and rejected storage lifecycle, but Review labels it **Proposal withdrawn**,
+not a human rejection. Previously confirmed behavior cannot be withdrawn by this path;
+approved/rejected requirements keep the existing human-review protections. Ordinary plain
+approvals, deferrals, delegations and workspace facts alone cannot authorize these changes.
+Multi-requirement comparison clarifications keep their exact wording/routing; they are
+answered or retired through the comparison workflow rather than repurposed in place.
+Each change must cite current concrete human input from this batch in detailed context;
+original supporting links are retained separately. Competing operations, invented/out-of-context citations and
+updates/retirements against unfinished human responses reject the round atomically.
+
+The queue retrieves at most **four** related pending candidates from explicit links or
+lexical similarity and adds them to the current response's context only if their entire
+evidence fits. Shared project notes can retrieve across features; other responses stay
+within their feature/dependencies unless explicit links identify another feature. This
+does not combine submissions, add a separate model call or force oversized optional work
+into the response. Omitted candidates cannot be changed. Lexical selection can miss
+paraphrases and model decisions remain advisory, not a completeness/correctness guarantee.
+
+A deterministic completion pass also notices changed supporting context, including human
+input applied **before** inference began. It withdraws affected outdated refinement or
+resolution suggestions from actionable review while keeping them under **Reviewed** with
+an explicit automatic-withdrawal explanation. Human dismissals remain distinguishable.
+Known generated comparison questions can retire when a newer comparison supersedes them
+or their exact pair leaves active scope, but only with original job provenance and no
+unfinished/saved answer. Generic questions are not retired simply because related records
+changed; context notices do not establish that a human choice is resolved.
+
+Question and requirement editing drafts remain intact. Changed question wording **or
+options** requires **Use draft with updated question** before submitting; current browser
+answers reference the reviewed saved revision, letting storage check the exact question
+fingerprint so an old tab cannot silently answer newly changed options. Retired questions
+with unsaved drafts remain visible as **Draft retained**
+and can be saved as a project note. Failures, cancellation, expired leases, stale results
+and blocked pair outcomes do not perform completion reconciliation. Startup/reload does
+not retrospectively sweep old work or repeat model calls. See the
+[compatibility ledger](migrations.md#completion-linked-pending-review-reconciliation-2026-10-20).
+
+Verification (2026-10-20): type checking and all **343 deterministic tests** passed.
+Live-model reconciliation quality remains unverified; these fixtures establish workflow
+and validation behavior, not semantic completeness.
+
+### Decision safety during queued work
+
+Requirement review, refinement/resolution approval and duplicate removal share explicit
+relationship checks in `src/core/decision-availability.ts`. Relevant work includes the
+target(s), linked clarification/evidence, feature/shared input and transitive dependency
+input. Applied responses with unfinished or failed follow-up still count as pending;
+retained conflicting/superseded responses do not permanently block replacement decisions.
+An explicitly linked unanswered/deferred/delegated clarification must be answered and
+processed first. These are deterministic safeguards, not semantic proof of consistency.
+
+- Direct reviews, cleanup approvals, duplicate removals and cleanup dismissals cannot
+  change a live discovery/scan snapshot, including a worker in another local process.
+  Even focused jobs currently publish against a whole-project revision. Advisory help
+  does not hold this lock; existing implementation ownership checks remain in force.
+- Answers and notes remain saveable. Ordinary review responses also remain saveable,
+  but related pending input or changed evidence retains the review as **needs-attention**,
+  with its exact note/decision and no applied approval/rejection. After processing related
+  work, review current information and resubmit; resuming never applies that conflicted
+  review automatically. Plain independent same-feature approvals and unrelated feature
+  input do not invalidate one another solely because the project revision changed.
+  Nonblank review addenda are conservatively feature-level input because their follow-up
+  can request wider changes; their saved decisions also enter that feature's guardrails.
+- New queued reviews capture a versioned relevant-evidence basis. Browser requests also
+  identify the revision actually reviewed, so an old tab cannot approve against newer
+  evidence merely because the requirement wording still matches. Storage rechecks this
+  basis and pending work transactionally when applying the queue. New individual wording
+  proposals capture the same basis and become outdated on relevant evidence changes;
+  resolution proposals retain their existing exact pair/context checks.
+- Review and Project map retain editing notes when supporting context changes and ask
+  the user to acknowledge the updated information. Refinement/duplicate-removal actions
+  explain their blockers. Completed or conflicting historical work alone does not pause
+  fresh follow-up after a focused queue run.
+
+Legacy reviews/proposals without a captured basis retain their original target-only
+provenance checks; the upgrade does not invent an earlier evidence snapshot or require
+replaying completed work. See the [migration ledger](migrations.md#human-decision-availability-and-evidence-bases-2026-10-20).
+
+Verification (2026-10-20): type checking, all **321 deterministic tests**, the UI build,
+Playwright browser checks and diff whitespace checks passed. Browser coverage includes
+retaining an unapplied review while a related answer runs, preserving its note and
+explicitly resubmitting afterwards, and re-review after a feature-level addendum finishes.
+Screenshot: `.reqwizit-state/browser-decision-safety.png`. Tests used Node 20.11; the
+development baseline remains Node 22.12+. No live model calls were made. Vite reports
+a non-blocking warning for the approximately 505 kB minified main UI chunk.
+
+### Implementation ownership
 
 Assessment, main verification and coding hold a stable specification from startup
 through completion. Answers, notes and ordinary requirement reviews can still be
@@ -601,7 +734,14 @@ it centers a clickable processing summary between equal-width side columns: curr
 feature exploration, requirement cleanup, scan batch, implementation check, coding,
 verification, Git delivery or question help), stage, waiting count and
 items needing attention. Clicking opens **Processing & queue** in a right-side modal
-drawer over the workspace; **Stop** is available inside while active. Closing with
+drawer over the workspace. Beside the summary, **Stop discovery** is available while
+discovery is active, **Resume discovery** when paused, and **Process waiting answers**
+when saved or queued responses can be processed. These controls reuse the drawer's
+actions, selected feature scope and disabled states without opening the drawer;
+they wrap on narrow screens. Implementation and question-help cancellation remain
+task-specific controls inside the drawer, which also retains discovery controls.
+This is a presentation-only change; persisted data and pause/resume semantics are unchanged.
+Closing with
 Close, Escape or the backdrop restores focus to the header and leaves work running.
 The drawer uses the full screen on narrow viewports and keeps keyboard focus inside.
 OpenCode stages distinguish runtime startup, model/session preparation, awaiting the
@@ -611,6 +751,12 @@ an AI-generated account of internal reasoning or a completion percentage. The st
 wraps below the title/progress on narrow screens, and completed/stopped/error states
 remain in the header. Progress messages are transient; saved jobs retain their results
 and diagnostics as before.
+
+Header discovery controls verified (2026-10-20): type checking, all 296 deterministic
+tests, the UI build and Chromium browser checks passed. Browser checks exercise
+processing saved responses directly from the header, keyboard stopping, paused-state
+reload and resuming without opening the drawer, with header controls fitting 1440px
+and 390px viewports. No live model calls were used.
 
 The drawer aggregates the selected project's background work across all features.
 Concurrent work has separate task cards and cancellation controls; the header reports
