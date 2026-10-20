@@ -110,15 +110,72 @@ These actions share the same lease, cancellation and evidence checks as normal c
 Force never bypasses approval, source validation or main verification and is rejected
 for coding execution. Main verification commands still run on every check.
 
+**Preview assessment queue** performs a local capture and deterministic impact pass,
+without model calls, fetching main or running verification commands. It lists pending
+and reusable requirements with reasons before expensive assessment. It shares the
+worker lease/cancellation rules and saves an explicitly labeled preview, not a
+zero-item assessment. A subsequent Check refreshes the capture; the preview is not a
+promise that files will remain unchanged. Feature selection limits the queue/action.
+Every capture updates impact metadata for all approved requirements, so a check of one
+requirement can identify stale evidence elsewhere without inferring on it.
+
+Under **Implementation settings → Assessment reuse boundaries**, configure literal
+repository-relative files/directories per requirement or apply them to all currently
+approved requirements in a feature. Click **Apply boundary**, then save settings.
+Include implementation, tests and supporting modules; use **Shared code paths** for
+cross-cutting code. New requirements start repository-wide. These are human-reviewed
+impact/search boundaries, not inferred from citations or keyword similarity.
+
+- Blank boundaries retain repository-wide impact checking. Scoped checks monitor new,
+  changed and deleted files under the reviewed paths, root files, nested configuration,
+  shared paths, referenced evidence and transitive prerequisite scopes.
+- A prerequisite without a reviewed scope, an unmatched configured path, incomplete
+  watched capture or traversal limit widens impact checking to the repository.
+  Omission inventory changes invalidate reuse conservatively. Existing capture exclusions
+  and budgets still apply; uninspected bytes are not certified by a fingerprint.
+- A new scoped assessment searches the bounded capture within that boundary, with an
+  explicit boundary notice in the prompt. All detailed evidence-window paths are
+  retained in the footprint, even if the final result did not cite them. Citation-only
+  reuse cannot detect newly implemented behavior and is not used.
+- A new HEAD alone does not repeat inference when content/coverage inputs match.
+  Evidence retains its original dates and commit. **Reuse footprint** lists monitored
+  files and whether the boundary widened to repository-wide checking.
+- **Reuse equivalent local/main assessments** can also avoid a second semantic model
+  call when a compatible footprint, relevant decisions and selected model match the
+  target capture exactly. Main checks still run first. The copied target checkpoint
+  records its target snapshot plus `semanticOrigin`; the source checkpoint remains
+  unchanged. Forced checks bypass this reuse too. This is enabled in the new-settings
+  browser form; existing saved settings retain separate scope assessment until enabled.
+- **Mark for reassessment** queues one approved requirement, optionally with a reason,
+  without starting inference or erasing its result. The request persists across restart
+  and invalidates local/main freshness independently until each scope is checked. Main
+  delivery credit is withheld while its supporting assessment needs reassessment;
+  previous delivery evidence is retained. Settings/marking use execution CAS and reject
+  active-worker conflicts.
+
+New or changed reviewed boundaries require a fresh search once. Older checkpoints
+without footprints can be enriched without inference only when the exact saved capture
+fingerprint and other reuse inputs match and no new scoped search is required. See
+[migrations.md](migrations.md) for the additive compatibility and recovery contract.
+
+Incremental-impact verification (2026-10-19): type checking, all 224 deterministic
+tests, UI build and Playwright browser checks passed. Real-local-Git fixtures verify
+unchanged-content commits, scoped new/deleted files, unrelated-result reuse, narrow-run
+impact outside selected inference scope, manual marking, SQLite reopen/legacy enrichment,
+and equivalent local/main reuse with independent checks, divergent content and forced
+assessment. Browser checks exercise boundary saving, queue preview/reasons and manual
+marking, including mobile width. No live model calls were made. Automatic code-boundary
+inference and per-scenario test scheduling remain follow-on work.
+
 Requirement approval, assessment freshness, assessment result, the active attempt and
 Git delivery remain separate state dimensions. **Assessed** means a persisted current
 result; it does not mean the requirement is complete. **Needs reassessment** gives a
 reason: changed requirement/approval, supporting decisions/guardrails, workflow/skill,
 model or code snapshot. Freshness uses the latest captured snapshot for each scope;
-it is not live filesystem monitoring. A capture change is conservatively broad and may
-invalidate requirements whose previously cited files did not change. The next Check
-detects such code changes. New unrelated implementations can matter too, so reuse is
-not based solely on previously cited file hashes.
+it is not live filesystem monitoring. Check or queue preview detects captured changes.
+Reviewed footprints narrow invalidation; requirements without reviewed boundaries keep
+repository-wide checking. New files and search coverage matter too, so reuse is not
+based solely on previously cited file hashes.
 
 Run details distinguish reused and freshly assessed requirements and record whether
 the action was forced. Each completed requirement is checkpointed immediately in
@@ -160,7 +217,10 @@ assess current decisions; assessment does not require archiving a coding run.
 
 Completed requirement assessments are checkpointed individually. Running the same
 action again reuses results only when relevant task-context identity, requirement fingerprint,
-model, HEAD, scope, assessment semantic compatibility and captured-source/omission fingerprint match.
+model, assessment semantic compatibility and content/search/omission footprint match.
+Workspace/main remain separate checkpoints, with optional equivalent-content semantic
+reuse and independent main verification. Legacy checkpoints require exact capture
+equivalence before footprint enrichment.
 Unrelated revision changes allow reuse; changed relevant inputs need fresh inference.
 Older assessments without task-context identity remain revision-bound (undated ones
 need reassessment). Context identity is local cache metadata, excluded from portable
@@ -171,7 +231,8 @@ rerun on each main-verification request. Tooling failures keep previous dated
 assessment/delivery evidence; they do not certify current main anew.
 
 Workspace reconnection, HEAD changes and captured-source changes still stop assessment
-with an assessment-specific diagnostic. Coding execution retains strict revision checks
+within a running capture with an assessment-specific diagnostic. HEAD-only changes
+between separate actions no longer invalidate equivalent captured evidence. Coding execution retains strict revision checks
 and requires archiving/replanning after specification changes.
 
 Concurrent-assessment verification (2026-10-19): all 210 deterministic tests passed.

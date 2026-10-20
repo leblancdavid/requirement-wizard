@@ -81,6 +81,16 @@ test("implementation API authenticates actions, rejects stale settings and malfo
     assert.equal((await post("execution-start", { revision: project.revision, operation: "continue", requirementID: "invented" })).status, 400);
     assert.equal((await post("execution-start", { revision: project.revision, operation: "check", force: "true" })).status, 400);
     assert.equal((await post("execution-start", { revision: project.revision, operation: "continue", force: true })).status, 400);
+    assert.equal((await post("execution-start", { revision: project.revision, operation: "assess", preview: "true" })).status, 400);
+    assert.equal((await post("execution-start", { revision: project.revision, operation: "check", preview: true })).status, 400);
+    const mark = { revision: project.revision, version: store.execution(project.id).version, requirementID: project.requirements[0]!.id, reason: "External behavior changed" };
+    assert.equal((await post("execution-mark-assessment", mark, false)).status, 403);
+    assert.equal((await post("execution-mark-assessment", { ...mark, revision: 1 })).status, 409);
+    assert.equal((await post("execution-mark-assessment", { ...mark, requirementID: "unknown" })).status, 400);
+    assert.equal((await post("execution-mark-assessment", { ...mark, reason: "x".repeat(1001) })).status, 400);
+    assert.equal((await post("execution-mark-assessment", mark)).status, 200);
+    assert.equal((await post("execution-mark-assessment", mark)).status, 400, "Marking uses execution CAS");
+    assert.equal(store.execution(project.id).assessmentRequests?.[mark.requirementID]?.reason, mark.reason);
     assert.equal((await post("execution-archive", { version: 0 })).status, 400);
     const snapshot = await (await fetch(`${app.origin}/api/projects/${project.id}`, { headers })).json() as { execution: { delivered: object; config: { repository: string } }; implementationActive: boolean };
     assert.deepEqual(snapshot.execution.delivered, {}); assert.equal(snapshot.implementationActive, false);

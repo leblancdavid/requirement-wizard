@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
 import { ImplementationService } from "./implementation.js";
 import { GitDelivery, command, githubRepository, inspectWorkspaceRepository } from "./git-delivery.js";
-import { assessmentCurrent, emptyExecution, executionConfigSchema, implementationPlan, deliveredRequirement, validateAssessment } from "../core/execution.js";
+import { assessmentCurrent, assessmentFreshness, emptyExecution, executionConfigSchema, implementationPlan, deliveredRequirement, validateAssessment } from "../core/execution.js";
 import { requirementFingerprint } from "../core/implementation.js";
 import type { ExecutionAdapter, ExecutionRequest } from "../runtime/execution.js";
 import type { DeliveryUnit, ExecutionConfig } from "../core/execution.js";
@@ -113,6 +113,77 @@ async function until(service: ImplementationService, id: string) {
   assert.fail("Implementation did not finish");
 }
 
+test("scoped pending queue avoids unrelated inference, detects additions and deletion, preserves checkpoints on reopen and supports manual invalidation", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = await mkdtemp(resolve(".reqwizit-state/tests/scoped-assessment-")), root = join(directory, "repo");
+  await mkdir(root);
+  let store = new ProjectStore(join(directory, "state.sqlite")), service: ImplementationService | undefined;
+  let calls = 0;
+  const git = async (args: string[]) => { const result = await command(root, "git", args, AbortSignal.timeout(10000)); assert.equal(result.code, 0, result.output); };
+  const adapter: ExecutionAdapter = { async perform(request) {
+    calls++;
+    const context = JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"requirement"') + 1));
+    assert.ok(!request.coding);
+    return JSON.stringify({ status: "missing", explanation: "Implementation not found in inspected scope", evidenceIDs: [context.evidence[0].id], scenarios: [{ index: 0, status: "missing", explanation: "Restart behavior not established" }] });
+  } };
+  try {
+    await git(["init", "-b", "main"]);
+    await writeFile(join(root, "README.md"), "Fixture baseline\n"); await writeFile(join(root, ".gitignore"), ".requirement-wizard/\n");
+    await git(["add", "."]); await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Baseline"]);
+    await mkdir(join(root, "src", "a"), { recursive: true }); await mkdir(join(root, "src", "b"), { recursive: true });
+    await writeFile(join(root, "src", "a", "a.ts"), "export const a = 1;\n"); await writeFile(join(root, "src", "b", "b.ts"), "export const b = 1;\n");
+    const p = seed(store, 3), [a, b, c] = p.requirements.map((r) => r.id) as [string, string, string];
+    store.connectWorkspace(p.id, p.revision, root);
+    service = new ImplementationService(store, adapter);
+    const settings = config(); settings.assessmentScopes = { [a]: ["src/a"], [b]: ["src/b"] };
+    service.configure(p.id, p.revision, settings);
+    const run = async (preview = false, requirementID?: string) => {
+      service!.start(p.id, p.revision, "assess", { requirementID }, { preview }); await until(service!, p.id);
+      const state = service!.snapshot(p.id); assert.equal(state.assessmentRuns!.at(-1)!.status, "completed", state.assessmentStatus); return state;
+    };
+    let state = await run(true);
+    assert.equal(calls, 0); assert.equal(state.assessmentRuns!.at(-1)!.checks.length, 0);
+    assert.equal(Object.values(state.assessmentRuns!.at(-1)!.impacts!).filter((i) => !i.reusable).length, 3);
+    state = await run(); assert.equal(calls, 3);
+    const original = structuredClone(state.workspaceAssessments![a]!);
+    await git(["add", "src"]); await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Commit already assessed content"]);
+    state = await run(); assert.equal(calls, 3, "A new HEAD with identical captured contents reuses all semantic evidence");
+    assert.deepEqual(state.workspaceAssessments![a], original, "Reuse preserves original assessment provenance");
+    await writeFile(join(root, "src", "a", "new.ts"), "export const implemented = true;\n");
+    state = await run(true);
+    assert.equal(calls, 3); assert.equal(state.assessmentRuns!.at(-1)!.impacts![a]!.reusable, false);
+    assert.equal(state.assessmentRuns!.at(-1)!.impacts![b]!.reusable, true);
+    assert.equal(state.assessmentRuns!.at(-1)!.impacts![c]!.reusable, false, "Unscoped requirements remain repository-wide");
+    assert.match(assessmentFreshness(p, state, a).message, /new.ts/);
+    state = await run(false, a); assert.equal(calls, 4);
+    assert.equal(assessmentCurrent(p, state, b), true); assert.equal(assessmentCurrent(p, state, c), false, "Narrow checks publish impact for unselected requirements");
+    state = await run(); assert.equal(calls, 5); assert.equal(state.assessmentRuns!.at(-1)!.reused, 2);
+    await rm(join(root, "src", "a", "new.ts"));
+    state = await run(true); assert.match(assessmentFreshness(p, state, a).message, /new.ts/);
+    state = await run(); assert.equal(calls, 7);
+    await service.close(); store.close(); store = new ProjectStore(join(directory, "state.sqlite")); service = new ImplementationService(store, adapter);
+    state = await run(); assert.equal(calls, 7, "Scoped checkpoints survive reopening SQLite");
+    const old = structuredClone(state.workspaceAssessments![b]);
+    service.markForAssessment(p.id, p.revision, b, "External behavior changed", state.version);
+    state = service.snapshot(p.id); assert.equal(calls, 7); assert.equal(assessmentFreshness(p, state, b).reason, "manual");
+    assert.deepEqual(state.workspaceAssessments![b], old, "Marking retains dated evidence");
+    assert.throws(() => service!.markForAssessment(p.id, p.revision, a, "stale", state.version - 1), /state changed/);
+    state = await run(); assert.equal(calls, 8); assert.equal(assessmentCurrent(p, state, b), true);
+    assert.throws(() => service!.start(p.id, p.revision, "check", {}, { preview: true }), /workspace assessment only/);
+    // Additive legacy upgrade: exact old captures can be enriched without inference.
+    const legacy = structuredClone(state); delete legacy.workspaceAssessments![c]!.footprint; delete legacy.assessments[c]!.footprint; store.saveExecution(p.id, legacy);
+    await service.close(); store.close(); store = new ProjectStore(join(directory, "state.sqlite")); service = new ImplementationService(store, adapter);
+    state = await run(); assert.equal(calls, 8); assert.equal(state.workspaceAssessments![c]!.footprint?.version, 1);
+    // Changing a reviewed boundary requires one new scoped search, not invented provenance.
+    const changed = { ...settings, assessmentScopes: { ...settings.assessmentScopes, [b]: ["src/b", "src/a"] } };
+    service.configure(p.id, p.revision, changed, state.version);
+    state = await run(true); assert.match(assessmentFreshness(p, state, b).message, /scope/);
+    state = await run(); assert.equal(calls, 9);
+    await writeFile(join(root, "package.json"), '{"name":"changed-shared-configuration"}\n');
+    state = await run(true); assert.ok(Object.values(state.assessmentRuns!.at(-1)!.impacts!).every((i) => !i.reusable));
+  } finally { await service?.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test("workspace assessment skips remote preflight, compacts omission metadata, reuses results, and retains failed main-check output", async () => {
   await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
   const directory = await mkdtemp(resolve(".reqwizit-state/tests/assessment-run-")), root = join(directory, "repo"), remote = join(directory, "remote.git");
@@ -154,6 +225,8 @@ test("workspace assessment skips remote preflight, compacts omission metadata, r
     assert.equal(published.implementationDelivery[0].assessment.model, undefined, "Local model/cache selection does not enter portable artifacts");
     assert.equal(published.implementationDelivery[0].assessment.captureFingerprint, undefined);
     assert.equal(published.implementationDelivery[0].assessment.contextFingerprint, undefined);
+    assert.equal(published.implementationDelivery[0].assessment.footprint, undefined, "Impact cache metadata remains local");
+    assert.equal(published.implementationDelivery[0].assessment.requestToken, undefined);
     assert.match(state.assessments[r.id]!.evidenceIDs[0]!, /^workspace:/, "Short model handles resolve back to captured provenance");
     // Prior confirmed delivery is not erased by a failed attempt to rerun tooling.
     state.delivered[r.id] = { fingerprint: requirementFingerprint(r), main: state.assessments[r.id]!.head, repository: settings.repository, at: new Date().toISOString(), checks: [] }; store.saveExecution(p.id, state);
@@ -172,6 +245,50 @@ test("workspace assessment skips remote preflight, compacts omission metadata, r
     assert.throws(() => service!.start(p.id, p.revision, "assess"), /Project changed/);
     service.start(p.id, store.get(p.id).revision, "assess"); await until(service, p.id);
     assert.equal(calls, 2, "A changed relevant specification context invalidates cached assessment context");
+  } finally { await service?.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("opt-in equivalent local/main content reuses semantics while main checks, divergence, force and failures remain independent", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = await mkdtemp(resolve(".reqwizit-state/tests/equivalent-assessment-")), root = join(directory, "repo"), remote = join(directory, "remote.git");
+  await mkdir(root);
+  const git = async (cwd: string, args: string[]) => { const result = await command(cwd, "git", args, AbortSignal.timeout(10000)); assert.equal(result.code, 0, result.output); };
+  const store = new ProjectStore(":memory:"); let service: ImplementationService | undefined, calls = 0;
+  class FixtureGit extends GitDelivery {
+    override async preflight() { await this.git(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]); return root; }
+  }
+  try {
+    await git(directory, ["init", "--bare", remote]); await git(root, ["init", "-b", "main"]);
+    await writeFile(join(root, "README.md"), "Complete restart behavior\n"); await writeFile(join(root, ".gitignore"), ".requirement-wizard/\n");
+    // Keep fixture bytes identical under hosts with Git autocrlf enabled.
+    await writeFile(join(root, ".gitattributes"), "* -text\n");
+    await git(root, ["add", "."]); await git(root, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Baseline"]);
+    await git(root, ["remote", "add", "origin", remote]); await git(root, ["push", "origin", "main"]);
+    const p = seed(store, 1), id = p.requirements[0]!.id; store.connectWorkspace(p.id, p.revision, root);
+    service = new ImplementationService(store, { async perform(request) {
+      calls++;
+      const context = JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"requirement"') + 1));
+      const status = request.prompt.includes("DIVERGENT") ? "partial" : "complete";
+      return JSON.stringify({ status, explanation: "Captured behavior", evidenceIDs: [context.evidence[0].id], scenarios: [{ index: 0, status, explanation: "Captured restart evidence" }] });
+    } }, (path, config, signal) => new FixtureGit(path, config, signal));
+    const settings = config(); settings.reuseEquivalentScopes = true; service.configure(p.id, p.revision, settings);
+    const check = async (force = false) => { service!.start(p.id, p.revision, "check", {}, { force }); await until(service!, p.id); return service!.snapshot(p.id); };
+    let state = await check();
+    assert.deepEqual(state.mainAssessments![id]!.footprint, state.workspaceAssessments![id]!.footprint, "Owned publication metadata does not distinguish equivalent code captures");
+    assert.equal(calls, 1, "Identical local/main content needs only one inference");
+    assert.equal(state.assessmentRuns!.at(-1)!.reused, 1); assert.equal(state.assessmentRuns!.at(-1)!.checks[0]!.exitCode, 0);
+    assert.deepEqual(state.mainAssessments![id]!.semanticOrigin, { scope: "workspace", head: state.workspaceAssessments![id]!.head, capturedAt: state.workspaceAssessments![id]!.capturedAt });
+    assert.equal(state.workspaceAssessments![id]!.verified, false); assert.equal(state.mainAssessments![id]!.verified, true);
+    assert.equal(deliveredRequirement(p, state, id), true);
+    state = await check(); assert.equal(calls, 1, "Both saved checkpoints remain reusable");
+    await writeFile(join(root, "README.md"), "DIVERGENT incomplete local behavior\n");
+    state = await check(); assert.equal(calls, 2);
+    assert.equal(state.workspaceAssessments![id]!.status, "partial"); assert.equal(state.mainAssessments![id]!.status, "complete");
+    state = await check(true); assert.equal(calls, 4, "Force bypasses same-scope and cross-scope reuse");
+    settings.checks = ['node -e "process.exit(3)"']; service.configure(p.id, p.revision, settings, state.version);
+    state = await check(); assert.equal(calls, 4);
+    assert.equal(state.assessmentRuns!.at(-1)!.status, "failed"); assert.equal(state.assessmentRuns!.at(-1)!.checks[0]!.exitCode, 3);
+    assert.equal(state.mainAssessments![id]!.status, "complete", "Failed verification retains dated main evidence");
   } finally { await service?.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

@@ -11,6 +11,8 @@ const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4
 const legacyIdentity = z.tuple([z.record(z.unknown()), z.array(z.string()), z.string()]);
 const savedIdentity = z.object({ contextFingerprint: z.string().optional(), legacyContextFingerprint: z.string().optional() }).passthrough();
 const savedAssessment = savedIdentity.extend({ contextPolicy: z.string().optional(), compatibility: z.string().optional(),
+  footprint: z.object({ version: z.literal(1), policy: z.string(), fingerprint: z.string(), files: z.array(z.object({ path: z.string(), hash: z.string(), ranges: z.string() })), omissionsFingerprint: z.string(), broad: z.boolean() }).strict().optional(),
+  semanticOrigin: z.object({ scope: z.enum(["workspace", "main"]), head: z.string(), capturedAt: z.string() }).strict().optional(),
   skill: z.object({ name: z.string(), version: z.string() }).passthrough().optional() });
 const executionEnvelope = z.object({ schemaVersion: z.number().int().nonnegative().optional(), version: z.number().int().nonnegative(),
   assessments: z.record(savedAssessment), workspaceAssessments: z.record(savedAssessment).optional(), mainAssessments: z.record(savedAssessment).optional(),

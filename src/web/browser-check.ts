@@ -468,19 +468,29 @@ try {
   await expect(implementationPanel.getByRole("button", { name: "Detect again", exact: true })).toBeEnabled();
   await expect(implementationPanel.getByLabel("Verification commands · one per line", { exact: true })).toHaveValue("npm run custom-verification");
   await implementationPanel.getByRole("button", { name: "Use suggested commands", exact: true }).click();
-  await expect(implementationPanel.getByLabel("Verification commands · one per line", { exact: true })).toHaveValue("npm run check\nnpm run test");
-  await implementationPanel.getByRole("button", { name: "Save implementation settings", exact: true }).click();
+   await expect(implementationPanel.getByLabel("Verification commands · one per line", { exact: true })).toHaveValue("npm run check\nnpm run test");
+   await implementationPanel.getByText(/Assessment reuse boundaries ·/, { exact: false }).click();
+   const boundarySelector = implementationPanel.getByLabel("Assessment boundary to configure", { exact: true });
+   await boundarySelector.selectOption((await boundarySelector.locator("option").nth(1).getAttribute("value"))!);
+   await implementationPanel.getByLabel("Shared assessment paths", { exact: true }).fill("src/shared");
+   await implementationPanel.getByLabel("Reviewed assessment paths", { exact: true }).fill("src/jobs\ntests/jobs");
+   await implementationPanel.getByRole("button", { name: "Apply boundary to 1 requirements", exact: true }).click();
+   await expect(implementationPanel.getByText(/Assessment reuse boundaries ·/, { exact: false })).toContainText("1 / 1 scoped");
+   await implementationPanel.getByRole("button", { name: "Save implementation settings", exact: true }).click();
   await expect(implementationPanel.getByRole("button", { name: /Continue implementation/ })).toBeEnabled();
    await expect(implementationPanel.getByRole("button", { name: "Check implementation", exact: true })).toBeEnabled();
    const featureFilter = page.getByRole("combobox", { name: "Filter by feature", exact: true });
    const forcedFeature = await featureFilter.inputValue();
    assert.notEqual(forcedFeature, "all", "Earlier feature selection is retained in the implementation view");
    await featureFilter.selectOption("all");
-   let implementationCheckRequest: { operation: string; revision: number; force?: boolean; requirementID?: string; epicID?: string } | undefined;
+    let implementationCheckRequest: { operation: string; revision: number; force?: boolean; preview?: boolean; requirementID?: string; epicID?: string } | undefined;
   await page.route("**/api/projects/*/execution-start", async (route) => {
     implementationCheckRequest = route.request().postDataJSON();
     await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
-   }, { times: 4 });
+   }, { times: 5 });
+   await implementationPanel.getByRole("button", { name: "Preview assessment queue", exact: true }).click();
+   await expect.poll(() => implementationCheckRequest?.preview).toBe(true);
+   assert.equal(implementationCheckRequest?.operation, "assess"); assert.equal(implementationCheckRequest?.force, undefined);
   await implementationPanel.getByRole("button", { name: "Check implementation", exact: true }).click();
   await expect.poll(() => implementationCheckRequest?.operation).toBe("check");
    assert.equal(typeof implementationCheckRequest?.revision, "number");
@@ -511,7 +521,11 @@ try {
    await implementationPanel.getByRole("button", { name: "Reassess", exact: true }).click();
    await expect.poll(() => typeof implementationCheckRequest?.requirementID).toBe("string");
    assert.equal(implementationCheckRequest?.force, true); assert.equal(implementationCheckRequest?.epicID, undefined);
-  await expect(implementationPanel.locator(".requirement-detail .badge")).toHaveText("Not assessed");
+   await expect(implementationPanel.locator(".requirement-detail .badge")).toHaveText("Not assessed");
+   await implementationPanel.locator(".requirement-detail").getByText("Mark for reassessment", { exact: true }).first().click();
+   await implementationPanel.getByLabel("Reason (optional)", { exact: true }).fill("External behavior changed");
+   await implementationPanel.getByRole("button", { name: "Mark for reassessment", exact: true }).click();
+   await expect(implementationPanel.getByText("Manual reassessment requested: External behavior changed", { exact: true })).toBeVisible();
   await page.screenshot({ path: ".reqwizit-state/browser-implementation.png", fullPage: true });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await appearance.getByRole("button", { name: "Midnight theme", exact: true }).click();
@@ -970,8 +984,21 @@ try {
       await expect(listPanel.locator(".feature-group")).toHaveCount(0);
       await expect(listPanel.getByRole("heading", { name: "No requirements match these filters.", exact: true })).toBeVisible();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Failed assessment diagnostics and command output fit mobile width");
-      await page.screenshot({ path: ".reqwizit-state/browser-assessment-failure.png", fullPage: true });
-      const blockedState = store.execution(listing.id);
+       await page.screenshot({ path: ".reqwizit-state/browser-assessment-failure.png", fullPage: true });
+       const previewState = store.execution(listing.id);
+       previewState.assessmentRuns!.push({ ...previewState.assessmentRuns![0]!, id: "fixture-impact-preview", operation: "assess", preview: true, status: "completed", diagnostic: undefined, checks: [],
+         stage: "Queue preview: 1 pending · 3 reusable. No model calls or verification commands run.",
+         impacts: Object.fromEntries(listing.requirements.map((r, index) => [r.id, { reusable: index !== 1, reason: index === 1 ? "Relevant code added, changed or removed: src/auth/reset.ts." : "Relevant code and search scope are unchanged." }])) });
+       store.saveExecution(listing.id, previewState);
+       await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
+       const previewRun = listPanel.getByRole("region", { name: "Assessment run" });
+       await expect(previewRun.getByRole("heading")).toContainText("Assessment queue preview");
+       await previewRun.getByText("Assessment queue · 1 pending · 3 reusable at capture", { exact: true }).click();
+       await expect(previewRun).toContainText("src/auth/reset.ts");
+       await expect(previewRun).toContainText("No model calls or verification commands run");
+       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Assessment queue reasons fit mobile width");
+       await page.screenshot({ path: ".reqwizit-state/browser-assessment-queue.png", fullPage: true });
+       const blockedState = store.execution(listing.id);
       blockedState.assessmentStatus = "Workspace assessment blocked: 0/4 requirements assessed. Context blocked before inference.";
       const requirementContext = { policy: "requirement-isolation-v1", requirementID: receipt.id, budget: 48000, characters: 37000, promptCharacters: 29000, historyCharacters: 0, reserveCharacters: 8000 };
       blockedState.assessmentRuns!.push({ ...blockedState.assessmentRuns![0]!, id: "fixture-context-block", operation: "assess", status: "blocked", stage: "Requirement context preflight", diagnostic: "Context blocked before inference; mandatory human decisions were retained.", checks: [],

@@ -30,6 +30,11 @@ implemented under `src/`. See [decisions.md](decisions.md),
   content-aware context budgeting and cache invalidation. SQLite retains per-scope
   assessment checkpoints independently of active attempts; incremental and forced
   checks share the same orchestration and validation.
+- `src/core/assessment-impact.ts` and `src/storage/assessment.ts`: reviewed impact/search
+  boundaries, conservative prerequisite/shared/configuration closure and versioned content
+  footprints. The service publishes a model-free pending queue, preserves legacy exact
+  capture reuse, and optionally shares equivalent semantic evidence across workspace/main
+  while retaining separate main command execution and delivery evidence.
 - `src/runtime/`: shared owned-server lifecycle, provider validation, and discovery adapter.
 - `src/providers/`: app-owned protected ChatGPT credentials, OAuth attempt lifecycle,
   connection service, account catalog/probe, and direct/legacy discovery dispatch.

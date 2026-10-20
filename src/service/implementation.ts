@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ProjectStore } from "../storage/store.js";
 import { captureWorkspace } from "../storage/scan.js";
-import { assessmentCaptureFingerprint, assessmentContext, assertAssessmentCaptureCurrent, type AssessmentCapture } from "../storage/assessment.js";
+import { assessmentCaptureFingerprint, assessmentContext, assessmentFootprint, assessmentImpactReason, assertAssessmentCaptureCurrent, type AssessmentCapture } from "../storage/assessment.js";
 import { requirementFingerprint } from "../core/implementation.js";
-import { executionConfigSchema, eligibleRequirements, implementationPlan, deliveredRequirement, assessmentCurrent, prerequisiteOnBranch, invalidateDelivery, validateAssessment,
+import { executionConfigSchema, eligibleRequirements, implementationPlan, deliveredRequirement, assessmentCurrent, assessmentFreshness, prerequisiteOnBranch, invalidateDelivery, validateAssessment,
   type Assessment, type AssessmentRun, type DeliveryUnit, type ExecutionConfig, type ExecutionRun, type ExecutionState } from "../core/execution.js";
 import { StaleRevisionError, type Project } from "../core/model.js";
 import { OpenCodeExecution, type ExecutionAdapter } from "../runtime/execution.js";
@@ -41,8 +41,18 @@ export class ImplementationService {
     for (const [target, dependencies] of Object.entries(config.dependencies)) {
       if (!project.requirements.some((r) => r.id === target) || dependencies.some((dependency) => !project.requirements.some((r) => r.id === dependency) || dependency === target)) throw new Error("Dependencies must reference existing distinct requirements.");
     }
+    if (Object.keys(config.assessmentScopes ?? {}).some((id) => !project.requirements.some((r) => r.id === id))) throw new Error("Assessment scopes must reference existing requirements.");
     if (config.strategy === "branch" && config.branch === "main") throw new Error("Select Commit to main for direct main delivery.");
     state.config = config; implementationPlan(project, state); this.store.saveExecution(id, state); return state;
+  }
+  markForAssessment(id: string, revision: number, requirementID: string, reason: string, expectedVersion: number) {
+    if (this.store.get(id).revision !== revision) throw new StaleRevisionError();
+    if (this.isActive(id)) throw new Error("Stop active implementation before marking requirements for reassessment.");
+    if (!eligibleRequirements(this.store.get(id)).some((r) => r.id === requirementID)) throw new Error("Choose an approved requirement to mark for reassessment.");
+    const state = this.store.execution(id);
+    if (state.version !== expectedVersion) throw new Error("Implementation state changed. Refresh before marking requirements.");
+    (state.assessmentRequests ??= {})[requirementID] = { token: randomUUID(), at: new Date().toISOString(), reason: z.string().trim().max(1000).parse(reason) || "Requested by user" };
+    this.store.saveExecution(id, state); return state;
   }
   archive(id: string, expectedVersion?: number) {
     if (this.store.executionActive(id) || this.work.has(id)) throw new Error("Stop implementation before archiving a run.");
@@ -56,7 +66,8 @@ export class ImplementationService {
     this.work.get(id)?.controller.abort();
   }
   async close() { for (const work of this.work.values()) work.controller.abort(); await Promise.allSettled([...this.work.values()].map((w) => w.promise)); }
-  start(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope = {}, options: { force?: boolean } = {}) {
+  start(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope = {}, options: { force?: boolean; preview?: boolean } = {}) {
+    if (options.preview && (operation !== "assess" || options.force)) throw new Error("Queue preview is a non-forced workspace assessment only.");
     if (options.force && operation === "continue") throw new Error("Force reassessment applies only to assessment, not coding execution.");
     if (this.work.has(id) || this.store.executionActive(id)) throw new Error("Implementation is already active for this project.");
     if (this.store.get(id).revision !== revision) throw new StaleRevisionError();
@@ -64,13 +75,13 @@ export class ImplementationService {
     if (!this.store.execution(id).config) throw new Error("Save implementation settings first.");
     if (operation !== "continue" && !eligibleRequirements(this.store.get(id)).some((r) => (!scope.epicID || r.epicID === scope.epicID) && (!scope.requirementID || r.id === scope.requirementID))) throw new Error("No approved requirements in the selected scope. Approve requirements in Review or choose another feature before assessing.");
     const controller = new AbortController();
-    const promise = this.perform(id, revision, operation, scope, controller.signal, options.force ?? false);
+    const promise = this.perform(id, revision, operation, scope, controller.signal, options.force ?? false, options.preview ?? false);
     this.work.set(id, { controller, promise, operation });
     void promise.finally(() => this.work.delete(id)).catch(() => {});
   }
   isActive(id: string) { return this.work.has(id) || this.store.executionActive(id); }
   operation(id: string) { return this.work.get(id)?.operation; }
-  private async perform(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope, signal: AbortSignal, force: boolean) {
+  private async perform(id: string, revision: number, operation: "check" | "assess" | "verify-main" | "continue", scope: Scope, signal: AbortSignal, force: boolean, preview: boolean) {
     const owner = randomUUID(); let claimed = false, timer: ReturnType<typeof setInterval> | undefined;
     let state = this.store.execution(id);
     const binding = this.store.workspace(id)!;
@@ -79,7 +90,7 @@ export class ImplementationService {
     const requirements = eligibleRequirements(project).filter((r) => (!scope.epicID || r.epicID === scope.epicID) && (!scope.requirementID || r.id === scope.requirementID));
     const newAssessmentRun = (phase: AssessmentRun["operation"]): AssessmentRun => ({
       id: randomUUID(), operation: phase, revision, bindingID: binding.bindingID!, status: "running", stage: "Preparing repository", requirementIDs: requirements.map((r) => r.id), completedIDs: [], reused: 0,
-      startedAt: new Date().toISOString(), checks: [], progress: [], force, freshIDs: [],
+      startedAt: new Date().toISOString(), checks: [], progress: [], force, freshIDs: [], preview,
     });
     let assessmentRun = operation === "continue" ? undefined : newAssessmentRun(operation === "check" ? "assess" : operation);
     let localSummary = "";
@@ -134,17 +145,79 @@ export class ImplementationService {
               omissions: capture.snapshot.omitted.length, traversalLimited: capture.snapshot.traversalLimited, omitted: capture.snapshot.omitted }; save();
             const scope = phase === "verify-main" ? "main" : "workspace";
             const results = scope === "main" ? (state.mainAssessments ??= {}) : (state.workspaceAssessments ??= {});
+            // Publish an impact pass for all approved requirements, including those
+            // outside the selected inference scope. A narrow check still detects
+            // stale evidence elsewhere without making additional model calls.
+            const footprints = new Map<string, ReturnType<typeof assessmentFootprint>>();
+            const reusableSources = new Map<string, Assessment>();
+            assessmentRun!.impacts = {};
+            for (const r of eligibleRequirements(project)) {
+              const previous = results[r.id] ?? (state.assessments[r.id]?.scope === scope ? state.assessments[r.id] : undefined);
+              try {
+                const footprint = assessmentFootprint(project, r.id, state.config!, capture, (previous?.footprint?.files ?? previous?.files)?.map((f) => f.path));
+                footprints.set(r.id, footprint);
+                assessmentRun!.impacts[r.id] = { fingerprint: footprint.fingerprint, policy: footprint.policy, reusable: false, reason: assessmentImpactReason(previous?.footprint, footprint) };
+              } catch (error) {
+                // Unresolved evidence on an unselected target must not block an
+                // otherwise valid narrow assessment. It cannot authorize reuse.
+                assessmentRun!.impacts[r.id] = { reusable: false, reason: `Impact scope unresolved: ${safeMessage(error)}` };
+              }
+            }
+            for (const r of eligibleRequirements(project)) {
+              if (!footprints.has(r.id)) continue;
+              const previous = results[r.id] ?? (state.assessments[r.id]?.scope === scope ? state.assessments[r.id] : undefined);
+              const impact = assessmentRun!.impacts[r.id]!;
+              const fresh = assessmentFreshness(project, state, r.id, previous);
+              const codeMatches = previous?.footprint ? previous.footprint.fingerprint === impact.fingerprint
+                : previous?.captureFingerprint === fingerprint;
+              impact.reusable = !force && !!previous && previous.scope === scope && previous.compatibility === assessmentCompatibility && fresh.status === "current" && codeMatches
+                && previous.model?.providerID === state.config!.providerID && previous.model.modelID === state.config!.modelID;
+              if (force) impact.reason = "Explicit forced reassessment.";
+              else if (fresh.status !== "current") impact.reason = fresh.message;
+              else if (!impact.reusable) impact.reason = "Saved checkpoint lacks compatible reuse metadata; previous evidence is retained.";
+              if (impact.reusable) reusableSources.set(r.id, previous!);
+              else if (!force && state.config!.reuseEquivalentScopes) {
+                const other = (scope === "main" ? state.workspaceAssessments : state.mainAssessments)?.[r.id];
+                if (other?.footprint && other.compatibility === assessmentCompatibility
+                  && other.model?.providerID === state.config!.providerID && other.model.modelID === state.config!.modelID
+                  && assessmentCurrent(project, { ...state, assessmentRuns: [] }, r.id, other)) {
+                  const equivalent = assessmentFootprint(project, r.id, state.config!, capture, other.footprint.files.map((file) => file.path));
+                  if (other.footprint.fingerprint === equivalent.fingerprint) {
+                    footprints.set(r.id, equivalent); reusableSources.set(r.id, other);
+                    impact.fingerprint = equivalent.fingerprint; impact.policy = equivalent.policy; impact.reusable = true;
+                    impact.reason = `Equivalent ${other.scope} content and decision evidence; reuse semantic assessment. Main verification remains independent.`;
+                  }
+                }
+              }
+            }
+            const pending = requirements.filter((r) => !assessmentRun!.impacts![r.id]!.reusable).length;
+            progress(`Assessment queue: ${pending} need assessment · ${requirements.length - pending} unchanged results reusable.`);
+            await assertAssessmentCaptureCurrent(directory, capture, signal, true);
+            if (preview) {
+              if (await target.head() !== head) throw new Error("Repository HEAD changed during queue preview. Refresh the queue.");
+              assessmentRun!.status = "completed"; assessmentRun!.finishedAt = new Date().toISOString();
+              assessmentRun!.stage = `Queue preview: ${pending} pending · ${requirements.length - pending} reusable. No model calls or verification commands run.`;
+              state.assessmentStatus = assessmentRun!.stage; save();
+              continue;
+            }
             for (const r of requirements) {
               current(); assessmentRun!.currentRequirementID = r.id;
-              const previous = results[r.id] ?? (state.assessments[r.id]?.scope === scope ? state.assessments[r.id] : undefined);
-              const reusable = !force && !!previous && previous.compatibility === assessmentCompatibility
-                && assessmentCurrent(project, state, r.id, previous) && previous.head === head && previous.scope === scope && previous.captureFingerprint === fingerprint
-                && previous.model?.providerID === state.config!.providerID && previous.model.modelID === state.config!.modelID;
+              const previous = reusableSources.get(r.id);
+              const reusable = assessmentRun!.impacts[r.id]!.reusable;
               progress(`${reusable ? "Reusing unchanged assessment" : "Assessing requirement"} ${assessmentRun!.completedIDs.length + 1}/${requirements.length}: ${r.statement}`);
-              const assessed = reusable ? structuredClone(previous) : await this.assess(project, r.id, target, scope, signal, progress, capture,
+              const assessed = reusable ? structuredClone(previous!) : await this.assess(project, r.id, target, scope, signal, progress, capture,
                 (sessionID) => { assessmentRun!.sessionID = sessionID; (assessmentRun!.sessions ??= {})[r.id] = [...(assessmentRun!.sessions?.[r.id] ?? []), sessionID]; save(); },
                 (context) => { (assessmentRun!.contexts ??= {})[r.id] = context; save(); });
-              if (reusable) { assessmentRun!.reused++; await assertAssessmentCaptureCurrent(directory, capture, signal); }
+              // Exact legacy capture equivalence permits additive enrichment without
+              // inventing historical file boundaries or changing original evidence dates.
+              if (reusable && !assessed.footprint) assessed.footprint = footprints.get(r.id)!;
+              if (reusable && assessed.scope !== scope) {
+                assessed.semanticOrigin ??= { scope: assessed.scope, head: assessed.head, capturedAt: assessed.capturedAt };
+                assessed.scope = scope; assessed.head = head; assessed.capturedAt = capture.snapshot.capturedAt;
+                assessed.captureFingerprint = fingerprint; assessed.verified = false;
+              }
+              if (reusable) assessmentRun!.reused++;
+              assessmentRun!.impacts[r.id]!.fingerprint = assessed.footprint?.fingerprint ?? footprints.get(r.id)!.fingerprint;
               current();
               if (await target.head() !== head) throw new Error("Repository HEAD changed during assessment.");
               results[r.id] = assessed;
@@ -160,6 +233,7 @@ export class ImplementationService {
               state.assessmentStatus = `${localSummary}Assessed ${assessmentRun!.completedIDs.length}/${requirements.length} approved requirements against ${scope === "main" ? "verified main" : "the working folder"}.`;
               save();
             }
+            await assertAssessmentCaptureCurrent(directory, capture, signal, true);
             assessmentRun!.status = "completed"; assessmentRun!.finishedAt = new Date().toISOString(); assessmentRun!.stage = "Completed";
             const counts = { complete: 0, partial: 0, missing: 0, unknown: 0 };
             for (const r of requirements) counts[results[r.id]!.status]++;
@@ -347,8 +421,12 @@ export class ImplementationService {
     const scan = captured ?? await captureWorkspace(git.directory, undefined, signal);
     await assertAssessmentCaptureCurrent(git.directory, scan, signal);
     let requested: string[] = [];
+    const inspected = new Set<string>();
+    const boundary = assessmentFootprint(project, id, git.config, scan);
+    const impactPaths = boundary.broad ? undefined : new Set(boundary.files.map((file) => file.path));
     for (let pass = 0; pass < 3; pass++) {
-      const { text, sourceIDs, availableEvidenceIDs, deferredEvidenceIDs, context } = assessmentContext(r, scan, { project, dependencyIDs: git.config.dependencies[id], dependencyGraph: git.config.dependencies, requestEvidenceIDs: requested });
+      const { text, sourceIDs, availableEvidenceIDs, deferredEvidenceIDs, context } = assessmentContext(r, scan, { project, dependencyIDs: git.config.dependencies[id], dependencyGraph: git.config.dependencies, requestEvidenceIDs: requested, impactPaths });
+      for (const sourceID of sourceIDs.values()) inspected.add(sourceID);
       onContext(context); progress(`Assessing acceptance (${pass + 1}/3 evidence windows): ${r.statement}`);
       const prompt = assessmentPrompt(text);
       const cannotFit = deferredEvidenceIDs.length > 0 && sourceIDs.size === 0;
@@ -357,7 +435,7 @@ export class ImplementationService {
         scenarios: r.acceptance.map((_, index) => ({ index, status: "unknown", explanation: unavailable })) })
         : await this.adapter.perform({ directory: git.directory, config: git.config, coding: false, signal, requirementID: id, onSession, onProgress: progress, onContext, prompt });
       if (await git.head() !== head) throw new Error("Repository HEAD changed during assessment. Refresh the source snapshot.");
-      await assertAssessmentCaptureCurrent(git.directory, scan, signal);
+      await assertAssessmentCaptureCurrent(git.directory, scan, signal, true);
       const result = validateAssessment(JSON.parse(response), r, [...sourceIDs.keys()]);
       const more = result.requestEvidenceIDs ?? [];
       if (more.length) {
@@ -379,6 +457,8 @@ export class ImplementationService {
       }
       result.evidenceIDs = result.evidenceIDs.map((id) => sourceIDs.get(id)!); result.requestEvidenceIDs = undefined;
       return { ...result, compatibility: assessmentCompatibility, fingerprint: requirementFingerprint(r), head, scope, verified: false, capturedAt: scan.snapshot.capturedAt, contextPolicy: executionContextPolicy,
+        footprint: assessmentFootprint(project, id, git.config, scan, scan.snapshot.files.filter((f) => inspected.has(f.sourceID)).map((f) => f.path)),
+        requestToken: this.store.execution(project.id).assessmentRequests?.[id]?.token,
         captureFingerprint: assessmentCaptureFingerprint(scan), contextFingerprint: assessmentContextFingerprint(project, id, git.config.dependencies), specificationRevision: project.revision, model: { providerID: git.config.providerID, modelID: git.config.modelID },
         skill: { name: assessmentSkill.name, version: assessmentSkill.version },
         files: scan.snapshot.files.filter((f) => result.evidenceIDs.includes(f.sourceID)).map((f) => ({ path: f.path, hash: f.hash, startLine: f.startLine ?? 1, endLine: f.endLine ?? f.lines })), omissions: scan.snapshot.omitted.length };

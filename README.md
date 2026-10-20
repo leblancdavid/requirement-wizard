@@ -36,6 +36,12 @@ for setup, deterministic verification and remaining live-qualification gaps.
 Implementation checks reuse current saved assessments; **Reassess all**, feature and
 individual controls explicitly bypass reuse. Owned OpenCode assessment/coding sessions
 load bundled role-specific skills, while Reqwizit owns state and Git delivery.
+**Preview assessment queue** shows pending/reusable requirements and reasons without
+model calls. Reviewed code boundaries can be applied per feature/requirement in
+Implementation settings to avoid rechecking unrelated changes; blank boundaries keep
+repository-wide checking. Equivalent-content commits reuse evidence, and optional
+local/main semantic reuse still runs main verification. Individual **Mark for
+reassessment** queues known changes while preserving previous results.
 Execution data upgrades use transactional forward migrations with original-payload
 backups. Compatible assessment workflow changes preserve saved results; see the
 [migration ledger](docs/migrations.md) for supported formats and recovery behavior.

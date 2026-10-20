@@ -142,7 +142,7 @@ export function renderWorkspace(project: Project, execution?: ExecutionState): R
     const unit = [...(execution.run?.units ?? []), ...execution.history.flatMap((h) => h.units)].find((u) => u.items.some((i) => i.requirementID === r.id));
     const item = unit?.items.find((i) => i.requirementID === r.id);
     const assessment = execution.assessments[r.id];
-    const { model: _model, captureFingerprint: _cache, contextFingerprint: _context, ...portableAssessment } = assessment ?? {};
+    const { model: _model, captureFingerprint: _cache, contextFingerprint: _context, footprint: _impact, requestToken: _request, ...portableAssessment } = assessment ?? {};
     const { contextFingerprint: _deliveryContext, ...portableDelivery } = execution.delivered[r.id] ?? {};
     return { requirementID: r.id, implemented: deliveredRequirement(project, execution, r.id), assessment: assessment ? portableAssessment : null,
       execution: item?.status ?? "not-started", git: unit?.delivery ?? "none", commit: item?.commit ?? null, pr: unit?.pr ?? null, delivery: execution.delivered[r.id] ? portableDelivery : null };

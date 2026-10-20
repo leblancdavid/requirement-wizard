@@ -4,6 +4,7 @@ import { requirementFingerprint } from "./implementation.js";
 import { assessmentContextFingerprint, executionContextPolicy, type ExecutionContextManifest } from "./execution-context.js";
 import { assessmentSkill } from "./execution-skills.js";
 import { assessmentCompatibility, executionSchemaVersion } from "./assessment-identity.js";
+import { assessmentImpactPolicy, assessmentPathSchema, reviewedAssessmentPaths, type AssessmentFootprint, type AssessmentImpact } from "./assessment-impact.js";
 
 const branch = z.string().trim().min(1).max(200).refine((s) => !s.startsWith("-") && !/[\s~^:?*\[\\]|\.\.|@\{|\/\/|\/$|\.$/.test(s), "Invalid branch name");
 export const executionConfigSchema = z.object({
@@ -13,6 +14,9 @@ export const executionConfigSchema = z.object({
   providerID: z.string().refine((s) => s === "openai", "Use the initial ChatGPT/OpenAI provider"), modelID: z.string().min(1).max(200),
   checks: z.array(z.string().trim().min(1).max(2000)).min(1).max(12),
   dependencies: z.record(z.array(z.string().min(1)).max(50)).default({}),
+  assessmentScopes: z.record(z.array(assessmentPathSchema).max(50)).optional(),
+  sharedAssessmentPaths: z.array(assessmentPathSchema).max(100).optional(),
+  reuseEquivalentScopes: z.boolean().optional(),
 }).strict();
 export type ExecutionConfig = z.infer<typeof executionConfigSchema>;
 export type VerificationSuggestions = { commands: string[]; evidence: string[]; message: string };
@@ -35,6 +39,9 @@ export type Assessment = z.infer<typeof assessmentOutputSchema> & {
   contextPolicy?: string; contextFingerprint?: string;
   skill?: { name: string; version: string };
   compatibility?: string; legacyContextFingerprint?: string;
+  footprint?: AssessmentFootprint;
+  requestToken?: string;
+  semanticOrigin?: { scope: "workspace" | "main"; head: string; capturedAt: string };
 };
 export type CheckResult = { command: string; exitCode: number; output: string; at: string };
 export type AssessmentRun = {
@@ -42,6 +49,7 @@ export type AssessmentRun = {
   status: "running" | "completed" | "failed" | "interrupted" | "blocked";
   stage: string; requirementIDs: string[]; completedIDs: string[]; reused: number;
   force?: boolean; freshIDs?: string[];
+  preview?: boolean; impacts?: Record<string, AssessmentImpact>;
   currentRequirementID?: string; head?: string; directory?: string; sessionID?: string;
   startedAt: string; finishedAt?: string; diagnostic?: string; checks: CheckResult[]; progress: string[];
   contexts?: Record<string, ExecutionContextManifest>; contextBlock?: ExecutionContextManifest; sessions?: Record<string, string[]>;
@@ -72,6 +80,7 @@ export type ExecutionState = {
   delivered: Record<string, MainDelivery>; deliveryHistory?: (MainDelivery & { requirementID: string })[];
   run?: ExecutionRun; history: ExecutionRun[]; assessmentStatus?: string;
   assessmentRuns?: AssessmentRun[];
+  assessmentRequests?: Record<string, { token: string; reason: string; at: string }>;
 };
 export const emptyExecution = (): ExecutionState => ({ schemaVersion: executionSchemaVersion, version: 0, assessments: {}, delivered: {}, history: [] });
 export function assessmentWorkflowCompatible(assessment: Assessment) {
@@ -102,6 +111,9 @@ export function createExecutionIndex(project: Project, state: ExecutionState) {
 export type ExecutionIndex = ReturnType<typeof createExecutionIndex>;
 export function deliveredRequirement(project: Project, state: ExecutionState, id: string, index?: ExecutionIndex) {
   const r = index ? index.requirements.get(id) : eligibleRequirements(project).find((r) => r.id === id), d = state.delivered[id];
+  const main = state.mainAssessments?.[id] ?? (state.assessments[id]?.scope === "main" ? state.assessments[id] : undefined);
+  if (state.assessmentRequests?.[id] && main?.requestToken !== state.assessmentRequests[id]!.token) return false;
+  if (main?.footprint && !assessmentCurrent(project, state, id, main, index)) return false;
   return !!r && !!d && d.fingerprint === requirementFingerprint(r) && d.repository === state.config?.repository
     && (!d.contextFingerprint || contextMatches(project, id, d.contextFingerprint, state.config?.dependencies, index));
 }
@@ -115,13 +127,15 @@ export function assessmentCurrent(project: Project, state: ExecutionState, id: s
 }
 export function assessmentFreshness(project: Project, state: ExecutionState, id: string, assessment: Assessment | undefined = state.assessments[id], index?: ExecutionIndex): {
   status: "not-assessed" | "current" | "needs-reassessment";
-  reason?: "requirement" | "decisions" | "policy" | "model" | "code";
+  reason?: "requirement" | "decisions" | "policy" | "model" | "code" | "manual";
   message: string;
 } {
   if (!assessment) return { status: "not-assessed", message: "No saved assessment." };
-  const stale = (reason: "requirement" | "decisions" | "policy" | "model" | "code", message: string) => ({ status: "needs-reassessment" as const, reason, message });
+  const stale = (reason: "requirement" | "decisions" | "policy" | "model" | "code" | "manual", message: string) => ({ status: "needs-reassessment" as const, reason, message });
   const r = index ? index.requirements.get(id) : eligibleRequirements(project).find((r) => r.id === id);
   if (!r || assessment.fingerprint !== requirementFingerprint(r)) return stale("requirement", "Requirement or approval changed.");
+  const request = state.assessmentRequests?.[id];
+  if (request && assessment.requestToken !== request.token) return stale("manual", `Marked for reassessment: ${request.reason}`);
   if (!assessmentWorkflowCompatible(assessment)) return stale("policy", "Saved assessment workflow is incompatible or lacks required provenance; a fresh assessment is needed. Previous evidence is retained.");
   if (assessment.contextFingerprint && !assessment.contextFingerprint.startsWith('["decisions-v1",'))
     return stale("policy", "Saved decision-context format could not be migrated with proven compatibility. A fresh assessment is needed; previous evidence is retained.");
@@ -129,8 +143,15 @@ export function assessmentFreshness(project: Project, state: ExecutionState, id:
     return stale("decisions", "Supporting decisions or guardrails changed, or legacy revision-bound evidence no longer matches.");
   if (assessment.model && state.config && (assessment.model.providerID !== state.config.providerID || assessment.model.modelID !== state.config.modelID))
     return stale("model", "Selected assessment model changed.");
+  if (assessment.footprint && assessment.footprint.policy !== assessmentImpactPolicy(project, id, state.config))
+    return stale("code", "Reviewed assessment scope or prerequisite scope changed.");
+  if (!assessment.footprint && reviewedAssessmentPaths(project, id, state.config))
+    return stale("code", "A new reviewed boundary needs an assessment to establish its search scope; legacy evidence is retained.");
   const evidence = [...state.assessmentRuns ?? []].reverse().find((run) => run.operation === (assessment.scope === "main" ? "verify-main" : "assess") && run.capture && run.head);
-  if (evidence && (assessment.head !== evidence.head || assessment.captureFingerprint !== evidence.capture!.fingerprint)) return stale("code", "Code snapshot changed since this assessment.");
+  const impact = evidence?.impacts?.[id];
+  if (assessment.footprint && impact?.fingerprint) {
+    if (assessment.footprint.fingerprint !== impact.fingerprint) return stale("code", impact.reason);
+  } else if (evidence && (assessment.captureFingerprint !== evidence.capture!.fingerprint || !impact && assessment.head !== evidence.head)) return stale("code", "Code snapshot changed since this assessment; no compatible scoped footprint is available.");
   return { status: "current", message: "Current against saved decisions and the latest checked code snapshot; filesystem changes are detected by Check implementation." };
 }
 export function prerequisiteOnBranch(project: Project, state: ExecutionState, id: string): string | undefined {

@@ -30,6 +30,20 @@ every technical detail proposed in the planning documents.
 | DEC-021 | Process queued AI follow-up one submission at a time, each with its own focused revision-linked context. Do not combine the queue or include unrelated feature history solely because it shares an area. Retain exact target evidence and explicit guardrails; preserve omitted records and request wider context when needed. | User requested individual processing/contexts after repeated queue-size blockers |
 | DEC-021 | Split generated requirements by stable feature ID, keep original evidence in shared referenced files, and avoid rewriting unchanged outputs. Retain an on-demand combined specification export. | User reported large generated files and confirmed both reading/coding-agent context and disk/Git efficiency as goals after the feature-based export recommendation |
 
+## Incremental implementation assessment (DEC-024)
+
+Confirmed direction: minimize repeated requirement assessments with durable per-target
+evidence, explainable change impact and a pending queue. Preserve original evidence and
+upgrade compatibility. Distinguish semantic assessment, test execution and verified
+main delivery. User approved the change-driven assessment recommendation.
+
+Implemented: optional human-reviewed per-requirement/feature code boundaries, shared
+paths and conservative prerequisite/capture fallback; new/deleted-file detection;
+model-free local queue preview; manual reassessment requests; equivalent-content commit
+reuse and opt-in local/main semantic reuse with independent verification. Automatic
+dependency-boundary inference and scenario-level test/assessment scheduling remain
+future work. See [implementation-workspace.md](implementation-workspace.md).
+
 ## Requirement refinement (DEC-022)
 
 Confirmed review presentation: refinement proposals are individual expandable items

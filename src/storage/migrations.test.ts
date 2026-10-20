@@ -115,7 +115,8 @@ test("failed migration rolls back backups, payloads and schema, then retries aft
 });
 
 test("future and malformed payloads stop the whole upgrade without replacing any saved row", () => {
-  for (const invalid of ["{invalid", JSON.stringify({ ...emptyExecution(), schemaVersion: 999 })]) {
+  for (const invalid of ["{invalid", JSON.stringify({ ...emptyExecution(), schemaVersion: 999 }),
+    JSON.stringify({ ...emptyExecution(), assessments: { future: { footprint: { version: 999 } } } })]) {
     const f = fixture();
     try {
       let db = new Database(f.path);

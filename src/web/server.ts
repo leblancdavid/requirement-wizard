@@ -175,13 +175,17 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, implementation.configure(id, input.revision, input.config, input.version)); return;
       }
       if (action === "execution-start") {
-        const input = z.object({ revision, operation: z.enum(["check", "assess", "verify-main", "continue"]), requirementID: z.string().min(1).optional(), epicID: z.string().min(1).optional(), force: z.boolean().optional() }).strict().parse(raw);
+        const input = z.object({ revision, operation: z.enum(["check", "assess", "verify-main", "continue"]), requirementID: z.string().min(1).optional(), epicID: z.string().min(1).optional(), force: z.boolean().optional(), preview: z.boolean().optional() }).strict().parse(raw);
         if (queue.isActive(id)) throw new Error("Stop discovery before starting implementation work.");
         if (input.requirementID && input.epicID) throw new Error("Choose a requirement or an epic scope.");
         if (input.requirementID && !project.requirements.some((r) => r.id === input.requirementID && r.status === "accepted")) throw new Error("Choose an accepted requirement.");
         if (input.epicID && !project.epics.some((e) => e.id === input.epicID && !e.archived)) throw new Error("Choose an active epic.");
-        implementation.start(id, input.revision, input.operation, { requirementID: input.requirementID, epicID: input.epicID }, { force: input.force });
+        implementation.start(id, input.revision, input.operation, { requirementID: input.requirementID, epicID: input.epicID }, { force: input.force, preview: input.preview });
         json(res, 202, { started: true }); return;
+      }
+      if (action === "execution-mark-assessment") {
+        const input = z.object({ revision, version: z.number().int().nonnegative(), requirementID: z.string().min(1), reason: z.string().trim().max(1000).default("") }).strict().parse(raw);
+        json(res, 200, implementation.markForAssessment(id, input.revision, input.requirementID, input.reason, input.version)); return;
       }
       if (action === "execution-stop") { z.object({}).strict().parse(raw); implementation.stop(id); json(res, 200, { stopping: true }); return; }
       if (action === "execution-archive") { const input = z.object({ version: z.number().int().nonnegative() }).strict().parse(raw); json(res, 200, implementation.archive(id, input.version)); return; }

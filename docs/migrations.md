@@ -41,6 +41,64 @@ match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
 
+### Additive assessment impact metadata v1 (2026-10-19)
+
+Source/target: execution JSON envelope **1 → 1**, database **2 → 2** and assessment
+semantics `assessment-evidence-v1` unchanged. This is an optional, independently
+versioned cache extension; no existing field is reinterpreted and no startup rewrite
+or new required representation is needed. Future footprint versions are rejected by
+startup validation without overwriting data. An incompatible future envelope still
+requires an ordered registry migration.
+
+- Optional settings: `assessmentScopes`, `sharedAssessmentPaths` and
+  `reuseEquivalentScopes`. Absent scopes retain repository-wide checking; absent
+  equivalent-scope setting retains separate local/main inference. The browser enables
+  equivalent-scope reuse for newly configured projects, without changing saved settings.
+- New assessments store footprint version 1: normalized policy identity, captured
+  path/hash/excerpt boundaries, an omission inventory digest and a content fingerprint.
+  The footprint covers search scope, shared/configuration paths, prerequisite boundaries,
+  referenced evidence and all detailed-window evidence. It is not synthesized from old
+  citations. Snapshot/omission budgets and unknown evidence retain their existing limits.
+  Only the app-owned excluded `.requirement-wizard` publication-directory inventory entry
+  is omitted from this digest, since it need not exist in a detached main worktree;
+  normative inputs are independently checked. Captured source bytes (including line
+  endings), all other omission metadata and excerpt boundaries must still match.
+- A compatible older checkpoint can acquire a footprint on an explicit normal check
+  only if its exact saved capture fingerprint, requirement, relevant decisions, model
+  and workflow match and no newly configured reviewed boundary requires a new search.
+  This also permits HEAD-only changes with identical captured content. Original result,
+  evidence, dates, commit and specification revision remain unchanged. When exact
+  equivalence is unavailable, retain the old result and queue conservative reassessment.
+- Per-run optional impact reasons/fingerprints and a `preview` flag describe the
+  assessment queue. Preview performs no inference or main verification. Old runs are
+  not reconstructed; absent impact metadata keeps the existing conservative fallback.
+- Optional manual reassessment requests keep a unique token, date and reason. New
+  checkpoints record the token they satisfied; local/main satisfy requests independently.
+  Old assessments/delivery records are retained, not deleted or rewritten as missing.
+- Opt-in cross-scope reuse requires compatible footprint and normative/model inputs
+  matching the target capture. A copied target checkpoint records `semanticOrigin`
+  (original scope, commit and capture date) and target snapshot identity; the original
+  checkpoint is unchanged. Actual main check output and main delivery remain separate.
+- Footprints and manual request tokens stay local to SQLite and are excluded from
+  portable progress artifacts. Semantic origin is portable provenance. Workspace
+  artifact format remains 2; no saved requirement IDs or human decisions change.
+
+Enrichment/checkpoints use the existing atomic execution save, CAS and worker lease.
+Interruption before saving leaves the old checkpoint intact; a saved checkpoint is
+reusable on retry. Startup itself neither enriches nor repeats model calls. Reopening
+validates optional footprint formats and retains histories and counters unchanged.
+Existing migration transaction rollback and future-format rejection also cover malformed
+or future footprint metadata. No data reset is needed.
+
+Verification (2026-10-19): type checking, all **224 deterministic tests**, the UI build
+and Playwright browser checks passed. Fixtures cover exact legacy enrichment,
+preserved provenance across repeated startup, scoped additions/deletions/shared changes,
+manual requests, equivalent local/main reuse with independent verification and divergent
+code, failures/cancellation, new files appearing during a frozen capture, and future-format
+rollback. Browser checks cover saved feature boundaries, preview requests/reasons,
+manual marking, mobile width and a 500-requirement collapsed view. No live model calls
+were made. Installer upgrades and the user's particular saved database were not exercised.
+
 ### Database 0/1 → 2; execution payload 0 → 1 (2026-10-19)
 
 Implementation: `src/storage/migrations.ts`, called by `ProjectStore` before workspace

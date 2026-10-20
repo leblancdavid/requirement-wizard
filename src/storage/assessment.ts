@@ -5,15 +5,59 @@ import type { Job, Project } from "../core/model.js";
 import { directoryKey } from "./workspace.js";
 import { assessmentPrompt, checkExecutionContext, executionContextBudget, ExecutionContextError, requirementTaskContext } from "../core/execution-context.js";
 import { shareRepeatedIdentifiers, shareRepeatedText } from "../core/working-set.js";
+import { assessmentImpactPolicy, matchesAssessmentPath, reviewedAssessmentPaths, sharedAssessmentFile, type AssessmentFootprint } from "../core/assessment-impact.js";
+import { canonicalJSON } from "../core/assessment-identity.js";
+import type { ExecutionConfig } from "../core/execution.js";
+import { captureWorkspace } from "./scan.js";
 
 export type AssessmentCapture = NonNullable<Job["scan"]>;
 export function assessmentCaptureFingerprint(scan: AssessmentCapture) {
   return createHash("sha256").update(JSON.stringify({ files: scan.snapshot.files, omitted: scan.snapshot.omitted, limited: scan.snapshot.traversalLimited })).digest("hex");
 }
 
+/** Hash the search/impact boundary, not merely the evidence cited by the model.
+ * New/deleted files participate; incomplete watched scope falls back to the full capture.
+ * Omission inventories remain global guardrails and are never treated as inspected code. */
+export function assessmentFootprint(project: Project, id: string, config: ExecutionConfig, scan: AssessmentCapture,
+  citedPaths: string[] = []): AssessmentFootprint {
+  const paths = reviewedAssessmentPaths(project, id, config);
+  const referenced = requirementTaskContext(project, id, config.dependencies[id], false, config.dependencies).referencedWorkspacePaths;
+  const watches = (path: string) => !paths || sharedAssessmentFile(path) || citedPaths.includes(path) || referenced.has(path)
+    || paths.some((prefix) => matchesAssessmentPath(path, prefix));
+  const broad = !paths || scan.snapshot.traversalLimited || paths.some((prefix) => !scan.snapshot.files.some((f) => matchesAssessmentPath(f.path, prefix)))
+    || scan.snapshot.omitted.some((item) => watches(item.path)
+    && !item.reason.startsWith("Excluded dependency/generated/tool-guidance/hidden"));
+  const grouped = new Map<string, AssessmentFootprint["files"][number]>();
+  for (const f of scan.snapshot.files.filter((f) => broad || watches(f.path))) {
+    const entry = grouped.get(f.path) ?? { path: f.path, hash: f.hash, ranges: "" };
+    entry.ranges += `${f.startLine ?? 1}:${f.endLine ?? f.lines};`;
+    grouped.set(f.path, entry);
+  }
+  const files = [...grouped.values()].sort((a, b) => a.path.localeCompare(b.path, "en"));
+  const hash = (value: unknown) => createHash("sha256").update(canonicalJSON(value)).digest("hex");
+  // Our publication directory exists only in the connected working folder, not
+  // necessarily in a detached main worktree. It is never captured code evidence;
+  // normative requirements/decisions have their own independent identity.
+  const omissionsFingerprint = hash(scan.snapshot.omitted.filter((item) => item.path !== ".requirement-wizard")
+    .sort((a, b) => a.path.localeCompare(b.path, "en") || a.reason.localeCompare(b.reason, "en")));
+  const policy = assessmentImpactPolicy(project, id, config);
+  return { version: 1, policy, fingerprint: hash({ policy, files, omissionsFingerprint, broad, limited: scan.snapshot.traversalLimited }), files, omissionsFingerprint, broad };
+}
+
+export function assessmentImpactReason(previous: AssessmentFootprint | undefined, next: AssessmentFootprint) {
+  if (!previous) return "No scoped footprint: using conservative legacy snapshot checks.";
+  if (previous.policy !== next.policy) return "Reviewed assessment scope or prerequisite scope changed.";
+  const before = new Map(previous.files.map((file) => [file.path, file]));
+  const after = new Map(next.files.map((file) => [file.path, file]));
+  const changes = [...new Set([...before.keys(), ...after.keys()])].filter((path) => canonicalJSON(before.get(path)) !== canonicalJSON(after.get(path)));
+  if (changes.length) return `Relevant code added, changed or removed: ${changes.slice(0, 3).join(", ")}${changes.length > 3 ? ` (+${changes.length - 3} more)` : ""}.`;
+  if (previous.omissionsFingerprint !== next.omissionsFingerprint || previous.broad !== next.broad) return "Capture coverage or omitted scope changed; impact needs a conservative reassessment.";
+  return "Relevant code and search scope are unchanged; saved semantic assessment can be reused.";
+}
+
 /** One requirement, exact normative evidence, and a bounded window of relevant current files. */
 export function assessmentContext(requirement: Project["requirements"][number], scan: AssessmentCapture,
-  options: { project?: Project; dependencyIDs?: string[]; dependencyGraph?: Record<string, string[]>; requestEvidenceIDs?: string[] } = {}) {
+  options: { project?: Project; dependencyIDs?: string[]; dependencyGraph?: Record<string, string[]>; requestEvidenceIDs?: string[]; impactPaths?: Set<string> } = {}) {
   const reasons: Record<string, number> = {};
   for (const item of scan.snapshot.omitted) {
     const reason = item.reason.replace(/\d+/g, "#"); reasons[reason] = (reasons[reason] ?? 0) + 1;
@@ -28,7 +72,7 @@ export function assessmentContext(requirement: Project["requirements"][number], 
     const linked = targetEvidence.has(source.id) || !!file && !!task?.referencedWorkspacePaths.has(file.path);
     const score = (linked ? 1000 : 0) + words.reduce((total, word) => total + (path.includes(word) ? 10 : 0) + (text.includes(word) ? 1 : 0), 0);
     return { id: `file:${index + 1}`, source, file, score, index };
-  }).sort((a, b) => b.score - a.score || a.index - b.index);
+  }).filter((entry) => !options.impactPaths || !!entry.file && options.impactPaths.has(entry.file.path)).sort((a, b) => b.score - a.score || a.index - b.index);
   const requested = new Set(options.requestEvidenceIDs ?? []);
   if ([...requested].some((id) => !ranked.some((entry) => entry.id === id))) throw new Error("Requested assessment evidence is outside the captured source scope.");
   // Captured files are current implementation evidence, not indivisible human
@@ -41,10 +85,11 @@ export function assessmentContext(requirement: Project["requirements"][number], 
   let normative: Record<string, unknown> = { ...records, decisions };
   const evidenceIndex: { id: string; pathPreview: string; startLine?: number; endLine?: number }[] = [];
   const serialize = () => JSON.stringify({ ...normative,
+    ...(options.impactPaths ? { assessmentBoundary: { policy: "Human-reviewed impact scope plus shared configuration, prerequisites and referenced evidence. Findings apply only within this boundary; excluded captured files were not inspected.", excludedCapturedExcerpts: scan.sources.length - ranked.length } } : {}),
     evidence: selected.map((entry) => ({ id: entry.id, text: entry.source.text })), evidenceIndex,
-    contextScope: { detailed: selected.length, captured: scan.sources.length, omittedFromDetail: scan.sources.length - selected.length,
+    contextScope: { detailed: selected.length, captured: ranked.length, omittedFromDetail: ranked.length - selected.length,
       ...(requested.size ? { deferredEvidenceIDs: [...requested].filter((id) => !selected.some((entry) => entry.id === id)) } : {}),
-      indexOmitted: scan.sources.length - selected.length - evidenceIndex.length, policy: "Only the detailed evidence window can support this result. Request another bounded window rather than guessing about indexed/omitted code." },
+      indexOmitted: ranked.length - selected.length - evidenceIndex.length, policy: "Only the detailed evidence window can support this result. Request another bounded window rather than guessing about indexed/omitted code." },
     omissions, traversalLimited: scan.snapshot.traversalLimited });
   const check = () => checkExecutionContext(assessmentPrompt(serialize()), false, requirement.id);
   // Reuse discovery's lossless encoding before blocking on repeated approval
@@ -91,7 +136,7 @@ export function assessmentContext(requirement: Project["requirements"][number], 
 }
 
 /** Validate only the captured source scope, not every binary/cache file in the repository. */
-export async function assertAssessmentCaptureCurrent(directory: string, scan: AssessmentCapture, signal: AbortSignal) {
+export async function assertAssessmentCaptureCurrent(directory: string, scan: AssessmentCapture, signal: AbortSignal, inspectInventory = false) {
   for (const file of new Map(scan.snapshot.files.map((file) => [file.path, file])).values()) {
     signal.throwIfAborted();
     const path = join(directory, file.path);
@@ -104,4 +149,6 @@ export async function assertAssessmentCaptureCurrent(directory: string, scan: As
       if (read.bytesRead !== stat.size || createHash("sha256").update(buffer.subarray(0, stat.size)).digest("hex") !== file.hash) throw new Error("Files changed during assessment. Refresh the source snapshot.");
     } finally { await handle.close(); }
   }
+  if (inspectInventory && assessmentCaptureFingerprint(await captureWorkspace(directory, undefined, signal)) !== assessmentCaptureFingerprint(scan))
+    throw new Error("Source inventory or capture coverage changed during assessment. Refresh the source snapshot.");
 }

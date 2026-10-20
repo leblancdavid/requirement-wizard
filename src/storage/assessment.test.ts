@@ -5,7 +5,8 @@ import { join, resolve } from "node:path";
 import { projectSchema, type Project } from "../core/model.js";
 import { requirementTaskContext } from "../core/execution-context.js";
 import { captureWorkspace } from "./scan.js";
-import { assessmentContext, assessmentCaptureFingerprint, assertAssessmentCaptureCurrent } from "./assessment.js";
+import { assessmentContext, assessmentCaptureFingerprint, assessmentFootprint, assessmentImpactReason, assertAssessmentCaptureCurrent } from "./assessment.js";
+import { executionConfigSchema } from "../core/execution.js";
 
 const requirement: Project["requirements"][number] = { id: "r1", epicID: "project", status: "accepted", statement: "Save records", rationale: "Required behavior", acceptance: ["Saved records survive restart"], sourceIDs: ["human:1"] };
 
@@ -92,6 +93,8 @@ test("assessment snapshots fingerprint exact captured scope and reject changed s
     await assert.rejects(assertAssessmentCaptureCurrent(root, first, signal), /Files changed/);
     const changed = await captureWorkspace(root, undefined, signal);
     assert.notEqual(assessmentCaptureFingerprint(first), assessmentCaptureFingerprint(changed));
+    await writeFile(join(root, "new.ts"), "export const newlyImplemented = true;\n");
+    await assert.rejects(assertAssessmentCaptureCurrent(root, changed, signal, true), /Source inventory or capture coverage changed/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -130,4 +133,59 @@ test("oversized repeated approval snapshots share exact text losslessly before a
   assert.equal(expanded.evidence[0].text, scan.sources[0]!.text);
   assert.ok(prepared.context.characters <= 48000);
   assert.deepEqual(p, before);
+});
+
+test("reviewed footprints include new/deleted files, prerequisites, shared configuration and inspected evidence, with conservative omission fallback", () => {
+  const p = projectSchema.parse({ id: "p", name: "Impact fixture", revision: 1, model: { providerID: "openai", modelID: "fixture" },
+    summary: "", goals: [], actors: [], assumptions: [], questions: [],
+    requirements: [requirement, { ...requirement, id: "r2" }], sources: [{ id: "human:1", kind: "initial", text: "Save records" }] });
+  const config = executionConfigSchema.parse({ repository: "fixture/repo", strategy: "main", providerID: "openai", modelID: "fixture", checks: ["npm test"],
+    assessmentScopes: { r1: ["src/save"], r2: ["src/other"] }, sharedAssessmentPaths: ["src/shared"] });
+  const scan = { workspaceKey: "fixture", sources: [], snapshot: { id: "capture", capturedAt: "now", files: ["src/save/a.ts", "src/other/b.ts", "src/shared/c.ts", "src/config/settings.json", "package.json"]
+    .map((path) => ({ path, hash: "before", sourceID: path, lines: 1 })), omitted: [] as { path: string; reason: string }[], traversalLimited: false, changes: [], affectedRequirementIDs: [] } };
+  const footprint = () => assessmentFootprint(p, "r1", config, scan);
+  const baseline = footprint(); assert.equal(baseline.broad, false);
+  scan.snapshot.files[1]!.hash = "unrelated";
+  assert.equal(footprint().fingerprint, baseline.fingerprint);
+  const extra = { path: "src/save/new.ts", hash: "new", sourceID: "new", lines: 1 };
+  scan.snapshot.files.push(extra);
+  assert.notEqual(footprint().fingerprint, baseline.fingerprint, "New implementation can resolve a previously missing result");
+  assert.match(assessmentImpactReason(baseline, footprint()), /src\/save\/new.ts/);
+  scan.snapshot.files.pop();
+  scan.snapshot.files[2]!.hash = "shared change";
+  assert.notEqual(footprint().fingerprint, baseline.fingerprint);
+  scan.snapshot.files[2]!.hash = "before"; scan.snapshot.files[3]!.hash = "configuration change";
+  assert.notEqual(footprint().fingerprint, baseline.fingerprint, "Nested configuration is always global");
+  scan.snapshot.files[3]!.hash = "before";
+  config.dependencies.r1 = ["r2"];
+  const withDependency = footprint();
+  scan.snapshot.files[1]!.hash = "dependency change";
+  assert.notEqual(footprint().fingerprint, withDependency.fingerprint);
+  delete config.assessmentScopes!.r2;
+  assert.equal(footprint().broad, true, "An unscoped prerequisite widens impact to the repository");
+  config.dependencies.r1 = [];
+  const inspected = assessmentFootprint(p, "r1", config, scan, ["src/other/b.ts"]);
+  scan.snapshot.files[1]!.hash = "inspected change";
+  assert.notEqual(assessmentFootprint(p, "r1", config, scan, ["src/other/b.ts"]).fingerprint, inspected.fingerprint);
+  scan.snapshot.omitted.push({ path: "src/save/omitted.ts", reason: "160-excerpt budget" });
+  assert.equal(footprint().broad, true);
+  scan.snapshot.omitted = []; scan.snapshot.traversalLimited = true;
+  assert.equal(footprint().broad, true);
+  scan.snapshot.traversalLimited = false;
+  const beforeDelete = footprint(); scan.snapshot.files.shift();
+  assert.notEqual(footprint().fingerprint, beforeDelete.fingerprint);
+  assert.match(assessmentImpactReason(beforeDelete, footprint()), /src\/save\/a.ts/);
+});
+
+test("assessment boundaries reject unsafe/ambiguous paths and keep excluded code out of scoped model windows", () => {
+  const base = { repository: "fixture/repo", strategy: "main", providerID: "openai", modelID: "fixture", checks: ["npm test"] };
+  for (const path of ["../src", "/src", "C:\\src", "src/**", "src//nested", "src/../other", "src\u0000x"])
+    assert.equal(executionConfigSchema.safeParse({ ...base, assessmentScopes: { r1: [path] } }).success, false, path);
+  assert.deepEqual(executionConfigSchema.parse({ ...base, assessmentScopes: { r1: ["src\\save\\"] } }).assessmentScopes!.r1, ["src/save"]);
+  const scan = { workspaceKey: "fixture", sources: ["save", "other"].map((id) => ({ id, epicID: "project", kind: "workspace" as const, text: `Save records in ${id}` })),
+    snapshot: { id: "scan", capturedAt: "now", files: ["src/save/a.ts", "src/other/b.ts"].map((path, i) => ({ path, sourceID: i === 0 ? "save" : "other", hash: "hash", lines: 1 })), omitted: [], traversalLimited: false, changes: [], affectedRequirementIDs: [] } };
+  const prepared = assessmentContext(requirement, scan, { impactPaths: new Set(["src/save/a.ts"]) });
+  assert.deepEqual([...prepared.sourceIDs.values()], ["save"]);
+  assert.equal(prepared.availableEvidenceIDs.size, 0);
+  assert.equal(JSON.parse(prepared.text).assessmentBoundary.excludedCapturedExcerpts, 1);
 });
