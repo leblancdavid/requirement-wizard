@@ -125,6 +125,8 @@ or paid reassessment is introduced.
 
 Verification (2026-10-20): `npm run check` and all **343 deterministic tests** passed,
 including the compatibility, atomic failure, stale-worker and retained-input cases above.
+The UI build and Playwright checks passed, including retained drafts, completion notices
+and reload without model replay.
 Live-model reconciliation quality has not been qualified.
 
 ### Human decision availability and evidence bases (2026-10-20)

@@ -227,6 +227,10 @@ not retrospectively sweep old work or repeat model calls. See the
 [compatibility ledger](migrations.md#completion-linked-pending-review-reconciliation-2026-10-20).
 
 Verification (2026-10-20): type checking and all **343 deterministic tests** passed.
+The UI build and Playwright browser checks also passed, including completion-time
+updates/withdrawals, retained question drafts, changed-question acknowledgement and
+reload without repeated inference. Screenshot: `.reqwizit-state/browser-review-completion.png`.
+The build retains a non-blocking approximately 508 kB main-chunk warning.
 Live-model reconciliation quality remains unverified; these fixtures establish workflow
 and validation behavior, not semantic completeness.
 
