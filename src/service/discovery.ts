@@ -187,7 +187,7 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; helpRequest?: QuestionHelpRequest;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
     if (!options.helpRequest) this.assertCanDiscover(projectID);
@@ -205,10 +205,12 @@ export class DiscoveryService {
       options.onJob?.(job);
       const question = options.helpRequest ? project.questions.find((q) => q.id === options.helpRequest!.questionID)! : undefined;
       const pair = options.refinementPair;
-      if (pair && (!options.refinementOnly || options.helpRequest || new Set(pair).size !== 2 || pair.some((id) => !project.requirements.some((r) => r.id === id && r.status === "accepted" && project.epics.some((e) => e.id === r.epicID && !e.archived))))) throw new Error("Resolution tasks require two approved active requirements in a refinement-only pass.");
+      if (pair && (!options.refinementOnly || options.helpRequest || new Set(pair).size !== 2 || pair.some((id) => !project.requirements.some((r) => r.id === id && (options.includeUnapproved ? r.status !== "rejected" : r.status === "accepted") && project.epics.some((e) => e.id === r.epicID && !e.archived))))) throw new Error("Resolution tasks require two eligible active requirements in a refinement-only pass.");
+      const triggerSourceIDs = options.resolutionTriggerSourceIDs ?? [];
+      if (triggerSourceIDs.length > 8 || triggerSourceIDs.some((id) => !project.sources.some((s) => s.id === id))) throw new Error("Resolution trigger evidence is missing or exceeds its bound.");
       if (options.refinementOnly && !refinementTarget && !pair) throw new Error("No requirement available for refinement in this scope.");
       const linkedQuestions = pair ? pairQuestions(project, pair) : [];
-      const pairRecords = pair ? [...pair, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
+      const pairRecords = pair ? [...pair, ...triggerSourceIDs, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
       const context = planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
         requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
         recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
@@ -216,7 +218,8 @@ export class DiscoveryService {
         budget: options.helpRequest ? 36000 : 48000, advisory: !!options.helpRequest, expandMandatory: !options.helpRequest });
       context.manifest.submissionIDs = options.submissionIDs;
       context.manifest.refinementOnly = options.refinementOnly;
-      if (pair) context.manifest.refinementPair = { requirementIDs: pair, contextKey: resolutionContextKey(project, pair) };
+      if (pair) context.manifest.refinementPair = { requirementIDs: pair, contextKey: resolutionContextKey(project, pair, triggerSourceIDs),
+        ...(options.includeUnapproved ? { includeUnapproved: true } : {}), ...(triggerSourceIDs.length ? { triggerSourceIDs } : {}) };
       if (!options.helpRequest && !options.refinementOnly) addRelatedRecordHints(project, context);
       if (refinementTarget) context.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
       // Detailed context can include historical reviews. Only the job's current

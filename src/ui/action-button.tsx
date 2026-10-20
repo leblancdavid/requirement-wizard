@@ -10,21 +10,28 @@ export function ActionScope({ reason, children }: { reason?: string; children: R
   const inheritedReason = useContext(DisabledReason);
   reason ||= inheritedReason;
   function prepare(nodes: React.ReactNode, inheritedDisabled = false): React.ReactNode {
-    return React.Children.map(nodes, (node) => {
-      if (!React.isValidElement<Record<string, unknown>>(node)) return node;
-      const props = node.props;
-      const fieldset = node.type === "fieldset" && !!props.disabled;
-      const disabled = inheritedDisabled || !!props.disabled;
-      const child = typeof props.children === "function"
-        ? (...args: unknown[]) => prepare((props.children as (...args: unknown[]) => React.ReactNode)(...args), inheritedDisabled || fieldset)
-        : prepare(props.children as React.ReactNode, inheritedDisabled || fieldset);
-      if (node.type === "button" && disabled) return <ActionButton key={node.key} {...props} disabled reason={typeof props.title === "string" ? props.title : reason}>{child as React.ReactNode}</ActionButton>;
-      return React.cloneElement(node, {
-        ...(fieldset ? { disabled: false, "aria-disabled": true } : {}),
-        ...(inheritedDisabled && ["input", "textarea", "select"].includes(String(node.type)) ? { disabled: true } : {}),
-        ...(inheritedDisabled && node.type === ActionButton ? { disabled: true } : {}),
-        ...(props.children !== undefined ? { children: child } : {}),
-      });
+    if (Array.isArray(nodes)) {
+      const children = nodes.map((node: React.ReactNode) => prepare(node, inheritedDisabled));
+      return children.every((child, index) => child === nodes[index]) ? nodes : children;
+    }
+    if (!React.isValidElement<Record<string, unknown>>(nodes)) {
+      if (nodes && typeof nodes === "object" && Symbol.iterator in nodes) return prepare(Array.from(nodes as Iterable<React.ReactNode>), inheritedDisabled);
+      return nodes;
+    }
+    const node = nodes;
+    const props = node.props;
+    const fieldset = node.type === "fieldset" && !!props.disabled;
+    const disabled = inheritedDisabled || !!props.disabled;
+    const child = typeof props.children === "function"
+      ? (...args: unknown[]) => prepare((props.children as (...args: unknown[]) => React.ReactNode)(...args), inheritedDisabled || fieldset)
+      : prepare(props.children as React.ReactNode, inheritedDisabled || fieldset);
+    if (node.type === "button" && disabled) return <ActionButton key={node.key} {...props} disabled reason={typeof props.title === "string" ? props.title : reason}>{child as React.ReactNode}</ActionButton>;
+    if (!fieldset && !(inheritedDisabled && (["input", "textarea", "select"].includes(String(node.type)) || node.type === ActionButton)) && child === props.children) return node;
+    return React.cloneElement(node, {
+      ...(fieldset ? { disabled: false, "aria-disabled": true } : {}),
+      ...(inheritedDisabled && ["input", "textarea", "select"].includes(String(node.type)) ? { disabled: true } : {}),
+      ...(inheritedDisabled && node.type === ActionButton ? { disabled: true } : {}),
+      ...(props.children !== undefined ? { children: child } : {}),
     });
   }
   return <DisabledReason.Provider value={reason}>{prepare(children)}</DisabledReason.Provider>;

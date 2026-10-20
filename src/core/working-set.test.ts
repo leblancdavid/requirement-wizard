@@ -222,9 +222,17 @@ test("twelve saved reviews use twelve independent contexts instead of carrying t
     store.applyQueued(project.id);
     project = store.get(project.id);
     assert.throws(() => planContext(project, { recordIDs: [project.requirements[0]!.id], focusEpicID: "inbox", expandMandatory: true }), ContextBudgetError);
-    let calls = 0, lastRevision = project.revision - 1;
+    let calls = 0, pairChecks = 0, lastRevision = project.revision - 1;
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
       const manifest = options.context.manifest;
+      if (manifest.refinementPair) {
+        pairChecks++;
+        assert.equal(manifest.isolatedTask, true);
+        const decoded = decodeContext<{ requirements: Project["requirements"]; sources: Project["sources"] }>(options.context.data);
+        assert.deepEqual(new Set(decoded.requirements.map((r) => r.id)), new Set(manifest.refinementPair.requirementIDs));
+        assert.ok(!decoded.sources.some((s) => historyAnswerIDs.has(s.id)), "pair checks must not pull unrelated feature answers into context");
+        return { ...empty(), resolutionCheck: { format: 1, outcome: "distinct", explanation: "Each effect has its own behavior/scenario" } };
+      }
       assert.deepEqual(manifest.submissionIDs, [submitted[calls]!.id]);
       calls++;
       assert.equal(manifest.isolatedTask, true); assert.equal(manifest.partial, true);
@@ -244,7 +252,8 @@ test("twelve saved reviews use twelve independent contexts instead of carrying t
     queue.resume(project.id); await idle(queue, project.id);
     assert.equal(calls, 12);
     assert.ok(store.submissions(project.id).every((s) => s.status === "completed" && !!s.response));
-    assert.equal(store.jobs(project.id).filter((j) => j.context?.isolatedTask).length, 12);
+    assert.equal(store.jobs(project.id).filter((j) => j.context?.isolatedTask && !j.context.refinementPair).length, 12);
+    assert.ok(pairChecks > 0 && pairChecks <= 36, "each response adds at most three focused pair checks");
     assert.deepEqual(store.get(project.id).sources, project.sources);
   } finally { await queue?.close(); store.close(); }
 });

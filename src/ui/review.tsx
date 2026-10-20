@@ -3,6 +3,8 @@ import { reviewFingerprint, type Project, type Submission } from "../core/model.
 import { relatedRequirements } from "../core/similarity.js";
 import { ActionButton, ActionScope } from "./action-button.js";
 import { refinementIsStale, resolutionHasWaitingInput } from "../core/resolution.js";
+import { SubmissionOverlapStatus } from "./submission-overlap.js";
+import { Pagination, usePagination } from "./pagination.js";
 
 export function pendingReviews(project: Project, submissions: Submission[]) {
   const waiting = new Set(submissions.filter((s) => s.input.type === "review" && ["queued", "saved", "processing"].includes(s.status)).map((s) => s.input.type === "review" ? s.input.requirementID : ""));
@@ -43,13 +45,17 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
   const submitted = reviews.filter((s) => s.status !== "completed" && s.status !== "superseded");
   const reviewed = reviewItems(project, submissions, "reviewed", epicID);
   const visible = filter === "pending" ? pending : filter === "refinements" ? refinements : filter === "reviewed" ? reviewed : [];
-  const active = expanded === null ? null : visible.some((r) => r.id === expanded) ? expanded : ["pending", "refinements"].includes(filter) ? visible[0]?.id : null;
+  const history = (filter === "submitted" ? submitted : filter === "reviewed" ? reviews.filter((s) => s.status === "completed") : []).slice().reverse();
+  const paging = usePagination([...visible.map((item) => item.id), ...history.map((s) => `submission:${s.id}`)], `${project.id}:${epicID}:${filter}`, expanded);
+  const pageItems = visible.slice(paging.start, paging.end);
+  const pageHistory = history.slice(Math.max(0, paging.start - visible.length), Math.max(0, paging.end - visible.length));
+  const active = expanded === null ? null : pageItems.some((r) => r.id === expanded) ? expanded : ["pending", "refinements"].includes(filter) ? pageItems[0]?.id : null;
   const related = useMemo(() => relatedRequirements(project, active?.startsWith("requirement:") ? active.slice("requirement:".length) : ""), [project.requirements, active]);
   const list = useRef<HTMLDivElement>(null);
   const focusNext = useRef(false);
   useEffect(() => {
     if (focusNext.current) { list.current?.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')?.focus(); focusNext.current = false; }
-  }, [active, expanded, project.revision, message]);
+  }, [active, expanded, project.revision, message, paging.page]);
   const advance = (id: string) => {
     const index = visible.findIndex((item) => item.id === id);
     setExpanded((visible[index + 1] ?? visible.find((item) => item.id !== id))?.id);
@@ -63,7 +69,8 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
     <div className="filter-row" aria-label="Review filters">{([ ["pending", "To review", pending.length], ["refinements", "Refinements", refinements.length], ["submitted", "Submitted", submitted.length], ["reviewed", "Reviewed", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { setFilter(key); setExpanded(undefined); }}>{label} <span>{count}</span></button>)}</div>
     {message && <p className="save-notice" role="status">{message}</p>}
     {!visible.length && filter !== "submitted" && <div className="empty-card"><h3>{filter === "pending" ? "No requirements waiting for review." : filter === "refinements" ? "No refinements waiting for review." : "No reviewed requirements yet."}</h3><p>{filter === "refinements" ? "Use Refine requirements to check existing wording. Approved and kept-current decisions appear under Reviewed." : "Check Submitted for AI responses and processing status, or explore the next gaps."}</p></div>}
-    <div ref={list}>{visible.map((item) => {
+    <Pagination paging={paging} label="Review" onNavigate={() => setExpanded(undefined)} />
+    <div ref={list}>{pageItems.map((item) => {
       if (item.kind === "refinement") {
         const p = item.refinement;
         const target = project.requirements.find((r) => r.id === p.requirementID);
@@ -85,7 +92,7 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
             <p><strong>Why refine:</strong> {p.reason}</p>
             <h4>{pending && !stale ? "Current wording" : "Original wording"} ({requirementStatus(p.original.status).toLowerCase()})</h4><p>{p.original.statement}</p><ul>{p.original.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul>
             <h4>Proposed wording</h4><p>{p.statement}</p><ul>{p.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><p>{p.rationale}</p>
-            {p.resolution && p.relatedOriginal && <section aria-label="Related requirement resolution"><h4>Other original requirement · {p.relatedOriginal.id}</h4><p>{p.relatedOriginal.statement}</p><ul>{p.relatedOriginal.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul>
+            {p.resolution && p.relatedOriginal && <section aria-label="Related requirement resolution"><h4>Other original requirement · {requirementStatus(p.relatedOriginal.status)} · {p.relatedOriginal.id}</h4><p>{p.relatedOriginal.statement}</p><ul>{p.relatedOriginal.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul>
               {p.resolution.change.type === "consolidate" ? <p><strong>On approval:</strong> keep {p.requirementID} with the proposed combined behavior and reject the redundant {p.relatedOriginal.id}. Both IDs, original evidence and history are retained.</p>
                 : <><h4>Other proposed replacement</h4><p>{p.resolution.change.statement}</p><ul>{p.resolution.change.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><p>{p.resolution.change.rationale}</p><p>On approval, both replacements are applied atomically and remain approved.</p></>}
               <details><summary>Other supporting evidence and resolution basis</summary>{[...new Set([...p.relatedOriginal.sourceIDs, ...p.resolution.evidenceIDs])].map((id) => <p className="source-excerpt" key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
@@ -128,10 +135,11 @@ export function ReviewQueue({ project, submissions, epicID, sending, submit, dis
       </article>;
     })}</div>
     {filter === "submitted" && !submitted.length && <p className="empty-card">No reviews awaiting follow-up.</p>}
-    {(filter === "submitted" ? submitted : filter === "reviewed" ? reviews.filter((s) => s.status === "completed") : []).slice().reverse().map((s) => {
+    {pageHistory.map((s) => {
       if (s.input.type !== "review") return null;
       const response = s.response;
-      return <article className="requirement-card" key={s.id}><span className={`badge ${s.status}`}>{s.status === "needs-attention" && s.contextBlock ? "Context blocked" : s.status}</span><h3>{s.input.requirementText}</h3><p>{s.input.action === "accepted" ? "Approved" : "Rejected"}{s.input.note ? ` — ${s.input.note}` : ""}</p>{response && <p><strong>AI response:</strong> {response}</p>}{s.status === "completed" && !response && <p>Follow-up saved. See Latest changes and the Project map.</p>}{s.status === "saved" && <p>Decision saved. Use Explore next gaps to process follow-up.</p>}{s.diagnostic && <p role="status">{s.diagnostic} {s.conflict ? "Return to To review or Reviewed to submit against the current requirement." : s.contextBlock ? "Review the feature's context scope in Project map, then resume to recheck. Your decision is retained." : "Use Resume discovery to retry follow-up; your decision is retained."}</p>}</article>;
+      return <article className="requirement-card" key={s.id}><span className={`badge ${s.status}`}>{s.status === "needs-attention" && s.contextBlock ? "Context blocked" : s.status}</span><h3>{s.input.requirementText}</h3><p>{s.input.action === "accepted" ? "Approved" : "Rejected"}{s.input.note ? ` — ${s.input.note}` : ""}</p>{response && <p><strong>AI response:</strong> {response}</p>}{s.status === "completed" && !response && <p>Follow-up saved. See Latest changes and the Project map.</p>}{s.status === "saved" && <p>Decision saved. Use Explore next gaps to process follow-up.</p>}{s.diagnostic && <p role="status">{s.diagnostic} {s.conflict ? "Return to To review or Reviewed to submit against the current requirement." : s.contextBlock ? "Review the feature's context scope in Project map, then resume to recheck. Your decision is retained." : "Use Resume discovery to retry follow-up; your decision is retained."}</p>}<SubmissionOverlapStatus submission={s} /></article>;
     })}
+    {paging.pages > 1 && <Pagination paging={paging} label="Review bottom" onNavigate={() => setExpanded(undefined)} />}
   </section></ActionScope>;
 }

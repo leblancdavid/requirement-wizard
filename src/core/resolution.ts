@@ -35,13 +35,17 @@ export function pairQuestions(project: Project, ids: readonly string[]) {
   return project.questions.filter((q) => ids.every((id) => q.evidenceIDs?.includes(id)) && q.status !== "retired");
 }
 
-export function resolutionPairForAnswer(project: Project, questionID: string, jobs: Job[]): [string, string] | undefined {
+export function resolutionTaskForAnswer(project: Project, questionID: string, jobs: Job[]): NonNullable<Job["context"]>["refinementPair"] {
   const question = project.questions.find((q) => q.id === questionID);
   if (!question || question.status !== "answered") return;
   const job = [...jobs].reverse().find((j) => j.status === "completed" && j.result?.resolutionCheck?.outcome === "question"
     && j.result.questions.some((q) => q.text === question.text) && j.context?.refinementPair?.requirementIDs.every((id) => question.evidenceIDs?.includes(id)));
   const pair = job?.context?.refinementPair?.requirementIDs;
-  return pair?.every((id) => project.requirements.some((r) => r.id === id && r.status === "accepted" && project.epics.some((e) => e.id === r.epicID && !e.archived))) ? pair : undefined;
+  return pair?.every((id) => project.requirements.some((r) => r.id === id && r.status !== "rejected" && project.epics.some((e) => e.id === r.epicID && !e.archived))) ? job!.context!.refinementPair : undefined;
+}
+
+export function resolutionPairForAnswer(project: Project, questionID: string, jobs: Job[]) {
+  return resolutionTaskForAnswer(project, questionID, jobs)?.requirementIDs;
 }
 
 /** Identity of immutable human evidence and exact pair snapshots, not app workflow
@@ -58,10 +62,19 @@ function resolutionAreas(project: Project, ids: readonly string[]) {
   return { requirements, areas };
 }
 
-export function resolutionContextKey(project: Project, ids: readonly string[]): string {
+export function resolutionContextKey(project: Project, ids: readonly string[], triggerSourceIDs: readonly string[] = []): string {
   const { requirements, areas } = resolutionAreas(project, ids);
   const superseded = new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
-  const linked = new Set(requirements.flatMap((r) => r.sourceIDs));
+  const triggers = new Set(triggerSourceIDs);
+  // Corrections outside the pair's areas must still stale proposals/checks made
+  // from an explicitly pinned response. Never replace or edit the old source.
+  let changed = true;
+  while (changed) {
+    const size = triggers.size;
+    for (const source of project.sources) if (source.supersedes && triggers.has(source.supersedes)) triggers.add(source.id);
+    changed = triggers.size !== size;
+  }
+  const linked = new Set([...requirements.flatMap((r) => r.sourceIDs), ...triggers]);
   const questionAreas = new Map(project.questions.map((q) => [q.id, q.epicID]));
   const requirementAreas = new Map(project.requirements.map((r) => [r.id, r.epicID]));
   const sources = project.sources.filter((s) => linked.has(s.id) || s.kind === "initial" || s.kind !== "workspace" && !superseded.has(s.id)
@@ -86,7 +99,19 @@ export function refinementIsStale(project: Project, proposal: Project["refinemen
   const target = project.requirements.find((r) => r.id === proposal.requirementID);
   if (!target || reviewFingerprint(target) !== proposal.fingerprint || !project.epics.some((e) => e.id === target.epicID && !e.archived)) return true;
   return !!proposal.resolution && (!proposal.relatedOriginal || !proposal.resolutionContextKey
-    || resolutionContextKey(project, [target.id, proposal.resolution.relatedRequirementID]) !== proposal.resolutionContextKey);
+    || resolutionContextKey(project, [target.id, proposal.resolution.relatedRequirementID], proposal.resolutionTriggerSourceIDs) !== proposal.resolutionContextKey);
+}
+
+export function resolutionPairEligible(project: Project, ids: [string, string], jobs: Job[], options: { includeUnapproved?: boolean; triggerSourceIDs?: string[] } = {}) {
+  if (ids.some((id) => !project.requirements.some((r) => r.id === id && (options.includeUnapproved ? r.status !== "rejected" : r.status === "accepted") && project.epics.some((e) => e.id === r.epicID && !e.archived)))) return false;
+  if (pairQuestions(project, ids).some((q) => ["pending", "deferred", "delegated"].includes(q.status))) return false;
+  if (project.refinements.some((p) => p.resolution && p.status === "pending" && !refinementIsStale(project, p)
+    && [p.requirementID, p.resolution.relatedRequirementID].some((id) => ids.includes(id)))) return false;
+  const key = (extra: string[] = []) => resolutionContextKey(project, ids, [...new Set([...(options.triggerSourceIDs ?? []), ...extra])]);
+  if (project.refinements.some((p) => p.resolution && ids.includes(p.requirementID) && ids.includes(p.resolution.relatedRequirementID)
+    && p.resolutionContextKey === key(p.resolutionTriggerSourceIDs))) return false;
+  return !jobs.some((j) => j.status === "completed" && j.context?.refinementPair && j.context.refinementPair.requirementIDs.every((id) => ids.includes(id))
+    && j.context.refinementPair.contextKey === key(j.context.refinementPair.triggerSourceIDs) && j.result?.resolutionCheck?.outcome !== "blocked");
 }
 
 export function pendingRefinementRequirementIDs(project: Project) {

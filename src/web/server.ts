@@ -27,6 +27,7 @@ import { inspectWorkspaceRepository } from "../service/git-delivery.js";
 import { executionConfigSchema } from "../core/execution.js";
 import type { ExecutionAdapter } from "../runtime/execution.js";
 import type { ModelSelection } from "../core/model.js";
+import { SnapshotEncoder, parseSnapshotTokens, snapshotHeader } from "./snapshot.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -36,6 +37,17 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
   const service = new DiscoveryService(options.store, options.adapter);
   const queue = new DiscoveryQueue(service);
   const implementation = new ImplementationService(options.store, options.executionAdapter);
+  const snapshotEncoder = new SnapshotEncoder();
+  // Revision payloads are immutable. Bound this cache across projects/history reads.
+  const revisionSnapshots = new Map<string, { project: ReturnType<ProjectStore["get"]>; coverage: ReturnType<typeof coverage> }>();
+  function revisionSnapshot(project: ReturnType<ProjectStore["get"]>) {
+    const key = `${project.id}:${project.revision}`;
+    let cached = revisionSnapshots.get(key);
+    if (!cached) cached = { project, coverage: coverage(project) };
+    revisionSnapshots.delete(key); revisionSnapshots.set(key, cached);
+    if (revisionSnapshots.size > 16) revisionSnapshots.delete(revisionSnapshots.keys().next().value!);
+    return cached;
+  }
   const helpWork = new Map<string, { controller: AbortController; promise: Promise<unknown> }>();
   const root = resolve(options.staticDir ?? "dist/web");
   const validateConnection = async (model: ModelSelection) => {
@@ -155,13 +167,24 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       const project = options.store.get(id);
       const action = route[2];
       if (req.method === "GET" && !action) {
-        const jobs = options.store.jobs(id).filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, scanWork, ...job }) => ({ ...job, ...(scan ? { scan: { ...scan, sources: [] } } : {}),
+        const rawTokens = req.headers["x-reqwizit-snapshot"];
+        if (rawTokens !== undefined && typeof rawTokens !== "string") throw new Error("Invalid snapshot tokens.");
+        const known = rawTokens === undefined ? undefined : parseSnapshotTokens(rawTokens);
+        const current = revisionSnapshot(project);
+        const allJobs = options.store.jobs(id);
+        const jobs = allJobs.filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, scanWork, ...job }) => ({ ...job, ...(scan ? { scan: { ...scan, sources: [] } } : {}),
           ...(scan && scanWork ? { scanProgress: { completed: scanWork.batches.filter((batch) => batch.output).length, total: scanWork.batches.length, capturedAt: scan.snapshot.capturedAt,
             resumable: ["failed", "cancelled", "interrupted"].includes(job.status) && job.expectedRevision === project.revision && scanWork.bindingID === options.store.workspace(id)?.bindingID } } : {}) }));
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
-        const previousCoverage = lastRound ? coverage(options.store.get(id, lastRound.expectedRevision)).percent : null;
-        const helpJobs = options.store.jobs(id).filter((j) => j.helpRequest).map(({ result: _, researchEvidence: __, ...job }) => job);
-        json(res, 200, { project, workspace: options.store.syncWorkspace(id), coverage: coverage(project), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) }); return;
+        const previousCoverage = lastRound ? revisionSnapshot(options.store.get(id, lastRound.expectedRevision)).coverage.percent : null;
+        const helpJobs = allJobs.filter((j) => j.helpRequest).map(({ result: _, researchEvidence: __, ...job }) => job);
+        const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
+        if (known) {
+          const encoded = snapshotEncoder.encode(snapshot, known, ["project", "coverage"]);
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", [snapshotHeader]: JSON.stringify(encoded.tokens) });
+          res.end(encoded.body);
+        } else json(res, 200, snapshot);
+        return;
       }
       if (req.method === "GET" && action === "history") { json(res, 200, options.store.history(id)); return; }
       if (req.method === "GET" && action === "activity") {

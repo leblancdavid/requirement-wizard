@@ -19,6 +19,34 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Refinement run progress
+
+Refinement stage/count/status telemetry is an additive browser snapshot section and
+in-memory queue state only. SQLite, project JSON, workspace artifacts, schema versions,
+fingerprints and saved-check reuse are unchanged. No forward transformation or model
+replay is required; original decisions, histories and completed checks remain intact.
+Server restart discards telemetry, not saved work, and does not resume inference.
+Deterministic tests cover completed-check reuse and partial failure/stop/block counts;
+there is no new persisted format requiring an upgrade fixture.
+Verification: type check, all 296 deterministic tests (including existing upgrade/reopen
+fixtures), UI build and Playwright browser checks passed.
+
+## Workspace list paging
+
+Design, Review and Implementation paging changes presentation only. Source and target
+SQLite/JSON/workspace formats, schema versions, optimistic-concurrency counters,
+assessment semantics and fingerprints are identical. Page size/position and retained
+editing drafts remain in-memory UI state; this change writes no navigation fields to
+project records or settings. Existing decisions, stable IDs, history, assessments and
+delivery evidence remain untouched. No data migration, backup transformation, reset,
+automatic model call or reassessment is needed. Restarting uses the normal saved state
+and default navigation; no partially applied data upgrade exists to recover.
+
+Verification: paging rendering checks preserve the entire input project/evidence and
+only mount bounded rows. The full 291-test deterministic suite, including existing
+SQLite reopening and forward-migration checks, passed. No new saved-data format exists
+for a separate upgrade fixture.
+
 ## Version boundaries
 
 - SQLite `PRAGMA user_version`: database schema, currently **3**.
@@ -40,6 +68,64 @@ Its actual model, requirement, relevant decisions and latest captured code must 
 match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
+
+### Processing refresh transport and rendering (2026-10-20)
+
+Source/target: SQLite **3 → 3**, execution payload **1 → 1**, workspace format **2 → 2**.
+No persisted transformation, backup or reassessment is needed. The optional authenticated
+`X-Reqwizit-Snapshot` request/response header carries bounded SHA-256 content tokens for
+top-level snapshot sections; only changed sections appear in the response body. These
+are transient transport identities, unrelated to stored decision/assessment fingerprints.
+Clients without this header retain full-response compatibility. Browser reloads begin
+with an empty token set and receive all sections, including after a server restart.
+
+Independent job, workspace, queue and projected interrupted-worker changes are hashed
+from current content on every poll, not inferred from revision/version counters.
+Only immutable revision payloads and their deterministic coverage reuse serialization.
+Each client merges against its request baseline; stale/aborted/wrong-project responses
+cannot overwrite newer accepted work. Rendering caches and lazy/paged queue history do
+not alter saved submissions, input, IDs, assessments, provenance or outcomes. All
+original history remains accessible through pagination. No startup model work is added.
+
+Verification: all **288 deterministic tests** passed, including request-baseline
+merging, same-counter worker changes, removed sections, malformed/oversized tokens,
+legacy full responses, independent workspace/queue/job updates, project switching,
+cancellation and out-of-order/stale refreshes. Existing storage migration/reopening
+tests also passed; no saved-data upgrade path is introduced by this change.
+
+### Targeted post-response resolution receipts v1 (2026-10-20)
+
+Source/target: SQLite **3 → 3**, resolution envelopes **1 → 1**. Add optional
+`Submission.overlapFollowup` (`format: 1`) with discovery job identity, affected IDs,
+trigger sources, candidate count and up to three pair checkpoints. Pair manifests add
+optional `includeUnapproved`/`triggerSourceIDs`; resolution proposals add optional
+`resolutionTriggerSourceIDs`. Existing project snapshots, approvals, IDs, original
+evidence, history, assessment/delivery state and workspace formats remain unchanged.
+This is an additive forward-compatible reader/workflow change, not a bulk rewrite;
+there is no schema-version increment, backfill, backup transformation or startup inference.
+Legacy completed submissions lacking receipts remain completed and are not reprocessed.
+
+The receipt commits atomically with successful discovery; failure rolls both back.
+Pair calls run afterward and save checkpoints with a discovery/job compare-and-swap
+guard so a late worker cannot replace a newer checkpoint. Startup preserves live
+leases; interrupted pending receipts pause for explicit resume. Completed pair results
+published before a crash are recovered without repeating their model call. A failed,
+cancelled, stale or oversized-context check keeps discovery, human input and the
+original review response; retry resumes only unfinished eligible work. Unsupported
+future receipt formats reject reads without replacing stored payloads.
+
+`resolution-evidence-v1` identities remain byte-equivalent when trigger sources are
+already represented. Compatible completed approved-pair checks/proposals are reused;
+new explicitly pinned evidence outside the old pair scope extends the identity and
+corrections stale that new evidence, without manufacturing provenance for older work.
+No assessment semantic version or freshness migration is needed.
+
+Verified: `npm run check`, all 284 `npm test` tests, and `npm run test:browser`
+(ordinary answer/review resolution without Refine, unchanged originals before approval,
+failure/resume and count summaries). Upgrade tests include repeated disk reopen after
+discovery publication, completed-pair crash recovery, legacy completed submissions/check
+reuse, cross-connection checkpoint CAS and future-format payload preservation. No live
+model calls were made; semantic resolution quality remains unqualified.
 
 ### Single Refine entry point (2026-10-20)
 

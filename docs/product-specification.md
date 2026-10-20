@@ -203,6 +203,14 @@ and allow editing, accepting, or rejecting proposed requirements.
   dismissal changes neither record. Preserve both IDs, original evidence/scenarios and
   history; stale or pending human input blocks approval. Bound/checkpoint pair calls
   independently of compatible completed individual cleanup checks (DEC-022 extension).
+- Ordinary concrete answers and requirement reviews automatically check affected/new/
+  changed requirements against relevant active counterparts after successful discovery.
+  Include proposed/needs-review records without treating them as human decisions;
+  schedule at most three strongest uncached candidate pairs per response and disclose
+  unscheduled candidates. Reuse the reviewed resolution/clarification flow. Save the
+  follow-up receipt atomically with discovery, retain successful checks and original
+  review responses, and require explicit resume after interruption without replaying
+  completed discovery. Keep Refine as the manual approved-pair entry point.
 
 **RW-013 — Coverage and conflicts.** Review applicable areas such as goals, workflows,
 data lifecycle, permissions, integrations, quality constraints, and operations.

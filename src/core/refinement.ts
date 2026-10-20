@@ -1,6 +1,14 @@
 import { reviewFingerprint, StaleRevisionError, type Analysis, type Project } from "./model.js";
 import { refinementIsStale, resolutionContextKey, validateResolutionEvidence } from "./resolution.js";
 
+/** Volatile run telemetry, not saved evidence or specification completeness. */
+export type RefinementProgress = {
+  phase: "preparing" | "overlaps" | "wording";
+  status: "running" | "completed" | "stopped" | "failed" | "blocked";
+  completed: number;
+  total?: number;
+};
+
 export function refinementCandidates(project: Project) {
   return project.requirements.filter((r) => r.status !== "rejected"
     && project.epics.some((e) => e.id === r.epicID && !e.archived)
@@ -9,7 +17,7 @@ export function refinementCandidates(project: Project) {
     && !project.refinements.some((p) => !p.resolution && p.requirementID === r.id && p.fingerprint === reviewFingerprint(r)));
 }
 
-export function proposeRefinements(project: Project, proposals: NonNullable<Analysis["refinements"]>, newID: () => string) {
+export function proposeRefinements(project: Project, proposals: NonNullable<Analysis["refinements"]>, newID: () => string, triggerSourceIDs: string[] = []) {
   const seen = new Set<string>();
   for (const proposal of proposals) {
     const target = project.requirements.find((r) => r.id === proposal.requirementID);
@@ -19,9 +27,9 @@ export function proposeRefinements(project: Project, proposals: NonNullable<Anal
     const fingerprint = reviewFingerprint(target);
     // A dismissed suggestion is not permission to try the same cleanup again.
     const related = proposal.resolution && project.requirements.find((r) => r.id === proposal.resolution!.relatedRequirementID);
-    if (proposal.resolution && (!related || related.id === target.id || target.status !== "accepted" || related.status !== "accepted"
-      || !project.epics.some((e) => e.id === related.epicID && !e.archived))) throw new Error("Resolution requires two distinct approved requirements in active features.");
-    const contextKey = related ? resolutionContextKey(project, [target.id, related.id]) : undefined;
+    if (proposal.resolution && (!related || related.id === target.id || related.status === "rejected"
+      || !project.epics.some((e) => e.id === related.epicID && !e.archived))) throw new Error("Resolution requires two distinct non-rejected requirements in active features.");
+    const contextKey = related ? resolutionContextKey(project, [target.id, related.id], triggerSourceIDs) : undefined;
     if (proposal.resolution) {
       if (proposal.resolution.basis === "duplicate" && proposal.resolution.change.type !== "consolidate") throw new Error("Duplicate resolutions must explicitly consolidate the redundant requirement.");
       validateResolutionEvidence(project, proposal);
@@ -31,7 +39,8 @@ export function proposeRefinements(project: Project, proposals: NonNullable<Anal
       : !r.resolution && r.requirementID === target.id && r.fingerprint === fingerprint)) continue;
     if (!proposal.resolution && proposal.statement === target.statement && JSON.stringify(proposal.acceptance) === JSON.stringify(target.acceptance)) continue;
     project.refinements.push({ ...proposal, id: newID(), fingerprint, original: structuredClone(target), status: "pending", createdAtRevision: project.revision + 1,
-      ...(related ? { relatedOriginal: structuredClone(related), resolutionContextKey: contextKey } : {}) });
+      ...(related ? { relatedOriginal: structuredClone(related), resolutionContextKey: contextKey,
+        ...(triggerSourceIDs.length ? { resolutionTriggerSourceIDs: [...triggerSourceIDs] } : {}) } : {}) });
     project.roundChanges.push(`Proposed requirement cleanup: ${target.statement} — ${proposal.reason}`);
   }
 }

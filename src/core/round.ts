@@ -3,7 +3,7 @@ import { proposeRefinements } from "./refinement.js";
 import { proposalSimilarityWarnings } from "./similarity.js";
 import { validConcepts, validateAnalysisReferences, type Project, type Analysis, type ResearchEvidence } from "./model.js";
 
-export function applyRound(project: Project, result: Analysis, newID: () => string, research: ResearchEvidence[] = []) {
+export function applyRound(project: Project, result: Analysis, newID: () => string, research: ResearchEvidence[] = [], resolutionTriggerSourceIDs: string[] = []) {
   let omittedConcepts = 0;
   result = { ...result, questions: result.questions.map((question) => {
     if (!question.concepts) return question;
@@ -126,7 +126,7 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
   }
   for (const response of result.reviewResponses ?? []) project.roundChanges.push(response.text);
   if (result.refinements?.some((r) => changed.has(r.requirementID))) throw new Error("Cannot refine and change the same requirement in one round.");
-  proposeRefinements(project, result.refinements ?? [], newID);
+  proposeRefinements(project, result.refinements ?? [], newID, resolutionTriggerSourceIDs);
   project.roundChanges.push(...proposalSimilarityWarnings(project, new Set([...questions, ...requirements].map((item) => item.id))));
   if (newFindings.length) project.roundChanges.push(`Saved ${newFindings.length} source-backed research findings.`);
   const evidence = new Set([...project.sources, ...project.questions, ...project.requirements, ...project.research].map((item) => item.id));

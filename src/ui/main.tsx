@@ -1,4 +1,4 @@
-import React, { startTransition, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import type { Job, Project, Submission } from "../core/model.js";
 import type { coverage } from "../core/coverage.js";
@@ -7,6 +7,8 @@ import "./appearance.css";
 import "./review.css";
 import "./action-button.css";
 import { ReviewQueue, reviewItems } from "./review.js";
+import { Pagination, PagedList, usePagination } from "./pagination.js";
+import "./pagination.css";
 import { pendingRefinementRequirementIDs } from "../core/resolution.js";
 import { ProcessingQueue } from "./processing-queue.js";
 import { queueActivities } from "./queue-activity.js";
@@ -18,7 +20,8 @@ import { LazyDetails } from "./lazy-details.js";
 import { projectProgress } from "../core/progress.js";
 import { ActivityProvider, ActivityFeedback, HeaderActivity, Spinner, useActivity } from "./activity.js";
 import { createExecutionIndex, deliveredRequirement, type ExecutionState, type WorkspaceRepository } from "../core/execution.js";
-import { shareSnapshot } from "./snapshot.js";
+import { SnapshotRefresh } from "./snapshot.js";
+import type { SnapshotTokens } from "../web/snapshot.js";
 import { reviewFingerprint } from "../core/model.js";
 import { AppearanceSettings } from "./appearance-settings.js";
 import { AnnotatedText, QuestionHelp, wordHelpContext, type HelpControls } from "./question-help.js";
@@ -29,7 +32,7 @@ import type { FolderPreview } from "../core/folder-preview.js";
 import { ActionScope } from "./action-button.js";
 import { discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 
-type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
+type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
 type Draft = { kind: "answer" | "delegation" | "deferral"; text: string };
 // Carry pre-rename browser preferences forward once, without replacing newer values.
@@ -57,7 +60,7 @@ function QuestionCleanup({ project, queuedIDs, disabled, replaceDisabled, retire
     <p>Dismiss individual questions beside Save response. These actions apply to all eligible unanswered questions; saved and queued responses are protected. Questions and reasons remain in history.</p>
     {!!eligible.length && <div className="button-row"><button className="secondary" disabled={disabled} onClick={() => void retire(eligible.map((q) => q.id))}>Dismiss unanswered questions</button><button className="secondary" disabled={disabled || replaceDisabled} title={!disabled && replaceDisabled ? "Complete a folder scan before generating evidence-based replacements." : undefined} onClick={() => void retire(eligible.map((q) => q.id), true)}>Replace unanswered questions from project evidence</button></div>}
     {replaceDisabled && <small>Complete a folder scan before generating evidence-based replacements.</small>}
-    {!!retired.length && <details><summary>Dismissed questions · {retired.length}</summary>{retired.map((q) => <p key={q.id}><strong>{q.text}</strong><br />{q.retirementReason}</p>)}</details>}
+    {!!retired.length && <details><summary>Dismissed questions · {retired.length}</summary><PagedList items={retired} itemID={(q) => q.id} label="Dismissed questions">{(q) => <p><strong>{q.text}</strong><br />{q.retirementReason}</p>}</PagedList></details>}
   </details></ActionScope>;
 }
 function Meter({ value, stale = false }: { value: number; stale?: boolean }) {
@@ -68,6 +71,7 @@ function App() {
   const [id, setID] = useState<string | null>(localStorage.getItem("reqwizit-project"));
   const selected = useRef(id); selected.current = id;
   const [data, setData] = useState<Snapshot | null>(null);
+  const refresh = useRef(new SnapshotRefresh<Snapshot>());
   const [creating, setCreating] = useState(false);
   const [tab, setTab] = useState<"discover" | "review" | "implementation" | "requirements" | "research" | "history">("discover");
   const [epicID, setEpicID] = useState("all");
@@ -142,10 +146,16 @@ function App() {
   }
   async function load(projectID = selected.current, signal?: AbortSignal, background = false) {
     if (!projectID) return;
-    const snapshot = await api<Snapshot>(`projects/${projectID}`, undefined, signal);
-    if (signal?.aborted) return;
+    const ticket = refresh.current.begin(projectID);
+    const response = await fetch(`/api/projects/${projectID}`, { signal, headers: { "X-Reqwizit-Token": token, "X-Reqwizit-Snapshot": JSON.stringify(ticket.baseline?.tokens ?? {}) } });
+    const sections = await response.json();
+    if (!response.ok) throw new Error(sections.error ?? "Request failed.");
+    const tokens: SnapshotTokens | null = response.headers.has("X-Reqwizit-Snapshot") ? JSON.parse(response.headers.get("X-Reqwizit-Snapshot")!) : null;
+    // A full-response fallback keeps older servers and development overlays compatible.
+    const snapshot = refresh.current.complete(ticket, sections, tokens, selected.current, signal?.aborted);
+    if (!snapshot) return;
     const update = () => {
-      if (selected.current === projectID) setData((previous) => previous && previous.project.id === projectID && (previous.project.revision > snapshot.project.revision || previous.project.revision === snapshot.project.revision && previous.execution.version > snapshot.execution.version) ? previous : shareSnapshot(previous, snapshot));
+      if (selected.current === projectID) setData(snapshot);
     };
     if (background) startTransition(update); else update();
   }
@@ -249,16 +259,19 @@ function App() {
   const epics = project?.epics.filter((item) => !item.archived) ?? [];
   const selectedEpic = epics.find((item) => item.id === epicID);
   const epicScore = summary?.epics.find((item) => item.epicID === epicID);
-  const queuedQuestionIDs = new Set(data?.submissions.flatMap((item) => item.input.type === "answer" && ["queued", "processing"].includes(item.status) ? [item.input.questionID] : []) ?? []);
-  const protectedQuestionIDs = new Set(data?.submissions.flatMap((item) => item.input.type === "answer" && ["queued", "processing", "saved", "needs-attention"].includes(item.status) ? [item.input.questionID] : []) ?? []);
+  const queuedQuestionIDs = useMemo(() => new Set(data?.submissions.flatMap((item) => item.input.type === "answer" && ["queued", "processing"].includes(item.status) ? [item.input.questionID] : []) ?? []), [data?.submissions]);
+  const protectedQuestionIDs = useMemo(() => new Set(data?.submissions.flatMap((item) => item.input.type === "answer" && ["queued", "processing", "saved", "needs-attention"].includes(item.status) ? [item.input.questionID] : []) ?? []), [data?.submissions]);
+  const pendingReviewCount = useMemo(() => project && data ? reviewItems(project, data.submissions, "pending").length : 0, [project, data?.submissions]);
   const questions = project?.questions.filter((item) => item.status !== "retired" && !queuedQuestionIDs.has(item.id) && (epicID === "all" || item.epicID === epicID)) ?? [];
   const openQuestions = questions.filter((item) => ["pending", "deferred", "delegated"].includes(item.status));
   const scopedQuestions = project?.questions.filter((item) => item.status !== "retired" && (epicID === "all" || item.epicID === epicID)) ?? [];
   const visibleQuestions = scopedQuestions.filter((item) => questionFilter === "submitted" ? queuedQuestionIDs.has(item.id) : !queuedQuestionIDs.has(item.id) && (questionFilter === "open" ? item.status === "pending" : questionFilter === "answered" ? item.status === "answered" : ["deferred", "delegated"].includes(item.status)));
+  const questionPaging = usePagination(visibleQuestions.map((q) => q.id), `${project?.id}:${epicID}:${questionFilter}`, expandedQuestion);
+  const pagedQuestions = visibleQuestions.slice(questionPaging.start, questionPaging.end);
   // Keep a ready-to-answer card open as submissions leave the list, including
   // changes arriving through polling. Explicit navigation can still open another.
-  const activeQuestionID = visibleQuestions.some((question) => question.id === expandedQuestion)
-    ? expandedQuestion : questionFilter === "open" ? visibleQuestions[0]?.id ?? null : null;
+  const activeQuestionID = pagedQuestions.some((question) => question.id === expandedQuestion)
+    ? expandedQuestion : questionFilter === "open" ? pagedQuestions[0]?.id ?? null : null;
   const latestSubmission = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status));
   const requirements = project?.requirements.filter((item) => epicID === "all" || item.epicID === epicID) ?? [];
   const implementationRemaining = useMemo(() => {
@@ -268,6 +281,10 @@ function App() {
   }, [project, data?.execution]);
   const lastJob = data?.jobs.at(-1);
   const responseStatus = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status))?.status;
+  const inspectRepository = useCallback(() => api<WorkspaceRepository>(`projects/${project?.id}/execution-repository`), [project?.id]);
+  const implementationAction = useCallback((name: string, body: Record<string, unknown>) => act(async () => {
+    if (project) await api(`projects/${project.id}/${name}`, { ...(name === "execution-start" || name === "execution-config" ? { revision: project.revision } : {}), ...body });
+  }), [project?.id, project?.revision]);
   const saveAnswer = async (question: Project["questions"][number], kind: "answer" | "delegation" | "deferral", text: string) => {
     const previous = latestSubmission(question.id);
     if (await submit({ type: "answer", questionID: question.id, questionText: question.text, sourceID: question.sourceID ?? null, answer: { kind, text } }, question.id, previous?.status === "queued" ? previous.id : undefined)) {
@@ -288,8 +305,8 @@ function App() {
     <main>
       {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
       <header className="topbar"><div><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small><HeaderActivity /></div>
-        {!creating && project && data && <ProcessingQueue key={project.id} active={data.active} progress={data.progress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(explore, "Starting discovery…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
-        {!showSettings && project && summary && data && !creating && <ProjectProgress key={`progress:${project.id}`} project={project} execution={data.execution} definition={summary} />}</header>
+        {!creating && project && data && <ProcessingQueue key={project.id} active={data.active} progress={data.progress} refinementProgress={data.refinementProgress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(explore, "Starting discovery…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
+        {!showSettings && project && summary && data && !creating && <ProjectProgress key={`progress:${project.id}`} progress={mapProgress!} definition={summary} />}</header>
       {pending && <ActivityFeedback label={actionLabel} />}
       {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
       {showSettings && <section id="workspace-settings" className="settings-panel" aria-label="Settings">
@@ -318,13 +335,13 @@ function App() {
         </form>
       </section> : !project || !summary ? <div className="empty">Loading your workspace…</div> : <>
         <div className="workspace-status" role="status"><span>{data.workspace ? `${data.workspace.status === "saved" ? "Saved" : data.workspace.status === "pending" ? "Saving" : data.workspace.status === "conflict" ? "Conflict" : "Unavailable"} · ${data.workspace.path}${data.workspace.savedRevision ? ` · r${data.workspace.savedRevision}` : ""}` : "No local folder connected"}</span><button className="quiet" onClick={() => navigate("settings")}>{data.workspace ? "Workspace settings" : "Connect workspace"}</button>{data.workspace?.diagnostic && <span>{data.workspace.diagnostic}</span>}</div>
-        <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Review"], ["implementation", "Implement"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}{key === "review" && <span>{reviewItems(project, data.submissions, "pending").length}</span>}{key === "implementation" && <span>{implementationRemaining}</span>}</button>)}</div>
+        <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Review"], ["implementation", "Implement"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}{key === "review" && <span>{pendingReviewCount}</span>}{key === "implementation" && <span>{implementationRemaining}</span>}</button>)}</div>
         <section className="workspace">
           <div className="discovery-column">
             <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "review" ? "Review one requirement at a time" : tab === "implementation" ? "Build one requirement at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div>{tab !== "implementation" && <button className="primary" disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(explore, "Starting discovery…")}>{data.active && <Spinner />}{data.active ? "Discovering…" : "Explore next gaps →"}</button>}</div>
             {needsInitialization && tab !== "implementation" && <p role="status">Initialization must complete before gap discovery. Retry the folder scan below.</p>}
             {tab !== "implementation" && tab !== "requirements" && data.workspace && !project.scans.length && <WorkspaceScan project={project} scanJob={lastScan} disabled={busy || connectionChanged} scan={(resumeJobID) => act(async () => { await api(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); setTab("requirements"); })} />}
-            {tab === "implementation" && <ImplementationTab key={project.id} project={project} state={data.execution} active={data.implementationActive} disabled={pending || data.active} discoveryActive={data.active} connected={!!data.workspace} workspaceID={data.workspace?.bindingID} epicID={epicID} inspectRepository={() => api<WorkspaceRepository>(`projects/${project.id}/execution-repository`)} action={(name, body) => act(async () => { await api(`projects/${project.id}/${name}`, { ...(name === "execution-start" || name === "execution-config" ? { revision: project.revision } : {}), ...body }); })} />}
+            {tab === "implementation" && <ImplementationTab key={project.id} project={project} state={data.execution} active={data.implementationActive} disabled={pending || data.active} discoveryActive={data.active} connected={!!data.workspace} workspaceID={data.workspace?.bindingID} epicID={epicID} inspectRepository={inspectRepository} action={implementationAction} />}
             {(tab === "history" || tab === "research") && <div className="filter-row"><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Changes & outcomes</button><button className={tab === "research" ? "active" : ""} onClick={() => setTab("research")}>Research sources</button></div>}
             {tab === "discover" && <>
               <QuestionCleanup project={project} disabled={busy || connectionChanged} queuedIDs={protectedQuestionIDs} replaceDisabled={!project.scans.length} retire={(ids, regenerate) => act(() => dismissQuestions(ids, regenerate))} />
@@ -333,12 +350,15 @@ function App() {
               {visibleQuestions.length === 0 && <div className="empty-card"><h3>{questionFilter !== "open" ? "No responses in this view yet." : queuedQuestionIDs.size ? "Your responses are in the queue." : "Ready for the next questions?"}</h3><p>{questionFilter === "open" ? "Explore the next gaps or add more information. Questions will adapt as you answer; no open questions does not mean the specification is complete." : "Use the filters above to answer questions or revisit a saved response."}</p></div>}
               {(epics.some((epic) => !["project", "inbox"].includes(epic.id)) || project.organizationReviews.some((review) => review.status === "pending")) && <button className="map-prompt" onClick={() => setTab("requirements")}>Your project is taking shape · {epics.filter((epic) => !["project", "inbox"].includes(epic.id)).length} feature areas{project.organizationReviews.some((review) => review.status === "pending") ? " · Organization changes to review" : ""} <span>View project map →</span></button>}
               {project.questions.filter((question) => question.status === "retired" && drafts.current.get(question.id)?.text.trim()).map((question) => <article className="question-card" key={question.id}><h3>Draft retained: {question.text}</h3><p>This question was retired during discovery. Your draft is still here; you can save it as a project note.</p><p className="source-excerpt">{drafts.current.get(question.id)!.text}</p><button className="secondary" disabled={sending.includes(question.id)} onClick={() => void submit({ type: "note", text: drafts.current.get(question.id)!.text, epicID: "project" }, question.id).then((saved) => { if (saved) { drafts.current.delete(question.id); void load(); } })}>Save draft as note</button></article>)}
-              {visibleQuestions.map((question, index) => {
+              <Pagination paging={questionPaging} label="Design" onNavigate={() => setExpandedQuestion(null)} />
+              {pagedQuestions.map((question, pageIndex) => {
+                const index = questionPaging.start + pageIndex;
                 const submission = latestSubmission(question.id);
                 const response = submission?.input.type === "answer" ? submission.input.answer : undefined;
                 const source = project.sources.find((item) => item.id === question.sourceID);
                 return <QuestionCard key={`${project.id}:${question.id}:${submission?.id ?? question.sourceID ?? "new"}`} question={question} area={areaTitle(epics.find((epic) => epic.id === question.epicID))} purpose={epics.find((epic) => epic.id === question.epicID)?.purpose} expanded={activeQuestionID === question.id} onToggle={() => setExpandedQuestion(activeQuestionID === question.id ? null : question.id)} onCancel={() => { drafts.current.delete(question.id); setExpandedQuestion(null); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={response?.text ?? source?.text} initialKind={response?.kind ?? (source && ["answer", "delegation", "deferral"].includes(source.kind) ? source.kind as Draft["kind"] : undefined)} number={index + 1} disabled={sending.includes(question.id)} dismissDisabled={busy || connectionChanged} onDismiss={question.status === "pending" && !question.sourceID && !protectedQuestionIDs.has(question.id) ? () => act(() => dismissQuestions([question.id])) : undefined} status={sending.includes(question.id) ? "Saving…" : responseStatus(question.id)} onSave={(kind, text) => saveAnswer(question, kind, text)} />;
               })}
+              {questionPaging.pages > 1 && <Pagination paging={questionPaging} label="Design bottom" onNavigate={() => setExpandedQuestion(null)} />}
               <details className="add-information"><summary>Add information</summary><form className="note-card" onSubmit={(event) => { event.preventDefault(); const submitted = note; void submit({ type: "note", text: submitted, epicID: epicID === "all" ? "project" : epicID }, "note").then((saved) => { if (saved) setNote((current) => current === submitted ? "" : current); }); }}><label>Add an idea, correction, or constraint<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Something else the project should consider…" maxLength={12000} required /></label><button className="secondary" title={sending.includes("note") ? "Your note is being saved." : !note.trim() ? "Write an idea, correction or constraint first." : undefined} disabled={sending.includes("note") || !note.trim()}>{sending.includes("note") ? "Saving…" : "Add to project →"}</button></form></details>
             </>}
             <div hidden={tab !== "review"}><ReviewQueue key={project.id} project={project} submissions={data.submissions} epicID={epicID} sending={sending} submit={submit}

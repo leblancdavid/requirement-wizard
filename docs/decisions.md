@@ -70,8 +70,20 @@ See [resolution workflow](browser-workspace.md#resolve-candidates-through-refine
 the [migration ledger](migrations.md#reviewable-requirement-resolutions-v1-2026-10-20).
 
 Confirmed simplification: remove the standalone approved-requirement audit section;
-Refine is the single duplicate/conflict resolution entry point. Retain its internal
+Refine is the single manual duplicate/conflict resolution entry point. Retain its internal
 candidate scan and all existing review/approval safeguards and saved work.
+
+Confirmed extension: ordinary concrete answers and requirement reviews automatically
+prepare targeted resolution checks after discovery. Compare affected/new/changed records
+with relevant active counterparts, including proposed/needs-review records without
+promoting AI wording to confirmed intent. At most three strongest uncached candidate
+pairs per response; show additional unscheduled candidates. Save discovery and a durable
+follow-up receipt together, then checkpoint pair calls independently. Preserve completed
+work on failure/restart, require explicit resume and never replay successful discovery
+to retry pair checking. Approved requirements still require explicit resolution approval;
+ambiguous intent still needs a targeted question. Explicit Refine keeps its approved-only
+pair scope and existing 20-pair-call limit. Implemented and deterministically tested;
+live semantic resolution quality remains unqualified.
 
 Confirmed review presentation: refinement proposals are individual expandable items
 in the shared Review queue, with a Refinements filter, approve/keep-current actions,

@@ -4,6 +4,24 @@ import { projectSchema, reviewFingerprint, type Project, type Submission } from 
 import { ReviewQueue, reviewItems } from "./review.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { pageWindow, PagedList } from "./pagination.js";
+
+test("page windows bound large lists and clamp empty, negative and shortened pages", () => {
+  assert.deepEqual(pageWindow(500, 25, 25), { page: 1, pages: 20, start: 25, end: 50 });
+  assert.deepEqual(pageWindow(26, 499, 25), { page: 1, pages: 2, start: 25, end: 26 });
+  assert.deepEqual(pageWindow(0, 25, 25), { page: 0, pages: 1, start: 0, end: 0 });
+  assert.equal(pageWindow(100, -25, 10).start, 0);
+  assert.equal(pageWindow(101, 100, 50).end, 101);
+});
+
+test("secondary histories only render the first 25 rows without changing saved items", () => {
+  const items = Array.from({ length: 500 }, (_, id) => ({ id: String(id) }));
+  const html = renderToStaticMarkup(createElement(PagedList<{ id: string }>, { items, itemID: (item) => item.id, label: "History", children: (item) => createElement("article", null, item.id) }));
+  assert.equal((html.match(/<article>/g) ?? []).length, 25);
+  assert.match(html, /1–25 of 500/);
+  assert.match(html, /Page 1 of 20/);
+  assert.equal(items.length, 500);
+});
 
 function fixture(): Project {
   const project = projectSchema.parse({ id: "project", name: "Game", revision: 1, model: { providerID: "openai", modelID: "fixture" },
@@ -25,6 +43,19 @@ test("Review uses Refine as the single duplicate/conflict workflow without runni
   assert.ok(!html.includes("Check approved requirements for duplicates and conflicts"));
   assert.ok(!html.includes("Approved requirement audit"));
   assert.equal(calls, 0);
+  assert.deepEqual(p, before);
+});
+
+test("Review bounds a 500-item pending list without limiting its counts or mutating evidence", () => {
+  const p = fixture();
+  p.refinements = [];
+  p.requirements = Array.from({ length: 500 }, (_, index) => ({ ...p.requirements[1]!, id: `pending-${index}`, statement: `Pending behavior ${index}` }));
+  const before = structuredClone(p);
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
+    refine: () => assert.fail("Paging must not invoke a model"), submit: async () => true, reviewRefinement: async () => true }));
+  assert.equal((html.match(/class="question-card review-card"/g) ?? []).length, 25);
+  assert.match(html, /1–25 of 500/);
+  assert.ok(!html.includes("Pending behavior 25<"));
   assert.deepEqual(p, before);
 });
 

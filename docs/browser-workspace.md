@@ -2,6 +2,29 @@
 
 ## Repeated questions and overlapping requirements
 
+### Automatic targeted checks after answers and reviews
+
+When an ordinary concrete answer or requirement review finishes discovery, the queue
+compares affected/new/changed requirements with related active requirements across
+features. It schedules at most three strongest uncached lexical candidates per response,
+not every project pair. Proposed and needs-review requirements can participate, but
+their AI wording is not confirmed human intent. Rejected records and archived features
+are excluded; a proposed replacement for a rejected record can still be checked.
+Notes, deferrals and delegations do not trigger this additional stage.
+
+Checks use the same resolution proposals and targeted clarification questions as Refine.
+No resolution changes either original until **Approve resolution**. Processing & queue
+and submitted-review history show checked/skipped/remaining counts and additional
+unscheduled candidates. A skipped pair is not a new semantic verdict; lexical retrieval
+can miss differently worded conflicts, and this is not a completeness guarantee.
+
+Discovery and its original review response are saved before pair calls. Failure,
+cancellation or interrupted-worker recovery pauses for **Resume discovery**, retaining
+human decisions and completed pair work without replaying successful discovery.
+Automatic-processing preferences still apply: saved responses get these checks when
+their follow-up is processed, not simply when viewing Review. Legacy completed responses
+are not backfilled or reprocessed. No live semantic-quality qualification is claimed.
+
 ### Resolve candidates through Refine
 
 Use **Review → Refine requirements** for both wording cleanup and duplicate/conflict
@@ -10,7 +33,8 @@ section was removed. Choose **All project areas** for project-wide checks; a sel
 feature limits Refine to pairs touching that feature, including cross-feature
 counterparts and their full evidence. Only approved requirements in active features
 participate in pair resolution; proposed, rejected, needs-review and archived-feature
-records are excluded from that stage. Refine checks candidate approved pairs first,
+records are excluded from that explicit stage (unlike automatic targeted checks above).
+Refine checks candidate approved pairs first,
 then unfinished individual wording tasks, using bounded AI requests.
 
 - **Resolution proposed** appears under **To review / Refinements**. Compare both
@@ -36,6 +60,21 @@ Approve/dismiss pending work, answer clarification questions, then refine again 
 remaining overlaps. Unchanged completed pair checks and dismissed fixes are reused;
 failed/cancelled work resumes only explicitly. No-change individual cleanup checks
 from earlier app versions remain valid and are not replayed for this workflow change.
+
+**Processing & queue** now shows refinement stage counts and a measured progress bar:
+**Step 1 of 2 · Checking overlaps**, then **Step 2 of 2 · Wording cleanup**. Counts
+advance after successful saved checks, not when requests start; model activity does
+not replace the stage counts. Percentages describe the current stage of **this run**,
+not an exhaustive audit or a time estimate. Preparation is indeterminate; ineligible
+work can be skipped and further overlaps can remain after the 20-call cap. Stopped,
+failed and blocked outcomes retain partial counts without marking unfinished checks
+complete. These counters are in-memory telemetry: page reloads can recover them from
+the running server, but server restart discards them. Durable check reuse and explicit
+retry behavior remain unchanged.
+
+Verified with the 296-test deterministic suite and Playwright browser checks, including
+live 0/3 → 1/3 → 3/3 wording counts, accessible progress values and the completed outcome.
+No live model calls were needed for these presentation/orchestration checks.
 
 Checks preserve exact pair evidence, applicable human guardrails and linked clarification
 history within the existing hard context bounds. Missing/oversized evidence blocks the
@@ -190,6 +229,84 @@ the available Node 20.11 environment; the documented development baseline remain
 Node 22.12+. No live model calls or production-data resets were performed.
 
 ## Large-project responsiveness
+
+### Design, Review and Implementation paging
+
+Question filters, requirement/refinement review (including submitted/reviewed history),
+and the filtered Implementation requirement list use shared Previous/Next controls,
+item ranges and page counts. Pages default to **25 items**, with **10/25/50** choices;
+main multi-page lists repeat controls at the bottom. Feature/status/search filters apply
+before paging, across the full dataset. Implementation retains feature headings and
+existing ordering; a feature spanning pages shows only that page's rows, while its
+progress totals and **Implement epic** action still cover the whole feature.
+
+Question drafts, review notes, and planning dependency/order/notes edits live outside
+paged rows. Explicit answer links and review auto-advance reveal the target page.
+Background refreshes use stable item IDs for navigation and clamp pages when a list
+shrinks. Work packages, execution order, dismissed questions, previous plans and
+assessment/implementation runs are paged as well. Closing lazy history drawers resets
+their local navigation on reopening. Page size/position are in-memory UI state, not
+project settings, and reset when their owning view is remounted.
+
+Paging bounds rendered rows, not initial snapshot size or engine evaluation. Assessment,
+planning, execution, progress and review counts retain their existing full scope. No
+saved-data format, assessment fingerprint or freshness rule changes; existing evidence
+does not need migration or reassessment. See [compatibility](migrations.md#workspace-list-paging).
+
+Verification (2026-10-20): type checking, all **291 deterministic tests**, the UI
+build, Playwright browser checks and diff checks passed.
+Paging checks cover bounded 500-item rendering, unchanged full-list counts and evidence,
+empty lists, partial final pages and clamping after shrinkage. Browser checks cover
+cross-page navigation, global search, retained answer/review/planning drafts and dependency
+choices, review auto-advance/focus, answer links to later pages, and mobile width.
+No live model calls were
+made; checks used the available Node 20.11 environment (baseline remains Node 22.12+).
+
+### Processing refreshes (2026-10-20)
+
+The browser sends bounded, per-section content tokens on its existing authenticated
+snapshot request. The server omits unchanged sections from the JSON body; unchanged
+polls return `{}`. Progress-only refreshes do not retransmit or parse the specification,
+coverage or execution evidence. Tokens cover actual section content, not only revision
+or execution counters, so worker interruption, help jobs, queue state and workspace
+outcomes remain visible without a specification change. Tokens live only in memory.
+Clients without the new header still receive the original full snapshot.
+
+Each response merges against its own request's baseline, retaining equal section
+identities and removing vanished optional fields. Aborted, old out-of-order, wrong-project
+and older revision/version results cannot replace newer accepted state. Background
+refreshes retain React transitions. Implementation and overall-progress components skip
+unrelated progress-only renders; disabled-action preparation retains unmodified element
+branches rather than cloning every element. Existing accessibility/blocking behavior is
+preserved. The project map and overall-progress header share one memoized score calculation.
+
+The server keeps a bounded 16-entry immutable revision/coverage cache and reads job
+history once per snapshot. Volatile sections are still evaluated on every request;
+workspace synchronization/conflict detection and recovery are intentionally unchanged.
+Execution checkpoint changes still transfer the whole execution section, and synchronous
+storage/filesystem work is not moved to a worker by this pass.
+
+Processing & queue mounts completed/replaced submission history and recent background
+details only when expanded. Completed/replaced responses have 25-item pages, newest
+first; active and waiting submissions remain visible. Closing a history disclosure
+unmounts its contents; reopening starts at the newest page.
+
+Compatibility: no persisted data, schema, assessment semantics, freshness fingerprints
+or workspace formats change; no reset, migration or repeated model call is required.
+See the [migration ledger](migrations.md#processing-refresh-transport-and-rendering-2026-10-20).
+
+Verification (2026-10-20): type checking, all **288 deterministic tests**, UI build,
+Playwright browser checks and diff checks passed. The 500-requirement fixture exercises
+checkpoint/progress refreshes, typing and focus retention, expanded details, prerequisite
+drafts, scrolling and navigation. Queue checks cover unmounted collapsed history,
+25-item pages and access to older entries. In one local run, the initial JSON body was
+**154,695 bytes**, versus **41 bytes** for a progress-only body (excluding HTTP headers),
+with no observed browser long tasks during the instrumented interactions. This is a
+deterministic synthetic check, not a before/after end-to-end latency benchmark or live
+provider/desktop qualification. No model calls were made. Checks used the available
+Node 20.11 environment; the development baseline remains Node 22.12+.
+
+### Earlier large-project rendering work
 
 Implementation feature drawers, requirement bodies, assessment details and run history
 mount their contents on expansion rather than constructing hidden evidence/log trees.

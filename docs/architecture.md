@@ -19,6 +19,13 @@ implemented under `src/`. See [decisions.md](decisions.md),
   proposals; existing storage transactions publish and approve both records atomically.
   The discovery queue runs bounded pair tasks before compatible individual cleanup and
   retains completed pair outcomes independently; no automatic approval or startup replay.
+- `src/core/incremental-resolution.ts`: publication-time affected-record selection and
+  top-three uncached lexical pair planning after ordinary answers/reviews, including
+  non-rejected proposals. `finishJob` saves optional version-1 submission receipts in
+  the same transaction as discovery. Queue follow-up checkpoints pair jobs separately,
+  pins trigger evidence, retains original review responses and uses checkpoint CAS to
+  reject late workers. Interrupted follow-up requires explicit resume without discovery
+  replay; compatible legacy completed checks remain reusable. See [migrations.md](migrations.md).
 - `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`, `working-set.ts`: organization, material
   change review, deterministic coverage, and bounded working sets.
 - `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.
@@ -64,6 +71,10 @@ implemented under `src/`. See [decisions.md](decisions.md),
 - `src/terminal/cli.ts`: scriptable commands and a readline interview menu.
 - `src/spike/`: compatibility runner using the shared runtime implementation.
 - `src/web/server.ts`: authenticated loopback browser API and built-asset hosting.
+- `src/web/snapshot.ts`: opt-in section-content tokens for lightweight snapshot polling;
+  the UI merges request-linked deltas without persisting transport state. A bounded
+  revision/coverage cache avoids repeated deterministic work; volatile outcomes remain
+  content-checked independently of specification/execution version counters.
 - `src/ui/`: React workspace and responsive styles, built with Vite 6.4.4.
 - `src/desktop/`: Electron main process, sandboxed preload, and desktop smoke check.
   The main process owns the existing local service; the renderer reuses the React UI.

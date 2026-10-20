@@ -76,6 +76,7 @@ export const refinementProposalSchema = z.object({
 const refinementSchema = refinementProposalSchema.extend({
   id: z.string(), fingerprint: z.string(), original: requirement,
   relatedOriginal: requirement.optional(), resolutionContextKey: z.string().optional(),
+  resolutionTriggerSourceIDs: z.array(z.string().min(1)).min(1).max(8).optional(),
   status: z.enum(["pending", "accepted", "dismissed"]), createdAtRevision: z.number().int(),
 }).superRefine((value, ctx) => {
   if (value.resolution && (!value.relatedOriginal || value.relatedOriginal.id !== value.resolution.relatedRequirementID || !value.resolutionContextKey)) ctx.addIssue({ code: "custom", message: "Resolution provenance is incomplete." });
@@ -185,10 +186,19 @@ export const submissionSchema = z.object({
   auto: z.boolean(), research: z.boolean(),
   replaces: z.string().uuid().optional(),
 }).strict();
+export const overlapFollowupSchema = z.object({
+  format: z.literal(1), discoveryJobID: z.string().min(1),
+  requirementIDs: z.array(z.string().min(1)), triggerSourceIDs: z.array(z.string().min(1)).min(1).max(8),
+  state: z.enum(["pending", "completed"]), candidateCount: z.number().int().nonnegative(),
+  pairs: z.array(z.object({ requirementIDs: z.tuple([z.string().min(1), z.string().min(1)]),
+    status: z.enum(["pending", "completed", "skipped"]), jobID: z.string().optional(), reason: z.string().optional(),
+  }).strict()).max(3),
+}).strict();
 export type Submission = z.infer<typeof submissionSchema> & {
   projectID: string; status: "queued" | "saved" | "processing" | "completed" | "needs-attention" | "superseded";
   applied: boolean; appliedSourceID?: string; conflict?: boolean; submittedAt: string; jobID?: string; diagnostic?: string;
   response?: string;
+  overlapFollowup?: z.infer<typeof overlapFollowupSchema>;
   /** Durable preflight result; input/approval is already saved, inference not started. */
   contextBlock?: Pick<NonNullable<Job["context"]>, "revision" | "characters" | "budget" | "epicIDs" | "sectionCharacters">;
 };
@@ -212,7 +222,7 @@ export type Job = {
     isolatedTask?: boolean;
     refinementOnly?: boolean;
     refinementTarget?: { requirementID: string; fingerprint: string; contextKey?: string };
-    refinementPair?: { requirementIDs: [string, string]; contextKey: string };
+    refinementPair?: { requirementIDs: [string, string]; contextKey: string; includeUnapproved?: boolean; triggerSourceIDs?: string[] };
     submissionIDs?: string[];
     reviewSourceIDs?: string[];
     reviewChangeSourceIDs?: string[];

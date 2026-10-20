@@ -1,9 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Project } from "../core/model.js";
 import type { coverage } from "../core/coverage.js";
-import type { ExecutionState } from "../core/execution.js";
-import { localAssessmentDetail, projectProgress, type LocalAssessmentCounts } from "../core/progress.js";
+import { localAssessmentDetail, type projectProgress, type LocalAssessmentCounts } from "../core/progress.js";
 import "./project-progress.css";
 
 function ProgressMeter({ value, label }: { value: number; label: string }) {
@@ -18,8 +16,8 @@ function LocalCodeProgress({ counts, epic }: { counts: LocalAssessmentCounts; ep
   </div>;
 }
 
-export function ProjectProgress({ project, execution, definition }: { project: Project; execution: ExecutionState; definition: ReturnType<typeof coverage> }) {
-  const progress = useMemo(() => projectProgress(project, execution, definition), [project, execution, definition]);
+export const ProjectProgress = React.memo(ProjectProgressView);
+function ProjectProgressView({ progress, definition }: { progress: ReturnType<typeof projectProgress>; definition: ReturnType<typeof coverage> }) {
   const [open, setOpen] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null), trigger = useRef<HTMLButtonElement>(null);
   useEffect(() => {

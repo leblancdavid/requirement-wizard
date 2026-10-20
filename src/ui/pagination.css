@@ -1,0 +1,4 @@
+.list-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; margin: 1rem 0; font-size: .9rem; }
+.list-pagination label { display: flex; align-items: center; gap: .4rem; }
+.list-pagination select { width: auto; padding: .35rem; }
+.list-pagination button { padding: .4rem .7rem; }

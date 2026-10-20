@@ -14,6 +14,8 @@ import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
 import { wordingKey } from "../core/similarity.js";
 import { resolutionHasWaitingInput, validateResolutionEvidence } from "../core/resolution.js";
+import { planIncrementalResolution } from "../core/incremental-resolution.js";
+import { overlapFollowupSchema } from "../core/model.js";
 import { reviewRefinement } from "../core/refinement.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -27,6 +29,12 @@ function readStoredJob(payload: string): Job {
     ...(job.result?.refinements ?? []).flatMap((p) => p.resolution ? [p.resolution] : [])];
   if (envelopes.some((value) => value.format !== 1)) throw new Error("Unsupported requirement-resolution format in saved job. Upgrade the app; saved evidence was not overwritten.");
   return job;
+}
+
+function readStoredSubmission(payload: string): Submission {
+  const item = JSON.parse(payload) as Submission;
+  if (item.overlapFollowup !== undefined) overlapFollowupSchema.parse(item.overlapFollowup);
+  return item;
 }
 
 /** Also used on a disposable project copy before accepting a batch checkpoint. */
@@ -276,7 +284,7 @@ export class ProjectStore {
 
   submissions(id: string): Submission[] {
     return (this.db.prepare("SELECT payload FROM submissions WHERE project_id = ? ORDER BY rowid").all(id) as Array<{ payload: string }>)
-      .map((row) => JSON.parse(row.payload) as Submission);
+      .map((row) => readStoredSubmission(row.payload));
   }
 
   /** The wake-up loop must not parse every project's specification on each tick. */
@@ -297,6 +305,7 @@ export class ProjectStore {
   }
 
   saveSubmission(item: Submission) {
+    if (item.overlapFollowup !== undefined) overlapFollowupSchema.parse(item.overlapFollowup);
     this.db.transaction(() => {
       this.db.prepare("UPDATE submissions SET payload = ? WHERE id = ? AND project_id = ?").run(JSON.stringify(item), item.id, item.projectID);
       if (item.status === "needs-attention") {
@@ -306,12 +315,24 @@ export class ProjectStore {
     })();
   }
 
+  /** Follow-up workers cannot overwrite a newer worker's checkpoint after lease loss. */
+  saveOverlapSubmission(item: Submission, expectedJobID: string | undefined): boolean {
+    return this.db.transaction(() => {
+      const current = this.submissions(item.projectID).find((s) => s.id === item.id);
+      if (!current?.overlapFollowup || current.jobID !== expectedJobID
+        || current.overlapFollowup.discoveryJobID !== item.overlapFollowup?.discoveryJobID
+        || current.status === "completed" && item.status !== "completed") return false;
+      this.saveSubmission(item);
+      return true;
+    }).immediate();
+  }
+
   enqueue(id: string, raw: unknown): Submission {
     const input = submissionSchema.parse(raw);
     return this.db.transaction(() => {
       const existing = this.db.prepare("SELECT payload FROM submissions WHERE id = ?").get(input.id) as { payload: string } | undefined;
       if (existing) {
-        const item = JSON.parse(existing.payload) as Submission;
+        const item = readStoredSubmission(existing.payload);
         if (item.projectID !== id || JSON.stringify(item.input) !== JSON.stringify(input.input) || item.auto !== input.auto || item.research !== input.research || item.replaces !== input.replaces) throw new Error("Submission ID already used for a different response.");
         return item;
       }
@@ -743,11 +764,15 @@ export class ProjectStore {
         job.diagnostic = "Project changed while analysis was running; result was not applied.";
       } else {
         this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
+          const before = structuredClone(project);
           const reviews = this.submissions(project.id).filter((s) => s.applied && s.input.type === "review" && job.context?.submissionIDs?.includes(s.id));
           const pair = job.context?.refinementPair?.requirementIDs;
           if (job.context?.refinementOnly && ((!pair && result.questions.length) || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length || result.researchFindings?.length)) throw new Error("Refinement-only passes may only propose requirement cleanup.");
           if (result.resolutionCheck && !pair) throw new Error("Resolution outcomes require an explicit pair task.");
           if (pair) {
+            if (new Set(pair).size !== 2 || pair.some((id) => !project.requirements.some((r) => r.id === id
+              && (job.context?.refinementPair?.includeUnapproved ? r.status !== "rejected" : r.status === "accepted")
+              && project.epics.some((e) => e.id === r.epicID && !e.archived)))) throw new Error("Resolution pair is not eligible for this task's review scope.");
             const check = result.resolutionCheck;
             if (!check || result.questions.length > 1 || (result.refinements?.length ?? 0) > 1) throw new Error("Resolution tasks need a bounded explicit outcome.");
             if ((check.outcome === "proposal") !== !!result.refinements?.length || (check.outcome === "question") !== !!result.questions.length) throw new Error("Resolution outcome does not match its proposal or question.");
@@ -817,11 +842,24 @@ export class ProjectStore {
           }
           const interpretation = job.context?.partial || job.context?.refinementOnly ? { summary: project.summary, analysisRevision: project.analysisRevision,
             goals: project.goals, actors: project.actors, assumptions: project.assumptions, scopeAssessment: project.scopeAssessment } : undefined;
-          applyRound(project, result, randomUUID, job.researchEvidence);
+          applyRound(project, result, randomUUID, job.researchEvidence, job.context?.refinementPair?.triggerSourceIDs);
           if (result.resolutionCheck) project.roundChanges.push(`Requirement overlap check (${result.resolutionCheck.outcome}): ${result.resolutionCheck.explanation}`);
           if (omittedConcepts) project.roundChanges.push(`Omitted ${omittedConcepts} malformed concept annotations; question wording was preserved.`);
           if (job.context?.refinementOnly) project.roundChanges.push(`Requirement refinement (bounded working set): ${result.summary}`);
           if (interpretation) Object.assign(project, interpretation);
+          if (!job.context?.refinementOnly) {
+            // The receipt commits with discovery. A crash cannot lose the pair
+            // stage or require replaying a successful (possibly paid) round.
+            const jobs = this.jobs(project.id);
+            for (const item of this.submissions(project.id).filter((s) => s.applied && job.context?.submissionIDs?.includes(s.id))) {
+              const receipt = planIncrementalResolution(before, project, item, job.id, jobs);
+              if (receipt) {
+                item.overlapFollowup = receipt;
+                item.response = result.reviewResponses?.find((r) => r.sourceID === item.appliedSourceID)?.text;
+                this.saveSubmission(item);
+              }
+            }
+          }
         });
         job.status = "completed";
       }

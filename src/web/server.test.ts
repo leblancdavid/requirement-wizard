@@ -12,6 +12,47 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ActivityPage } from "../core/project-activity.js";
+import { snapshotHeader } from "./snapshot.js";
+
+test("snapshot section tokens preserve legacy reads and independent queue, worker and workspace changes", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "snapshot-api-"));
+  const store = new ProjectStore(":memory:");
+  let project = store.create("Section polling", "Keep input", { providerID: "openai", modelID: "fixture" });
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { throw new Error("No inference expected"); } } });
+  const url = `${app.origin}/api/projects/${project.id}`, headers = { "X-Reqwizit-Token": app.token };
+  try {
+    const legacy = await fetch(url, { headers });
+    const full = await legacy.json(); assert.equal(full.project.id, project.id); assert.equal(legacy.headers.has(snapshotHeader), false);
+    assert.equal((await fetch(url, { headers: { [snapshotHeader]: "{}" } })).status, 403);
+    const first = await fetch(url, { headers: { ...headers, [snapshotHeader]: "{}" } });
+    assert.deepEqual(await first.json(), full);
+    const known = first.headers.get(snapshotHeader)!;
+    const nextHeaders = { ...headers, [snapshotHeader]: known };
+    assert.deepEqual(await (await fetch(url, { headers: nextHeaders })).json(), {});
+    // No revision/version increment is necessary for queue/workspace/job outcomes.
+    store.pauseQueue(project.id, true);
+    assert.deepEqual(await (await fetch(url, { headers: nextHeaders })).json(), { queuePaused: true });
+    store.connectWorkspace(project.id, project.revision, directory);
+    const workspacePatch = await (await fetch(url, { headers: nextHeaders })).json();
+    assert.equal(workspacePatch.workspace.status, "saved"); assert.equal(Object.hasOwn(workspacePatch, "project"), false);
+    const job = store.beginJob(project.id, project.revision).job;
+    const jobPatch = await (await fetch(url, { headers: nextHeaders })).json();
+    assert.equal(jobPatch.jobs[0].id, job.id); assert.equal(Object.hasOwn(jobPatch, "project"), false);
+    store.failJob(job.id, "cancelled", "Stopped by fixture");
+    const stopped = await (await fetch(url, { headers: nextHeaders })).json();
+    assert.equal(stopped.jobs[0].status, "cancelled");
+    project = store.note(project.id, project.revision, "A newer saved decision");
+    const changed = await (await fetch(url, { headers: nextHeaders })).json();
+    assert.equal(changed.project.revision, project.revision);
+    assert.equal(changed.project.sources.at(-1).text, "A newer saved decision");
+    for (const value of ["null", "[]", '{"project":"bad"}', "x".repeat(4097)]) assert.equal((await fetch(url, { headers: { ...headers, [snapshotHeader]: value } })).status, 400);
+    const other = store.create("Other", "Different input", project.model);
+    const otherResponse = await fetch(`${app.origin}/api/projects/${other.id}`, { headers: nextHeaders });
+    assert.equal((await otherResponse.json()).project.id, other.id);
+    assert.equal((await fetch(url, { headers })).status, 200, "Malformed client tokens cannot poison subsequent reads");
+  } finally { await app.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("activity API returns bounded filtered pages, validates cursors and keeps authentication", async () => {
   const store = new ProjectStore(":memory:");

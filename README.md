@@ -62,6 +62,12 @@ Keep answering while discovery works: responses are durably queued and processed
 one at a time, each in its own revision-linked context. Each follow-up includes its
 target and supporting evidence, project/dependency guardrails and feature notes;
 unrelated feature history is explicitly omitted. Completed items stay completed.
+Ordinary answers and requirement reviews also trigger up to three targeted
+duplicate/conflict pair checks for affected requirements, including new proposals.
+Fixes await your approval; ambiguous intent prompts a clarification. Discovery is
+saved before these checks, so a failed check resumes without repeating discovery.
+Additional unscheduled candidates are shown in Processing & queue; **Refine** remains
+the manual entry point for approved-pair checks, not an exhaustive correctness audit.
 During assessment or coding, answers, notes and reviews are saved as waiting submissions;
 processing starts after the worker finishes. Conflicting actions explain their blockers
 on hover, keyboard focus or tap. Failures, cancellation and expired-worker recovery keep
@@ -84,6 +90,9 @@ question whose processed answer returns to resolution; approved wording never ch
 without review. Choose **All project areas** to refine across the project, or select a
 feature to limit the work. The separate duplicate/conflict check section was removed;
 Refine is the single entry point.
+**Processing & queue** shows completed-check counts and a progress bar for each
+refinement stage (overlap checks, then wording cleanup). Percentages cover this run's
+current stage, not an exhaustive audit or a time estimate.
 Refinements appear as individual expandable
 **Refinement proposed** items in **To review**, with a **Refinements** filter. Compare
 original/proposed wording and scenarios, then choose **Approve refinement** or **Keep

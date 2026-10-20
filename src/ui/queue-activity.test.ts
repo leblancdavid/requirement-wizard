@@ -3,6 +3,20 @@ import test from "node:test";
 import { emptyExecution } from "../core/execution.js";
 import { projectSchema, type Job } from "../core/model.js";
 import { queueActivities } from "./queue-activity.js";
+import { refinementActivity } from "./refinement-progress.js";
+
+test("refinement labels distinguish stage progress, run scope and terminal outcomes", () => {
+  const running = { phase: "overlaps", status: "running", completed: 6, total: 20 } as const;
+  assert.equal(refinementActivity(running).headline, "Refining requirements");
+  assert.equal(refinementActivity(running).label, "Step 1 of 2 · Checking overlaps · 6 of 20 checks completed · 30% of this stage · this run");
+  assert.match(refinementActivity({ ...running, phase: "wording" }).label, /Step 2 of 2 · Wording cleanup/);
+  for (const status of ["stopped", "failed", "blocked"] as const) {
+    assert.equal(refinementActivity({ ...running, status }).headline, `Refining requirements · ${status}`);
+    assert.doesNotMatch(refinementActivity({ ...running, status }).label, /100%/);
+  }
+  assert.equal(refinementActivity({ phase: "preparing", status: "running", completed: 0 }).label, "Preparing checks · this run");
+  assert.doesNotMatch(refinementActivity({ phase: "wording", status: "completed", completed: 0, total: 0 }).label, /NaN|Infinity|100%/);
+});
 
 const project = projectSchema.parse({ id: "project", name: "Queue", revision: 1, model: { providerID: "openai", modelID: "fixture" },
   sources: [{ id: "idea", kind: "initial", text: "Save responses" }], questions: [], summary: "Queue", goals: [], actors: [], assumptions: [],

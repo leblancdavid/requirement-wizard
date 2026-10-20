@@ -11,7 +11,24 @@ import { command } from "../service/git-delivery.js";
 import { requirementFingerprint } from "../core/implementation.js";
 import { assessmentContextFingerprint } from "../core/execution-context.js";
 import { assessmentCurrent, emptyExecution, executionConfigSchema } from "../core/execution.js";
-import { planningEdgeID } from "../core/implementation-planning.js";
+import { planningConfigFingerprint, planningEdgeID } from "../core/implementation-planning.js";
+import { SnapshotEncoder, parseSnapshotTokens, snapshotHeader } from "./snapshot.js";
+import type { Route, APIResponse } from "@playwright/test";
+
+// Overlays still exercise the production section-token protocol. Fetch a full
+// upstream snapshot before applying fixture data, then encode it for this client.
+const fixtureSnapshotEncoder = new SnapshotEncoder();
+async function fullSnapshot(route: Route) {
+  const headers = { ...route.request().headers() }; delete headers["x-reqwizit-snapshot"];
+  return route.fetch({ headers });
+}
+async function fulfillSnapshot(route: Route, response: APIResponse, snapshot: object) {
+  const known = route.request().headers()["x-reqwizit-snapshot"];
+  if (known === undefined) { await route.fulfill({ response, json: snapshot }); return { bytes: Buffer.byteLength(JSON.stringify(snapshot)), keys: Object.keys(snapshot) }; }
+  const encoded = fixtureSnapshotEncoder.encode(snapshot, parseSnapshotTokens(known));
+  await route.fulfill({ response, headers: { ...response.headers(), [snapshotHeader]: JSON.stringify(encoded.tokens) }, body: encoded.body });
+  return { bytes: Buffer.byteLength(encoded.body), keys: Object.keys(JSON.parse(encoded.body)) };
+}
 
 // Deterministic UI exercise: no model inference, provider credentials, or billing.
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -33,8 +50,11 @@ let planningProjectID = "";
 const planningDirectory = await mkdtemp(resolve(".reqwizit-state/browser-planning-"));
 const releases: Array<() => void> = [];
 const reviewReleases: Array<() => void> = [];
+const refinementReleases: Array<() => void> = [];
+let holdRefinement = true;
 let rounds = 0;
 let failNextScan = false;
+let failAutomaticPair = false;
 let releaseWordHelp: (() => void) | undefined;
 let login: LoginStatus = { id: "10000000-0000-4000-8000-000000000001", status: "cancelled" };
 let loginComplete = false, connected = false, blockTest = true;
@@ -55,9 +75,12 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
   return JSON.stringify({ summary: "Build dependency-safe slices", packages: [{ requirementID: request.requirementID, title: `Planning package ${index + 1}`, reason: "Unlocks a usable workflow", steps: ["Implement the approved outcome"], verification: ["Verify the acceptance scenario"],
     prerequisites: index < 2 ? [{ requirementID: other.id, kind: "hard", reason: "Needs the supporting contract", evidenceIDs: [other.id], confidence: "medium" }] : [], questions: index === 0 ? ["Which shared contract comes first?"] : [] }] });
 } }, adapter: { async analyze(project, options) {
-  if (["Resolution workflow fixture", "Resolution ambiguity fixture"].includes(project.name)) {
+  if (["Resolution workflow fixture", "Resolution ambiguity fixture", "Automatic answer fixture", "Automatic review fixture"].includes(project.name)) {
     const pair = options.context.manifest.refinementPair?.requirementIDs;
-    if (!pair) return analysisSchema.parse({ summary: "Individual wording is unchanged", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], refinements: [] });
+    if (!pair) return analysisSchema.parse({ summary: "Individual wording is unchanged", goals: [], actors: [], assumptions: [], questions: [],
+      requirements: project.name === "Automatic answer fixture" ? [{ statement: "Guests may access private reports", rationale: "Ordinary answer follow-up", sourceIDs: [project.sources.find((s) => s.kind === "answer")!.id], acceptance: ["Guests can open private reports"] }] : [],
+      retireQuestions: [], refinements: [], reviewResponses: options.context.manifest.reviewSourceIDs?.map((sourceID) => ({ sourceID, text: "Your review was saved before pair checking." })) });
+    if (project.name === "Automatic review fixture" && failAutomaticPair) { failAutomaticPair = false; throw new Error("Fixture targeted check failure"); }
     const answer = project.sources.find((s) => s.kind === "answer");
     if (project.name === "Resolution ambiguity fixture" && !answer) return analysisSchema.parse({ summary: "Ask for the intended access policy", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], refinements: [],
       questions: [{ text: "Should guests be allowed to access private reports?", whyItMatters: "The approved allow and deny rules conflict", epicID: "inbox", evidenceIDs: pair, options: [{ label: "Allow private reports", consequence: "The allow rule supersedes denial" }, { label: "Deny private reports", consequence: "The deny rule supersedes access" }] }],
@@ -70,6 +93,7 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
   }
   if (project.name === "Cleanup fixture") {
     assert.equal(options.context.manifest.refinementOnly, true);
+    if (holdRefinement) await new Promise<void>((accept) => { refinementReleases.push(accept); options.signal.addEventListener("abort", () => accept(), { once: true }); });
     return analysisSchema.parse({ summary: "Unchanged", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
       refinements: project.requirements.map((r, index) => ({ requirementID: r.id, statement: index ? "The player can aim within a forward-facing arc." : "The player can jump briefly after stepping off a ledge.",
         rationale: "Observable gameplay behavior.", acceptance: [index ? "Aiming stays within the forward arc." : "Pressing jump immediately after leaving a ledge initiates a jump."], reason: "Abstracted code identifiers and tuning values." })).filter((r, index) => index < 2 && r.requirementID === options.context.manifest.refinementTarget?.requirementID) });
@@ -906,7 +930,59 @@ try {
       await page.getByRole("tab", { name: /Review/ }).click();
       await expect(overlapPanel.getByText("Possible overlaps or conflicts (1)", { exact: true })).toBeVisible();
       assert.deepEqual(store.get(overlapProject.id), overlapBefore);
-      for (const ambiguous of [false, true]) {
+       for (const kind of ["answer", "review"] as const) {
+         let automatic = store.create(`Automatic ${kind} fixture`, "Keep reviewed report access rules", { providerID: "openai", modelID: "fixture" });
+         const seed = store.beginJob(automatic.id, automatic.revision).job;
+         store.claimJob(seed.id, Date.now() + 60000);
+         store.finishJob(seed.id, { summary: "Reports", goals: [], actors: [], assumptions: [], retireQuestions: [],
+           requirements: (kind === "answer" ? ["Guests can access private reports"] : ["Guests can access private reports", "Guests may access private reports"]).map((statement) => ({ statement, rationale: "Report policy", sourceIDs: [automatic.sources[0]!.id], acceptance: [statement] })),
+           questions: kind === "answer" ? [{ text: "Should guest report access be preserved?", whyItMatters: "Preserve human intent", options: [{ label: "Preserve access", consequence: "Guests retain access" }, { label: "Restrict access", consequence: "Guests lose access" }] }] : [] });
+         automatic = store.get(automatic.id);
+         automatic = store.review(automatic.id, automatic.revision, automatic.requirements[0]!.id, "accepted", "Preserve access");
+         const approved = structuredClone(automatic.requirements[0]!);
+         failAutomaticPair = kind === "review";
+         await page.reload();
+         await page.locator(".sidebar").getByRole("button", { name: new RegExp(automatic.name) }).click();
+         await page.getByLabel("Filter by feature").selectOption("all");
+         await page.getByRole("tab", { name: /^Design/ }).click();
+         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         const autoPreference = page.getByLabel("Automatically explore queued answers");
+         const wasAutomatic = await autoPreference.isChecked();
+         await autoPreference.check();
+         await page.getByRole("button", { name: "Back to workspace" }).click();
+         if (kind === "answer") {
+           const question = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Should guest report access be preserved?", exact: true }) });
+           await question.getByRole("button", { name: /Choose Preserve access/ }).click();
+           await question.getByRole("button", { name: /^Save response/ }).click();
+         } else {
+           await page.getByRole("tab", { name: /Review/ }).click();
+           await reviewPanel.getByRole("button", { name: /^To review/ }).click();
+           await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
+           await expect.poll(() => store.submissions(automatic.id)[0]?.status).toBe("needs-attention");
+           const receipt = store.submissions(automatic.id)[0]!.overlapFollowup!;
+           assert.equal(store.getJob(receipt.discoveryJobID).status, "completed");
+           await page.locator(".topbar .queue-trigger").click();
+           await expect(page.getByRole("dialog")).toContainText("Discovery and human input were saved");
+           await page.getByRole("button", { name: "Resume discovery", exact: true }).click();
+           await page.getByRole("button", { name: "Close processing queue" }).click();
+         }
+         await expect.poll(() => store.submissions(automatic.id)[0]?.status).toBe("completed");
+         assert.equal(store.jobs(automatic.id).filter((j) => j.context?.submissionIDs?.length).length, 1, "No successful discovery replay");
+         assert.deepEqual(store.get(automatic.id).requirements[0], approved);
+         assert.equal(store.get(automatic.id).requirements[1]!.status, kind === "answer" ? "proposed" : "accepted");
+         await page.getByRole("tab", { name: /Review/ }).click();
+         await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
+          await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).toBeVisible();
+          await page.locator(".topbar .queue-trigger").click();
+          await page.getByRole("dialog").locator("details > summary").filter({ hasText: "Recent completed work" }).click();
+          await expect(page.getByRole("dialog")).toContainText("Targeted duplicate/conflict checks: 1 checked");
+         await page.getByRole("button", { name: "Close processing queue" }).click();
+         await page.getByRole("tab", { name: /^Design/ }).click();
+         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         await autoPreference.setChecked(wasAutomatic);
+         await page.getByRole("button", { name: "Back to workspace" }).click();
+       }
+       for (const ambiguous of [false, true]) {
         let resolutionProject = store.create(ambiguous ? "Resolution ambiguity fixture" : "Resolution workflow fixture", "Keep reviewed report access rules", { providerID: "openai", modelID: "fixture" });
         const resolutionSeed = store.beginJob(resolutionProject.id, resolutionProject.revision).job;
         store.claimJob(resolutionSeed.id, Date.now() + 60000);
@@ -965,6 +1041,20 @@ try {
      await page.locator(".sidebar").getByRole("button", { name: /Cleanup fixture/ }).click();
      await page.getByRole("tab", { name: /Review/ }).click();
      await reviewPanel.getByRole("button", { name: "Refine requirements", exact: true }).click();
+     await expect(page.locator(".queue-trigger")).toContainText("0 of 3 checks completed");
+     await expect(page.locator(".queue-trigger [role=progressbar]")).toHaveAttribute("aria-valuenow", "0");
+     await page.locator(".queue-trigger").click();
+     const refinementDrawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+     await expect(refinementDrawer).toContainText("Step 2 of 2 · Wording cleanup");
+     await expect.poll(() => refinementReleases.length).toBe(1);
+     refinementReleases.shift()!();
+     await expect(refinementDrawer).toContainText("1 of 3 checks completed");
+     await expect(refinementDrawer.getByRole("progressbar")).toHaveAttribute("aria-valuenow", String(1 / 3 * 100));
+     await expect.poll(() => refinementReleases.length).toBe(1);
+     holdRefinement = false; refinementReleases.shift()!();
+     await expect(refinementDrawer.getByRole("heading", { name: "Refining requirements · completed", exact: true })).toBeVisible();
+     await expect(refinementDrawer).toContainText("3 of 3 checks completed · 100% of this stage · this run");
+     await refinementDrawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
      await expect(reviewPanel.locator(".refinement-card")).toHaveCount(2);
      await expect(reviewPanel.locator(".review-card")).toHaveCount(3);
      await expect(reviewPanel.getByRole("button", { name: /^To review/ })).toContainText("3");
@@ -1154,10 +1244,10 @@ try {
        let queueImplementationActive = true, queueHelpActive = true;
        const snapshotRoute = `**/api/projects/${listing.id}`;
        await page.route(snapshotRoute, async (route) => {
-          const response = await route.fetch();
-          await route.fulfill({ response, json: { ...await response.json(), execution: queueState, implementationActive: queueImplementationActive, implementationOperation: "check",
-            queuePaused: false, submissions: [{ id: "waiting-note", projectID: listing.id, input: { type: "note", epicID: "project", text: "Retained while assessment works" }, auto: true, research: false, applied: false, status: "queued", submittedAt: new Date().toISOString() }],
-           helpJobs: [{ id: "queue-help-fixture", projectID: listing.id, expectedRevision: listing.revision, model: listing.model, leaseUntil: null, status: queueHelpActive ? "running" : "cancelled" }] } });
+           const response = await fullSnapshot(route);
+           await fulfillSnapshot(route, response, { ...await response.json(), execution: queueState, implementationActive: queueImplementationActive, implementationOperation: "check",
+             queuePaused: false, submissions: [{ id: "waiting-note", projectID: listing.id, input: { type: "note", epicID: "project", text: "Retained while assessment works" }, auto: true, research: false, applied: false, status: "queued", submittedAt: "2026-10-01T00:00:00.000Z" }, ...Array.from({ length: 60 }, (_, index) => ({ id: `history-${index}`, projectID: listing.id, input: { type: "note", epicID: "project", text: `Historical saved response ${index}` }, auto: false, research: false, applied: true, status: "completed", submittedAt: "2026-10-01T00:00:00.000Z" }))],
+            helpJobs: [{ id: "queue-help-fixture", projectID: listing.id, expectedRevision: listing.revision, model: listing.model, leaseUntil: null, status: queueHelpActive ? "running" : "cancelled" }] });
        });
        await page.route(`**/api/projects/${listing.id}/cancel-help`, async (route) => {
          assert.deepEqual(route.request().postDataJSON(), { jobID: "queue-help-fixture" });
@@ -1217,7 +1307,17 @@ try {
        await expect(sharedQueueTrigger).toContainText("2 tasks processing");
        await sharedQueueTrigger.click();
         const sharedQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
-        await expect(sharedQueue).toContainText("Responses are saved and waiting for assessment or implementation to finish");
+         await expect(sharedQueue).toContainText("Responses are saved and waiting for assessment or implementation to finish");
+         await expect(sharedQueue.locator(".queue-item").filter({ hasText: "Historical saved response" })).toHaveCount(0);
+         const historySummary = sharedQueue.getByText("Recent completed work · 60", { exact: true });
+         await historySummary.click();
+         await expect(sharedQueue.locator(".queue-item").filter({ hasText: "Historical saved response" })).toHaveCount(25);
+         await expect(sharedQueue).toContainText("Historical saved response 59");
+         await sharedQueue.getByRole("button", { name: "Older responses", exact: true }).click();
+         await expect(sharedQueue).toContainText("Page 2 of 3");
+         await expect(sharedQueue).toContainText("Historical saved response 34");
+         await historySummary.click();
+         await expect(sharedQueue.locator(".queue-item").filter({ hasText: "Historical saved response" })).toHaveCount(0);
         const waitingAction = sharedQueue.getByRole("button", { name: "Process waiting answers", exact: true });
         await expect(waitingAction).toBeDisabled(); await waitingAction.focus();
         await expect(sharedQueue.getByRole("tooltip")).toContainText("Assessment or implementation is running");
@@ -1267,21 +1367,44 @@ try {
          const largeProject = structuredClone(listing);
          largeProject.epics = Array.from({ length: 10 }, (_, index) => ({ ...listing.epics[0]!, id: `large-${index}`, title: `Large feature ${index}`, dependencies: [], archived: false }));
          largeProject.requirements = Array.from({ length: 500 }, (_, index) => ({ ...listing.requirements[0]!, id: `large-r-${index}`, epicID: `large-${Math.floor(index / 50)}`, statement: `Large requirement ${index}`, acceptance: [`Scenario for large requirement ${index}`] }));
-         const largeState = emptyExecution();
+          const largeState = emptyExecution();
+          let largeTick = 0;
+          let largeActive = false;
+          const largeRefreshes: Array<{ bytes: number; keys: string[] }> = [];
          largeState.config = { repository: "fixture/large", strategy: "main", branch: "implementation", providerID: "openai", modelID: "fixture", checks: ["fixture-check"], dependencies: {} };
          await page.route(snapshotRoute, async (route) => {
-           const response = await route.fetch();
-           const payload = await response.json();
-           await route.fulfill({ response, json: { ...payload, project: largeProject, execution: largeState } });
+            const response = await fullSnapshot(route);
+            const payload = await response.json();
+            largeRefreshes.push(await fulfillSnapshot(route, response, { ...payload, project: largeProject, execution: largeState, implementationActive: largeActive,
+              ...(largeState.planning ? { workspace: { bindingID: "paging-binding", path: workspaceDirectory, status: "saved", savedRevision: largeProject.revision, diagnostic: null, hashes: {}, pendingHashes: {} } } : {}), progress: [`Performance checkpoint ${largeTick}`] }));
          });
          await page.setViewportSize({ width: 1280, height: 800 });
-         await page.reload();
+          await page.reload();
+          await page.evaluate(() => {
+            const durations: number[] = [];
+            const observer = new PerformanceObserver((list) => durations.push(...list.getEntries().map((entry) => entry.duration)));
+            observer.observe({ type: "longtask" });
+            (window as typeof window & { refreshPerformance: { durations: number[]; observer: PerformanceObserver } }).refreshPerformance = { durations, observer };
+          });
          const switchStart = await page.evaluate(() => performance.now());
          await page.getByRole("tab", { name: /Implement/ }).click();
-         await expect(listPanel.locator(".feature-group")).toHaveCount(10);
+          await expect(listPanel.locator(".feature-group")).toHaveCount(1);
          await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
          assert.ok(await listPanel.locator("*").count() < 500, "Collapsed 500-requirement workspace must stay bounded");
-         const switchMilliseconds = await page.evaluate(() => performance.now()) - switchStart;
+          const switchMilliseconds = await page.evaluate(() => performance.now()) - switchStart;
+          const implementationPages = listPanel.getByRole("navigation", { name: "Implementation pages", exact: true });
+          await expect(implementationPages).toContainText("1–25 of 500");
+          await implementationPages.getByRole("button", { name: "Next", exact: true }).click();
+          await expect(implementationPages).toContainText("26–50 of 500");
+          await listPanel.locator(".feature-group > summary").first().click();
+          await expect(listPanel.locator(".requirement-detail")).toHaveCount(25);
+          await expect(listPanel.locator(".requirement-detail").first()).toContainText("Large requirement 25");
+          await implementationPages.getByRole("button", { name: "Next", exact: true }).click();
+          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("Large feature 1");
+          await search.fill("Large requirement 499");
+          await expect(implementationPages).toContainText("1–1 of 1");
+          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("Large feature 9");
+          await search.fill("");
          await listPanel.locator(".implementation-settings > summary").click();
          await listPanel.getByText("Requirement prerequisites", { exact: true }).click();
          await expect(listPanel.locator("select[multiple]")).toHaveCount(0);
@@ -1298,7 +1421,7 @@ try {
          await expect(prerequisites).toHaveValues(["large-r-1"]);
          await listPanel.locator(".implementation-settings > summary").click();
          await listPanel.locator(".feature-group > summary").first().click();
-         await expect(listPanel.locator(".requirement-detail")).toHaveCount(50);
+          await expect(listPanel.locator(".requirement-detail")).toHaveCount(25);
          await expect(listPanel.locator(".requirement-detail article")).toHaveCount(0);
          await listPanel.locator(".requirement-detail > summary").first().click();
          await expect(listPanel.locator(".requirement-detail article")).toHaveCount(1);
@@ -1310,10 +1433,30 @@ try {
          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("1 / 50 assessed locally · 1 complete locally");
          await expect(search).toHaveValue("Large requirement 0");
          await expect(prerequisites).toHaveValues(["large-r-1"]);
-         await expect(listPanel.locator(".requirement-detail[open]")).toHaveCount(1);
+          await expect(listPanel.locator(".requirement-detail[open]")).toHaveCount(1);
+          // Progress-only polls must not retransmit the 500-requirement project or
+          // execution evidence, disturb focused input, or mount additional details.
+          largeActive = true;
+          await expect(page.locator(".queue-trigger")).toContainText("Implementing requirements");
+          await search.focus();
+          for (let checkpoint = 1; checkpoint <= 3; checkpoint++) {
+            const nextCheckpoint = page.waitForResponse(async (response) => response.url().endsWith(`/api/projects/${listing.id}`) && (await response.text()).includes(`Performance checkpoint ${checkpoint}`));
+            largeTick = checkpoint;
+            await nextCheckpoint;
+            await expect.poll(() => largeRefreshes.at(-1)?.keys.join(",")).toBe("progress");
+            await expect(search).toBeFocused();
+            await search.press("End"); await search.press("Backspace"); await search.pressSequentially("0");
+            await expect(search).toHaveValue("Large requirement 0");
+            await expect(listPanel.locator(".requirement-detail[open]")).toHaveCount(1);
+          }
+          const refreshPerformance = await page.evaluate(() => {
+            const state = (window as typeof window & { refreshPerformance: { durations: number[]; observer: PerformanceObserver } }).refreshPerformance;
+            state.observer.disconnect(); return state.durations;
+          });
+          console.log(`Processing refresh check: first body ${largeRefreshes[0]!.bytes} bytes; progress-only body ${largeRefreshes.at(-1)!.bytes} bytes; observed ${refreshPerformance.length} browser long tasks (max ${Math.round(Math.max(0, ...refreshPerformance))} ms) across large-project interactions. Not a cross-machine benchmark.`);
          await page.getByRole("tab", { name: /Design/ }).click();
          await page.getByRole("tab", { name: /Implement/ }).click();
-         await expect(listPanel.locator(".feature-group")).toHaveCount(10);
+          await expect(listPanel.locator(".feature-group")).toHaveCount(1);
          await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
           console.log(`Large-project check: 500 requirements, ${Math.round(switchMilliseconds)} ms Playwright-observed initial tab switch; collapsed DOM below 500 elements.`);
           await page.getByRole("tab", { name: "Project map", exact: true }).click();
@@ -1323,8 +1466,76 @@ try {
            assert.ok(await page.locator(".epic-overview *").count() < 500, "Collapsed epic overview must keep 500-requirement details unmounted");
            await page.getByRole("tab", { name: /Review/ }).click();
            await expect(page.getByRole("region", { name: "Approved requirement audit", exact: true })).toHaveCount(0);
-           await expect(reviewPanel.getByRole("button", { name: "Refine requirements", exact: true })).toBeVisible();
-           await page.unroute(snapshotRoute);
+            await expect(reviewPanel.getByRole("button", { name: "Refine requirements", exact: true })).toBeVisible();
+            // Paging is presentation-only; drafts and global navigation survive.
+            largeActive = false;
+            largeState.planning = { format: 1, id: "paging-plan", revision: largeProject.revision, bindingID: "paging-binding", createdAt: "2026-10-20", status: "proposed", configFingerprint: planningConfigFingerprint(largeState), model: largeProject.model,
+              output: { summary: "Paging plan fixture", packages: largeProject.requirements.map((r, index) => ({ requirementID: r.id, title: `Paged package ${index}`, reason: "Keep complete planning scope", steps: ["Implement"], verification: ["Verify"], prerequisites: index === 0 ? [{ requirementID: largeProject.requirements[1]!.id, kind: "hard", reason: "Supporting behavior", evidenceIDs: [largeProject.requirements[1]!.id], confidence: "high" }] : [], questions: [] })) } };
+            largeState.version++;
+            await page.getByRole("tab", { name: /Implement/ }).click();
+            const packagePages = listPanel.getByRole("navigation", { name: "Work packages pages", exact: true });
+            await expect(packagePages).toContainText("1–25 of 500");
+            const packageList = listPanel.getByRole("list", { name: "Proposed work packages", exact: true });
+            await expect(packageList.locator(":scope > li")).toHaveCount(25);
+            await packageList.locator("summary").first().click();
+            await packageList.getByRole("checkbox").uncheck();
+            await listPanel.getByRole("textbox", { name: /Planning review notes/ }).fill("Keep planning draft across pages");
+            await packagePages.getByRole("button", { name: "Next", exact: true }).click();
+            await expect(packagePages).toContainText("26–50 of 500");
+            await packagePages.getByRole("button", { name: "Previous", exact: true }).click();
+            await packageList.locator("summary").first().click();
+            await expect(packageList.getByRole("checkbox")).not.toBeChecked();
+            await expect(listPanel.getByRole("textbox", { name: /Planning review notes/ })).toHaveValue("Keep planning draft across pages");
+            largeState.planning = undefined; largeState.version++;
+            largeProject.questions = Array.from({ length: 64 }, (_, index) => ({ id: `paged-q-${index}`, text: `Paging question ${index}?`, whyItMatters: "Retain previous decisions", options: [], status: "answered", epicID: "large-0", sourceID: largeProject.sources[0]!.id }));
+            for (const requirement of largeProject.requirements) requirement.status = "proposed";
+            largeProject.refinements = [];
+            largeProject.revision++;
+            await page.reload();
+            await page.getByRole("tab", { name: /Review/ }).click();
+            const reviewPages = reviewPanel.getByRole("navigation", { name: "Review pages", exact: true });
+            await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
+            await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).fill("Keep this review draft");
+            await reviewPages.getByRole("button", { name: "Next", exact: true }).click();
+            await expect(reviewPages).toContainText("26–50 of 500");
+            await reviewPages.getByRole("button", { name: "Previous", exact: true }).click();
+            await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep this review draft");
+            await reviewPages.getByRole("combobox").selectOption("10");
+            await expect(reviewPanel.locator(".review-card")).toHaveCount(10);
+            await reviewPanel.locator(".review-card-heading").last().click();
+            const pagingSubmitRoute = `**/api/projects/${listing.id}/submit`;
+            await page.route(pagingSubmitRoute, async (route) => {
+              const input = route.request().postDataJSON().input;
+              assert.equal(input.type, "review"); assert.equal(input.requirementID, "large-r-9");
+              largeProject.requirements[9]!.status = "accepted"; largeProject.revision++;
+              await route.fulfill({ json: { saved: true } });
+            });
+            await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
+            await expect(reviewPanel.locator('.review-card-heading[aria-expanded="true"]')).toContainText("Large requirement 10");
+            await expect(reviewPanel.locator('.review-card-heading[aria-expanded="true"]')).toBeFocused();
+            await page.unroute(pagingSubmitRoute);
+            await page.getByRole("tab", { name: /Design/ }).click();
+            await page.getByRole("button", { name: /Previous answers/ }).click();
+            const designPages = page.getByRole("navigation", { name: "Design pages", exact: true });
+            await expect(designPages).toContainText("1–25 of 64");
+            await page.getByRole("heading", { name: "Paging question 0?", exact: true }).click();
+            await page.getByLabel("Your answer to Paging question 0?", { exact: true }).fill("Keep this answer draft");
+            await designPages.getByRole("button", { name: "Next", exact: true }).click();
+            await expect(designPages).toContainText("26–50 of 64");
+            await designPages.getByRole("button", { name: "Previous", exact: true }).click();
+            await page.getByRole("heading", { name: "Paging question 0?", exact: true }).click();
+            await expect(page.getByLabel("Your answer to Paging question 0?", { exact: true })).toHaveValue("Keep this answer draft");
+            await page.getByRole("tab", { name: "Project map", exact: true }).click();
+            await page.locator(".epic-overview").first().getByText("View details", { exact: true }).click();
+            const savedAnswers = page.locator(".feature-decisions").first();
+            await savedAnswers.locator("summary").click();
+            await savedAnswers.locator("div").filter({ hasText: "Paging question 60?" }).getByRole("button", { name: "Edit answer", exact: true }).click();
+            await expect(designPages).toContainText("51–64 of 64");
+            await expect(page.getByLabel("Your answer to Paging question 60?", { exact: true })).toBeVisible();
+            await page.setViewportSize({ width: 390, height: 844 });
+            assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Paging controls fit mobile width");
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.unroute(snapshotRoute);
           // Real paginated activity API with 1,000 routine revisions and meaningful older input.
           let activityProject = store.create("Activity paging fixture", "Keep useful history", { providerID: "openai", modelID: "fixture" });
           activityProject = store.organize(activityProject.id, activityProject.revision, [{ type: "upsert", epicID: "activity-files", title: "Activity files", purpose: "Retain work", dependencies: [] }]);
@@ -1414,10 +1625,10 @@ try {
             const mapDelivery = (r: typeof mapRequirements[number]) => ({ fingerprint: requirementFingerprint(r), main: "fixture-main", repository: mapState.config!.repository, at: new Date().toISOString(), checks: [] });
             mapState.delivered[mapRequirements[0]!.id] = mapDelivery(mapRequirements[0]!);
             await page.route(`**/api/projects/${planningProject.id}`, async (route) => {
-              const response = await route.fetch(), snapshot = await response.json();
-              await route.fulfill({ response, json: { ...snapshot, execution: mapState, project: { ...snapshot.project, epics: [...snapshot.project.epics,
+               const response = await fullSnapshot(route), snapshot = await response.json();
+               await fulfillSnapshot(route, response, { ...snapshot, execution: mapState, project: { ...snapshot.project, epics: [...snapshot.project.epics,
                 { ...snapshot.project.epics[0], id: "map-empty", title: "Future reporting", purpose: "Explain trends at a glance.", archived: false, dependencies: [] },
-                { ...snapshot.project.epics[0], id: "map-archived", title: "Archived capability", archived: true, dependencies: [] }] } } });
+                 { ...snapshot.project.epics[0], id: "map-archived", title: "Archived capability", archived: true, dependencies: [] }] } });
             });
              mapState.run = { id: "action-label-fixture", revision: planningProject.revision, bindingID: "fixture-binding", repositoryRoot: planningDirectory,
                config: mapState.config!, scope: {}, requirementIDs: mapRequirements.map((r) => r.id), units: [], status: "interrupted", progress: [], createdAt: new Date().toISOString() };
