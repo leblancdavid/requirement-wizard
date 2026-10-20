@@ -69,6 +69,138 @@ match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
 
+### Snapshot-bound saved-search continuations (2026-10-20)
+
+Source/target SQLite **3 → 3**, retrieval work **1 → 1**, saved-search result **1 → 1**
+with optional `page` **format 1**, execution **1 → 1**, workspace **2 → 2**. Search
+requests optionally accept a witnessed opaque `cursor`. No DDL, startup conversion,
+project mutation, data reset, assessment invalidation, approval replay or automatic model
+call is required. Original IDs, human evidence, history, approvals, completed gap checks,
+implementation assessments and delivered evidence are unchanged. Older nonpaged receipts
+remain valid and byte-preserved; retries do not invent cursors, change original results or
+repeat completed calls merely because paging became available. Old versions cannot read
+new paging fields; do not downgrade an active worker.
+
+New optional page receipts bind project, immutable source revision, task/loaded-record
+scope key, literal query, result limit and scan position. They record the input cursor,
+record/text offsets, deferred-text flag and optional next position/cursor. Positions are
+not model-controlled offsets: a continuation must match a previously saved stage's offered
+cursor, query, limit and scope, and its position hash must verify. A continuation reads
+the original revision in its original saved record order, not today's changed navigation.
+Missing original snapshots, unknown/stale cursors, incompatible scope or malformed/future
+page envelopes reject without replacing saved receipts or silently starting a fresh search.
+Fresh queries without cursors remain available against the current snapshot.
+
+Search remains advisory navigation and stays excluded from `gap-stage-evidence-v1`.
+Original page receipts and hashes are retained on compatible retries; exact loading uses
+current saved evidence and changed authoritative content still blocks later call reuse.
+No legacy evidence-basis or gap-check fingerprint changes. Missing legacy bases continue
+to require original wire-hash verification; optional page metadata is not synthesized
+during adoption. Existing revision/lease/cancellation/permission safeguards remain in force.
+
+Each page has the existing eight-result, 5,000-record and 1,000,000-text-character limits.
+Continuation first advances past omitted matches/unexamined records, then to later
+4,096-character text windows (at most sixteen local windows). Previously offered handles
+are skipped. Deferred earlier text remains eligible after result pagination; at the total
+character boundary, whole windows are deferred rather than losing a partially scanned
+tail. This can examine slightly fewer records in a new first page than the older prefix-
+only planner, without rewriting its original results. Matching across window boundaries
+is not guaranteed. Omission counts and explicit local bounds remain visible; absent next
+cursors do not certify exhaustive search or specification completeness.
+
+Search/refinement/paging/loading **share the unchanged two-navigation-stage and three-
+attempt budget**, including failures and retries across revisions. No-call startup/reload
+and compatible completed-call reuse remain intact. Search → page → load cannot also
+analyze under this cap; it blocks without publishing proposals or consuming a gap check.
+Paging does not allow navigation-only handles to authorize citations, decisions or changes.
+
+Added deterministic coverage includes stable original-snapshot ordering across reordered
+navigation, refined queries, result/record-cap/text-cap/suffix continuations, whole-window
+boundary preservation, earlier deferred suffixes, local text-window exhaustion, unknown/
+stale/query/limit/scope/position failures, unavailable snapshots, disk reopening/no-call
+startup, cross-revision paging, cumulative budget exhaustion, and legacy nonpaged receipts
+with and without evidence bases. Malformed/future page envelopes reject reads without
+replacing payloads. Cancelled, stale and expired-lease workers cannot checkpoint returned
+continuations. Existing authoritative-evidence-change and approval/assessment/history
+regressions continue to pass. The expanded in-memory browser scenario checks continuation
+availability/positions, original snapshot provenance, explicit retry, exact human
+constraints, shared-budget blockers, reload, original history and mobile width.
+
+Verification: type check, all **417 deterministic tests**, UI build, focused exact-retrieval
+browser check and full browser suite passed. The expanded navigation browser check first
+timed out waiting for Design after reload; failure diagnostics were added and an independent
+rerun passed. This reload timing issue is not claimed fixed. The separate known full-suite
+tooltip flake did not reproduce and was not modified; the large-JavaScript-chunk warning
+remains. Available Node is **20.11**; Node 22.12+ verification remains outstanding. No live
+model calls, user-project database writes, repository commits or pushes were performed.
+Live semantic quality/entailment and adversarial live permission qualification remain open.
+
+### Bounded saved-evidence navigation queries (2026-10-20)
+
+Source/target SQLite **3 → 3**, retrieval work **1 → 1**, execution **1 → 1**,
+workspace **2 → 2**. This is an additive response/checkpoint extension, not a change to
+project evidence, gap-check semantics or assessment freshness. No DDL, startup rewrite,
+backfill, data reset, approval replay or reassessment is required. Original sources,
+stable IDs, revisions, approvals, completed gap checks and implementation assessments
+retain their identities. Existing pre-search completed stages/finals remain reusable;
+the old context wire representation is unchanged when no search has occurred.
+
+Navigation stage `request` now accepts either the existing strict `retrieveEvidence`
+envelope or strict `searchEvidence: {format:1,query,limit}`. A search stage requires its
+original `searchResult` **format 1**, with matching query, bounded handles/labels, scanned
+record count and explicit omitted-match/unexamined/prefix-limited counts. A load stage
+cannot carry that search receipt. Unsupported future result formats, missing receipts,
+mismatched queries and over-limit results reject reads without replacing saved payloads.
+Older app versions cannot interpret new search stages; do not downgrade an active worker.
+
+Search examines only omitted saved records available for exact loading: requirement
+statements, question/source text and research findings, plus record/epic IDs. Queries
+are bounded to 160 characters/twelve literal terms, returned handles to eight, text
+prefixes to 4,096 characters, examined records to 5,000 and examined text to 1,000,000
+characters. Counts describe those prefixes, not an exhaustive or semantic search.
+There is no persisted external index, filesystem/network access or new permission.
+
+The context's new `savedEvidenceSearch` field is explicitly advisory and is excluded
+from `gap-stage-evidence-v1`, alongside existing navigation indexes. This preserves
+the exact old basis for old contexts; it does not exclude any formerly authoritative
+field. Search results do not enter `includedIDs`, citation allowlists or decision/change
+authority. A returned handle must still exist and be loaded with exact evidence and its
+mandatory human constraints before use. Old completed gap checks are not reopened solely
+because search is now available; completion never promised exhaustive evidence review.
+
+Search and exact loading share the existing two committed navigation stages, three
+cumulative request attempts and 96,000-character hard context cap. Existing transactional
+lease/revision checks reserve attempts before inference and save search receipts before
+expansion. Failed or over-budget follow-up retains the receipt and does not reset budgets.
+Explicit retry reuses the original search result without rerunning its query, even after
+unrelated revisions or changed navigation labels. Original job/hash/session/revision
+provenance stays intact; new exact loading reads current saved records. Changed loaded
+authoritative evidence blocks reuse of later stages/finals; original results are retained,
+not replayed or treated as current. Publication keeps all existing current-revision,
+reference, approval, question-budget and live-lease checks. Startup never resumes inference.
+Legacy missing-basis adoption still verifies immutable original contexts and wire hashes.
+
+Deterministic tests cover undisplayed handles, search → exact load → analysis, navigation-
+only citation/change rejection, literal matching, query/result/scan/text/context limits,
+disk reopening, startup no-call recovery, committed-search interruption, final-publication
+failure, compatible cross-revision reuse, original receipts under changed labels, changed
+loaded evidence, cumulative retry exhaustion, cancellation, stale revisions, expired leases
+and malformed/future receipts. Existing legacy adoption and assessment/approval/history
+regressions remain passing. The new focused browser check uses an in-memory database and
+verifies undisplayed-handle navigation, explicit retry, exact human constraints, shared
+budgets, omissions/blockers, original history, reload without inference and mobile width.
+
+Verification: `npm run check`, all **410 deterministic tests**, UI production build,
+focused saved-navigation and retrieval browser checks, and the full `npm run test:browser`
+suite passed. The known full-suite tooltip timing flake was not reproduced or fixed;
+the large-JavaScript-chunk warning remains. Checks used available Node **20.11**, not the
+recommended 22.12+ baseline. No live model calls, user project database writes, repository
+commits or pushes were performed by this task. Live-provider search quality, semantic
+entailment and adversarial live permission behavior remain unqualified. Prefix/order
+bounds can miss relevant records; budget exhaustion requires meaningful scope/evidence
+changes, not repeated clicks. Structural validation cannot prove model prose ignored
+all advisory labels; it prevents those handles from authorizing citations or changes.
+
 ### Evidence-equivalent cross-revision retrieval retry (2026-10-20)
 
 Source/target SQLite **3 → 3**, retrieval work **1 → 1**, execution **1 → 1**,

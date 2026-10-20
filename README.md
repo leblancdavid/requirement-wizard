@@ -22,6 +22,12 @@ retaining human constraints and checkpointing completed calls for explicit retry
 hints cannot support citations; oversized evidence blocks rather than silently truncating it.
 Compatible saved stages also survive unrelated specification revisions; original model-call
 provenance is retained and publication still checks the latest revision.
+Gap tasks can also search bounded saved-record prefixes for handles outside displayed
+indexes, then explicitly load exact evidence. Search labels are navigation only and
+share the existing request budget; omissions and blockers remain visible.
+Snapshot-bound continuation handles can advance result/text windows or queries can be
+refined. Paging does not add requests: another search page can leave insufficient budget
+to load its exact evidence and analyze it.
 Connect a local folder for each project to automatically save versionable requirements
 and progress files. Choose it during creation or use **Settings → Project workspace**.
 Generated requirements are split by stable feature ID with a linked overview and shared

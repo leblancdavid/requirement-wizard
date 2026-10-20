@@ -152,7 +152,16 @@ completed stages are revision/lease-checkpointed, and explicit compatible retry 
 replaying saved model responses. Three cumulative requests and a 96,000-character
 evidence cap block rather than truncate constraints. Explicit retries reuse compatible
 stages across unrelated revisions with original provenance and current-revision publication;
-in-flight stale workers never rebase automatically. Live semantic quality, arbitrary evidence
+in-flight stale workers never rebase automatically. Bounded lexical search can discover
+saved handles outside displayed indexes; navigation results require explicit exact loading
+and share the same stage/request budget. Search receipts survive compatible retries without
+being rerun, and the queue exposes omissions and blockers. Deterministic upgrade/recovery
+and focused browser checks pass; this adds no exhaustive-search or completeness guarantee.
+Snapshot-bound continuation handles now advance bounded result/text windows without
+rerunning prior pages or changing request budgets. New queries can refine navigation;
+unloaded page results still cannot support analysis. Original receipts (including legacy
+nonpaged receipts), human constraints, completed checks and assessments are preserved.
+Live semantic quality, arbitrary evidence
 windows and semantic prioritization remain follow-on
 work; see [browser discovery](browser-workspace.md#exploring-gaps-in-large-projects).
 

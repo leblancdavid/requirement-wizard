@@ -6,6 +6,7 @@ import { analysisSchema } from "./model.js";
 import type { Analysis } from "./model.js";
 import { ContextBudgetError } from "./context.js";
 import { planContext } from "./working-set.js";
+import { searchEvidenceSchema, savedEvidenceSearchSchema } from "./gap-navigation.js";
 
 export const retrievalRequestSchema = z.object({ retrieveEvidence: z.object({ format: z.literal(1),
   recordIDs: z.array(z.string().min(1).max(200)).min(1).max(8), reason: z.string().min(1).max(600),
@@ -15,10 +16,19 @@ const evidenceBasisSchema = z.object({ format: z.literal(1), compatibility: z.li
 export const retrievalWorkSchema = z.object({ format: z.literal(1),
   research: z.boolean(),
   stages: z.array(z.object({ revision: z.number().int().positive(), contextKey: z.string().regex(/^[a-f0-9]{64}$/),
-    includedIDs: z.array(z.string()), request: retrievalRequestSchema,
+    includedIDs: z.array(z.string()), request: z.union([retrievalRequestSchema, searchEvidenceSchema]),
+    searchResult: savedEvidenceSearchSchema.optional(),
     sessionID: z.string().optional(),
     evidenceBasis: evidenceBasisSchema.optional(),
-  }).strict()).max(2),
+  }).strict().superRefine((stage, ctx) => {
+    if (("searchEvidence" in stage.request) !== !!stage.searchResult
+      || stage.searchResult && "searchEvidence" in stage.request && (stage.searchResult.query !== stage.request.searchEvidence.query
+        || stage.searchResult.records.length > stage.request.searchEvidence.limit
+        || stage.request.searchEvidence.cursor !== stage.searchResult.page?.inputCursor
+        || stage.searchResult.page && stage.searchResult.page.limit !== stage.request.searchEvidence.limit)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Search checkpoints require their bounded original navigation result, and load checkpoints cannot carry search results." });
+    }
+  })).max(2),
   attempts: z.number().int().min(0).max(3),
   originJobID: z.string().optional(),
   reuse: z.object({ format: z.literal(1), sourceJobID: z.string().min(1), sourceRevision: z.number().int().positive(),
@@ -64,7 +74,7 @@ function expandedEvidence(input: unknown): Record<string, unknown> {
 /** Navigation never grants authority. Keep every other displayed field conservative. */
 export function retrievalEvidenceBasis(context: ContextPack) {
   const { revision: _revision, previousInterpretation: _summary, recordIndex: _index,
-    relatedRecordHints: _hints, epicMap: _map, ...evidence } = expandedEvidence(context.data);
+    relatedRecordHints: _hints, epicMap: _map, savedEvidenceSearch: _search, ...evidence } = expandedEvidence(context.data);
   if (evidence.submissionScope && typeof evidence.submissionScope === "object") {
     const { omittedRecords: _count, ...scope } = evidence.submissionScope as Record<string, unknown>;
     evidence.submissionScope = scope;

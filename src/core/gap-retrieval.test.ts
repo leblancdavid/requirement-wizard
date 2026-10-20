@@ -12,12 +12,14 @@ import { planContext, shareRepeatedIdentifiers, shareRepeatedText } from "./work
 import { ContextBudgetError } from "./context.js";
 import { nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval } from "./gap-retrieval.js";
 import type { Analysis } from "./model.js";
+import { searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch } from "./gap-navigation.js";
+import { discoveryPrompt } from "../runtime/discovery.js";
 
 const empty = (): Analysis => ({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [], questions: [],
   requirements: [], retireQuestions: [], organization: [], assessments: [] });
 const request = (...recordIDs: string[]) => ({ retrieveEvidence: { format: 1 as const, recordIDs, reason: "Inspect the exact saved file, not its navigation link." } });
 
-function fixture() {
+function fixture(hidden = false) {
   const directory = mkdtempSync(join(tmpdir(), "reqwizit-retrieval-")), path = join(directory, "projects.sqlite");
   let store = new ProjectStore(path);
   let p = store.create("Retrieval upgrade", "Never discard human work.", { providerID: "openai", modelID: "fixture" });
@@ -31,6 +33,7 @@ function fixture() {
     p.sources.push({ id: `file-${i}`, kind: "workspace", epicID: "inbox", text: `${i}: exact static observation\n` + String(i).repeat(30000) });
     p.requirements[0]!.sourceIDs.push(`file-${i}`);
   }
+  if (hidden) p.sources.push({ id: "buried-source", kind: "workspace", epicID: "inbox", text: "Quartz archive recovery: exact saved observation\r\n" + "preserve original evidence ".repeat(100) });
   const db = new Database(path);
   db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(p), p.id);
   db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(p), p.id, p.revision);
@@ -70,6 +73,417 @@ test("stages defer static closure but retain every human constraint and reject n
     assert.deepEqual(store.get(p.id).sources, p.sources); assert.deepEqual(store.get(p.id).requirements, p.requirements);
     assert.ok(job.retrievalWork!.stages.every((s) => s.revision === p.revision));
   } finally { f.dispose(); }
+});
+
+const search = (query = "quartz archive", limit = 8) => ({ searchEvidence: { format: 1 as const, query, limit } });
+
+test("bounded search discovers undisplayed saved handles, then exact loading precedes any citation", async () => {
+  const f = fixture(true);
+  try {
+    const base = planGapContext(f.p, [], "inbox");
+    assert.doesNotMatch(JSON.stringify(base.data), /buried-source/);
+    assert.throws(() => validateRetrieval(base, request("buried-source")));
+    let calls = 0;
+    const job = await new DiscoveryService(f.store, { async analyze(snapshot, options) {
+      calls++;
+      assert.equal(options.research, false);
+      assert.match(JSON.stringify(options.context.data), /never discard offline edits/);
+      assert.ok(options.context.manifest.characters <= 96000);
+      assert.match(discoveryPrompt(snapshot, options.context), /searchEvidence/);
+      if (calls === 1) return search();
+      if (calls === 2) {
+        assert.ok(!options.context.manifest.includedIDs.includes("buried-source"));
+        assert.match(JSON.stringify(options.context.data), /Navigation only, not evidence/);
+        return request("buried-source");
+      }
+      assert.ok(options.context.manifest.includedIDs.includes("buried-source"));
+      assert.ok(JSON.stringify(options.context.data).includes(f.p.sources.at(-1)!.text.replace(/\r/g, "\\r").replace(/\n/g, "\\n")));
+      return { ...empty(), requirements: [{ statement: "Keep archive recovery available", rationale: "Captured observation, not human approval", acceptance: ["Saved recovery is available"], sourceIDs: ["buried-source"] }] };
+    } }).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    assert.equal(job.status, "completed", job.diagnostic); assert.equal(calls, 3);
+    assert.equal(job.retrievalWork!.stages[0]!.searchResult!.records[0]!.id, "buried-source");
+    assert.equal(f.store.get(f.p.id).requirements.at(-1)!.status, "proposed");
+    assert.deepEqual(f.store.get(f.p.id).requirements[0], f.p.requirements[0]);
+    assert.deepEqual(f.store.get(f.p.id).sources, f.p.sources);
+  } finally { f.dispose(); }
+});
+
+test("search labels never authorize citations or changes against navigation-only handles", async () => {
+  for (const mode of ["question", "requirement", "retirement", "refinement"] as const) {
+    const f = fixture(true);
+    try {
+      let calls = 0;
+      const job = await new DiscoveryService(f.store, { async analyze() {
+        if (++calls === 1) return search();
+        return { ...empty(), ...(mode === "question" ? { questions: [{ text: "What must archive recovery preserve?", whyItMatters: "Only a search label was seen", evidenceIDs: ["buried-source"], options: [{ label: "Keep", consequence: "Retain" }, { label: "Change", consequence: "Replace" }] }] }
+          : mode === "requirement" ? { requirements: [{ statement: "Preserve archive recovery", rationale: "Not loaded", acceptance: ["Recover"], sourceIDs: ["buried-source"] }] }
+          : mode === "retirement" ? { retireQuestions: [{ questionID: "buried-source", reason: "Navigation is not authority" }] }
+          : { refinements: [{ requirementID: "buried-source", statement: "Preserve recovery", rationale: "Not loaded", acceptance: ["Recover"], reason: "Search only" }] }) };
+      } }).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+      assert.equal(job.status, "failed"); assert.match(job.diagnostic!, /unseen navigation/);
+      assert.deepEqual(f.store.get(f.p.id), f.p);
+    } finally { f.dispose(); }
+  }
+});
+
+test("search is literal, bounded, counts omissions, and never changes authoritative context or human constraints", () => {
+  const f = fixture(true);
+  try {
+    const base = planGapContext(f.p, [], "inbox");
+    const result = searchSavedEvidence(f.p, base, search());
+    assert.deepEqual(result.records.map((r) => r.id), ["buried-source"]);
+    const next = withSavedEvidenceSearch(base, result);
+    assert.deepEqual(next.manifest.includedIDs, base.manifest.includedIDs);
+    assert.equal(retrievalEvidenceBasis(next).key, retrievalEvidenceBasis(base).key);
+    assert.notEqual(retrievalContextKey(next), retrievalContextKey(base));
+    assert.deepEqual(validateRetrieval(next, request("buried-source")), request("buried-source"));
+    assert.match(JSON.stringify(next.data), /never discard offline edits/);
+    assert.equal(searchSavedEvidence(f.p, base, search(".*")).records.length, 0);
+    for (const raw of [search(" "), search("x".repeat(161)), search("x ".repeat(81)), search(Array.from({ length: 13 }, (_, i) => `t${i}`).join(" ")),
+      search("quartz", 0), search("quartz", 9), { ...search(), requirements: [] }, { searchEvidence: { ...search().searchEvidence, path: "C:\\private" } }]) {
+      assert.throws(() => searchSavedEvidence(f.p, base, raw));
+    }
+    const p = structuredClone(f.p);
+    p.sources = Array.from({ length: 5002 }, (_, i) => ({ id: `nav-${i}`, kind: "workspace" as const, epicID: "inbox", text: "quartz archive" }));
+    const context = { ...base, manifest: { ...base.manifest, omittedIDs: p.sources.map((s) => s.id) } };
+    const many = searchSavedEvidence(p, context, search("quartz", 2));
+    assert.equal(many.records.length, 2); assert.equal(many.scannedRecords, 5000);
+    assert.equal(many.omittedMatches, 4998); assert.equal(many.unexaminedRecords, 2);
+    p.sources.forEach((s) => { s.text = "quartz archive " + "x".repeat(5000); });
+    const volume = searchSavedEvidence(p, context, search());
+    assert.equal(volume.scannedRecords, 244); assert.equal(volume.prefixLimitedRecords, 244);
+    assert.equal(volume.unexaminedRecords, 5002 - 244);
+    assert.throws(() => withSavedEvidenceSearch({ ...base, data: { mandatory: "x".repeat(96000) } }, result), ContextBudgetError);
+  } finally { f.dispose(); }
+});
+
+const continuation = (result: SavedEvidenceSearch, limit = result.page!.limit) => ({ searchEvidence: {
+  format: 1 as const, query: result.query, limit, cursor: result.page!.next!.cursor,
+} });
+
+test("continuations use original saved order, omit offered handles and bind query, limit, snapshot and scope", () => {
+  const f = fixture();
+  try {
+    const base = planGapContext(f.p, [], "inbox");
+    const first = searchSavedEvidence(f.p, base, search("exact static", 1));
+    assert.deepEqual(first.records.map((r) => r.id), ["file-0"]); assert.equal(first.omittedMatches, 4);
+    const history = [{ includedIDs: base.manifest.includedIDs, searchResult: first }];
+    const second = searchSavedEvidence(f.p, base, continuation(first), history);
+    assert.deepEqual(second.records.map((r) => r.id), ["file-1"]);
+    assert.equal(second.page!.inputCursor, first.page!.next!.cursor);
+    assert.equal(second.page!.snapshotRevision, f.p.revision);
+    assert.equal(retrievalEvidenceBasis(withSavedEvidenceSearch(base, second)).key, retrievalEvidenceBasis(base).key);
+    const newest = structuredClone(f.p); newest.revision++;
+    newest.sources.reverse(); newest.sources.push({ id: "new-quartz", kind: "workspace", epicID: "inbox", text: "exact static newly added" });
+    const across = searchSavedEvidence(newest, base, continuation(first), history, (revision) => {
+      assert.equal(revision, f.p.revision); return f.p;
+    });
+    assert.deepEqual(across, second, "New index order/additions must not shift the old snapshot's next page");
+    const refined = searchSavedEvidence(newest, base, search("exact static", 1), history);
+    assert.equal(refined.records[0]!.id, "file-4"); assert.equal(refined.page!.snapshotRevision, newest.revision);
+    assert.equal(refined.page!.inputCursor, undefined, "A fresh/refined query is not silently pinned to an old continuation");
+    for (const raw of [continuation(first, 2), { searchEvidence: { ...continuation(first).searchEvidence, query: "different" } },
+      { searchEvidence: { ...continuation(first).searchEvidence, cursor: "0".repeat(64) } }]) {
+      assert.throws(() => searchSavedEvidence(f.p, base, raw, history), /unknown or stale/);
+    }
+    assert.throws(() => searchSavedEvidence(f.p, base, continuation(first)), /unknown or stale/);
+    assert.throws(() => searchSavedEvidence(newest, base, continuation(first), history), /original snapshot is unavailable/);
+    assert.throws(() => searchSavedEvidence(newest, base, continuation(first), history, () => newest), /original snapshot is unavailable/);
+    assert.throws(() => searchSavedEvidence(f.p, { ...base, manifest: { ...base.manifest, focusEpicID: "changed-scope" } }, continuation(first), history), /unknown or stale/);
+    const forged = structuredClone(first); forged.page!.next!.recordOffset++;
+    assert.throws(() => searchSavedEvidence(f.p, base, continuation(forged), [{ ...history[0]!, searchResult: forged }]), /position is invalid/);
+  } finally { f.dispose(); }
+});
+
+test("continuations reach later text windows and scan-limit tails without silently skipping a partial window", () => {
+  const f = fixture();
+  try {
+    const p = structuredClone(f.p), base = planGapContext(p, [], "inbox");
+    p.sources = [{ id: "suffix", kind: "workspace", epicID: "inbox", text: "x".repeat(4096) + "quartz archive suffix" }];
+    const context = { ...base, manifest: { ...base.manifest, omittedIDs: ["suffix"] } };
+    const first = searchSavedEvidence(p, context, search());
+    assert.equal(first.records.length, 0); assert.equal(first.page!.next!.textOffset, 4096);
+    const second = searchSavedEvidence(p, context, continuation(first), [{ includedIDs: base.manifest.includedIDs, searchResult: first }]);
+    assert.deepEqual(second.records.map((r) => r.id), ["suffix"]); assert.equal(second.page!.next, undefined);
+    assert.match(second.records[0]!.label, /quartz archive suffix/);
+    assert.ok(!withSavedEvidenceSearch(context, second).manifest.includedIDs.includes("suffix"));
+    p.sources = Array.from({ length: 245 }, (_, i) => ({ id: `tail-${i}`, kind: "workspace" as const, epicID: "inbox",
+      text: i < 244 ? "x".repeat(4096) : "x".repeat(800) + "quartz archive at character-cap tail" }));
+    context.manifest.omittedIDs = p.sources.map((s) => s.id);
+    const capped = searchSavedEvidence(p, context, search());
+    assert.equal(capped.scannedRecords, 244); assert.equal(capped.unexaminedRecords, 1); assert.equal(capped.prefixLimitedRecords, 0);
+    const tail = searchSavedEvidence(p, context, continuation(capped), [{ includedIDs: base.manifest.includedIDs, searchResult: capped }]);
+    assert.deepEqual(tail.records.map((r) => r.id), ["tail-244"]); assert.equal(tail.page!.textOffset, 0);
+    p.sources = Array.from({ length: 5001 }, (_, i) => ({ id: `record-${i}`, kind: "workspace" as const,
+      epicID: "inbox", text: i === 5000 ? "quartz archive beyond record cap" : "unrelated" }));
+    context.manifest.omittedIDs = p.sources.map((s) => s.id);
+    const recordCap = searchSavedEvidence(p, context, search());
+    assert.equal(recordCap.scannedRecords, 5000); assert.equal(recordCap.unexaminedRecords, 1);
+    const recordTail = searchSavedEvidence(p, context, continuation(recordCap), [{ includedIDs: base.manifest.includedIDs, searchResult: recordCap }]);
+    assert.deepEqual(recordTail.records.map((r) => r.id), ["record-5000"]);
+    // Earlier long records must not lose their suffix continuation when later matches fill result pages.
+    p.sources = [{ id: "earlier", kind: "workspace", epicID: "inbox", text: "x".repeat(4096) + "quartz archive later" },
+      ...Array.from({ length: 3 }, (_, i) => ({ id: `match-${i}`, kind: "workspace" as const, epicID: "inbox", text: "quartz archive" }))];
+    context.manifest.omittedIDs = p.sources.map((s) => s.id);
+    const history: { includedIDs: string[]; searchResult: SavedEvidenceSearch }[] = [];
+    let page = searchSavedEvidence(p, context, search("quartz archive", 1));
+    const offered = page.records.map((r) => r.id);
+    for (let i = 0; i < 3; i++) {
+      history.push({ includedIDs: base.manifest.includedIDs, searchResult: page });
+      page = searchSavedEvidence(p, context, continuation(page), history); offered.push(...page.records.map((r) => r.id));
+    }
+    assert.deepEqual(offered, ["match-0", "match-1", "match-2", "earlier"]);
+    assert.equal(page.page!.next, undefined);
+    // These local helper pages do not enlarge the service's two-stage model budget.
+  } finally { f.dispose(); }
+});
+
+test("text-window continuations stop at their explicit local bound without claiming exhaustive search", () => {
+  const f = fixture();
+  try {
+    const p = structuredClone(f.p), base = planGapContext(p, [], "inbox");
+    p.sources = [{ id: "too-deep", kind: "workspace", epicID: "inbox", text: "x".repeat(65536) + "quartz archive beyond bound" }];
+    const context = { ...base, manifest: { ...base.manifest, omittedIDs: ["too-deep"] } };
+    const history: { includedIDs: string[]; searchResult: SavedEvidenceSearch }[] = [];
+    let page = searchSavedEvidence(p, context, search());
+    for (let i = 1; i < 16; i++) {
+      history.push({ includedIDs: base.manifest.includedIDs, searchResult: page });
+      page = searchSavedEvidence(p, context, continuation(page), history);
+    }
+    assert.equal(page.page!.textOffset, 61440); assert.equal(page.page!.next, undefined);
+    assert.equal(page.records.length, 0); assert.equal(page.prefixLimitedRecords, 1);
+    assert.match(page.limitation, /no exhaustive/);
+  } finally { f.dispose(); }
+});
+
+test("paged searches survive disk recovery and unrelated revisions but cannot reset budgets or replace exact loading", async () => {
+  const f = fixture(); let store = f.store;
+  try {
+    let calls = 0;
+    const checkpoint = store.checkpointRetrieval.bind(store);
+    store.checkpointRetrieval = (...args) => { checkpoint(...args); if (args[1].stages.length === 1) throw new Error("Fixture stopped after first page"); };
+    const first = await new DiscoveryService(store, { async analyze() { calls++; return search("exact static", 1); } })
+      .analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    const original = JSON.stringify(first);
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(f.path); assert.equal(JSON.stringify(store.getJob(first.id)), original);
+      await new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("No automatic paging on startup"); } })).close();
+    }
+    const latest = unrelatedEdit(store, f.p.id);
+    const second = await new DiscoveryService(store, { async analyze(_p, options) {
+      calls++; assert.match(JSON.stringify(options.context.data), /never discard offline edits/);
+      const page = (options.context.data as { savedEvidenceSearch: SavedEvidenceSearch }).savedEvidenceSearch;
+      if (calls === 2) return continuation(page);
+      assert.equal(page.page!.snapshotRevision, f.p.revision); assert.equal(page.records[0]!.id, "file-1");
+      assert.ok(!options.context.manifest.includedIDs.includes("file-1")); return request("file-1");
+    } }).analyze(latest.id, latest.revision, { focusEpicID: "inbox" });
+    assert.equal(second.status, "failed"); assert.match(second.diagnostic!, /unseen page results cannot support analysis/);
+    assert.equal(second.retrievalWork!.stages.length, 2); assert.equal(second.retrievalWork!.attempts, 3);
+    assert.equal(second.retrievalWork!.stages[1]!.searchResult!.page!.snapshotRevision, f.p.revision);
+    const retry = await new DiscoveryService(store, { async analyze() { assert.fail("No budget reset after paging"); } })
+      .analyze(latest.id, latest.revision, { focusEpicID: "inbox" });
+    assert.equal(retry.status, "failed"); assert.match(retry.diagnostic!, /three-request bound/); assert.equal(calls, 3);
+    assert.deepEqual(store.getJob(second.id), second); assert.equal(JSON.stringify(store.getJob(first.id)), original);
+    assert.deepEqual(store.get(latest.id), latest);
+  } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test("cancellation, stale revisions and expired leases prevent a returned continuation from being checkpointed", async () => {
+  for (const mode of ["cancel", "stale", "lease"] as const) {
+    const f = fixture();
+    try {
+      let calls = 0; const stop = new AbortController();
+      const job = await new DiscoveryService(f.store, { async analyze(_p, options) {
+        if (++calls === 1) return search("exact static", 1);
+        const page = (options.context.data as { savedEvidenceSearch: SavedEvidenceSearch }).savedEvidenceSearch;
+        if (mode === "cancel") stop.abort();
+        if (mode === "stale") f.store.note(f.p.id, f.p.revision, "Newer exact human constraint wins", "inbox");
+        if (mode === "lease") {
+          const db = new Database(f.path), live = f.store.jobs(f.p.id).at(-1)!;
+          db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify({ ...live, leaseUntil: Date.now() - 1 }), live.id); db.close();
+        }
+        return continuation(page);
+      } }).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox", signal: stop.signal });
+      assert.equal(calls, 2); assert.notEqual(job.status, "completed");
+      assert.equal(job.retrievalWork!.stages.length, 1); assert.equal(job.retrievalWork!.attempts, 2);
+      assert.equal(job.retrievalWork!.stages[0]!.searchResult!.records[0]!.id, "file-0");
+      assert.deepEqual(f.store.get(f.p.id).requirements, f.p.requirements);
+    } finally { f.dispose(); }
+  }
+});
+
+for (const basis of [false, true]) test(`legacy search receipts without paging metadata reopen and reuse without invented cursors or model replay (saved basis: ${basis})`, async () => {
+  const f = fixture(true); let store = f.store;
+  try {
+    const checkpoint = store.checkpointRetrieval.bind(store);
+    store.checkpointRetrieval = (...args) => { checkpoint(...args); if (args[1].stages.length === 1) throw new Error("Fixture saved legacy search"); };
+    const first = await new DiscoveryService(store, { async analyze() { return search(); } })
+      .analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    delete first.retrievalWork!.stages[0]!.searchResult!.page;
+    if (!basis) delete first.retrievalWork!.stages[0]!.evidenceBasis;
+    const raw = JSON.stringify(first), db = new Database(f.path);
+    db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(raw, first.id); db.close();
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(f.path); assert.deepEqual(store.getJob(first.id), first); }
+    const latest = unrelatedEdit(store, f.p.id); let calls = 0;
+    const retry = await new DiscoveryService(store, { async analyze(_p, options) {
+      calls++;
+      if (!options.context.manifest.includedIDs.includes("buried-source")) {
+        assert.equal((options.context.data as { savedEvidenceSearch: SavedEvidenceSearch }).savedEvidenceSearch.page, undefined);
+        return request("buried-source");
+      }
+      return empty();
+    } }).analyze(latest.id, latest.revision, { focusEpicID: "inbox" });
+    assert.equal(retry.status, "completed", retry.diagnostic); assert.equal(calls, 2); assert.equal(retry.retrievalWork!.attempts, 3);
+    assert.equal(retry.retrievalWork!.stages[0]!.searchResult!.page, undefined);
+    const after = new Database(f.path);
+    assert.equal((after.prepare("SELECT payload FROM jobs WHERE id = ?").get(first.id) as { payload: string }).payload, raw); after.close();
+    assert.deepEqual(store.get(latest.id).requirements, latest.requirements);
+  } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test("search checkpoints survive reopen, navigation churn and publication failure without resetting budgets or provenance", async () => {
+  const f = fixture(true); let store = f.store;
+  try {
+    let calls = 0;
+    const checkpoint = store.checkpointRetrieval.bind(store);
+    store.checkpointRetrieval = (...args) => {
+      checkpoint(...args);
+      if (args[1].stages.length === 1) throw new Error("Fixture interruption after durable search checkpoint");
+    };
+    const first = await new DiscoveryService(store, { async analyze() { calls++; return search(); } }).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    assert.equal(first.retrievalWork!.attempts, 1); const raw = JSON.stringify(first);
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(f.path);
+      assert.equal(JSON.stringify(store.getJob(first.id)), raw);
+      await new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("No startup search or inference"); } })).close();
+    }
+    const latest = unrelatedEdit(store, f.p.id);
+    const finish = store.finishJob.bind(store);
+    store.finishJob = () => { throw new Error("Fixture interruption after final checkpoint"); };
+    const second = await new DiscoveryService(store, { async analyze(_p, options) {
+      calls++; return options.context.manifest.includedIDs.includes("buried-source") ? empty() : request("buried-source");
+    } }).analyze(latest.id, latest.revision, { focusEpicID: "inbox" });
+    store.finishJob = finish;
+    assert.equal(second.retrievalWork!.attempts, 3); assert.ok(second.retrievalWork!.final, second.diagnostic);
+    const changed = unrelatedEdit(store, f.p.id);
+    const third = await new DiscoveryService(store, { async analyze() { assert.fail("No repeated completed calls"); } }).analyze(changed.id, changed.revision, { focusEpicID: "inbox" });
+    assert.equal(third.status, "completed", third.diagnostic); assert.equal(calls, 3);
+    assert.equal(third.retrievalWork!.reuse!.stages, 2); assert.equal(third.retrievalWork!.reuse!.final, true);
+    assert.deepEqual(third.retrievalWork!.stages[0], first.retrievalWork!.stages[0]);
+    assert.equal(JSON.stringify(store.getJob(first.id)), raw); assert.deepEqual(store.getJob(second.id), second);
+    assert.deepEqual(store.get(changed.id).sources, changed.sources); assert.deepEqual(store.get(changed.id).requirements, f.p.requirements);
+  } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test("failed post-search attempts still consume the shared budget on explicit cross-revision retry", async () => {
+  const f = fixture(true);
+  try {
+    let calls = 0;
+    const first = await new DiscoveryService(f.store, { async analyze() { if (++calls === 1) return search(); throw new Error("Fixture request failed"); } })
+      .analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    assert.equal(first.retrievalWork!.attempts, 2);
+    const latest = unrelatedEdit(f.store, f.p.id);
+    const second = await new DiscoveryService(f.store, { async analyze() { calls++; return request("buried-source"); } })
+      .analyze(latest.id, latest.revision, { focusEpicID: "inbox" });
+    assert.equal(second.status, "failed"); assert.match(second.diagnostic!, /three-request bound/); assert.equal(calls, 3);
+    const third = await new DiscoveryService(f.store, { async analyze() { assert.fail("Retry cannot reset the budget"); } })
+      .analyze(latest.id, latest.revision, { focusEpicID: "inbox" });
+    assert.equal(third.status, "failed"); assert.equal(third.retrievalWork!.attempts, 3);
+    assert.deepEqual(f.store.get(latest.id), latest);
+  } finally { f.dispose(); }
+});
+
+test("changed navigation labels permit saved search reuse, but changed loaded evidence blocks final reuse", async () => {
+  const f = fixture(true);
+  try {
+    let calls = 0;
+    const checkpoint = f.store.checkpointRetrieval.bind(f.store);
+    f.store.checkpointRetrieval = (...args) => {
+      checkpoint(...args);
+      if (args[1].stages.length === 1) throw new Error("Fixture stopped after search");
+    };
+    const first = await new DiscoveryService(f.store, { async analyze() { calls++; return search(); } })
+      .analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    f.store.checkpointRetrieval = checkpoint;
+    const replaceObservation = (text: string) => {
+      const p = f.store.get(f.p.id); p.sources.find((s) => s.id === "buried-source")!.text = text;
+      const db = new Database(f.path);
+      db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(p), p.id);
+      db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(p), p.id, p.revision); db.close();
+      return p;
+    };
+    // Curated saved-snapshot change: unlinked observation is not yet authoritative.
+    const updated = replaceObservation("Completely changed saved observation; no original search terms.");
+    const finish = f.store.finishJob.bind(f.store);
+    f.store.finishJob = () => { throw new Error("Fixture publication interruption"); };
+    const second = await new DiscoveryService(f.store, { async analyze(_p, options) {
+      calls++;
+      if (calls === 2) {
+        assert.deepEqual((options.context.data as { savedEvidenceSearch: unknown }).savedEvidenceSearch, first.retrievalWork!.stages[0]!.searchResult);
+        return request("buried-source");
+      }
+      assert.match(JSON.stringify(options.context.data), /Completely changed saved observation/); return empty();
+    } }).analyze(updated.id, updated.revision, { focusEpicID: "inbox" });
+    f.store.finishJob = finish;
+    assert.ok(second.retrievalWork!.final, second.diagnostic); assert.equal(calls, 3);
+    replaceObservation("Another changed authoritative observation, after exact loading.");
+    const third = await new DiscoveryService(f.store, { async analyze() { assert.fail("Never reuse or replay changed authoritative evidence"); } })
+      .analyze(updated.id, updated.revision, { focusEpicID: "inbox" });
+    assert.equal(third.status, "failed"); assert.match(third.diagnostic!, /Saved final evidence changed/);
+    assert.deepEqual(f.store.getJob(first.id), first); assert.deepEqual(f.store.getJob(second.id), second);
+    assert.deepEqual(f.store.get(f.p.id).requirements, f.p.requirements);
+  } finally { f.dispose(); }
+});
+
+test("future or incomplete saved search receipts reject reads without overwriting original payloads", async () => {
+  const f = fixture(true);
+  try {
+    const failed = await new DiscoveryService(f.store, { async analyze() { return search(); } })
+      .analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    const db = new Database(f.path);
+    try {
+      for (const mode of ["future", "missing", "query", "result-bound", "page-future", "cursor-mismatch", "window-limit"] as const) {
+        const work = structuredClone(failed);
+        if (mode === "future") (work.retrievalWork!.stages[0]!.searchResult as unknown as { format: number }).format = 99;
+        if (mode === "missing") delete work.retrievalWork!.stages[0]!.searchResult;
+        if (mode === "query") work.retrievalWork!.stages[0]!.searchResult!.query = "not the requested query";
+        if (mode === "result-bound") work.retrievalWork!.stages[0]!.searchResult!.records = Array(9).fill(work.retrievalWork!.stages[0]!.searchResult!.records[0]);
+        if (mode === "page-future") (work.retrievalWork!.stages[0]!.searchResult!.page as unknown as { format: number }).format = 99;
+        if (mode === "cursor-mismatch") {
+          const request = work.retrievalWork!.stages[0]!.request;
+          if ("searchEvidence" in request) request.searchEvidence.cursor = "0".repeat(64);
+        }
+        if (mode === "window-limit") work.retrievalWork!.stages[0]!.searchResult!.page!.textOffset = 65536;
+        const raw = JSON.stringify(work);
+        db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(raw, failed.id);
+        assert.throws(() => f.store.getJob(failed.id));
+        assert.equal((db.prepare("SELECT payload FROM jobs WHERE id = ?").get(failed.id) as { payload: string }).payload, raw);
+      }
+    } finally { db.close(); }
+  } finally { f.dispose(); }
+});
+
+test("search stages obey cancellation, stale revisions, leases and the two-stage bound", async () => {
+  for (const mode of ["cancel", "stale", "lease", "stages"] as const) {
+    const f = fixture(true);
+    try {
+      const stop = new AbortController(); let calls = 0;
+      const job = await new DiscoveryService(f.store, { async analyze() {
+        calls++;
+        if (mode === "cancel") stop.abort();
+        if (mode === "stale") f.store.note(f.p.id, f.p.revision, "Newer exact constraint", "inbox");
+        if (mode === "lease") {
+          const db = new Database(f.path), live = f.store.jobs(f.p.id).at(-1)!;
+          db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify({ ...live, leaseUntil: Date.now() - 1 }), live.id); db.close();
+        }
+        return search();
+      } }).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox", signal: stop.signal });
+      assert.notEqual(job.status, "completed");
+      assert.equal(job.retrievalWork!.stages.length, mode === "stages" ? 2 : 0);
+      if (mode === "stages") { assert.equal(calls, 3); assert.match(job.diagnostic!, /stage limit/); }
+      assert.deepEqual(f.store.get(f.p.id).requirements, f.p.requirements);
+    } finally { f.dispose(); }
+  }
 });
 
 function unrelatedEdit(store: ProjectStore, id: string) {

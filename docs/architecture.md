@@ -207,6 +207,25 @@ stage/final counts. Legacy bases require immutable-snapshot reconstruction and t
 wire hash, never today's invented provenance. Publication still uses the new job's latest
 expected revision and all existing eligibility checks; stale workers cannot rebase in flight.
 Older completed checks/approvals and implementation identities are unchanged.
+`gap-navigation.ts` adds strict saved-record lexical search as an alternative navigation
+reply. It returns at most eight handles/excerpted labels, never detailed-evidence authority;
+the model must explicitly load selected records before citing or changing them. Queries
+and local prefix scanning are bounded, and search shares the existing two navigation stages
+and three cumulative attempts with loading. Search receipts are checkpointed before context
+expansion and replayed unchanged on explicit compatible retry, not rerun against a changing
+index. Only the advisory `savedEvidenceSearch` context field is excluded from the existing
+authoritative evidence basis; loaded content and applicable human constraints remain binding.
+No tools, external index, new filesystem or network permissions are introduced.
+Optional search `cursor` values are witnessed opaque handles, bound to project, original
+snapshot revision, task/loaded-record scope, query, result limit and record/text position.
+Continuation searches read the immutable original revision in original saved order; they
+do not page today's shifting index. An optional independently versioned `searchResult.page`
+receipt keeps positions and next-cursor provenance. Previously offered handles are skipped
+on continuation. New queries without cursors start against the current snapshot. Completed
+receipts are replayed unchanged across compatible retries, including older receipts without
+paging metadata. The two-stage/three-attempt cap still applies: search → page → load cannot
+also analyze, and blocks rather than admitting navigation-only citations. Whole text windows
+are deferred at the scan-character boundary so pagination cannot skip a partial window's tail.
 See [the protocol and boundaries](browser-workspace.md#bounded-exact-evidence-stages)
 and [migration compatibility](migrations.md).
 Before starting a queued AI job, each indivisible candidate is checked against the

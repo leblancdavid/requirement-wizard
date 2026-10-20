@@ -57,6 +57,60 @@ unseen record IDs in a strict `retrieveEvidence` envelope instead of returning p
 The app loads exact saved records and their human dependencies in a fresh context, keeps
 previously loaded evidence, and independently rejects unseen citations/changes.
 
+If relevant handles are absent from those indexes, the model can instead return ONLY
+`{searchEvidence:{format:1,query:"quartz archive",limit:8}}`. This searches omitted saved
+project requirements, questions, sources and research, including historical records, not
+the filesystem or internet. Query length is 1–160 characters with at most twelve literal
+whitespace-separated terms; all must match, case-insensitively. Regex syntax has no special
+meaning. Matching examines IDs, epic IDs and bounded prefixes of requirement statements,
+question/source text or research findings, in saved order (requirements, questions, sources,
+research). It does not search every field, use embeddings, or rank semantic relevance.
+At most 5,000 records and 1,000,000 text characters are examined per search; each text prefix
+is at most 4,096 characters. Results contain 1–8 requested maximum handles (possibly zero
+matches), kind/epic and labels of at most 180 characters. Records unavailable for exact
+loading in this context are not offered. Displayed results are **navigation only**:
+`retrieveEvidence` must explicitly load selected handles before citations or changes.
+
+Search and exact loading **share**, rather than extend, the two navigation stages and
+three cumulative model attempts. Search → load → analysis fits. Repeated searches, failed
+requests or oversized results may leave insufficient budget to load and analyze; retries
+do not reset it. Mandatory human constraints remain exact even in the search-result request.
+The queue shows saved search handle counts, further prefix matches omitted, unexamined
+records, prefix-limited text and failure blockers. These are local bounds, not an exhaustive
+search claim or a specification-completeness measure.
+
+#### Search refinement and bounded continuation
+
+New search results may include `page: {format:1, snapshotRevision, scopeKey, limit,
+recordOffset, textOffset, moreText, inputCursor?, next?:{cursor,recordOffset,textOffset}}`.
+To request the offered next window, return the strict search envelope with the **same**
+query and limit plus `cursor: savedEvidenceSearch.page.next.cursor`. Only a cursor returned
+by a saved stage of this task is accepted; arbitrary offsets, invented cursors or cursors
+from a different query/limit/scope are rejected. No client-supplied path or network URL is
+followed. Unknown/stale handles retain original receipts and explain their blocker.
+
+Ordering is the original revision's saved order (requirements, questions, sources,
+research). Continuation reads that immutable revision even after unrelated edits add or
+reorder today's navigation. It advances to the first omitted prefix match or unexamined
+record; after that record pass, it can advance to the next 4,096-character text window.
+Earlier deferred text is retained across result pages. Whole text windows are deferred,
+not partly skipped, when the one-million-character cap is reached. Previously offered
+handles are not re-offered on continuation. A new query **without** a cursor refines search
+from the beginning of the current snapshot instead; it still costs a navigation stage.
+
+Every page retains the eight-result, 5,000-record and one-million-text-character bounds.
+The local text-window range is at most sixteen windows (offsets 0–61,440). Matching is
+within individual windows; terms split across windows, other fields and deeper text can
+be missed. Queue status shows the original snapshot, record/text-window position,
+continuation availability and omissions. No next cursor means only that none is offered
+within these local bounds, **not** that saved evidence or the specification is complete.
+
+There is **no additional model allowance for paging**: search → page → exact load leaves
+no request for analysis under the existing three-attempt cap and is explicitly blocked.
+The page's labels cannot substitute for loading. Compatible retry reuses receipts and
+cumulative attempts without generating new cursors for legacy receipts. The ability to
+page does not reopen completed gap checks or invalidate implementation assessments.
+
 There are at most two completed navigation stages and three total adapter attempts,
 including failed requests across retries. Context targets 48,000 characters and has a
 96,000-character hard evidence cap; final saved output also has a 96,000-character cap.
@@ -79,13 +133,18 @@ a new task identity. Changes to already retrieved supporting constraints block s
 reuse; old results remain available, never silently applied or replayed.
 
 Cross-revision reuse excludes only revision labels, advisory previous interpretation,
-navigation indexes/hints, the navigation epic map and omitted-record counts. Lossless wire
-encodings are expanded before comparison; exact displayed human text, records, task lens,
+navigation indexes/hints, the navigation epic map, omitted-record counts and advisory
+saved-search results. Lossless wire encodings are expanded before comparison;
+exact displayed human text, records, task lens,
 feature/dependency scope and retrieval policy remain binding. A previously displayed handle
 can still load its exact saved record after unrelated additions move its hint out of the
 bounded index; this does not authorize citations before its contents are loaded. Older
 checkpoints without the new basis are adopted only after rebuilding their immutable input
 revision and verifying the original exact wire hash. No startup rewrite is needed.
+Search checkpoints keep their original results even when today's labels/order/matches
+change; retries do not silently rerun searches or claim those labels are current facts.
+Loading a returned handle uses today's exact saved evidence. Once loaded, changed evidence
+still prevents reuse of later completed calls. Missing handles block rather than redirect.
 
 Processing & queue displays source/retry revisions and the number of reused stages/final
 responses. A reused result still faces current reference, pending-question-budget and
@@ -94,8 +153,8 @@ attempts still count toward the three-request limit across revisions; unrelated 
 repeated clicks do not reset it. A concurrent edit during retry still makes the worker
 stale, even if that edit itself would permit another explicit compatible retry.
 
-The loader reads saved evidence only, not uncaptured files, arbitrary text ranges or a
-semantic search index. Loaded evidence is cumulative: this is **not** a way to divide
+The loader and lexical search read saved evidence only, not uncaptured files, arbitrary
+text ranges or a semantic search index. Loaded evidence is cumulative: this is **not** a way to divide
 mandatory human constraints into lossy summaries or process an unbounded evidence union.
 Only displayed handles are requestable. Exhausted request budgets require a meaningful
 scope/evidence change, not repeated clicks. Crash-before-checkpoint model responses cannot
@@ -106,6 +165,20 @@ reload/no-call replay, preserved records and mobile layout (`browser-gap-retriev
 Run `npm run test:browser:retrieval` for the independently runnable deterministic
 retrieval UI/API scenario (`browser-gap-retrieval-focused.png`), without the full suite's
 unrelated tooltip timing dependency. It uses an in-memory database and no model calls.
+`npm run test:browser:navigation` separately exercises an undisplayed handle search,
+durable search interruption, cross-revision explicit retry, exact loading before analysis,
+shared request budgets, omissions/blocker text, reload, preserved history and mobile width
+(`.reqwizit-state/browser-gap-navigation.png`). Both focused browser checks and the full
+browser suite passed on 2026-10-20 with this extension; the known tooltip timing flake was
+not reproduced or fixed. Live-provider search quality and semantic entailment remain
+unqualified; structural citation validation cannot establish the truth of model prose.
+The continuation extension adds an isolated second browser project checking original-
+snapshot paging across unrelated revisions, shared-budget exhaustion, displayed blockers,
+reload without budget reset and mobile width (`browser-gap-continuation.png`). Its first
+run timed out waiting for Design after a reload; an independent diagnostic-enabled rerun
+passed. This is not evidence that the reload timing issue is fixed. The full browser suite
+and focused exact-retrieval scenario passed on this extension; the tooltip flake did not
+reproduce. Available verification still uses Node 20.11 rather than Node 22.12+.
 
 ## Repeated questions and overlapping requirements
 

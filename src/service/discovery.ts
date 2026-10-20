@@ -5,7 +5,8 @@ import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext } from "../core/working-set.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
-import { checkpointEvidenceBasis, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
+import { checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
+import { searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch } from "../core/gap-navigation.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
@@ -294,17 +295,28 @@ export class DiscoveryService {
           && !saved.kind && !saved.helpRequest && !saved.context?.refinementOnly);
         const work: RetrievalWork = prior ? { ...structuredClone(prior.retrievalWork!), originJobID: prior.id }
           : { format: 1, research: adapterOptions.research, stages: [], attempts: 0 };
+        const searchContext = (base: ContextPack, result: SavedEvidenceSearch, stage: number) => {
+          const next = structuredClone(base);
+          enableGapRetrieval(next, stage + 2);
+          return withSavedEvidenceSearch(next, result);
+        };
         if (prior && (work.stages.some((s) => !s.evidenceBasis) || work.final && !work.final.evidenceBasis)) {
           const originalProject = this.store.get(projectID, prior.expectedRevision);
           let original = restoreGapTaskContext(originalProject, prior.context!.gapExploration!, prior.context?.focusEpicID ?? undefined);
           addRelatedRecordHints(originalProject, original);
           const requested: string[] = [];
+          const witnessed: string[] = [];
           for (const [index, saved] of work.stages.entries()) {
             if (!saved.evidenceBasis && saved.revision !== prior.expectedRevision) throw new Error("Legacy stage revision is not established by its saved job. Original work retained.");
             saved.evidenceBasis = checkpointEvidenceBasis(saved, original);
-            validateRetrieval(original, saved.request);
-            requested.push(...saved.request.retrieveEvidence.recordIDs);
-            if (index + 1 < work.stages.length || work.final) original = nextGapContext(originalProject, original, requested);
+            if ("retrieveEvidence" in saved.request) {
+              validateRetrieval(original, saved.request, witnessed);
+              requested.push(...saved.request.retrieveEvidence.recordIDs);
+              if (index + 1 < work.stages.length || work.final) original = nextGapContext(originalProject, original, requested);
+            } else {
+              witnessed.push(...saved.searchResult!.records.map((r) => r.id));
+              original = searchContext(original, saved.searchResult!, index);
+            }
           }
           if (work.final && !work.final.evidenceBasis) {
             if (work.final.revision !== undefined && work.final.revision !== prior.expectedRevision) throw new Error("Legacy final revision is not established by its saved job. Original work retained.");
@@ -320,18 +332,26 @@ export class DiscoveryService {
         }
         if (context.gapReport) this.store.attachGapReport(job.id, { ...context.gapReport, modelCalls: work.attempts });
         const requested: string[] = [];
+        const witnessed: string[] = [];
         let stage = 0;
         while (true) {
           controller.signal.throwIfAborted();
           const saved = work.stages[stage];
           if (saved) {
             if (saved.evidenceBasis?.key !== retrievalEvidenceBasis(context).key) throw new Error("Saved retrieval evidence changed. Original stages retained; no completed call replayed. Review the changed evidence or task scope.");
-            validateRetrieval(context, saved.request, saved.request.retrieveEvidence.recordIDs);
             if (work.reuse) work.reuse.stages = stage + 1;
             this.store.checkpointRetrieval(job.id, work, context.manifest);
-            requested.push(...saved.request.retrieveEvidence.recordIDs);
             report(`Reusing saved evidence stage ${stage + 1}; no model request repeated.`);
-            context = nextGapContext(project, context, requested); stage++; continue;
+            if ("retrieveEvidence" in saved.request) {
+              validateRetrieval(context, saved.request, saved.request.retrieveEvidence.recordIDs);
+              requested.push(...saved.request.retrieveEvidence.recordIDs);
+              context = nextGapContext(project, context, requested);
+            } else {
+              witnessed.push(...saved.searchResult!.records.map((r) => r.id));
+              context = searchContext(context, saved.searchResult!, stage);
+              report(`Saved-evidence search reused: ${saved.searchResult!.records.length} handles, ${saved.searchResult!.omittedMatches} further prefix matches omitted, ${saved.searchResult!.unexaminedRecords} records unexamined. Original page retained; navigation only, exact loading still required.`);
+            }
+            stage++; continue;
           }
           if (work.final) {
             if (work.final.evidenceBasis?.key !== retrievalEvidenceBasis(context).key) throw new Error("Saved final evidence changed; original response retained and no completed call replayed. Review the changed evidence or task scope.");
@@ -351,20 +371,29 @@ export class DiscoveryService {
           output = await this.adapter.analyze(project, { ...adapterOptions, context });
           controller.signal.throwIfAborted();
           if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
-          if (!output || typeof output !== "object" || !("retrieveEvidence" in output)) {
+          if (!output || typeof output !== "object" || !("retrieveEvidence" in output || "searchEvidence" in output)) {
             if (JSON.stringify(output)?.length > 96000) throw new Error("Final gap response exceeds the 96,000-character saved-output bound.");
             const parsed = parseDiscoveryAnalysis(output).result;
             validateGapFinal(project, context, parsed);
             work.final = { contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context), revision: project.revision, output: parsed };
             break;
           }
-          const request = validateRetrieval(context, output);
-          if (work.stages.length >= 2) throw new Error("Evidence stage limit reached. No proposals applied; completed stages retained.");
+          const request = "searchEvidence" in output ? searchEvidenceSchema.parse(output) : validateRetrieval(context, output, witnessed);
+          if (work.stages.length >= 2) throw new Error("Evidence stage limit reached. No proposals applied; completed stages retained. Search, continuation and exact loading share the same budget; unseen page results cannot support analysis without exact loading.");
+          const searchResult = "searchEvidence" in request ? searchSavedEvidence(project, context, request,
+            work.stages, (revision) => this.store.get(projectID, revision)) : undefined;
           work.stages.push({ revision: project.revision, contextKey: retrievalContextKey(context),
-            evidenceBasis: retrievalEvidenceBasis(context), includedIDs: [...context.manifest.includedIDs], request, sessionID: this.store.getJob(job.id).sessionID });
+            evidenceBasis: retrievalEvidenceBasis(context), includedIDs: [...context.manifest.includedIDs], request, searchResult, sessionID: this.store.getJob(job.id).sessionID });
           this.store.checkpointRetrieval(job.id, work, context.manifest);
-          requested.push(...request.retrieveEvidence.recordIDs);
-          context = nextGapContext(project, context, requested); stage++;
+          if ("retrieveEvidence" in request) {
+            requested.push(...request.retrieveEvidence.recordIDs);
+            context = nextGapContext(project, context, requested);
+          } else {
+            witnessed.push(...searchResult!.records.map((r) => r.id));
+            context = searchContext(context, searchResult!, stage);
+            report(`Saved-evidence search: ${searchResult!.records.length} handles, ${searchResult!.omittedMatches} further prefix matches omitted, ${searchResult!.unexaminedRecords} records unexamined, ${searchResult!.prefixLimitedRecords} text prefixes limited. Snapshot revision ${searchResult!.page!.snapshotRevision}, record position ${searchResult!.page!.recordOffset}, text window ${searchResult!.page!.textOffset / 4096 + 1}; ${searchResult!.page!.next ? "continuation available within the shared remaining budget" : "no continuation offered within this window"}. Navigation only, not exhaustive; load exact evidence before use.`);
+          }
+          stage++;
         }
         this.store.checkpointRetrieval(job.id, work, context.manifest);
       } else output = options.helpRequest ? await this.adapter.clarify!(project, options.helpRequest, adapterOptions)
