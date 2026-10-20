@@ -207,6 +207,9 @@ stage/final counts. Legacy bases require immutable-snapshot reconstruction and t
 wire hash, never today's invented provenance. Publication still uses the new job's latest
 expected revision and all existing eligibility checks; stale workers cannot rebase in flight.
 Older completed checks/approvals and implementation identities are unchanged.
+The test-only [first-query baseline](retrieval-baseline.md) drives these production
+planner/service/checkpoint boundaries with large synthetic saved catalogs, measuring
+desired handles separately from completed jobs. It does not add a runtime retrieval path.
 `gap-navigation.ts` adds strict saved-record lexical search as an alternative navigation
 reply. It returns at most eight handles/excerpted labels, never detailed-evidence authority;
 the model must explicitly load selected records before citing or changing them. Queries

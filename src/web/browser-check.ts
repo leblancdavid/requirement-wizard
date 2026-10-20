@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { browserDiagnostics } from "./browser-diagnostics.js";
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { startApp } from "./server.js";
@@ -176,10 +177,12 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
   return { explanation: request.action === "follow-up" ? "A small team could share job records with separate access." : "Will just you use the app, or will other people use it too?", assumptions: ["Team size is not confirmed yet."], followUp: "Will anyone else need access?" };
 } } });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+let diagnose: ReturnType<typeof browserDiagnostics> | undefined;
 try {
   browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, hasTouch: true });
   const page = await context.newPage();
+  diagnose = browserDiagnostics(page);
   await page.addInitScript(() => {
     if (!localStorage.getItem("reqwizit-plan-confirmed:previous-account")) {
       localStorage.setItem("wizard-plan-confirmed:previous-account", "true");
@@ -584,9 +587,15 @@ try {
   await expect(unavailableCheck).toHaveAccessibleDescription(/Save implementation settings below before assessing/);
   await page.keyboard.press("Escape"); await expect(page.getByRole("tooltip")).toHaveCount(0);
   await page.getByRole("tab", { name: /Implement/ }).focus();
+  // Escape dismisses an existing hover. Keyboard focus does not move the pointer;
+  // guarantee a real leave/enter instead of hovering an already-hovered trigger.
+  await page.mouse.move(0, 0);
   await unavailableCheck.hover(); await expect(page.getByRole("tooltip")).toContainText("Save implementation settings");
-  const disabledBounds = await unavailableCheck.boundingBox(); assert.ok(disabledBounds);
-  await page.touchscreen.tap(disabledBounds.x + disabledBounds.width / 2, disabledBounds.y + disabledBounds.height / 2);
+  // Hover's trial checks current visibility/stability/hit target without requiring
+  // enabled=true. Tap must bypass only that intended aria-disabled condition;
+  // it still resolves current coordinates, unlike a saved bounding box.
+  await unavailableCheck.hover({ trial: true });
+  await unavailableCheck.tap({ force: true });
   await expect(page.getByRole("tooltip")).toBeVisible();
   assert.equal(store.execution(store.list()[0]!.id).assessmentRuns?.length ?? 0, 0, "Touch on a disabled action cannot launch assessment");
   await page.mouse.move(0, 0); await page.keyboard.press("Escape");
@@ -1934,4 +1943,7 @@ try {
     await page.screenshot({ path: ".reqwizit-state/browser-gap-retrieval.png", fullPage: true });
     assert.deepEqual(errors, []);
     console.log("Browser checks passed, including bounded gap lenses, no-call reuse, staged evidence retrieval, interrupted-stage explicit retry without replay, reload, preserved decisions and mobile progress.");
+} catch (error) {
+  await diagnose?.(".reqwizit-state/browser-full-failure").catch((diagnosticError: unknown) => console.error("Could not save browser diagnostics", diagnosticError));
+  throw error;
 } finally { await browser?.close(); await app.close(); store.close(); await rm(workspaceDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await rm(scanDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await rm(planningDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }

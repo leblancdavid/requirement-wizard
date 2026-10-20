@@ -28,6 +28,8 @@ share the existing request budget; omissions and blockers remain visible.
 Snapshot-bound continuation handles can advance result/text windows or queries can be
 refined. Paging does not add requests: another search page can leave insufficient budget
 to load its exact evidence and analyze it.
+The [deterministic retrieval baseline](docs/retrieval-baseline.md) records first-query
+hits, intentional misses and exact-use blockers on large synthetic saved projects.
 Connect a local folder for each project to automatically save versionable requirements
 and progress files. Choose it during creation or use **Settings → Project workspace**.
 Generated requirements are split by stable feature ID with a linked overview and shared
@@ -177,6 +179,10 @@ continue to work; connect that route with `opencode auth login` if needed.
 
 See the [browser workspace guide](docs/browser-workspace.md) for research controls,
 epic organization, scoring, context management, verification, and current limitations.
+Windows engine and browser checks are verified on **Node 22.23.3**. Use
+`npm run test:browser:all` to build once and run the fixture browser checks sequentially,
+without model calls. See [startup reliability and verification](docs/browser-workspace.md#browser-startup-and-verification-reliability)
+for the controlled regressions, failed-run history and remaining qualification limits.
 
 The terminal client is also available:
 

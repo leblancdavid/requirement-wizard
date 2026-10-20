@@ -70,6 +70,7 @@ function Meter({ value, stale = false }: { value: number; stale?: boolean }) {
 }
 function App() {
   const [projects, setProjects] = useState<Item[]>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [id, setID] = useState<string | null>(localStorage.getItem("reqwizit-project"));
   const selected = useRef(id); selected.current = id;
   const [data, setData] = useState<Snapshot | null>(null);
@@ -143,7 +144,7 @@ function App() {
   };
 
   async function list() {
-    const items = await api<Item[]>("projects"); setProjects(items);
+    const items = await api<Item[]>("projects"); setProjects(items); setProjectsLoaded(true);
     if (!items.some((item) => item.id === selected.current)) setID(items[0]?.id ?? null);
   }
   async function load(projectID = selected.current, signal?: AbortSignal, background = false) {
@@ -325,7 +326,7 @@ function App() {
       </section>}
       <div hidden={showSettings}>
       {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => navigate("settings")}>Review connection settings</button></div>}
-      {(creating || !projects.length) ? <section className="welcome">
+      {(creating || projectsLoaded && !id && !project && !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>
         <form onSubmit={(event) => void create(event)}>
           <fieldset className="project-start"><legend>Start from</legend><label><input type="radio" name="project-start" checked={!initializeFolder} disabled={pending} onChange={() => setInitializeFolder(false)} /> New idea</label><label><input type="radio" name="project-start" checked={initializeFolder} disabled={pending} onChange={() => { setInitializeFolder(true); setCreateDirectory(false); }} /> Existing project</label></fieldset>

@@ -69,6 +69,82 @@ match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
 
+### Deterministic first-query retrieval baseline (2026-10-20)
+
+Source/target SQLite **3 → 3**, retrieval work **1 → 1**, execution **1 → 1**, workspace
+**2 → 2**. This adds test-only synthetic catalogs, measurement/assertions and an npm test
+entry point; no production planner, search, ranking, prompt, budget, payload, schema,
+assessment semantics or freshness identity changes. No forward conversion, backup rewrite,
+reset, reassessment or automatic model replay is required. Existing approvals, exact human
+constraints, history, stable IDs, completed checks and implementation assessments remain valid.
+There is no partially applied production migration to recover. Test imports only touch their
+own newly created disposable SQLite databases; no user database is opened or upgraded.
+
+Large-catalog checks preserve original revisions/jobs and a current fingerprinted implementation
+assessment, reuse a committed search after reopen and an unrelated revision, and retain
+attempt limits/navigation citation rejection across repeated reopening. Existing upgrade
+tests continue covering older formats and recovery; no new persisted representation requires
+a separate upgrade transform. See [baseline design, measured misses and verification](retrieval-baseline.md).
+Verification: type checking and all **431** deterministic tests passed, including existing
+forward-migration/legacy-reopen cases. Initial ABI and fixture-assertion failures are retained
+in the baseline verification record; they are not represented as passing retrieval runs.
+UI build and the full serial `test:browser:all` command passed without retries on this change;
+the existing bundle-size warning remains. Both CLI help entry points and diff checking passed.
+
+### Browser startup readiness and verification isolation (2026-10-20)
+
+Source/target SQLite **3 → 3**, retrieval work **1 → 1**, execution **1 → 1**, workspace
+**2 → 2**. This changes browser readiness presentation and fixture verification only.
+The new project-list-loaded flag is in-memory component state; no database tables,
+project/job JSON, local-storage keys, workspace artifacts, provenance, freshness rules,
+gap checks or assessment fingerprints change. Existing IDs, history, human approvals,
+completed calls and implementation assessments remain valid. No forward data conversion,
+startup rewrite, reassessment or model replay is required. Refresh simply rebuilds the
+readiness flag; interruption cannot leave a partially migrated payload.
+
+Before this fix a slow/failed sidebar-list request could hide the Design tab even after
+the selected project's authenticated snapshot had loaded. The empty initial array no
+longer establishes that there are no saved projects. A successful known-empty list and
+absence of a selected project establish the welcome state; an explicit New project action
+still works. Snapshot/current-revision/permission checks are untouched. Controlled browser
+response ordering reproduced the old failure and verifies snapshot-first/list-first,
+overtaking polls, stale selection responses, failed lists, cold loads and confirmed emptiness
+without inference or mutations to original saved snapshots. The earlier uninstrumented
+navigation timeout's exact historical cause remains unknown.
+
+Tooltip test setup now establishes an actual pointer leave/enter after Escape and taps
+the current locator instead of cached coordinates. A trial hover retains visibility,
+stability and hit-target checking before an intentionally aria-disabled explanation is
+tapped; its disabled-state, visible explanation and zero-execution assertions remain.
+Focused browser coverage reproduces no-enter-after-Escape, a deterministic layout shift,
+blur-timer cancellation and keyboard/touch dismissal. No production tooltip behavior,
+permissions or guard logic changes; no test-level retry or timeout increase masks failures.
+`test:browser:all` builds once before running the four browser scenarios in sequence;
+failure diagnostics are bounded and redact messages, URLs and sensitive HTTP material.
+
+Node **22.23.3 win-x64** verification uses the official portable archive (published
+SHA-256 `2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71`), an isolated
+repository snapshot and a clean `npm ci` with independent Node-22-native dependencies.
+The checkout's Node installation, dependencies and user project database are untouched.
+Electron binary download was skipped; desktop packaging and exact Node 22.12.0 are not
+qualified by this check. Type checking, all **417 deterministic tests**, and terminal/spike
+`--help` passed. The initial Node 22 full browser run failed at the touch-tooltip assertion;
+an intermediate locator-tap revision failed its intended enabled check. These failures are
+retained as verification history, not relabeled as passing.
+
+Final verification passed on Node 22.23.3: type check, all **417 deterministic tests**,
+UI production build, and `test:browser:all` (controlled reliability, full workspace,
+focused exact retrieval and saved navigation), plus terminal/spike `--help`. The focused
+reliability check also passed under the checkout's unchanged Node 20.11 installation.
+The serial browser command succeeded after the targeted test changes; earlier failed runs
+remain recorded above. This qualifies the tested version/workflows, not every timing
+interleaving, exact minimum Node version or live-provider behavior.
+The existing bundle-size warning and eight moderate clean-install audit findings remain;
+dependencies were not changed. No live model calls, user-database writes, repository
+commits or pushes were performed. First-query retrieval quality and live-provider
+qualification remain separate follow-on work; this does not change discovery budgets
+or establish specification completeness.
+
 ### Snapshot-bound saved-search continuations (2026-10-20)
 
 Source/target SQLite **3 → 3**, retrieval work **1 → 1**, saved-search result **1 → 1**

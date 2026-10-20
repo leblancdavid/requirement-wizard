@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { browserDiagnostics } from "./browser-diagnostics.js";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { startApp } from "./server.js";
@@ -87,9 +88,11 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
   return empty();
 } } });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+let diagnose: ReturnType<typeof browserDiagnostics> | undefined;
 try {
   browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } });
+  diagnose = browserDiagnostics(page);
   await page.addInitScript(() => { localStorage.setItem("reqwizit-research", "false"); localStorage.setItem("reqwizit-auto", "false"); });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
@@ -172,10 +175,6 @@ try {
   assert.deepEqual(errors, []);
   console.log("Saved-evidence navigation browser check passed: undisplayed handle search, exact load, durable interruption, cross-revision paging/retry, shared-budget exhaustion, omissions/continuation/blocker UI, history, reload and mobile width.");
 } catch (error) {
-  const page = browser?.contexts()[0]?.pages()[0];
-  if (page) {
-    console.error("Navigation browser failure:", await page.locator("body").innerText(), errors);
-    await page.screenshot({ path: ".reqwizit-state/browser-gap-navigation-failure.png", fullPage: true });
-  }
+  await diagnose?.(".reqwizit-state/browser-gap-navigation-failure").catch((diagnosticError: unknown) => console.error("Could not save browser diagnostics", diagnosticError));
   throw error;
 } finally { await browser?.close(); await app.close(); store.close(); }

@@ -49,6 +49,11 @@ live-provider retrieval quality remain unqualified. The staged protocol is descr
 
 ### Bounded exact-evidence stages
 
+The [deterministic first-query baseline](retrieval-baseline.md) measures fixed queries over
+1,487–5,987 saved records through the real service/checkpoints. It retains intentional
+paraphrase, distractor, field/window/scan and oversized-load failures; completing a job does
+not imply the desired evidence was retrieved. It changes no search semantics or budgets.
+
 Gap tasks can defer saved static-file motivation instead of requiring the entire file
 closure up front. Human constraints/addenda, current decisions and applicable guardrails
 stay exact in **every** stage. Index labels, related-record hints and unseen source links
@@ -178,7 +183,65 @@ reload without budget reset and mobile width (`browser-gap-continuation.png`). I
 run timed out waiting for Design after a reload; an independent diagnostic-enabled rerun
 passed. This is not evidence that the reload timing issue is fixed. The full browser suite
 and focused exact-retrieval scenario passed on this extension; the tooltip flake did not
-reproduce. Available verification still uses Node 20.11 rather than Node 22.12+.
+reproduce. Available verification at that stage still used Node 20.11 rather than Node 22.12+.
+
+### Browser startup and verification reliability
+
+Saved workspace snapshots no longer depend on the project list finishing first. Previously,
+the initially empty sidebar list was treated as proof there were no projects, so a loaded
+saved project could show the new-project form with no Design tab while listing was slow or
+failed. Listing now has a separate in-memory loaded flag. A known selected snapshot renders
+its tabs immediately; the automatic new-project form appears only after a successful empty
+list with no selected project (or an explicit **New project** action). API errors remain
+visible. No saved evidence, selection key, approvals, assessments or request budgets change.
+
+`npm run test:browser:reliability` runs controlled startup orders rather than random sleeps:
+snapshot before list, list before snapshot, a poll overtaking an older load, selection changes
+while an old response is held, failed listing with a usable snapshot, cold loading and a
+confirmed empty list. It verifies zero model calls and preservation of original snapshots.
+This reproduced the list-dependent missing-tab state before the fix. The exact cause of
+the previously uninstrumented navigation timeout cannot be established retrospectively.
+
+Tooltip verification now distinguishes two input preconditions. Escape dismisses an open
+hover, but focusing another element does not move the pointer: a second `hover()` over the
+same trigger may emit no new enter event. The test explicitly leaves/re-enters. Touch uses
+a current locator target instead of cached coordinates that can go stale when repository
+detection moves the activity bar. A trial hover checks visibility/stability/hit testing;
+the subsequent tap intentionally bypasses Playwright's enabled check for the app's
+`aria-disabled` explanation button. Assertions still require disabled state, visible
+explanation, keyboard/touch dismissal and **no assessment execution**. The focused check
+reproduces the Escape precondition, stale coordinates after a deliberate layout shift,
+blur-timer cancellation and keyboard/touch behavior. Tooltip product behavior is unchanged.
+
+Use `npm run test:browser:all` to build once and run reliability, full workspace, exact-
+retrieval and saved-navigation scenarios sequentially. Do not run individual build-and-test
+scripts concurrently against the same `dist/web`: Vite replaces assets that another running
+fixture may be serving. No whole-test retries or longer assertion timeouts were added.
+Full/reliability/navigation failures save `.json` diagnostics and `.png` screenshots under
+`.reqwizit-state/browser-{full,reliability,gap-navigation}-failure`. Diagnostics retain at
+most 100 browser/network failure events, selected fixture ID and rendered tabs, without
+request headers, cookies, response bodies or URL queries; error messages are redacted.
+Expected injected API failures may also appear in these fixture diagnostics.
+
+Windows Node 22 verification uses an isolated clean repository snapshot and separate
+dependencies, not the user's database or the checkout's Node 20 native modules. The official
+portable Node **22.23.3 win-x64** archive was checked against its published SHA-256:
+`2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71`.
+It is unpacked under the approved OpenCode temporary directory, without changing global
+Node, system/user PATH or shell configuration. `npm ci` succeeded with Electron binary downloading
+disabled (desktop packaging is not part of this check); all **417 deterministic tests**,
+type checking and both terminal `--help` entry points passed on Node 22.23.3. UI production
+build and the complete serial `test:browser:all` command also passed on that runtime.
+The final outcomes and compatibility assessment are recorded in the
+[migration ledger](migrations.md#browser-startup-readiness-and-verification-isolation-2026-10-20).
+The initial Node 22 full browser run reproduced the touch-tooltip failure; the first
+locator-tap test revision also correctly refused the intentionally disabled control until
+the enabled-check exception was made explicit. Neither failed run is counted as passing.
+The existing large-JavaScript-chunk warning and clean-install audit's eight moderate
+dependency findings remain; no dependency upgrades or live provider probes were performed.
+Specific startup/input failure modes now have deterministic regressions; these passes do
+not prove that all timing failures are eliminated. The checkout's original Node 20.11
+installation remains unchanged; the focused reliability check also passed there.
 
 ## Repeated questions and overlapping requirements
 

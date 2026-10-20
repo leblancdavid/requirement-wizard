@@ -161,9 +161,21 @@ Snapshot-bound continuation handles now advance bounded result/text windows with
 rerunning prior pages or changing request budgets. New queries can refine navigation;
 unloaded page results still cannot support analysis. Original receipts (including legacy
 nonpaged receipts), human constraints, completed checks and assessments are preserved.
+Startup reliability now has controlled browser regressions for list/snapshot ordering,
+failed lists, overtaking polls and stale selection responses. Tooltip checks establish
+actual hover/touch preconditions without whole-test retries. Windows Node 22.23.3 passed
+clean installation, all 417 deterministic tests, type checking, UI build, the full serial
+browser command and CLI help entry points. Prior failed runs and remaining timing/live-
+provider limits remain documented; this does not qualify release readiness or desktop packaging.
 Live semantic quality, arbitrary evidence
 windows and semantic prioritization remain follow-on
 work; see [browser discovery](browser-workspace.md#exploring-gaps-in-large-projects).
+
+A deterministic [first-query retrieval baseline](retrieval-baseline.md) now records
+desired-handle discovery, exact use, omissions, context sizes and cumulative attempts
+over 1,487–5,987 saved records. Intentional lexical/field/scan misses, distractor-only
+completion and oversized evidence remain measured failures, not a reason to raise budgets.
+This establishes a regression baseline, not semantic quality or a new milestone exit.
 
 Dependencies: M2 and M1 research recommendation; M3 required for full client verification.
 Covers RW-009–010 and RW-013–014.
