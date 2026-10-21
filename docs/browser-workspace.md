@@ -54,11 +54,13 @@ The [deterministic first-query baseline](retrieval-baseline.md) measures fixed q
 paraphrase, distractor, field/window/scan and oversized-load failures; completing a job does
 not imply the desired evidence was retrieved. It changes no search semantics or budgets.
 The [offline candidate comparison](retrieval-evaluation.md) adds field-aware/ranking/sampling
-experiments and a second domain. It records regressions as well as gains; none is enabled
-in the browser's saved-evidence search.
+experiments and a second domain. It records regressions as well as gains; density-ranking
+and sampling policies remain disabled in browser search.
 The [prefix-preserving merge evaluation](retrieval-merge.md) now exercises auxiliary-field
 gains through real service/checkpoints and legacy receipt reuse, without enabling the
-candidate for browser/terminal projects or changing their budgets.
+candidate during that evaluation or changing budgets. A [default-off browser pilot](retrieval-browser-pilot.md)
+now exposes explicit, tab-local manual opt-in, policy/limit/omission UI and switch-back reuse.
+Terminal and automatic workflows retain default search. Independent relevance review is pending.
 
 Gap tasks can defer saved static-file motivation instead of requiring the entire file
 closure up front. Human constraints/addenda, current decisions and applicable guardrails
@@ -220,7 +222,7 @@ reproduces the Escape precondition, stale coordinates after a deliberate layout 
 blur-timer cancellation and keyboard/touch behavior. Tooltip product behavior is unchanged.
 
 Use `npm run test:browser:all` to build once and run reliability, full workspace, exact-
-retrieval and saved-navigation scenarios sequentially. Do not run individual build-and-test
+retrieval, saved-navigation and default-off pilot scenarios sequentially. Do not run individual build-and-test
 scripts concurrently against the same `dist/web`: Vite replaces assets that another running
 fixture may be serving. No whole-test retries or longer assertion timeouts were added.
 Full/reliability/navigation failures save `.json` diagnostics and `.png` screenshots under

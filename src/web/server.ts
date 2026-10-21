@@ -28,6 +28,7 @@ import { executionConfigSchema } from "../core/execution.js";
 import type { ExecutionAdapter } from "../runtime/execution.js";
 import type { ModelSelection } from "../core/model.js";
 import { SnapshotEncoder, parseSnapshotTokens, snapshotHeader } from "./snapshot.js";
+import { savedEvidencePolicySchema } from "../core/gap-navigation.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -173,7 +174,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const current = revisionSnapshot(project);
         const allJobs = options.store.jobs(id);
         const jobs = allJobs.filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, ...job }) => ({ ...job,
-          ...(retrievalWork ? { retrievalWork: { format: retrievalWork.format, research: retrievalWork.research, stages: retrievalWork.stages, attempts: retrievalWork.attempts, originJobID: retrievalWork.originJobID, reuse: retrievalWork.reuse } } : {}),
+          ...(retrievalWork ? { retrievalWork: { format: retrievalWork.format, research: retrievalWork.research, stages: retrievalWork.stages, attempts: retrievalWork.attempts, originJobID: retrievalWork.originJobID, reuse: retrievalWork.reuse, ...(retrievalWork.requestedPolicy ? { requestedPolicy: retrievalWork.requestedPolicy } : {}) } } : {}),
           ...(scan ? { scan: { ...scan, sources: [] } } : {}),
           ...(scan && scanWork ? { scanProgress: { completed: scanWork.batches.filter((batch) => batch.output).length, total: scanWork.batches.length, capturedAt: scan.snapshot.capturedAt,
             resumable: ["failed", "cancelled", "interrupted"].includes(job.status) && job.expectedRevision === project.revision && scanWork.bindingID === options.store.workspace(id)?.bindingID } } : {}) }));
@@ -269,7 +270,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (action === "analyze") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
-        const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional() }).strict().parse(raw);
+        const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional(), savedEvidencePolicy: savedEvidencePolicySchema.optional() }).strict().parse(raw);
+        if (input.savedEvidencePolicy === "prefix-aux-v1" && (input.refinementOnly || !project.requirements.length && !project.questions.length)) throw new Error("The saved-evidence pilot is only available for manual next-gap exploration after initial interpretation.");
         if (project.revision !== input.revision) throw new StaleRevisionError();
         if (queue.isActive(id)) {
           json(res, 409, { error: "This project already has an active discovery job." }); return;

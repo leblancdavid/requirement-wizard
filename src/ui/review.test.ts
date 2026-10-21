@@ -8,6 +8,8 @@ import { pageWindow, PagedList } from "./pagination.js";
 import { ReviewUpdateNotice } from "./review-update.js";
 import { GapExplorationStatus } from "./gap-status.js";
 import type { Job } from "../core/model.js";
+import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
+import { planGapContext } from "../core/gap-context.js";
 
 test("gap backlog status distinguishes saved checks, unresolved decisions and no-call reuse without a completeness claim", () => {
   const job: Job = { id: "gap-job", projectID: "project", expectedRevision: 1, model: { providerID: "openai", modelID: "fixture" },
@@ -17,6 +19,22 @@ test("gap backlog status distinguishes saved checks, unresolved decisions and no
   assert.match(html, /Gap exploration backlog/); assert.match(html, /2 checked/); assert.match(html, /waiting for decisions/);
   assert.match(html, /No model request made/); assert.match(html, /not live completeness/); assert.match(html, /not proof of completeness/);
   assert.ok(!html.includes("100%")); assert.deepEqual(job, before);
+});
+
+test("pilot status distinguishes requested default from saved experimental policy and explains bounded auxiliary omissions", () => {
+  const p = fixture(), context = planGapContext(p, [], "inbox");
+  const request = { searchEvidence: { format: 1 as const, query: "gameplay", limit: 2 } };
+  const result = searchPrefixAuxEvidence(p, context, request);
+  const job: Job = { id: "pilot-job", projectID: p.id, expectedRevision: p.revision, model: p.model, status: "failed", leaseUntil: null,
+    gapReport: { format: 1, state: "planned", checked: 0, pending: 3, waiting: 0, blocked: 0, total: 3, modelCalls: 1, explanation: "Not proof of completeness." },
+    retrievalWork: { format: 1, research: false, requestedPolicy: "prefix", attempts: 1, stages: [{ revision: p.revision,
+      contextKey: "0".repeat(64), includedIDs: context.manifest.includedIDs, request, searchResult: result }] } };
+  const before = structuredClone(job), html = renderToStaticMarkup(createElement(GapExplorationStatus, { job }));
+  assert.match(html, /Requested for new searches in this job: Default prefix search/);
+  assert.match(html, /Saved policy: Experimental prefix-preserving auxiliary merge/);
+  assert.match(html, /1,000,000 scan characters/); assert.match(html, /auxiliary records text-limited/);
+  assert.match(html, /Zero omissions is not proof/); assert.match(html, /No candidate continuation offered/);
+  assert.match(html, /96,000-character evidence cap/); assert.deepEqual(job, before);
 });
 
 test("page windows bound large lists and clamp empty, negative and shortened pages", () => {

@@ -11,6 +11,7 @@ import { OperationConflictError } from "../core/operations.js";
 import { decisionAvailability } from "../core/decision-availability.js";
 import { reconciliationCandidates } from "../core/review-completion.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
+import type { SavedEvidencePolicy } from "../core/gap-navigation.js";
 
 type Work = { controller: AbortController; promise: Promise<void> };
 
@@ -92,7 +93,7 @@ export class DiscoveryQueue {
     return item;
   }
 
-  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string } = {}) {
+  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy } = {}) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
@@ -176,7 +177,7 @@ export class DiscoveryQueue {
     }
   }
 
-  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string }) {
+  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy }) {
     if (this.closing || this.isActive(id) || this.service.store.executionActive(id)) return;
     if (!manual && this.service.store.executionExpired(id)) {
       this.service.store.pauseQueue(id, true);
@@ -336,6 +337,7 @@ export class DiscoveryQueue {
         for (const item of batch) { delete item.contextBlock; delete item.diagnostic; this.service.store.saveSubmission(item); }
         const research = manual?.research ?? batch.some((s) => s.research);
         const job = await this.service.analyze(id, project.revision, {
+          savedEvidencePolicy: batch.length ? undefined : manual?.savedEvidencePolicy,
           signal: controller.signal, research, ...task(batch), submissionIDs: batch.map((s) => s.id), onProgress: report,
           onJob: (job) => {
             for (const item of batch) { item.status = "processing"; item.jobID = job.id; this.service.store.saveSubmission(item); }

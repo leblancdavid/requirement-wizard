@@ -69,6 +69,39 @@ match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
 
+### Default-off browser retrieval pilot (2026-10-20)
+
+Source/target SQLite **3 → 3**, retrieval work **1 → 1**, saved-search result **1 → 1**,
+execution **1 → 1**, workspace **2 → 2**. Adds optional retrieval-work `requestedPolicy`
+(`prefix` / `prefix-aux-v1`) and an authenticated manual analyze request field. Project
+records, workspace artifacts, schema versions, assessments/check identities and budgets
+are unchanged. UI opt-in is in-memory/tab-local, default off, reset on reload/project change;
+no persisted preference or local-storage migration. Queued submissions/Refine/scans/terminal
+do not inherit it. Explicit manual default requests may also store `requestedPolicy:"prefix"`.
+
+No forward data transformation, startup rewrite, reassessment, reset or automatic model
+call is needed. Older jobs keep absent request provenance absent; new requests do not copy
+that field from prior jobs. Original saved stages retain their exact policies/receipts and
+attempt counts across switching back; no rerunning searches to replace misses. Legacy
+receipts and compatible checks/approvals/history/implementation assessments remain valid.
+The optional request marker is independent of the original saved-stage policy and of
+optimistic revision counters. Downgrading to older binaries lacking the additive fields
+is not qualified; unsupported future selections reject reads without overwriting payloads.
+
+Tests use disposable stores, preserve old missing-field payloads through repeated reopen,
+resume legacy misses without replay under explicit pilot selection, and repeatedly reject
+future request-policy values while preserving raw jobs/projects. API/browser checks exercise
+opt-in, switch-back reuse and exact-loading boundaries. Independent relevance review remains
+pending; [review packet](retrieval-pilot-review.md) is not a completed sign-off. See
+[pilot scope and verification](retrieval-browser-pilot.md).
+Verification: type checking and all **450** deterministic tests passed on portable Node
+22.23.3. The focused pilot browser/UI build also passed without retries. Original saved
+input, approvals, legacy receipts and current assessment checks remain covered by the full
+baseline/merge suites; independent human relevance review is still not completed.
+Final UI production build and all five serial browser scenarios passed without retries,
+including the default-off pilot. The existing bundle-size warning remains; live/provider
+quality and independent relevance review are not established by these fixture checks.
+
 ### Prefix-preserving auxiliary merge evaluation (2026-10-20)
 
 Source/target SQLite **3 → 3**, retrieval work **1 → 1**, saved-search result **1 → 1**,

@@ -3,6 +3,9 @@ import { createHash } from "node:crypto";
 import type { Project } from "./model.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
 
+export const savedEvidencePolicySchema = z.enum(["prefix", "prefix-aux-v1"]);
+export type SavedEvidencePolicy = z.infer<typeof savedEvidencePolicySchema>;
+
 export const searchEvidenceSchema = z.object({ searchEvidence: z.object({ format: z.literal(1),
   query: z.string().max(160).trim().min(1).refine((query) => query.split(/\s+/u).length <= 12,
     "Saved-evidence search accepts at most twelve literal terms."), limit: z.number().int().min(1).max(8),

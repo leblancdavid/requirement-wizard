@@ -6,7 +6,7 @@ import { analysisSchema } from "./model.js";
 import type { Analysis } from "./model.js";
 import { ContextBudgetError } from "./context.js";
 import { planContext } from "./working-set.js";
-import { searchEvidenceSchema, savedEvidenceSearchSchema } from "./gap-navigation.js";
+import { searchEvidenceSchema, savedEvidenceSearchSchema, savedEvidencePolicySchema } from "./gap-navigation.js";
 
 export const retrievalRequestSchema = z.object({ retrieveEvidence: z.object({ format: z.literal(1),
   recordIDs: z.array(z.string().min(1).max(200)).min(1).max(8), reason: z.string().min(1).max(600),
@@ -14,6 +14,7 @@ export const retrievalRequestSchema = z.object({ retrieveEvidence: z.object({ fo
 const evidenceBasisSchema = z.object({ format: z.literal(1), compatibility: z.literal("gap-stage-evidence-v1"),
   key: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export const retrievalWorkSchema = z.object({ format: z.literal(1),
+  requestedPolicy: savedEvidencePolicySchema.optional(),
   research: z.boolean(),
   stages: z.array(z.object({ revision: z.number().int().positive(), contextKey: z.string().regex(/^[a-f0-9]{64}$/),
     includedIDs: z.array(z.string()), request: z.union([retrievalRequestSchema, searchEvidenceSchema]),

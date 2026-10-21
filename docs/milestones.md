@@ -183,6 +183,10 @@ The [prefix-preserving merge experiment](retrieval-merge.md) isolates field-awar
 without density ranking and verifies actual service/checkpoint, legacy receipt and stale
 loaded-evidence recovery. It remains opt-in for tests; candidate rollout, paging and live
 quality are not qualified and do not establish another milestone exit.
+A subsequent [default-off browser pilot](retrieval-browser-pilot.md) adds manual opt-in,
+policy/omission visibility and deterministic API/browser switch-back checks. This supersedes
+test-only access, not the unchanged budgets or release limits. New ticketing relevance cases
+are review-ready, **not independently reviewed**; broader rollout remains gated on real sign-off.
 
 Dependencies: M2 and M1 research recommendation; M3 required for full client verification.
 Covers RW-009–010 and RW-013–014.

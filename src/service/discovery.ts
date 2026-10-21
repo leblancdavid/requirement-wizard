@@ -6,7 +6,8 @@ import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext } from "../core/working-set.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
 import { checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
-import { savedEvidenceSearchSchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch } from "../core/gap-navigation.js";
+import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch, type SavedEvidencePolicy } from "../core/gap-navigation.js";
+import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
@@ -191,9 +192,10 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
+    if (options.savedEvidencePolicy !== undefined) savedEvidencePolicySchema.parse(options.savedEvidencePolicy);
     if (!options.helpRequest) this.assertCanDiscover(projectID);
     const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest);
     // Startup, discovery, and inference have a combined five-minute bound.
@@ -296,6 +298,10 @@ export class DiscoveryService {
           && !saved.kind && !saved.helpRequest && !saved.context?.refinementOnly);
         const work: RetrievalWork = prior ? { ...structuredClone(prior.retrievalWork!), originJobID: prior.id }
           : { format: 1, research: adapterOptions.research, stages: [], attempts: 0 };
+        // This job's explicit choice is distinct from the original policies of reused stages.
+        // Missing on older jobs remains missing; never backfill invented selection provenance.
+        delete work.requestedPolicy;
+        if (options.savedEvidencePolicy !== undefined) work.requestedPolicy = options.savedEvidencePolicy;
         const searchContext = (base: ContextPack, result: SavedEvidenceSearch, stage: number) => {
           const next = structuredClone(base);
           enableGapRetrieval(next, stage + 2);
@@ -381,7 +387,9 @@ export class DiscoveryService {
           }
           const request = "searchEvidence" in output ? searchEvidenceSchema.parse(output) : validateRetrieval(context, output, witnessed);
           if (work.stages.length >= 2) throw new Error("Evidence stage limit reached. No proposals applied; completed stages retained. Search, continuation and exact loading share the same budget; unseen page results cannot support analysis without exact loading.");
-          const searchResult = "searchEvidence" in request ? savedEvidenceSearchSchema.parse((this.navigation.searchEvidence ?? searchSavedEvidence)(project, context, request,
+          const selectedSearch = options.savedEvidencePolicy === "prefix-aux-v1" ? searchPrefixAuxEvidence
+            : options.savedEvidencePolicy === "prefix" ? searchSavedEvidence : this.navigation.searchEvidence ?? searchSavedEvidence;
+          const searchResult = "searchEvidence" in request ? savedEvidenceSearchSchema.parse(selectedSearch(project, context, request,
             work.stages, (revision) => this.store.get(projectID, revision))) : undefined;
           work.stages.push({ revision: project.revision, contextKey: retrievalContextKey(context),
             evidenceBasis: retrievalEvidenceBasis(context), includedIDs: [...context.manifest.includedIDs], request, searchResult, sessionID: this.store.getJob(job.id).sessionID });

@@ -88,6 +88,8 @@ function App() {
   const drafts = useRef(new Map<string, Draft>());
   const [auto, setAuto] = useState(localStorage.getItem("reqwizit-auto") !== "false");
   const [research, setResearch] = useState(localStorage.getItem("reqwizit-research") !== "false");
+  const [evidencePilot, setEvidencePilot] = useState(false);
+  useEffect(() => { setEvidencePilot(false); }, [id]);
   const [name, setName] = useState(""); const [idea, setIdea] = useState("");
   const [workspacePath, setWorkspacePath] = useState(""); const [createDirectory, setCreateDirectory] = useState(false);
   const [initializeFolder, setInitializeFolder] = useState(false);
@@ -225,7 +227,7 @@ function App() {
   }
   async function explore() {
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before exploring.");
-    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
+    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, savedEvidencePolicy: evidencePilot ? "prefix-aux-v1" : "prefix", ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
   async function dismissQuestions(questionIDs: string[], regenerate = false) {
     await mutate("retire-questions", { questionIDs, reason: regenerate ? "Replace generic unanswered questions with gaps grounded in the existing project evidence." : "Dismissed by the user as unrelated to this project.", regenerate, research: project?.model.connectionID ? false : research });
@@ -322,6 +324,11 @@ function App() {
         </AIConnections>
         {project && !creating ? <><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p></> : <p>Your selected connection and model will be used when you create a project.</p>}
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
+        {project && !creating && !!(project.requirements.length || project.questions.length) && <section aria-label="Saved-evidence retrieval pilot"><h2>Experimental saved-evidence search</h2>
+          <label><input type="checkbox" checked={evidencePilot} disabled={busy} onChange={(event) => setEvidencePilot(event.target.checked)} /> Use prefix-preserving auxiliary merge for manual Explore next gaps</label>
+          <p>Default off. Applies only to manual gap exploration in this tab, not queued answers, scans, Refine or terminal commands. Resets on reload or project change. Existing prefix hits keep priority; auxiliary fields fill only free slots. Model requests, scan and context budgets do not increase.</p>
+          <p>Switching off affects new searches, not committed receipts: compatible retries reuse original results and cumulative attempts. Relevance quality is not independently qualified; exact loading is still required.</p>
+        </section>}
         {project && !creating && <WorkspaceConnection project={project} scanJob={lastScan} workspace={data?.workspace ?? null} request={api} disabled={busy} run={act} />}
       </section>}
       <div hidden={showSettings}>

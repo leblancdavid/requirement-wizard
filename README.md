@@ -31,9 +31,10 @@ to load its exact evidence and analyze it.
 The [deterministic retrieval baseline](docs/retrieval-baseline.md) records first-query
 hits, intentional misses and exact-use blockers on large synthetic saved projects.
 An [offline candidate evaluation](docs/retrieval-evaluation.md) compares bounded retrieval
-approaches across two domains; these experimental policies are not enabled in the app.
+approaches across two domains; density-ranking and sampling policies are not enabled in the app.
 A [prefix-preserving merge experiment](docs/retrieval-merge.md) tests auxiliary-field gains
-through actual service/checkpoints while keeping browser/terminal search unchanged.
+through actual service/checkpoints. A [default-off browser pilot](docs/retrieval-browser-pilot.md)
+now permits explicit manual testing; terminal and automatic discovery keep default search.
 Connect a local folder for each project to automatically save versionable requirements
 and progress files. Choose it during creation or use **Settings → Project workspace**.
 Generated requirements are split by stable feature ID with a linked overview and shared

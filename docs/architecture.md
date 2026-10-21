@@ -216,6 +216,10 @@ An [opt-in prefix/auxiliary merge](retrieval-merge.md) uses an injectable saved-
 dependency to exercise the actual service/checkpoint path. Service construction still
 defaults to original prefix search. Additive versioned experimental receipt metadata is
 validated before checkpoints; old receipts/cursors retain their issued semantics.
+The [browser pilot](retrieval-browser-pilot.md) additionally accepts an optional explicit
+manual request policy. Queue plumbing applies it only to empty-queue gap work; work receipts
+record the current request separately from immutable saved-stage policy. Default service
+construction and automatic/terminal work still use original prefix search.
 `gap-navigation.ts` adds strict saved-record lexical search as an alternative navigation
 reply. It returns at most eight handles/excerpted labels, never detailed-evidence authority;
 the model must explicitly load selected records before citing or changing them. Queries

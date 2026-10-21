@@ -2,16 +2,19 @@
 
 ## Scope
 
-2026-10-20. This is the next **opt-in evaluation**, not a browser/terminal search rollout.
+2026-10-20. This report records the **opt-in service evaluation**, before browser exposure.
+The subsequent [default-off browser pilot](retrieval-browser-pilot.md) supersedes the
+test-only access restriction, not the measured results or outstanding relevance-review gate.
 Run `npm run test:retrieval:merge` (also included in `npm test`). The original baseline
 corpus/queries/tests and previous density/sampling comparisons are unchanged.
 
 `src/core/gap-prefix-aux.ts` implements `prefix-aux-v1`. An optional search dependency on
 `DiscoveryService` allows deterministic tests to select it through the real planner,
-service, SQLite checkpoint, exact-loader and transactional publication path. All existing
-browser/terminal/provider service construction omits that dependency and continues to use
+service, SQLite checkpoint, exact-loader and transactional publication path. At that stage,
+browser/terminal/provider service construction omitted that dependency and continued to use
 the original `searchSavedEvidence`. No setting, CLI flag, prompt recommendation or automatic
-policy switch enables the candidate. There are no live model calls or user-data imports.
+policy switch enabled the candidate during this evaluation. There were no live model calls
+or user-data imports.
 
 ## Algorithm and fixed budgets
 
