@@ -8,11 +8,18 @@ import { retrievalEvidenceBasis, validateGapFinal } from "./gap-retrieval.js";
 import { epicReviewSchema, type EpicReview, type EpicReviewReport } from "./epic-review-types.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export function epicReviewOutsideArea(context: ContextPack, output: Analysis): string | undefined {
+  return [...output.questions, ...output.requirements, ...(output.researchFindings ?? [])]
+    .map((r) => r.epicID ?? context.manifest.focusEpicID ?? "project")
+    .find((id) => !context.manifest.epicIDs?.includes(id));
+}
 export function validateEpicReviewFinal(project: Project, context: ContextPack, output: Analysis) {
   validateGapFinal(project, context, output);
   if (output.refinements?.length || output.pendingChanges?.changes.length || output.reviewChanges?.length
     || output.organization?.length || output.assessments?.length || output.resolutionCheck) throw new Error("Epic workflow reviews propose gaps only; cleanup and wider changes are not authorized.");
   if (output.questions.some((q) => !q.evidenceIDs?.length)) throw new Error("Epic review questions require exact detailed evidence IDs.");
+  const outside = epicReviewOutsideArea(context, output);
+  if (outside) throw new Error(`Cannot add proposals to an area outside this round's context: ${JSON.stringify(outside)}. Allowed area IDs: ${JSON.stringify(context.manifest.epicIDs)}. No proposals applied; retry the review to request a corrected response.`);
 }
 type Record = Project["requirements"][number] | Project["questions"][number] | Project["sources"][number];
 export type EpicReviewTask = { review: EpicReview; context?: ContextPack; reason?: string; state: "pending" | "reviewed" | "waiting" | "blocked"; prior?: Job };

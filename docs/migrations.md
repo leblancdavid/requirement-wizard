@@ -21,6 +21,19 @@ freshness rules. Record the plan here **with the code change**, before release:
 
 ## Epic workflow review
 
+Area-boundary correction (2026-10-21): SQLite **3 → 3**, review/checkpoint format
+**1 → 1**; no identity/fingerprint changes or startup rewrite. Response schemas now
+restrict proposal epic IDs to detailed areas, with independent pre-checkpoint validation.
+On explicit retry only, an older saved final that assigns proposals outside those areas
+is omitted from the new job's cloned work before requesting a corrected response.
+The original failed job/output, evidence, load stages and cumulative attempts are
+preserved; the three-attempt ceiling is not reset. No valid completed checks/finals
+are invalidated, no proposal is reassigned, and startup never calls the model.
+Existing lease/revision-checked checkpoints and atomic publication remain in force.
+An on-disk older invalid-final fixture verifies repeated reopen, original-payload
+preservation and successful corrected retry; valid final recovery remains covered.
+Type check and all 535 deterministic tests passed on Node 22.23.3; no live calls.
+
 SQLite **3 → 3**; additive, separately versioned format-1 `context.epicReview` and
 `epicReviewReport` job envelopes. Existing retrieval checkpoint format **1 → 1** is reused
 for at most one exact-load stage, three cumulative attempts and a validated final response;

@@ -1160,8 +1160,9 @@ export class ProjectStore {
             const detailed = new Set(job.context.includedIDs);
             const areas = new Set(job.context.epicIDs);
             const existingAreaOutside = (id: string | undefined) => id && !id.startsWith("new:") && job.context!.epicIDs && !areas.has(id);
-            if ([...result.questions, ...result.requirements, ...(result.researchFindings ?? [])].some((r) => existingAreaOutside(r.epicID))) {
-              throw new Error("Cannot add proposals to an area outside this round's context.");
+            const outside = [...result.questions, ...result.requirements, ...(result.researchFindings ?? [])].find((r) => existingAreaOutside(r.epicID));
+            if (outside) {
+              throw new Error(`Cannot add proposals to an area outside this round's context: ${JSON.stringify(outside.epicID)}. Allowed area IDs: ${JSON.stringify([...areas])}. No proposals were applied; saved input was retained. Run a focused review of the affected area.`);
             }
             if (result.retireQuestions.some((q) => !detailed.has(q.questionID))) throw new Error("Cannot retire a question outside this round's detailed context.");
             for (const op of result.organization ?? []) {

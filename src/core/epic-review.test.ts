@@ -128,6 +128,34 @@ test("single batched load leaves room for final review and is checkpointed", asy
   } finally { store.close(); }
 });
 
+test("epic review constrains proposal areas and rejects out-of-scope output before checkpointing", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1), context = planEpicReview(p, [], "orders").task!.context!;
+    const prompt = discoveryPrompt(p, context);
+    assert.match(prompt, /Writable proposal epicIDs for this round/);
+    const schema = JSON.parse(prompt.split("Schema: ")[1]!.split("\nWorking context")[0]!);
+    const analysis = schema.anyOf.find((s: { properties?: { questions?: unknown } }) => s.properties?.questions);
+    for (const field of ["questions", "requirements"]) {
+      assert.deepEqual(analysis.properties[field].items.properties.epicID.enum, context.manifest.epicIDs);
+    }
+    let calls = 0;
+    const service = new DiscoveryService(store, { async analyze() {
+      calls++;
+      return { ...empty(), questions: [{ epicID: calls === 1 ? "billing" : "orders", localID: "new:q-recovery",
+        text: "Retain failed attempts?", whyItMatters: "Recovery", evidenceIDs: [p.requirements[0]!.id],
+        options: [{ label: "Yes", consequence: "Retained" }, { label: "No", consequence: "Not retained" }] }] };
+    } });
+    const failed = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(failed.status, "failed"); assert.match(failed.diagnostic!, /outside this round's context: "billing"/);
+    assert.equal(failed.retrievalWork!.final, undefined); assert.deepEqual(store.get(p.id), p);
+    const retried = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(retried.status, "completed", retried.diagnostic);
+    assert.equal(retried.retrievalWork!.attempts, 2); assert.equal(calls, 2);
+    assert.equal(store.get(p.id).questions.at(-1)!.epicID, "orders");
+  } finally { store.close(); }
+});
+
 for (const kind of ["search", "second-load", "explicit", "unseen", "malformed", "cleanup"] as const) test(`epic review rejects ${kind} without publishing or calling it reviewed`, async () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -279,6 +307,37 @@ test("saved load/final recovery survives reopen without replay; old jobs remain 
     const unchanged = new Database(path, { readonly: true });
     assert.deepEqual(JSON.parse((unchanged.prepare("SELECT payload FROM jobs WHERE id = ?").get(original.id) as { payload: string }).payload), future);
     unchanged.close();
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("older unpublishable area checkpoints recover after reopen without erasing attempts or original output", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "epic-area-upgrade-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = seed(store, 1);
+    store.finishJob = () => { throw new Error("Publication interrupted"); };
+    const failed = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    const legacy = structuredClone(failed);
+    legacy.retrievalWork!.final!.output.requirements.push({ epicID: "billing", statement: "Unrelated proposal",
+      rationale: "Wrong area", acceptance: ["Observable result"], sourceIDs: [p.sources[0]!.id] });
+    legacy.diagnostic = "Cannot add proposals to an area outside this round's context.";
+    store.close();
+    const db = new Database(path);
+    db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(legacy), legacy.id); db.close();
+    store = new ProjectStore(path); store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.getJob(legacy.id), legacy);
+    let calls = 0;
+    const recovered = await new DiscoveryService(store, { async analyze() { calls++; return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(recovered.status, "completed", recovered.diagnostic);
+    assert.equal(calls, 1); assert.equal(recovered.retrievalWork!.attempts, 2);
+    assert.deepEqual(store.getJob(legacy.id), legacy);
+    assert.deepEqual(store.get(p.id).requirements, p.requirements);
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.getJob(legacy.id), legacy);
+    assert.equal(planEpicReview(store.get(p.id), store.jobs(p.id), "orders").report.reviewed, 1);
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 

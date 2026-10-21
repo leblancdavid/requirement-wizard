@@ -72,6 +72,20 @@ unauthorized cleanup/reorganization and whole-area assessment. A crash after the
 checkpoint can publish that saved response without repeating inference. Startup never
 starts model work. See [migration ledger](migrations.md#epic-workflow-review).
 
+Proposal area IDs are constrained in the review response schema to the round's detailed
+areas, not every area shown in the navigation map. Omitted areas default to the focused
+area; explicit out-of-scope assignments are rejected before final checkpointing, never
+silently moved. Diagnostics identify the offending ID and allowed IDs. Restart the app
+after updating, then explicitly use **Review next epic workflow** again. Older failed
+jobs with an unpublishable out-of-scope final can request a corrected response within
+the same three-attempt ceiling; original output and spent attempts remain in history.
+Exhausted packages remain blocked. Compatible valid finals/checks still reuse normally.
+
+Area-boundary fix verification (2026-10-21): type checking and all **535 deterministic
+tests** passed on Windows Node 22.23.3, including response-schema constraints, atomic
+rejection, corrected retry and older saved-final recovery across repeated reopen.
+No live provider calls or browser checks were run for this service/prompt-only fix.
+
 ## Verification and remaining work
 
 `src/core/epic-review.test.ts` covers package/lens batching, dependency boundaries, exact

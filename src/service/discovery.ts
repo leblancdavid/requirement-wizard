@@ -9,7 +9,7 @@ import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenc
 import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch, type SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
-import { planEpicReview, epicReviewContext, validateEpicReviewFinal } from "../core/epic-review.js";
+import { planEpicReview, epicReviewContext, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
 import { epicReviewBlockedSchema } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
@@ -349,6 +349,10 @@ export class DiscoveryService {
           if (saved.evidenceBasis?.key !== retrievalEvidenceBasis(context).key || !("retrieveEvidence" in saved.request)) throw new Error("Saved epic evidence changed; original stage retained without replay.");
           context = epicReviewContext(project, review, saved.request.retrieveEvidence.recordIDs, true);
         }
+        // Older versions checkpointed out-of-scope finals before storage rejected
+        // publication. Keep the original job as evidence, but do not replay a
+        // known unpublishable response forever. Spent attempts/loads stay intact.
+        if (work.final && epicReviewOutsideArea(context, work.final.output)) delete work.final;
         checkpoint();
         while (true) {
           controller.signal.throwIfAborted();
