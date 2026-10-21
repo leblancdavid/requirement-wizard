@@ -86,6 +86,23 @@ export class DiscoveryQueue {
     }).catch((error) => { progress.push(safeMessage(error instanceof Error ? error.message : error)); }).finally(() => this.active.delete(id));
     this.active.set(id, { controller, promise });
   }
+  continueExploration(id: string, revision: number, jobID: string) {
+    this.service.store.assertNoExecution(id);
+    this.service.assertCanDiscover(id);
+    if (this.isActive(id)) throw new OperationConflictError("This project already has active discovery work.");
+    if (this.closing) throw new Error("The application is closing.");
+    this.service.assertGapContinuation(id, revision, jobID);
+    // This explicit grant is for exactly one gap task, never waiting submissions.
+    this.service.store.pauseQueue(id, true);
+    const controller = new AbortController();
+    const progress: string[] = []; this.messages.set(id, progress);
+    this.refinementRuns.delete(id);
+    const promise = Promise.resolve().then(async () => {
+      await this.service.analyze(id, revision, { continueGapJobID: jobID, signal: controller.signal,
+        onProgress: (message) => { progress.push(message); if (progress.length > 20) progress.shift(); } });
+    }).catch((error) => { progress.push(safeMessage(error instanceof Error ? error.message : error)); }).finally(() => this.active.delete(id));
+    this.active.set(id, { controller, promise });
+  }
   submit(id: string, raw: unknown): Submission {
     const item = this.service.store.enqueue(id, raw);
     if (this.service.requiresInitialization(id)) this.service.store.pauseQueue(id, true);

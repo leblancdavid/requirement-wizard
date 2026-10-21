@@ -61,6 +61,11 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
     assert.equal(options.research, false);
     assert.match(JSON.stringify(options.context.data), /Keep every original paging constraint exact/);
     assert.ok(options.context.manifest.characters <= options.context.manifest.budget);
+    if (pagingCalls > 3) {
+      assert.equal((options.context.data as { evidenceRetrieval: { maxRequests: number } }).evidenceRetrieval.maxRequests, 6);
+      if (options.context.manifest.includedIDs.includes(pagingBefore.requirements[2]!.id)) return empty();
+      return { retrieveEvidence: { format: 1, recordIDs: [pagingBefore.requirements[2]!.id], reason: "Load the retained second-page handle under the explicit allowance" } };
+    }
     if (pagingCalls === 1) return { searchEvidence: { format: 1, query: "quartz archive", limit: 1 } };
     const result = (options.context.data as { savedEvidenceSearch: SavedEvidenceSearch }).savedEvidenceSearch;
     if (pagingCalls === 2) return { searchEvidence: { format: 1, query: result.query, limit: 1, cursor: result.page!.next!.cursor } };
@@ -172,6 +177,29 @@ try {
   assert.match(store.jobs(paging.id).at(-1)!.diagnostic!, /three-request bound/); assert.equal(pagingCalls, 3);
   assert.deepEqual(store.getJob(firstPage.id), firstPage); assert.deepEqual(store.getJob(exhausted.id), exhausted);
   assert.deepEqual(store.get(paging.id), paging); assert.deepEqual(store.get(paging.id, pagingBefore.revision), pagingBefore);
+  await page.locator(".topbar .queue-trigger").click();
+  const queueDialog = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+  const continuation = queueDialog.getByRole("region", { name: "Continue gap exploration", exact: true });
+  await expect(continuation).toBeVisible();
+  await expect(queueDialog.getByRole("button", { name: "Resume discovery", exact: true })).toHaveCount(0);
+  await continuation.getByRole("button", { name: "Continue exploration", exact: true }).click();
+  await expect(continuation).toContainText("six total across retries");
+  await continuation.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(pagingCalls, 3, "reviewing/cancelling an allowance cannot call the provider");
+  await continuation.getByRole("button", { name: "Continue exploration", exact: true }).click();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-gap-allowance.png", fullPage: true });
+  await continuation.getByRole("button", { name: "Allow up to 3 more requests", exact: true }).click();
+  await expect.poll(() => store.jobs(paging.id).at(-1)!.status).toBe("completed");
+  assert.equal(pagingCalls, 5);
+  const extended = store.jobs(paging.id).at(-1)!;
+  assert.equal(extended.retrievalWork!.attempts, 5); assert.ok(extended.retrievalWork!.continuation);
+  assert.deepEqual(extended.retrievalWork!.stages.slice(0, 2), exhausted.retrievalWork!.stages);
+  await expect(continuation).toHaveCount(0);
+  await page.reload(); assert.equal(pagingCalls, 5);
+  assert.deepEqual(store.getJob(exhausted.id), exhausted);
+  assert.deepEqual(store.get(paging.id).sources, paging.sources);
+  assert.deepEqual(store.get(paging.id).requirements, paging.requirements);
   assert.deepEqual(errors, []);
   console.log("Saved-evidence navigation browser check passed: undisplayed handle search, exact load, durable interruption, cross-revision paging/retry, shared-budget exhaustion, omissions/continuation/blocker UI, history, reload and mobile width.");
 } catch (error) {

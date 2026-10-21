@@ -827,6 +827,15 @@ export class ProjectStore {
       .map((row) => readStoredJob(row.payload));
   }
 
+  gapContinuationGranted(projectID: string, exploration: NonNullable<Job["context"]>["gapExploration"]): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ?
+      AND json_type(payload, '$.retrievalWork.continuation') IS NOT NULL
+      AND json_extract(payload, '$.context.gapExploration.targetRecordID') = ?
+      AND json_extract(payload, '$.context.gapExploration.check.inputKey') = ?
+      AND json_extract(payload, '$.context.gapExploration.check.lens') = ? LIMIT 1`)
+      .get(projectID, exploration?.targetRecordID ?? "", exploration?.check?.inputKey ?? "", exploration?.check?.lens ?? "");
+  }
+
   /** A saved no-call outcome is not a model check and never advances specification state. */
   finishGapIdle(id: string, report: GapReport): Job {
     return this.db.transaction(() => {

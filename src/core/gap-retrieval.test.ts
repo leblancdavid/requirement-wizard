@@ -10,8 +10,8 @@ import { DiscoveryQueue } from "../service/queue.js";
 import { planGapContext } from "./gap-context.js";
 import { planContext, shareRepeatedIdentifiers, shareRepeatedText } from "./working-set.js";
 import { ContextBudgetError } from "./context.js";
-import { nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval } from "./gap-retrieval.js";
-import type { Analysis } from "./model.js";
+import { addQuotedRecordNavigation, canContinueGapExploration, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, retrievalWorkSchema, validateRetrieval, validateGapFinal } from "./gap-retrieval.js";
+import type { Analysis, Job } from "./model.js";
 import { searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch } from "./gap-navigation.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 
@@ -76,6 +76,82 @@ test("stages defer static closure but retain every human constraint and reject n
 });
 
 const search = (query = "quartz archive", limit = 8) => ({ searchEvidence: { format: 1 as const, query, limit } });
+
+test("quoted existing IDs gain explicit bounded navigation without gaining evidence or changing checkpoint identity", () => {
+  const f = fixture(true);
+  try {
+    const context = planGapContext(f.p, [], "inbox");
+    context.data = { ...(context.data as object), rationale: "The exact historical reference [buried-source] is documentary motivation, not a decision." };
+    context.manifest.characters = JSON.stringify(context.data).length;
+    const basis = retrievalEvidenceBasis(context), included = [...context.manifest.includedIDs], original = structuredClone(f.p);
+    assert.throws(() => validateRetrieval(context, request("buried-source")), /not offered as a navigation handle/);
+    addQuotedRecordNavigation(f.p, context);
+    assert.deepEqual((context.data as { quotedRecordNavigation: { recordIDs: string[] } }).quotedRecordNavigation.recordIDs, ["buried-source"]);
+    assert.deepEqual(validateRetrieval(context, request("buried-source")), request("buried-source"));
+    assert.deepEqual(context.manifest.includedIDs, included);
+    assert.deepEqual(retrievalEvidenceBasis(context), basis, "navigation metadata is not decision-bearing evidence");
+    assert.throws(() => validateGapFinal(f.p, context, { ...empty(), requirements: [{ statement: "Unsupported finding", rationale: "Not loaded", acceptance: ["Not inspected"], sourceIDs: ["buried-source"] }] }), /current detailed/);
+    assert.ok(context.manifest.characters <= context.manifest.budget);
+    assert.equal(context.manifest.characters, JSON.stringify(context.data).length);
+    assert.deepEqual(f.p, original);
+  } finally { f.dispose(); }
+});
+
+test("quoted navigation rejects unknown and substring IDs, respects spare space, and reports exact invalid-handle categories", () => {
+  const f = fixture(true);
+  try {
+    const context = planGapContext(f.p, [], "inbox");
+    context.data = { ...(context.data as object), rationale: "prefixburied-sourceSuffix and invented-saved-source are not handles" };
+    addQuotedRecordNavigation(f.p, context);
+    assert.equal((context.data as { quotedRecordNavigation?: unknown }).quotedRecordNavigation, undefined);
+    assert.throws(() => validateRetrieval(context, request("buried-source")), /not offered/);
+    context.data = { ...(context.data as object), rationale: "Read buried-source only after explicit exact retrieval." };
+    context.manifest.characters = JSON.stringify(context.data).length;
+    context.manifest.budget = context.manifest.characters;
+    const before = JSON.stringify(context.data);
+    addQuotedRecordNavigation(f.p, context);
+    assert.equal(JSON.stringify(context.data), before, "optional handles cannot displace evidence or expand the budget");
+    assert.throws(() => validateRetrieval(context, request(context.manifest.includedIDs[0]!)), /already loaded/);
+    assert.throws(() => validateRetrieval(context, request("not-a-saved-record")), /not available/);
+    assert.throws(() => validateRetrieval(context, request("buried-source", "buried-source")), /duplicate/);
+    context.manifest.budget = 96000;
+    for (let i = 0; i < 40; i++) {
+      const id = `quoted-extra-${i}`;
+      f.p.sources.push({ id, kind: "workspace", epicID: "inbox", text: `Documentary evidence ${i}` });
+      context.manifest.omittedIDs.push(id);
+      context.data = { ...(context.data as object), rationale: `${(context.data as { rationale: string }).rationale} [${id}]` };
+    }
+    addQuotedRecordNavigation(f.p, context);
+    assert.equal((context.data as { quotedRecordNavigation: { recordIDs: string[] } }).quotedRecordNavigation.recordIDs.length, 32);
+  } finally { f.dispose(); }
+});
+
+test("new gap calls offer quoted saved references and load their exact records before analysis", async () => {
+  const f = fixture(true);
+  try {
+    const p = structuredClone(f.p);
+    p.requirements[0]!.rationale += ". Related historical record: buried-source.";
+    const db = new Database(f.path);
+    db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(p), p.id);
+    db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(p), p.id, p.revision);
+    db.close();
+    let calls = 0;
+    const result = await new DiscoveryService(f.store, { async analyze(_p, options) {
+      calls++;
+      if (calls === 1) {
+        assert.ok((options.context.data as { quotedRecordNavigation: { recordIDs: string[] } }).quotedRecordNavigation.recordIDs.includes("buried-source"));
+        assert.ok(!options.context.manifest.includedIDs.includes("buried-source"));
+        return request("buried-source");
+      }
+      assert.ok(options.context.manifest.includedIDs.includes("buried-source"));
+      assert.match(JSON.stringify(options.context.data), /Quartz archive recovery: exact saved observation/);
+      return empty();
+    } }).analyze(p.id, p.revision, { focusEpicID: "inbox" });
+    assert.equal(result.status, "completed", result.diagnostic); assert.equal(calls, 2);
+    assert.deepEqual(f.store.get(p.id).requirements, p.requirements);
+    assert.deepEqual(f.store.get(p.id).sources, p.sources);
+  } finally { f.dispose(); }
+});
 
 test("bounded search discovers undisplayed saved handles, then exact loading precedes any citation", async () => {
   const f = fixture(true);
@@ -884,6 +960,55 @@ test("over-budget stage expansion preserves task identity and retries without re
   } finally { f.dispose(); }
 });
 
+test("saved oversized shared-file expansion resumes after reopening without replaying its navigation", async () => {
+  const f = fixture(); let store = f.store;
+  try {
+    // Curated older project: many proposals share one file, but are not human
+    // guardrails or linked evidence of the selected requirement.
+    let p = structuredClone(f.p);
+    p.requirements.push(...Array.from({ length: 24 }, (_, i) => ({ id: `shared-file-proposal-${i}`, epicID: "inbox",
+      statement: `Other documented workflow ${i}`, rationale: "Shared file", acceptance: [`Other scenario ${i}`],
+      status: "proposed" as const, sourceIDs: ["file-0"] })));
+    const db = new Database(f.path);
+    db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(p), p.id);
+    db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(p), p.id, p.revision);
+    db.close(); p = store.get(p.id);
+    const base = planGapContext(p, [], "inbox");
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    const stage = { revision: p.revision, contextKey: retrievalContextKey(base), includedIDs: base.manifest.includedIDs,
+      evidenceBasis: retrievalEvidenceBasis(base), request: request("file-0"), sessionID: "legacy-navigation-session" };
+    // The old expansion's manifest is diagnostic, not evidence to pin on retry.
+    store.checkpointRetrieval(job.id, { format: 1, research: false, attempts: 1, stages: [stage] },
+      { ...base.manifest, characters: 102595, budget: 96000,
+        includedIDs: [...base.manifest.includedIDs, "file-0", ...p.requirements.slice(1).map((r) => r.id)] });
+    store.failJob(job.id, "failed", "Legacy shared-file expansion exceeded bounded input budget");
+    const saved = store.getJob(job.id);
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(f.path);
+      assert.deepEqual(store.getJob(job.id), saved);
+      assert.deepEqual(store.get(p.id), p);
+    }
+    let calls = 0;
+    assert.equal(store.retrievalHistory(p.id, p.revision, base.manifest.gapExploration, false, p.model, base.manifest.focusEpicID).length, 1);
+    const retry = await new DiscoveryService(store, { async analyze(_p, options) {
+      calls++;
+      assert.deepEqual(options.context.manifest.gapExploration, base.manifest.gapExploration);
+      assert.ok(options.context.manifest.includedIDs.includes("file-0"));
+      assert.ok(stage.includedIDs.every((id) => options.context.manifest.includedIDs.includes(id)));
+      assert.ok(!options.context.manifest.includedIDs.includes("shared-file-proposal-0"));
+      assert.ok(options.context.manifest.characters <= 96000);
+      return empty();
+    } }).analyze(p.id, p.revision, { focusEpicID: "inbox" });
+    assert.equal(retry.status, "completed", retry.diagnostic);
+    assert.equal(calls, 1, "only the unfinished analysis makes a new request");
+    assert.equal(retry.retrievalWork!.originJobID, job.id);
+    assert.equal(retry.retrievalWork!.attempts, 2);
+    assert.deepEqual(store.getJob(job.id), saved);
+    assert.deepEqual(store.get(p.id).requirements, p.requirements);
+    assert.deepEqual(store.get(p.id).sources, p.sources);
+  } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
 test("mandatory human constraints cannot be paged away and research permission changes cannot reuse old stages", async () => {
   const f = fixture();
   try {
@@ -906,4 +1031,126 @@ test("mandatory human constraints cannot be paged away and research permission c
     assert.equal(calls, 1); assert.equal(changedPermission.retrievalWork!.originJobID, undefined);
     assert.equal(changedPermission.retrievalWork!.attempts, 1);
   } finally { f.dispose(); }
+});
+
+test("explicit continuation upgrades an exhausted saved task without resetting attempts or replaying completed stages", async () => {
+  const f = fixture(true); let store = f.store;
+  try {
+    let calls = 0;
+    const adapter = { async analyze(_p: Parameters<import("../service/discovery.js").DiscoveryAdapter["analyze"]>[0], options: Parameters<import("../service/discovery.js").DiscoveryAdapter["analyze"]>[1]) {
+      calls++;
+      assert.equal(options.research, true, "saved research permission is retained");
+      const wire = options.context.data as { savedEvidenceSearch?: SavedEvidenceSearch; evidenceRetrieval: { maxRequests: number } };
+      if (!options.context.manifest.includedIDs.includes("file-0")) return request("file-0");
+      if (!wire.savedEvidenceSearch && !options.context.manifest.includedIDs.includes("buried-source")) return search();
+      if (!options.context.manifest.includedIDs.includes("buried-source")) {
+        assert.equal(wire.savedEvidenceSearch!.records[0]!.id, "buried-source");
+        if (calls > 3) {
+          assert.equal(wire.evidenceRetrieval.maxRequests, 6);
+          assert.match(discoveryPrompt(_p, options.context, true), /EXPLICIT CONTINUATION BUDGET/);
+        }
+        return request("buried-source");
+      }
+      assert.ok(options.context.manifest.includedIDs.includes("file-0"));
+      assert.match(JSON.stringify(options.context.data), /never discard offline edits/);
+      return empty();
+    } };
+    const failed = await new DiscoveryService(store, adapter).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox", research: true, savedEvidencePolicy: "prefix" });
+    assert.equal(failed.status, "failed"); assert.match(failed.diagnostic!, /stage limit/);
+    assert.equal(failed.retrievalWork!.attempts, 3); assert.ok(canContinueGapExploration(failed));
+    const original = JSON.stringify(failed);
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(f.path); assert.equal(JSON.stringify(store.getJob(failed.id)), original); }
+    const service = new DiscoveryService(store, adapter);
+    const ordinary = await service.analyze(f.p.id, f.p.revision, { focusEpicID: "inbox", research: true, savedEvidencePolicy: "prefix" });
+    assert.match(ordinary.diagnostic!, /three-request bound/); assert.equal(calls, 3);
+    await assert.rejects(() => service.analyze(f.p.id, f.p.revision, { continueGapJobID: failed.id }), /newer attempt/);
+    const continued = await service.analyze(f.p.id, f.p.revision, { continueGapJobID: ordinary.id });
+    assert.equal(continued.status, "completed", continued.diagnostic);
+    assert.equal(calls, 5); assert.equal(continued.retrievalWork!.attempts, 5);
+    assert.deepEqual(continued.retrievalWork!.stages.slice(0, 2), failed.retrievalWork!.stages);
+    assert.deepEqual(continued.retrievalWork!.continuation, { format: 1, sourceJobID: ordinary.id, fromStage: 2 });
+    const loaded = continued.retrievalWork!.stages[2]!.request;
+    assert.ok("retrieveEvidence" in loaded); assert.equal(loaded.retrieveEvidence.recordIDs[0], "buried-source");
+    assert.equal(continued.retrievalWork!.requestedPolicy, "prefix");
+    assert.equal(JSON.stringify(store.getJob(failed.id)), original);
+    assert.deepEqual(store.get(f.p.id).sources, f.p.sources);
+    assert.deepEqual(store.get(f.p.id).requirements, f.p.requirements);
+    assert.equal(canContinueGapExploration(continued), false);
+    await assert.rejects(() => service.analyze(f.p.id, store.get(f.p.id).revision, { continueGapJobID: ordinary.id }), /already received/);
+  } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test("continuation failures survive restart and ordinary retries cannot reset six attempts or grant a second allowance", async () => {
+  const f = fixture(true); let store = f.store;
+  try {
+    let calls = 0;
+    const adapter = { async analyze() { calls++; throw new Error("Deterministic provider failure"); } };
+    const service = new DiscoveryService(store, adapter);
+    let last;
+    for (let i = 0; i < 3; i++) last = await service.analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    assert.equal(calls, 3); assert.ok(canContinueGapExploration(last!));
+    const extended = await service.analyze(f.p.id, f.p.revision, { continueGapJobID: last!.id });
+    assert.equal(extended.retrievalWork!.attempts, 4);
+    assert.ok(extended.retrievalWork!.continuation); assert.equal(canContinueGapExploration(extended), false);
+    store.close(); store = new ProjectStore(f.path);
+    assert.deepEqual(store.getJob(extended.id), extended);
+    const resumed = new DiscoveryService(store, adapter);
+    for (let i = 0; i < 2; i++) last = await resumed.analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    assert.equal(last!.retrievalWork!.attempts, 6); assert.equal(calls, 6);
+    const bounded = await resumed.analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+    assert.match(bounded.diagnostic!, /six-request continuation bound/); assert.equal(calls, 6);
+    await assert.rejects(() => resumed.analyze(f.p.id, f.p.revision, { continueGapJobID: bounded.id }), /without an existing continuation/);
+    assert.deepEqual(store.get(f.p.id), f.p);
+    assert.throws(() => retrievalWorkSchema.parse({ ...bounded.retrievalWork, continuation: undefined }), /Extended retrieval/);
+    assert.throws(() => retrievalWorkSchema.parse({ ...bounded.retrievalWork, continuation: { ...bounded.retrievalWork!.continuation, format: 99 } }));
+  } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test("continuation cancellation, malformed output and stale publication preserve the grant without applying proposals", async () => {
+  for (const mode of ["cancelled", "malformed", "stale"] as const) {
+    const f = fixture();
+    try {
+      let calls = 0;
+      const service = new DiscoveryService(f.store, { async analyze() { calls++; throw new Error("Initial exhausted attempts"); } });
+      let source: Job | undefined;
+      for (let i = 0; i < 3; i++) source = await service.analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+      const controller = new AbortController();
+      const continued = await new DiscoveryService(f.store, { async analyze() {
+        calls++;
+        if (mode === "cancelled") controller.abort();
+        if (mode === "stale") f.store.note(f.p.id, f.p.revision, "A newer exact human constraint", "inbox");
+        return mode === "malformed" ? { questions: "not an array" } : empty();
+      } }).analyze(f.p.id, f.p.revision, { continueGapJobID: source!.id, signal: controller.signal });
+      assert.equal(continued.status, mode === "malformed" ? "failed" : mode);
+      assert.equal(continued.retrievalWork!.attempts, 4); assert.ok(continued.retrievalWork!.continuation);
+      assert.equal(continued.retrievalWork!.final, undefined); assert.equal(calls, 4);
+      assert.deepEqual(f.store.get(f.p.id).requirements, f.p.requirements);
+      if (mode !== "stale") {
+        const retry = await new DiscoveryService(f.store, { async analyze() { calls++; return empty(); } })
+          .analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+        assert.equal(retry.status, "completed", retry.diagnostic); assert.equal(calls, 5);
+        assert.equal(retry.retrievalWork!.attempts, 5); assert.ok(retry.retrievalWork!.continuation);
+      } else {
+        await assert.rejects(() => service.analyze(f.p.id, f.p.revision, { continueGapJobID: source!.id }), /Project changed/);
+        assert.equal(f.store.get(f.p.id).sources.at(-1)!.text, "A newer exact human constraint");
+      }
+    } finally { f.dispose(); }
+  }
+});
+
+test("continuation cannot override saved model or changed human constraints", async () => {
+  for (const mode of ["model", "evidence"] as const) {
+    const f = fixture();
+    try {
+      let calls = 0;
+      const service = new DiscoveryService(f.store, { async analyze() { calls++; throw new Error("Initial exhausted attempts"); } });
+      let source: Job | undefined;
+      for (let i = 0; i < 3; i++) source = await service.analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+      const p = mode === "model" ? f.store.setModel(f.p.id, f.p.revision, { providerID: "openai", modelID: "different-fixture" })
+        : f.store.note(f.p.id, f.p.revision, "New human rule for this task", "inbox");
+      await assert.rejects(() => service.analyze(p.id, p.revision, { continueGapJobID: source!.id }), mode === "model" ? /different model/ : /immutable input revision/);
+      assert.equal(calls, 3); assert.equal(f.store.gapContinuationGranted(p.id, source!.context!.gapExploration), false);
+      assert.deepEqual(f.store.get(p.id), p);
+    } finally { f.dispose(); }
+  }
 });

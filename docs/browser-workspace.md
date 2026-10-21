@@ -29,6 +29,26 @@ live local-checkpoint updates without main credit and mobile progress layout.
 
 ## Moving between Design and Review
 
+### Shared modal behavior
+
+Project progress, Processing & queue, and View & resolve use one shared modal
+shell: centered rounded panels, consistent header/close controls and backdrop,
+and a thin internal body scrollbar that cannot cover the rounded corners. Panels
+retain content-appropriate widths; on mobile they fill the viewport. Processing
+& queue is now centered rather than a right-edge drawer.
+
+Close, Escape, and clicking outside dismiss the top modal and restore focus to
+its opener. Inside clicks and drags starting inside do not dismiss it. Opening
+View & resolve over the queue keeps the queue open and the page scroll-locked
+until both are closed. Closing a modal does not stop background work.
+These changes affect presentation only; saved data needs no migration.
+
+Verification (2026-10-21): type check, all 497 deterministic tests, UI build and
+full browser checks passed (tests on Node 22.23.3). Browser coverage includes all
+three modal shells, backdrop/Escape dismissal, drag safeguards, fixed headers,
+focus restoration, keyboard containment, mobile layout and nested scroll locks.
+The existing Vite chunk-size warning remains non-blocking.
+
 ### Find and resolve processing problems
 
 **Needs attention** in Review and **Processing & queue** is an all-project inbox,
@@ -305,7 +325,7 @@ that must all be run to finish a specification. Choose a feature to restrict the
 An explicitly selected empty feature can start from the original idea and its saved
 purpose, without inventing a new evidence record or changing the original input.
 
-Each task makes **at most three model request attempts across explicit retries** (initial
+By default each task makes **at most three model request attempts across explicit retries** (initial
 interpretation keeps its existing one-request path). Compatible completed checks are reused,
 including after restart. Unresolved target-linked questions wait for a concrete answer;
 deferral/delegation does not settle them. If everything in the selected scope is already
@@ -364,6 +384,25 @@ are navigation, not authoritative evidence. A model can request up to eight disp
 unseen record IDs in a strict `retrieveEvidence` envelope instead of returning proposals.
 The app loads exact saved records and their human dependencies in a fresh context, keeps
 previously loaded evidence, and independently rejects unseen citations/changes.
+
+Loading a shared workspace excerpt does not automatically include other requirements
+merely because they cite that file. Explicitly requested requirements and their evidence,
+previously loaded evidence, and mandatory human guardrails remain included. This avoids
+turning a file lookup into an oversized review of unrelated requirement histories.
+
+Before a new model request, the app can expose up to 32 additional exact saved IDs
+mentioned only in quoted explanations as `quotedRecordNavigation.recordIDs`. Candidates
+must exist in the saved project, be omitted from detailed evidence, and occur as whole
+IDs in the current package. Existing structured handles are not duplicated. These hints
+use only spare context space and never displace evidence or expand a budget. Ordinary
+prose strings are not automatically retrieval handles; only the explicit navigation list
+offers these references. As with search handles, exact retrieval is still required before
+citation or changes. Invalid requests identify duplicate, already-loaded, unavailable or
+not-offered handles; unknown model-supplied strings are not echoed as record IDs.
+
+This does not restore attempts already consumed by a failed call. A six-request task is
+still exhausted and incomplete; retry does not gain another allowance. Select another
+feature to explore independent work rather than retrying the unchanged exhausted task.
 
 If relevant handles are absent from those indexes, the model can instead return ONLY
 `{searchEvidence:{format:1,query:"quartz archive",limit:8}}`. This searches omitted saved
@@ -427,6 +466,39 @@ summarized, truncated or forgotten. The existing five-minute job deadline still 
 Research is opt-in under the existing permission profile (at most four tool calls per
 adapter request, twelve across a three-request task); saved-record retrieval itself uses
 no tools, arbitrary paths or network access. Direct-provider research remains unsupported.
+
+#### Explicit additional exploration allowance
+
+When a saved gap task has used all three attempts without a final response, **Continue
+exploration** appears in the workspace. It first explains the cost and limits; **Allow up
+to 3 more requests** grants one additional allowance for that exact saved task. The same
+action is available directly beside the failure in **Processing & queue**, without closing
+the dialog. When only an exhausted gap task remains, its ordinary **Resume discovery**
+button is hidden to avoid repeating the unchanged blocker. Waiting responses retain their
+separate Resume action. Cancel makes no request. This is distinct from following a saved search page's continuation
+cursor. Ordinary **Resume** / **Explore next gaps** never grants extra calls or resets spent
+attempts.
+
+The grant raises the task's lifetime ceiling to **six attempts and five navigation stages**.
+Failed/cancelled calls count, and no second grant is available. Saved navigation stages are
+reused with their original revision/session/evidence; an unsuccessful, uncheckpointed
+request may need to be made again. The continuation keeps its saved model, connection,
+research permission and search policy. It does not process waiting submissions or
+automatically start another gap task. Each explicitly started job retains its five-minute
+deadline and cancellation controls. Research remains at most four tools per adapter
+request (at most 24 across a fully granted task); evidence stays capped at 96,000 characters.
+
+The API validates the expected revision, source project/task, latest failed attempt,
+current evidence and model before granting. Changed evidence can still block reuse;
+navigation labels never authorize decisions. Restart does not infer or grant anything.
+The durable receipt and attempts survive restart; ordinary retries reuse their remaining
+allowance. Reaching six requests still blocks without declaring completeness.
+
+Deterministic tests cover legacy exhausted jobs, repeated reopening, stage reuse, spent
+attempts, grant duplication, model/revision/ownership checks and authenticated requests.
+The navigation browser check exercises confirmation/cancel, a successful additional exact
+load/analysis, reload, retained history and mobile layout
+(`.reqwizit-state/browser-gap-allowance.png`). Live continuation quality remains unqualified.
 
 Processing & queue shows saved navigation stages, cumulative request attempts and failure
 blockers. After an interruption, click **Explore next gaps** explicitly in the same scope.

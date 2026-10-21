@@ -191,7 +191,11 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
 
   const included = new Set([...taskIDs, ...task.supportingRecordIDs ?? []]);
   const workspaceIDs = new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id));
-  const taskEvidenceIDs = new Set([...taskIDs, ...project.questions.filter((q) => taskIDs.has(q.id)).flatMap((q) => q.sourceID ? [q.sourceID] : [])]);
+  // Loading a shared file for a gap task does not request every requirement
+  // citing that file. Keep the file itself exact in included, but do not use it
+  // as a submission-style trigger for unrelated downstream requirements.
+  const taskEvidenceIDs = new Set([...taskIDs].filter((id) => !task.gapExploration || !workspaceIDs.has(id))
+    .concat(project.questions.filter((q) => taskIDs.has(q.id)).flatMap((q) => q.sourceID ? [q.sourceID] : [])));
   // A current question can cite a reviewed requirement as motivation. Its files
   // remain task evidence, just as when that requirement/review itself is the task.
   const taskRequirementIDs = new Set(project.requirements.filter((r) => taskIDs.has(r.id)).map((r) => r.id));

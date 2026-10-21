@@ -30,6 +30,17 @@ every technical detail proposed in the planning documents.
 | DEC-021 | Process queued AI follow-up one submission at a time, each with its own focused revision-linked context. Do not combine the queue or include unrelated feature history solely because it shares an area. Retain exact target evidence and explicit guardrails; preserve omitted records and request wider context when needed. | User requested individual processing/contexts after repeated queue-size blockers |
 | DEC-021 | Split generated requirements by stable feature ID, keep original evidence in shared referenced files, and avoid rewriting unchanged outputs. Retain an on-demand combined specification export. | User reported large generated files and confirmed both reading/coding-agent context and disk/Git efficiency as goals after the feature-based export recommendation |
 
+## Explicit bounded gap-exploration continuation
+
+Confirmed direction (2026-10-21): after a saved task exhausted the three-request evidence
+allowance, the user approved an explicit **Continue exploration** recovery action that
+preserves saved work and grants a bounded additional allowance. Implemented policy: up
+to three additional requests once for the same evidence-bound task, at most six attempts
+and five navigation stages across retries. Ordinary Resume never silently expands the
+allowance; original evidence, provider selection, research permissions and hard context
+limits remain protected. See [browser behavior](browser-workspace.md#explicit-additional-exploration-allowance)
+and [upgrade compatibility](migrations.md#explicit-one-time-gap-continuation-allowance).
+
 ## Narrower Design/Review blockers (DEC-027)
 
 Confirmed direction (2026-10-21): the user requested implementation of narrower blockers

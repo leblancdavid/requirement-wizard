@@ -937,6 +937,34 @@ test("queue preflight isolates oversized responses, persists blockers, and resum
   } finally { await queue?.close(); store.close(); }
 });
 
+test("gap file retrieval does not fan out to requirements sharing its documentary source", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    const file = { id: "shared-file", epicID: "project", kind: "workspace" as const, text: "Exact shared documentary evidence" };
+    const guardrail = { id: "global-rule", epicID: "project", kind: "note" as const, text: "Preserve the human project rule" };
+    project.sources.push(file, guardrail);
+    project.requirements.push(...Array.from({ length: 24 }, (_, i) => ({ id: `file-requirement-${i}`, epicID: "inbox",
+      statement: `Documented behavior ${i}`, rationale: "Documentary motivation", acceptance: [`Scenario ${i}`],
+      status: "proposed" as const, sourceIDs: [file.id] })));
+    const target = project.requirements[0]!;
+    const options = { focusEpicID: "inbox", recordIDs: [target.id, file.id], isolatedTask: true,
+      gapExploration: true, deferWorkspaceEvidence: true, expandMandatory: true };
+    const before = structuredClone(project);
+    const pack = planContext(project, options);
+    const decoded = decodeContext<{ sources: Project["sources"]; requirements: Project["requirements"] }>(pack.data);
+    assert.deepEqual(decoded.requirements, [target]);
+    assert.deepEqual(decoded.sources.find((s) => s.id === file.id), file);
+    assert.deepEqual(decoded.sources.find((s) => s.id === guardrail.id), guardrail);
+    assert.ok(pack.manifest.omittedIDs.includes("file-requirement-1"));
+    const explicit = planContext(project, { ...options, recordIDs: [...options.recordIDs, "file-requirement-1"] });
+    assert.ok(explicit.manifest.includedIDs.includes("file-requirement-1"), "explicit requirement retrieval still loads exact evidence");
+    const followUp = planContext(project, { ...options, gapExploration: false });
+    assert.ok(followUp.manifest.includedIDs.includes("file-requirement-1"), "submission follow-up keeps its existing source-trigger policy");
+    assert.deepEqual(project, before);
+  } finally { store.close(); }
+});
+
 test("indivisible mandatory human constraints beyond the fallback fail before inference and retain the attempted manifest", async () => {
   const store = new ProjectStore(":memory:");
   try {

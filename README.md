@@ -32,6 +32,9 @@ share the existing request budget; omissions and blockers remain visible.
 Snapshot-bound continuation handles can advance result/text windows or queries can be
 refined. Paging does not add requests: another search page can leave insufficient budget
 to load its exact evidence and analyze it.
+For an exhausted saved gap task, **Continue exploration** offers an explicit one-time
+allowance of up to three additional requests (six cumulative attempts maximum), retaining
+saved stages and spent calls. Ordinary Resume does not reset the limit or grant calls.
 The [deterministic retrieval baseline](docs/retrieval-baseline.md) records first-query
 hits, intentional misses and exact-use blockers on large synthetic saved projects.
 An [offline candidate evaluation](docs/retrieval-evaluation.md) compares bounded retrieval

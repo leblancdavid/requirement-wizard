@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import React, { useState } from "react";
+import { Modal } from "./modal.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import type { QueueActivity } from "./queue-activity.js";
@@ -11,19 +11,19 @@ import { LazyDetails } from "./lazy-details.js";
 import type { RefinementProgress } from "../core/refinement.js";
 import { refinementActivity } from "./refinement-progress.js";
 import { GapExplorationStatus } from "./gap-status.js";
+import { GapContinuation } from "./gap-continuation.js";
 import { AttentionInbox, attentionGroups } from "./attention.js";
 
-export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, stop, error, openIssue, jobs = [] }: {
+export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, stop, error, openIssue, jobs = [], continuationAvailable = false, continueExploration }: {
   project: Project;
   active: boolean; progress: string[]; submissions: Submission[]; paused: boolean; lastJob?: Job;
   refinementProgress?: RefinementProgress | null;
   activities: QueueActivity[]; stopActivity: (target: NonNullable<QueueActivity["stop"]>) => void;
   scope: string; disabled: boolean; stopDisabled: boolean; resume: () => void; stop: () => void; error: string;
   openIssue?: (submissionID: string) => void; jobs?: Job[];
+  continuationAvailable?: boolean; continueExploration?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
   const processing = submissions.filter((item) => item.status === "processing");
   const waiting = submissions.filter((item) => item.status === "queued");
   const resolvedAttempts = resolvedReviewAttempts(project, submissions);
@@ -46,20 +46,9 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
      : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting discovery" : "Ready when you are";
    const headline = taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? discoveryHeadline;
   const liveStage = running[0]?.stage ?? refinement?.label ?? stage.join(" ");
-  const canResume = !active && (paused || waiting.length > 0 || saved.length > 0);
+   const canResume = !active && (paused || waiting.length > 0 || saved.length > 0)
+     && (!continuationAvailable || waiting.length > 0 || saved.length > 0);
   const resumeLabel = paused ? "Resume discovery" : "Process waiting answers";
-
-  useEffect(() => {
-    if (!open) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    dialog.current?.showModal();
-    return () => {
-      dialog.current?.close();
-      document.body.style.overflow = previousOverflow;
-      trigger.current?.focus({ preventScroll: true });
-    };
-  }, [open]);
 
   function items(entries: Submission[]) {
     return entries.map((item) => <article className="queue-item" key={item.id}>
@@ -78,7 +67,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
 
   return <ActionScope>
     <div className="queue-header">
-      <button ref={trigger} className="round-status queue-trigger" aria-label={`Processing & queue: ${headline} · ${waiting.length} waiting${attentionCount ? ` · ${attentionCount} need attention` : ""}`}
+      <button className="round-status queue-trigger" aria-label={`Processing & queue: ${headline} · ${waiting.length} waiting${attentionCount ? ` · ${attentionCount} need attention` : ""}`}
         aria-haspopup="dialog" aria-expanded={open} aria-controls="processing-queue" onClick={() => setOpen(true)}>
         {working ? <Spinner /> : <span className="connection-dot" aria-hidden="true" />}
         <span className="status-copy" role="status" aria-live="polite"><strong>{headline}</strong><small>{working ? `${active && !running.length && processing.length ? `${task} · ` : ""}${liveStage || "Working…"} · ` : ""}{waiting.length} waiting{attentionCount ? ` · ${attentionCount} need attention` : ""}{paused && active ? " · Paused" : ""}</small></span>
@@ -88,19 +77,15 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
       {active && <button className="secondary queue-header-action" disabled={stopDisabled} onClick={stop}>Stop discovery</button>}
       {canResume && <button className="secondary queue-header-action" disabled={disabled} onClick={resume} aria-description={`Discovery scope: ${scope}`}>{resumeLabel}</button>}
     </div>
-    {open && createPortal(<ActionScope><dialog ref={dialog} id="processing-queue" className="queue-drawer" aria-labelledby="queue-title" onCancel={() => setOpen(false)} onClose={() => setOpen(false)} onClick={(event) => {
-      if (event.target !== event.currentTarget) return;
-      const bounds = event.currentTarget.getBoundingClientRect();
-      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) setOpen(false);
-    }}>
-      <div className="queue-drawer-heading"><div><h2 id="queue-title">Processing &amp; queue</h2><p role="status">{taskCount} active {taskCount === 1 ? "task" : "tasks"} · Responses: {processing.length} processing · {waiting.length} waiting{attentionCount ? ` · ${attentionCount} need attention` : ""}{paused ? " · Discovery paused" : ""}</p></div><button autoFocus className="secondary" aria-label="Close processing queue" onClick={() => setOpen(false)}>Close ×</button></div>
-      <div className="queue-panel">
+    {open && <ActionScope><Modal id="processing-queue" className="queue-drawer" titleID="queue-title" title="Processing & queue" close={() => setOpen(false)} closeLabel="Close processing queue" headerClassName="queue-drawer-heading" bodyClassName="queue-panel"
+      description={<p role="status">{taskCount} active {taskCount === 1 ? "task" : "tasks"} · Responses: {processing.length} processing · {waiting.length} waiting{attentionCount ? ` · ${attentionCount} need attention` : ""}{paused ? " · Discovery paused" : ""}</p>}>
         {error && <p role="alert" className="job-error">{error}</p>}
         <p>All project areas · Discovery, scans, implementation, verification, delivery and question help. Each queued response receives its own follow-up.</p>
         {running.map((item) => <section key={item.id} aria-label={item.title}><h3>{item.title}</h3><span className="badge">{item.status}</span><ActivityFeedback label={item.stage ?? item.title} completed={item.completed} total={item.total} />{item.detail && <p>{item.detail}</p>}{item.stop && <button className="secondary" disabled={stopDisabled} onClick={() => stopActivity(item.stop!)}>Stop {item.title === "Question help" ? "question help" : "implementation"}</button>}</section>)}
         {active && <section aria-label="Current task"><h3>{refinement?.headline ?? task}</h3><ActivityFeedback label={refinement?.label ?? (stage.join(" ") || task)} completed={completed} total={total} />{refinement && <><p>{task}{stage.length ? ` · ${stage.join(" ")}` : ""}</p><p>Progress covers this run only, with up to 20 overlap checks followed by unfinished wording checks. Ineligible work is skipped; further overlaps may remain. Proposed changes still need your approval.</p></>}<button className="secondary" disabled={stopDisabled} onClick={stop}>Stop</button>{!processing.length && !refinement && <p>The active round is exploring existing project information; queued responses join the next round.</p>}</section>}
         {!active && refinement && <section aria-label="Refinement outcome"><h3>{refinement.headline}</h3><p>{refinement.label}</p><p>{progress.at(-1)}</p></section>}
-        {!active && failed && <p className="job-error">Last {lastJob.kind === "scan" ? "scan" : "round"} {lastJob.status}: {lastJob.diagnostic}</p>}
+         {!active && failed && <p className="job-error">Last {lastJob.kind === "scan" ? "scan" : "round"} {lastJob.status}: {lastJob.diagnostic}</p>}
+         {!active && lastJob && continueExploration && <GapContinuation key={lastJob.id} job={lastJob} available={continuationAvailable} disabled={disabled} continueExploration={continueExploration} />}
         {!active && lastJob?.gapReport && <GapExplorationStatus job={lastJob} />}
         {paused && <p role="status">Discovery is paused. Saved submissions are retained.</p>}
         {executionWaiting && !paused && waiting.length > 0 && <p role="status">Responses are saved and waiting for assessment or implementation to finish. Automatic follow-up resumes afterward for responses submitted with automatic processing enabled.</p>}
@@ -114,8 +99,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
            const entries = submissions.filter((item) => item.status === status || status === "superseded" && resolvedAttempts.has(item.id)).reverse();
           return entries.length > 0 && <LazyDetails key={status} summary={<>{label} · {entries.length}</>}>{() => <SubmissionHistory entries={entries} render={items} />}</LazyDetails>;
         })}
-      </div>
-    </dialog></ActionScope>, document.body)}
+    </Modal></ActionScope>}
   </ActionScope>;
 }
 

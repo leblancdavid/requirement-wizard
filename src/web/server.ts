@@ -29,6 +29,7 @@ import type { ExecutionAdapter } from "../runtime/execution.js";
 import type { ModelSelection } from "../core/model.js";
 import { SnapshotEncoder, parseSnapshotTokens, snapshotHeader } from "./snapshot.js";
 import { savedEvidencePolicySchema } from "../core/gap-navigation.js";
+import { canContinueGapExploration } from "../core/gap-retrieval.js";
 import { reviewAttemptBatchLimit } from "../core/review-attempts.js";
 
 const revision = z.number().int().positive();
@@ -175,7 +176,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const current = revisionSnapshot(project);
         const allJobs = options.store.jobs(id);
         const jobs = allJobs.filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, ...job }) => ({ ...job,
-          ...(retrievalWork ? { retrievalWork: { format: retrievalWork.format, research: retrievalWork.research, stages: retrievalWork.stages, attempts: retrievalWork.attempts, originJobID: retrievalWork.originJobID, reuse: retrievalWork.reuse, ...(retrievalWork.requestedPolicy ? { requestedPolicy: retrievalWork.requestedPolicy } : {}) } } : {}),
+          gapContinuationAvailable: canContinueGapExploration({ ...job, retrievalWork }),
+          ...(retrievalWork ? { retrievalWork: { format: retrievalWork.format, research: retrievalWork.research, stages: retrievalWork.stages, attempts: retrievalWork.attempts, originJobID: retrievalWork.originJobID, reuse: retrievalWork.reuse, continuation: retrievalWork.continuation, ...(retrievalWork.requestedPolicy ? { requestedPolicy: retrievalWork.requestedPolicy } : {}) } } : {}),
           ...(scan ? { scan: { ...scan, sources: [] } } : {}),
           ...(scan && scanWork ? { scanProgress: { completed: scanWork.batches.filter((batch) => batch.output).length, total: scanWork.batches.length, capturedAt: scan.snapshot.capturedAt,
             resumable: ["failed", "cancelled", "interrupted"].includes(job.status) && job.expectedRevision === project.revision && scanWork.bindingID === options.store.workspace(id)?.bindingID } } : {}) }));
@@ -268,6 +270,12 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const work = helpWork.get(job.id);
         work?.controller.abort();
         json(res, 200, { cancelled: !!work }); return;
+      }
+      if (action === "continue-exploration") {
+        if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
+        const input = z.object({ revision, jobID: z.string().uuid() }).strict().parse(raw);
+        queue.continueExploration(id, input.revision, input.jobID);
+        json(res, 202, { started: true }); return;
       }
       if (action === "analyze") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);

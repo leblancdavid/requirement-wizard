@@ -15,7 +15,7 @@ export const gapReuseSchema = gapCheckSchema.extend({ targetRecordID: z.string()
 export const gapReportSchema = z.object({ format: z.literal(1), state: z.enum(["planned", "checked", "idle", "waiting", "blocked"]),
   total: z.number().int().nonnegative(), checked: z.number().int().nonnegative(), pending: z.number().int().nonnegative(),
   waiting: z.number().int().nonnegative(), blocked: z.number().int().nonnegative(),
-  modelCalls: z.number().int().min(0).max(3), explanation: z.string().min(1).max(1200),
+  modelCalls: z.number().int().min(0).max(6), explanation: z.string().min(1).max(1200),
   projectedReviewSnapshots: z.number().int().nonnegative().optional(),
   blockedTasks: z.array(gapBlockSchema).max(20).optional(),
   reusedChecks: z.array(gapReuseSchema).max(20).optional(),

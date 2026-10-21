@@ -1,10 +1,3 @@
-.issue-dialog { width: min(920px, calc(100% - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--border); border-radius: 12px; color: var(--text); background: var(--background); overflow: hidden; overflow-wrap: anywhere; }
-.issue-dialog[open] { display: flex; flex-direction: column; }
-.issue-dialog::backdrop { background: #0008; }
-.issue-dialog > header { flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 22px; background: var(--background); border-bottom: 1px solid var(--border); }
-.issue-dialog h2 { margin: 0; font-size: 20px; }
-.issue-dialog-body { min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; padding: 22px; }
 .attention-inbox { margin-block: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .attention-inbox .queue-item { padding-block: 12px; }
 .attention-inbox button { margin-top: 8px; }
-@media (max-width: 540px) { .issue-dialog { width: 100%; max-width: 100%; max-height: 100dvh; height: 100dvh; margin: 0; border-radius: 0; } .issue-dialog-body { padding: 12px; } }

@@ -2088,6 +2088,36 @@ try {
     const resolverInbox = page.getByRole("region", { name: "Needs attention inbox", exact: true });
     await expect(resolverInbox).toContainText("Needs attention · 1 item");
     await expect(resolverInbox).toContainText("4 saved attempts");
+    // All modal entry points share the same shell and dismissal safeguards.
+    for (const [trigger, name] of [
+      [page.locator(".progress-trigger"), "Project progress"],
+      [page.getByRole("button", { name: /^Processing & queue:/ }), "Processing & queue"],
+    ] as const) {
+      const previousOverflow = await page.evaluate(() => document.body.style.overflow);
+      await trigger.click();
+      const modal = page.getByRole("dialog", { name, exact: true });
+      await expect(modal).toBeVisible();
+      assert.deepEqual(await modal.evaluate((dialog) => ({
+        radius: getComputedStyle(dialog).borderRadius,
+        overflow: getComputedStyle(dialog).overflow,
+        bodyOverflow: getComputedStyle(dialog.querySelector(".modal-body")!).overflowY,
+      })), { radius: "12px", overflow: "hidden", bodyOverflow: "auto" });
+      await modal.getByRole("heading", { name, exact: true }).click();
+      await expect(modal).toBeVisible();
+      const bounds = (await modal.boundingBox())!;
+      await page.mouse.move(bounds.x + 10, bounds.y + 10);
+      await page.mouse.down(); await page.mouse.move(2, 2); await page.mouse.up();
+      await expect(modal).toBeVisible();
+      const headerTop = await modal.locator("header").evaluate((header) => header.getBoundingClientRect().top);
+      await modal.locator(".modal-body").evaluate((body) => { body.scrollTop = body.scrollHeight; });
+      assert.equal(await modal.locator("header").evaluate((header) => header.getBoundingClientRect().top), headerTop, "Modal header stays fixed while its body scrolls");
+      await page.mouse.click(2, 2);
+      await expect(modal).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      assert.equal(await page.evaluate(() => document.body.style.overflow), previousOverflow);
+      await trigger.click(); await page.keyboard.press("Escape");
+      await expect(modal).toHaveCount(0); await expect(trigger).toBeFocused();
+    }
      await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
     const resolverDialog = page.getByRole("dialog", { name: "View & resolve", exact: true });
     await expect(resolverDialog).toContainText("Both players return to their latest shared beacon");
@@ -2133,6 +2163,12 @@ try {
     const resolverDrawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
      await resolverDrawer.getByRole("region", { name: "Needs attention inbox", exact: true }).getByRole("button", { name: "Answer question", exact: true }).click();
     await expect(resolverDialog).toBeVisible();
+    await page.mouse.click(2, 2);
+    await expect(resolverDialog).toHaveCount(0);
+    await expect(resolverDrawer).toBeVisible();
+    assert.equal(await page.evaluate(() => document.body.style.overflow), "hidden", "Closing a nested modal keeps the underlying modal scroll lock");
+    await expect(resolverDrawer.getByRole("button", { name: "Answer question", exact: true })).toBeFocused();
+    await resolverDrawer.getByRole("button", { name: "Answer question", exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await resolverDialog.evaluate((dialog) => dialog.scrollWidth > dialog.clientWidth), false, "Resolver fits mobile width");
     await page.screenshot({ path: ".reqwizit-state/browser-focused-resolver.png", fullPage: true });

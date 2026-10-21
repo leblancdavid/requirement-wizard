@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import type { ContextPack } from "./context.js";
-import type { Project } from "./model.js";
+import type { Project, Job } from "./model.js";
 import { analysisSchema } from "./model.js";
 import type { Analysis } from "./model.js";
 import { ContextBudgetError } from "./context.js";
@@ -14,6 +14,8 @@ export const retrievalRequestSchema = z.object({ retrieveEvidence: z.object({ fo
 const evidenceBasisSchema = z.object({ format: z.literal(1), compatibility: z.literal("gap-stage-evidence-v1"),
   key: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export const retrievalWorkSchema = z.object({ format: z.literal(1),
+  continuation: z.object({ format: z.literal(1), sourceJobID: z.string().min(1),
+    fromStage: z.number().int().min(0).max(2) }).strict().optional(),
   requestedPolicy: savedEvidencePolicySchema.optional(),
   research: z.boolean(),
   stages: z.array(z.object({ revision: z.number().int().positive(), contextKey: z.string().regex(/^[a-f0-9]{64}$/),
@@ -29,15 +31,26 @@ export const retrievalWorkSchema = z.object({ format: z.literal(1),
         || stage.searchResult.page && stage.searchResult.page.limit !== stage.request.searchEvidence.limit)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Search checkpoints require their bounded original navigation result, and load checkpoints cannot carry search results." });
     }
-  })).max(2),
-  attempts: z.number().int().min(0).max(3),
+  })).max(5),
+  attempts: z.number().int().min(0).max(6),
   originJobID: z.string().optional(),
   reuse: z.object({ format: z.literal(1), sourceJobID: z.string().min(1), sourceRevision: z.number().int().positive(),
-    targetRevision: z.number().int().positive(), stages: z.number().int().min(0).max(2), final: z.boolean() }).strict().optional(),
+    targetRevision: z.number().int().positive(), stages: z.number().int().min(0).max(5), final: z.boolean() }).strict().optional(),
   final: z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), output: analysisSchema,
     revision: z.number().int().positive().optional(), evidenceBasis: evidenceBasisSchema.optional() }).strict().optional(),
-}).strict();
+}).strict().superRefine((work, ctx) => {
+  if (!work.continuation && (work.attempts > 3 || work.stages.length > 2 || (work.reuse?.stages ?? 0) > 2)
+    || work.continuation && (work.attempts < 3 || work.continuation.fromStage > work.stages.length)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Extended retrieval requires a valid explicit continuation receipt." });
+  }
+});
 export type RetrievalWork = z.infer<typeof retrievalWorkSchema>;
+/** Advisory eligibility; service also verifies ownership, current evidence and latest attempt. */
+export function canContinueGapExploration(job: Job): boolean {
+  return ["failed", "cancelled", "interrupted"].includes(job.status) && !!job.context?.gapExploration?.check
+    && !job.kind && !job.helpRequest && !job.context.refinementOnly
+    && job.retrievalWork?.attempts === 3 && !job.retrievalWork.continuation && !job.retrievalWork.final;
+}
 export const retrievalContextKey = (context: ContextPack) => createHash("sha256").update(JSON.stringify(context.data)).digest("hex");
 
 /** Expand only the app's lossless wire forms; human strings are never interpreted. */
@@ -75,7 +88,7 @@ function expandedEvidence(input: unknown): Record<string, unknown> {
 /** Navigation never grants authority. Keep every other displayed field conservative. */
 export function retrievalEvidenceBasis(context: ContextPack) {
   const { revision: _revision, previousInterpretation: _summary, recordIndex: _index,
-    relatedRecordHints: _hints, epicMap: _map, savedEvidenceSearch: _search, ...evidence } = expandedEvidence(context.data);
+    relatedRecordHints: _hints, quotedRecordNavigation: _quoted, epicMap: _map, savedEvidenceSearch: _search, ...evidence } = expandedEvidence(context.data);
   if (evidence.submissionScope && typeof evidence.submissionScope === "object") {
     const { omittedRecords: _count, ...scope } = evidence.submissionScope as Record<string, unknown>;
     evidence.submissionScope = scope;
@@ -110,9 +123,7 @@ export function validateGapFinal(project: Project, context: ContextPack, output:
   }
 }
 
-/** Only handles actually displayed to the model may be requested. */
-export function validateRetrieval(context: ContextPack, raw: unknown, witnessedNavigationIDs: string[] = []) {
-  const request = retrievalRequestSchema.parse(raw);
+function displayedRecordIDs(data: unknown): Set<string> {
   const known = new Set<string>();
   const visit = (value: unknown, key = "") => {
     if (typeof value === "string" && (key === "id" || key.endsWith("ID") || key.endsWith("IDs"))) known.add(value);
@@ -125,22 +136,66 @@ export function validateRetrieval(context: ContextPack, raw: unknown, witnessedN
       else Object.entries(value).forEach(([k, v]) => visit(v, k));
     }
   };
-  visit(context.data);
+  visit(data);
   // Compacted identifier dictionaries also contain exact displayed handles.
-  const table = (context.data as { identifierTable?: { values: string[] } }).identifierTable;
+  const table = (data as { identifierTable?: { values: string[] } }).identifierTable;
   table?.values.forEach((id) => known.add(id));
+  return known;
+}
+
+/** Promote exact, existing quoted references to explicit navigation, never evidence. */
+export function addQuotedRecordNavigation(project: Project, context: ContextPack): void {
+  const { quotedRecordNavigation: _, ...data } = context.data as Record<string, unknown>;
+  const known = displayedRecordIDs(data);
+  const existing = new Set([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => r.id));
+  const text = JSON.stringify(data);
+  const boundary = (character: string | undefined) => character === undefined || !/[A-Za-z0-9:_-]/.test(character);
+  const quoted = (id: string) => {
+    let offset = 0, at: number;
+    while ((at = text.indexOf(id, offset)) !== -1) {
+      if (boundary(text[at - 1]) && boundary(text[at + id.length])) return true;
+      offset = at + id.length;
+    }
+    return false;
+  };
+  const recordIDs: string[] = [];
+  const navigation = { recordIDs,
+    explanation: "Navigation only: these exact saved record IDs occur in quoted explanatory text in this package and are not yet loaded. They identify existing saved records, not verified facts or user preferences. Request retrieveEvidence before citing or drawing conclusions from them. Other strings in prose are not retrieval handles; never invent IDs." };
+  for (const id of context.manifest.omittedIDs) {
+    if (recordIDs.length >= 32) break;
+    if (!id || id.length > 200 || !existing.has(id) || known.has(id) || context.manifest.includedIDs.includes(id) || !quoted(id)) continue;
+    recordIDs.push(id);
+    if (JSON.stringify({ ...data, quotedRecordNavigation: navigation }).length > Math.min(context.manifest.budget, 96000)) recordIDs.pop();
+  }
+  context.data = recordIDs.length ? { ...data, quotedRecordNavigation: navigation } : data;
+  context.manifest.characters = JSON.stringify(context.data).length;
+  context.manifest.sectionCharacters = Object.fromEntries(Object.entries(context.data as Record<string, unknown>).map(([key, value]) => [key, JSON.stringify(value).length]));
+}
+
+/** Only handles actually displayed to the model may be requested. */
+export function validateRetrieval(context: ContextPack, raw: unknown, witnessedNavigationIDs: string[] = []) {
+  const request = retrievalRequestSchema.parse(raw);
+  const known = displayedRecordIDs(context.data);
   // Only verified saved requests may supply prior navigation witnesses. This
   // does not add their contents to includedIDs or permit proposals/citations.
   witnessedNavigationIDs.forEach((id) => known.add(id));
   const ids = request.retrieveEvidence.recordIDs;
-  if (new Set(ids).size !== ids.length || ids.some((id) => !known.has(id) || !context.manifest.omittedIDs.includes(id)
-    || context.manifest.includedIDs.includes(id))) {
-    throw new Error("Evidence retrieval requires distinct, displayed, unseen record IDs. No proposals applied.");
+  const seen = new Set<string>();
+  const invalid = ids.flatMap((id, index) => {
+    const reason = seen.has(id) ? "duplicate" : context.manifest.includedIDs.includes(id) ? "already loaded"
+      : !context.manifest.omittedIDs.includes(id) ? "not available in this saved context"
+      : !known.has(id) ? "not offered as a navigation handle" : undefined;
+    seen.add(id);
+    const label = context.manifest.includedIDs.includes(id) || context.manifest.omittedIDs.includes(id) ? id : `request item ${index + 1}`;
+    return reason ? [`${label} (${reason})`] : [];
+  });
+  if (invalid.length) {
+    throw new Error(`Evidence retrieval requires distinct, displayed, unseen record IDs. No proposals applied. Invalid handles: ${invalid.join("; ")}. Completed stages and saved input are retained.`);
   }
   return request;
 }
 
-export function nextGapContext(project: Project, base: ContextPack, requestedIDs: string[]): ContextPack {
+export function nextGapContext(project: Project, base: ContextPack, requestedIDs: string[], extended = false): ContextPack {
   const gap = base.manifest.gapExploration!;
   let next: ContextPack;
   try { next = planContext(project, { focusEpicID: base.manifest.focusEpicID ?? undefined,
@@ -159,18 +214,20 @@ export function nextGapContext(project: Project, base: ContextPack, requestedIDs
   next.manifest.gapExploration = gap;
   next.gapReport = base.gapReport;
   const previousStage = (base.data as { evidenceRetrieval: { stage: number } }).evidenceRetrieval.stage;
-  enableGapRetrieval(next, previousStage + 1);
+  enableGapRetrieval(next, previousStage + 1, extended);
   if (next.manifest.characters > next.manifest.budget) next.manifest.budget = 96000;
   if (next.manifest.characters > 96000) throw new ContextBudgetError(next.manifest);
   return next;
 }
 
-export function enableGapRetrieval(context: ContextPack, stage = 1) {
+export function enableGapRetrieval(context: ContextPack, stage = 1, extended = false) {
   if (!context.manifest.gapExploration) return;
   context.manifest.gapRetrieval = true;
   context.data = { ...(context.data as object), evidenceRetrieval: {
-    format: 1, stage, navigationStagesRemaining: 3 - stage, maxRequests: 3, maxRecordIDsPerRequest: 8,
-    instruction: "Navigation hints and deferred links are NOT evidence. If additional exact saved evidence is needed, return ONLY {retrieveEvidence:{format:1,recordIDs:[exact known IDs],reason:string}} instead of proposals. Request only unseen IDs listed in this package's indexes or links. The app loads exact records and their human constraints in a fresh bounded request. Never cite or decide from unseen evidence. Otherwise return the normal analysis. Stage three is final: if more evidence is still needed, return the retrieval envelope to block explicitly; no fourth request or unsupported proposals will be permitted. Retrieved workspace/research facts never establish user preferences. Limits can block further retrieval; do not guess. Completion is not proof of completeness.",
+    format: 1, stage, navigationStagesRemaining: (extended ? 6 : 3) - stage, maxRequests: extended ? 6 : 3, maxRecordIDsPerRequest: 8,
+    instruction: "Navigation hints and deferred links are NOT evidence. If additional exact saved evidence is needed, return ONLY {retrieveEvidence:{format:1,recordIDs:[exact known IDs],reason:string}} instead of proposals. Request only unseen IDs listed in this package's indexes or links. The app loads exact records and their human constraints in a fresh bounded request. Never cite or decide from unseen evidence. Otherwise return the normal analysis. "
+      + (extended ? "The user explicitly granted one bounded continuation: at most six cumulative requests and five navigation stages across all retries. Stage six is final; no seventh request is permitted. Budget spent on failed attempts is not restored. " : "Stage three is final: if more evidence is still needed, return the retrieval envelope to block explicitly; no fourth request or unsupported proposals will be permitted. ")
+      + "Retrieved workspace/research facts never establish user preferences. Limits can block further retrieval; do not guess. Completion is not proof of completeness.",
   } };
   context.manifest.characters = JSON.stringify(context.data).length;
 }

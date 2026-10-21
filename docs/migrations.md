@@ -19,6 +19,98 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Explicit navigation for saved IDs in quoted explanations
+
+SQLite **3 → 3**, retrieval envelope **1 → 1**, evidence-basis compatibility
+**gap-stage-evidence-v1 → gap-stage-evidence-v1**. There is no startup conversion, data
+reset, model replay, specification revision or allowance reset. Before a new gap request,
+an optional `quotedRecordNavigation` index promotes at most 32 exact whole IDs in quoted
+context text into explicit handles, restricted to existing omitted saved records and spare
+context space. It never adds detailed evidence, authorizes citations, resolves human intent
+or follows a path/URL. Freeform strings alone remain invalid retrieval handles.
+
+This index is navigation-only, like search results and ordinary record indexes, and is
+excluded from the existing evidence-basis calculation. Exact quoted text and all detailed
+records remain in that calculation. Older compatible stage/final receipts retain their
+original keys/revisions/sessions and reuse checks; original wire-hash verification for
+legacy receipts without a basis is unchanged. No saved receipts are rewritten on startup.
+Failure diagnostics now distinguish canonical handles that were already loaded, not
+offered or duplicated, and unavailable request items without echoing unknown model text.
+Future envelope rejection and existing context/attempt bounds remain unchanged.
+
+Tests cover exact and substring references, unknown IDs, the 32-handle/spare-space limits,
+unchanged evidence identity, unseen-citation rejection and exact loading through the real
+service. A read-only reconstruction of Rust Grind Galaxy's failed request at revision 1694
+accepted its seven requested IDs after two quoted handles were offered: 55,020 / 96,000
+characters, with unchanged evidence identity. This was validation only, not a new model
+call or completed discovery; its six spent attempts remain six and the task remains
+incomplete. Original project data and job/session evidence were not modified.
+Verification on Node 22.23.3: typecheck, all 508 deterministic tests, the navigation
+browser check and diff whitespace checks passed. Live discovery was not retried.
+
+## Explicit one-time gap continuation allowance
+
+SQLite **3 → 3**; retrieval envelope **1 → 1** with an optional strict
+`continuation: {format: 1, sourceJobID, fromStage}` receipt. Existing jobs remain byte-for-byte
+unchanged on reopen; no startup inference, schema conversion, assessment invalidation or
+workspace rewrite is needed. Legacy jobs without a receipt retain the three-attempt,
+two-navigation-stage limits. Only the explicit revision-checked continuation action grants
+up to three more attempts once, raising lifetime maxima to six attempts/five stages. Gap
+report `modelCalls` accepts up to six; it is a diagnostic count, not evidence of readiness.
+
+New jobs copy compatible checkpointed work and retain original evidence bases, revisions,
+sessions and cumulative attempts. The receipt records the exhausted source job and first
+unfinished stage. Extended prompt limits start there; replayed older stages keep their
+original input identity. Original source jobs, human input and specification histories are
+not rewritten. A pre-upgrade failed final navigation request that was never checkpointed
+is not invented from a diagnostic; continuation may need a new request for that unfinished
+step. Original final responses still use the existing publication-reuse path, not a grant.
+
+The owned-worker lease excludes concurrent discovery. The receipt is checkpointed before
+any newly allowed inference; failure/cancellation and reopening retain both grant and spent
+attempts. A durable task-identity lookup rejects a second grant even after a successful
+continuation. Stale revisions, changed task evidence, different models/connections,
+cross-project IDs and obsolete attempts reject rather than reset work. Unknown receipt
+formats and extended counts without a receipt reject without replacing saved bytes.
+Older app versions do not support newly granted extended envelopes; use the updated app
+to reopen them rather than downgrading. No destructive migration needs a separate backup.
+
+Upgrade tests cover legacy exhausted jobs, repeated reopen, original payload preservation,
+compatible stage reuse, explicit grant, failure/retry accounting and six-call exhaustion.
+API/browser checks cover authentication, origin/revision/ownership/active-worker checks,
+confirmation/cancel, saved receipt visibility, reload and mobile layout. Live provider
+continuation remains unqualified; no user database was modified during development.
+Verification on Node 22.23.3: typecheck, all 505 deterministic tests, standard browser
+checks and the extended navigation browser check passed. UI builds retain the existing
+non-blocking large-chunk warning. Diff whitespace checks passed.
+
+The continuation action is also rendered next to the diagnostic inside Processing &
+queue. This UI-only recovery placement changes no persisted formats, identities or grant
+rules. Ordinary Resume is hidden there for exhausted-only work; queued/saved responses
+keep their separate Resume control. The navigation browser check exercises granting
+from inside the modal rather than reaching a control behind it.
+
+## Gap retrieval shared-file scope correction
+
+SQLite **3 → 3**; no schema/payload conversion, fingerprint-version change, startup
+replay, or assessment invalidation. A gap lookup now loads an explicitly requested
+workspace source without using that source as a submission trigger for every requirement
+citing the same file. Exact task requirements, prior-stage evidence and human guardrails
+retain their existing inclusion rules. Queued submission follow-up is unchanged.
+
+Previously failed expansions retain their original manifests and diagnostics. Explicit
+retry rebuilds from the original target and checkpointed stage evidence, not the failed
+expansion's diagnostic included-ID list. Compatible navigation stages retain their
+original IDs, revisions, sessions and cumulative attempts; unrelated completed work is
+not replayed. Existing evidence-basis checks still reject genuinely changed evidence.
+No destructive conversion or separate backup is needed; future-format rejection remains
+unchanged. Tests cover shared-file isolation, explicit requirement loading, human
+guardrails, unchanged submissions, repeated SQLite reopening and saved-stage recovery
+without replaying navigation. A read-only reconstruction of Rust Grind Galaxy revision
+1693 reduced its failing expansion from 102,595 to 51,582 characters, retaining all
+previous-stage evidence and the requested file; no live inference or user-data write
+was performed.
+
 ## Requirement-level attention cleanup
 
 SQLite **3 → 3**. No payload conversion, startup sweep, revision/fingerprint change,

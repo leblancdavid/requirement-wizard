@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { pageWindow, PagedList } from "./pagination.js";
 import { ReviewUpdateNotice } from "./review-update.js";
 import { GapExplorationStatus } from "./gap-status.js";
+import { GapContinuation } from "./gap-continuation.js";
 import type { Job } from "../core/model.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { planGapContext } from "../core/gap-context.js";
@@ -35,8 +36,22 @@ test("pilot status distinguishes requested default from saved experimental polic
   assert.match(html, /Requested for new searches in this job: Default prefix search/);
   assert.match(html, /Saved policy: Experimental prefix-preserving auxiliary merge/);
   assert.match(html, /1,000,000 scan characters/); assert.match(html, /auxiliary records text-limited/);
-  assert.match(html, /Zero omissions is not proof/); assert.match(html, /No candidate continuation offered/);
+  assert.match(html, /Zero omissions is not proof/); assert.match(html, /No candidate search-page continuation offered/);
   assert.match(html, /96,000-character evidence cap/); assert.deepEqual(job, before);
+});
+
+test("gap continuation status shows the durable six-request limit and never grants calls on render", () => {
+  const job: Job = { id: "continued-job", projectID: "project", expectedRevision: 1, model: { providerID: "openai", modelID: "fixture" },
+    status: "failed", leaseUntil: null, gapReport: { format: 1, state: "planned", checked: 0, pending: 3, waiting: 0, blocked: 0,
+      total: 3, modelCalls: 6, explanation: "Exploration is not complete." },
+    retrievalWork: { format: 1, research: false, attempts: 6, stages: [], continuation: { format: 1, sourceJobID: "exhausted-job", fromStage: 0 } } };
+  const html = renderToStaticMarkup(createElement(GapExplorationStatus, { job }));
+  assert.match(html, /6 of 6 model requests/); assert.match(html, /no second grant is available/);
+  const continued = () => assert.fail("Rendering must not grant requests");
+  assert.equal(renderToStaticMarkup(createElement(GapContinuation, { job, available: false, disabled: false, continueExploration: continued })), "");
+  const offered = renderToStaticMarkup(createElement(GapContinuation, { job: { ...job, retrievalWork: { ...job.retrievalWork!, attempts: 3, continuation: undefined } }, available: true, disabled: false, continueExploration: continued }));
+  assert.match(offered, /Continue exploration/); assert.match(offered, /Ordinary Resume does not reset/);
+  assert.doesNotMatch(offered, /Allow up to 3 more requests/, "cost confirmation requires a user action first");
 });
 
 test("page windows bound large lists and clamp empty, negative and shortened pages", () => {

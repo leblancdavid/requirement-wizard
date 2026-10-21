@@ -35,6 +35,46 @@ export async function settled(store: ProjectStore, id: string) {
   assert.fail("Pilot fixture did not settle within the bounded wait");
 }
 
+test("continue-exploration API authenticates a revision-bound one-time grant and excludes other work", async () => {
+  const store = new ProjectStore(":memory:"), p = seedPilot(store), other = seedPilot(store, "Other project");
+  let calls = 0;
+  const failing = new DiscoveryService(store, { async analyze() { calls++; throw new Error("Bounded fixture failure"); } });
+  let failed: Job | undefined;
+  for (let i = 0; i < 3; i++) failed = await failing.analyze(p.id, p.revision, { focusEpicID: "admission" });
+  assert.equal(calls, 3);
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const app = await startApp({ store, port: 0, adapter: { async analyze(_snapshot, options) {
+    calls++; assert.equal(options.research, false);
+    assert.equal((options.context.data as { evidenceRetrieval: { maxRequests: number } }).evidenceRetrieval.maxRequests, 6);
+    await gate; return baselineAnalysis();
+  } } });
+  const headers = { "content-type": "application/json", "x-reqwizit-token": app.token, origin: app.origin };
+  const run = (body: unknown, projectID = p.id, h = headers) => fetch(`${app.origin}/api/projects/${projectID}/continue-exploration`, { method: "POST", headers: h, body: JSON.stringify(body) });
+  try {
+    const body = { revision: p.revision, jobID: failed!.id };
+    assert.equal((await run(body, p.id, { ...headers, "x-reqwizit-token": "bad" })).status, 403);
+    assert.equal((await run(body, p.id, { ...headers, origin: "https://untrusted.invalid" })).status, 403);
+    assert.equal((await run({ ...body, revision: p.revision + 1 })).status, 409);
+    assert.equal((await run({ ...body, research: true })).status, 400);
+    assert.equal((await run({ ...body, maxRequests: 99 })).status, 400);
+    assert.equal((await run({ ...body, revision: other.revision }, other.id)).status, 400);
+    assert.equal(calls, 3);
+    const snapshot = await (await fetch(`${app.origin}/api/projects/${p.id}`, { headers })).json() as { jobs: (Job & { gapContinuationAvailable: boolean })[] };
+    assert.equal(snapshot.jobs.at(-1)!.gapContinuationAvailable, true);
+    assert.equal((await run(body)).status, 202);
+    assert.equal((await run(body)).status, 409);
+    finish();
+    const completed = await settled(store, p.id);
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(completed.retrievalWork!.attempts, 4); assert.equal(calls, 4);
+    assert.equal((await run({ ...body, revision: store.get(p.id).revision })).status, 400);
+    assert.equal(calls, 4);
+    assert.deepEqual(store.get(p.id).requirements, p.requirements);
+    assert.deepEqual(store.get(p.id).sources, p.sources);
+  } finally { finish(); await app.close(); store.close(); }
+});
+
 test("manual API pilot is default off, validates local requests and reuses original receipts after switching back", async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "pilot-api-")), path = join(directory, "projects.sqlite");

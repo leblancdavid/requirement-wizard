@@ -1,0 +1,10 @@
+.modal { width: min(var(--modal-width, 920px), calc(100% - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--border); border-radius: 12px; color: var(--text); background: var(--background); overflow: hidden; overflow-wrap: anywhere; }
+.modal[open] { display: flex; flex-direction: column; }
+.modal::backdrop { background: #0008; }
+.modal-heading { flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 22px; background: var(--background); border-bottom: 1px solid var(--border); }
+.modal-heading > div { min-width: 0; }
+.modal-heading h2 { margin: 0; font-size: 20px; }
+.modal-heading p { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.modal-heading button { flex-shrink: 0; }
+.modal-body { min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; padding: 22px; }
+@media (max-width: 540px) { .modal { width: 100%; max-width: 100%; max-height: 100dvh; height: 100dvh; margin: 0; border-radius: 0; } .modal-heading { padding: 16px 12px; } .modal-body { padding: 12px; } }

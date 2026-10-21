@@ -5,7 +5,7 @@ import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext } from "../core/working-set.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
-import { checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
+import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
 import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch, type SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
@@ -55,6 +55,19 @@ export class DiscoveryService {
   }
   assertCanDiscover(projectID: string) {
     if (this.requiresInitialization(projectID)) throw new Error("Initialization incomplete. Complete a folder scan and review its baseline before exploring missing requirements.");
+  }
+
+  assertGapContinuation(projectID: string, revision: number, jobID: string): Job {
+    const project = this.store.get(projectID), source = this.store.getJob(jobID);
+    if (project.revision !== revision) throw new StaleRevisionError();
+    if (source.projectID !== projectID || !canContinueGapExploration(source)) throw new Error("Choose an exhausted gap task without an existing continuation allowance.");
+    if (this.store.gapContinuationGranted(projectID, source.context!.gapExploration)) throw new Error("This gap task already received its one-time continuation allowance. Resume the latest attempt instead.");
+    if (source.model.providerID !== project.model.providerID || source.model.modelID !== project.model.modelID
+      || source.model.connectionID !== project.model.connectionID) throw new Error("The saved gap task uses a different model or connection. Its allowance cannot be continued.");
+    if (this.store.retrievalHistory(projectID, revision, source.context!.gapExploration, source.retrievalWork!.research,
+      project.model, source.context!.focusEpicID).at(0)?.id !== source.id) throw new Error("A newer attempt exists for this gap task. Review its latest result instead.");
+    restoreGapTaskContext(project, source.context!.gapExploration!, source.context!.focusEpicID ?? undefined);
+    return source;
   }
 
   async scan(projectID: string, expectedRevision: number, options: { signal?: AbortSignal; onProgress?: (message: string) => void; resumeJobID?: string } = {}): Promise<Job> {
@@ -192,11 +205,16 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
     if (options.savedEvidencePolicy !== undefined) savedEvidencePolicySchema.parse(options.savedEvidencePolicy);
     if (!options.helpRequest) this.assertCanDiscover(projectID);
+    const continuationSource = options.continueGapJobID ? this.assertGapContinuation(projectID, expectedRevision, options.continueGapJobID) : undefined;
+    if (continuationSource && (options.helpRequest || options.refinementOnly || options.recordIDs?.length || options.submissionIDs?.length
+      || options.requiredEpicIDs?.length || options.isolatedTask || options.savedEvidencePolicy !== undefined || options.research !== undefined || options.focusEpicID !== undefined)) {
+      throw new Error("Continue exploration retains its saved task, model, research permission and search policy; other discovery options are not accepted.");
+    }
     const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest);
     // Startup, discovery, and inference have a combined five-minute bound.
     // The longer lease permits a short recovery/cleanup window without stealing live work.
@@ -219,12 +237,14 @@ export class DiscoveryService {
       const pairRecords = pair ? [...pair, ...triggerSourceIDs, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
       const generalExploration = !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
-      let context = generalExploration ? planGapContext(project, this.store.gapHistory(projectID), options.focusEpicID, (revision) => this.store.get(projectID, revision))
+      let context = continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
+        : generalExploration ? planGapContext(project, this.store.gapHistory(projectID), options.focusEpicID, (revision) => this.store.get(projectID, revision))
         : planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
         requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
         recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
         isolatedTask: options.refinementOnly || options.isolatedTask,
         budget: options.helpRequest ? 36000 : 48000, advisory: !!options.helpRequest, expandMandatory: !options.helpRequest });
+      if (continuationSource?.gapReport) context.gapReport = structuredClone(continuationSource.gapReport);
       context.manifest.submissionIDs = options.submissionIDs;
       context.manifest.refinementOnly = options.refinementOnly;
       if (context.manifest.gapExploration) {
@@ -289,24 +309,27 @@ export class DiscoveryService {
         onProgress: report,
         onTelemetry: (telemetry) => this.store.attachTelemetry(job.id, telemetry),
         context,
-        research: options.helpRequest || options.refinementOnly ? false : options.research ?? false,
+        research: continuationSource?.retrievalWork?.research ?? (options.helpRequest || options.refinementOnly ? false : options.research ?? false),
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
       controller.signal.throwIfAborted();
       if (context.gapReport && !context.manifest.gapRetrieval) this.store.attachGapReport(job.id, { ...context.gapReport, modelCalls: 1 });
       let output: unknown;
       if (context.manifest.gapRetrieval) {
-        const prior = this.store.retrievalHistory(projectID, project.revision, context.manifest.gapExploration, adapterOptions.research, project.model, context.manifest.focusEpicID).find((saved) => saved.id !== job.id
+        const prior = continuationSource ?? this.store.retrievalHistory(projectID, project.revision, context.manifest.gapExploration, adapterOptions.research, project.model, context.manifest.focusEpicID).find((saved) => saved.id !== job.id
           && !saved.kind && !saved.helpRequest && !saved.context?.refinementOnly);
         const work: RetrievalWork = prior ? { ...structuredClone(prior.retrievalWork!), originJobID: prior.id }
           : { format: 1, research: adapterOptions.research, stages: [], attempts: 0 };
         // This job's explicit choice is distinct from the original policies of reused stages.
         // Missing on older jobs remains missing; never backfill invented selection provenance.
-        delete work.requestedPolicy;
-        if (options.savedEvidencePolicy !== undefined) work.requestedPolicy = options.savedEvidencePolicy;
+        if (!continuationSource && !work.continuation) delete work.requestedPolicy;
+        if (options.savedEvidencePolicy !== undefined && !work.continuation) work.requestedPolicy = options.savedEvidencePolicy;
+        if (continuationSource) work.continuation = { format: 1, sourceJobID: continuationSource.id, fromStage: work.stages.length };
+        const maxRequests = work.continuation ? 6 : 3, maxStages = work.continuation ? 5 : 2;
+        const extendedAt = (stage: number) => !!work.continuation && stage >= work.continuation.fromStage;
         const searchContext = (base: ContextPack, result: SavedEvidenceSearch, stage: number) => {
           const next = structuredClone(base);
-          enableGapRetrieval(next, stage + 2);
+          enableGapRetrieval(next, stage + 2, extendedAt(stage + 1));
           return withSavedEvidenceSearch(next, result);
         };
         if (prior && (work.stages.some((s) => !s.evidenceBasis) || work.final && !work.final.evidenceBasis)) {
@@ -321,7 +344,7 @@ export class DiscoveryService {
             if ("retrieveEvidence" in saved.request) {
               validateRetrieval(original, saved.request, witnessed);
               requested.push(...saved.request.retrieveEvidence.recordIDs);
-              if (index + 1 < work.stages.length || work.final) original = nextGapContext(originalProject, original, requested);
+              if (index + 1 < work.stages.length || work.final) original = nextGapContext(originalProject, original, requested, extendedAt(index + 1));
             } else {
               witnessed.push(...saved.searchResult!.records.map((r) => r.id));
               original = searchContext(original, saved.searchResult!, index);
@@ -345,6 +368,13 @@ export class DiscoveryService {
         let stage = 0;
         while (true) {
           controller.signal.throwIfAborted();
+          // Preserve original stage inputs/hashes. Extended instructions first
+          // appear at the unfinished stage covered by the explicit grant.
+          if (extendedAt(stage)) {
+            enableGapRetrieval(context, stage + 1, true);
+            if (context.manifest.characters > context.manifest.budget) context.manifest.budget = 96000;
+            if (context.manifest.characters > 96000) throw new ContextBudgetError(context.manifest);
+          }
           const saved = work.stages[stage];
           if (saved) {
             if (saved.evidenceBasis?.key !== retrievalEvidenceBasis(context).key) throw new Error("Saved retrieval evidence changed. Original stages retained; no completed call replayed. Review the changed evidence or task scope.");
@@ -354,7 +384,7 @@ export class DiscoveryService {
             if ("retrieveEvidence" in saved.request) {
               validateRetrieval(context, saved.request, saved.request.retrieveEvidence.recordIDs);
               requested.push(...saved.request.retrieveEvidence.recordIDs);
-              context = nextGapContext(project, context, requested);
+              context = nextGapContext(project, context, requested, extendedAt(stage + 1));
             } else {
               witnessed.push(...saved.searchResult!.records.map((r) => r.id));
               context = searchContext(context, saved.searchResult!, stage);
@@ -373,10 +403,13 @@ export class DiscoveryService {
             report(`Reusing saved final model response from revision ${work.final.revision ?? prior!.expectedRevision}; validating publication at revision ${project.revision} without another request.`);
             break;
           }
-          if (work.attempts >= 3) throw new Error("Evidence retrieval reached its three-request bound. Completed stages are saved; narrow the task or review missing evidence. Exploration is not complete.");
+          if (work.attempts >= maxRequests) throw new Error(work.continuation
+            ? "Evidence retrieval reached its six-request continuation bound. Completed stages are saved; no further allowance can be granted for this task. Review missing evidence or narrow its scope. Exploration is not complete."
+            : "Evidence retrieval reached its three-request bound. Completed stages are saved. Use Continue exploration to explicitly allow up to three additional requests once for this task. Exploration is not complete.");
+          addQuotedRecordNavigation(project, context);
           this.store.checkpointRetrieval(job.id, { ...work, attempts: ++work.attempts }, context.manifest);
           if (context.gapReport) this.store.attachGapReport(job.id, { ...context.gapReport, modelCalls: work.attempts });
-          report(`Evidence stage ${stage + 1}: ${work.stages.length} navigation stages saved; request ${work.attempts} of 3, ${context.manifest.characters} / ${context.manifest.budget} characters. Unseen evidence cannot support proposals.`);
+          report(`Evidence stage ${stage + 1}: ${work.stages.length} navigation stages saved; request ${work.attempts} of ${maxRequests}, ${context.manifest.characters} / ${context.manifest.budget} characters. Unseen evidence cannot support proposals.`);
           output = await this.adapter.analyze(project, { ...adapterOptions, context });
           controller.signal.throwIfAborted();
           if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
@@ -388,9 +421,11 @@ export class DiscoveryService {
             break;
           }
           const request = "searchEvidence" in output ? searchEvidenceSchema.parse(output) : validateRetrieval(context, output, witnessed);
-          if (work.stages.length >= 2) throw new Error("Evidence stage limit reached. No proposals applied; completed stages retained. Search, continuation and exact loading share the same budget; unseen page results cannot support analysis without exact loading.");
-          const selectedSearch = options.savedEvidencePolicy === "prefix-aux-v1" ? searchPrefixAuxEvidence
-            : options.savedEvidencePolicy === "prefix" ? searchSavedEvidence : this.navigation.searchEvidence ?? searchSavedEvidence;
+          if (work.stages.length >= maxStages) throw new Error("Evidence stage limit reached. No proposals applied; completed stages retained. Search, continuation and exact loading share the same budget; unseen page results cannot support analysis without exact loading."
+            + (work.continuation ? " The one-time continuation allowance is exhausted." : " Use Continue exploration to explicitly allow up to three additional requests once for this task."));
+          const policy = work.continuation ? work.requestedPolicy : options.savedEvidencePolicy;
+          const selectedSearch = policy === "prefix-aux-v1" ? searchPrefixAuxEvidence
+            : policy === "prefix" ? searchSavedEvidence : this.navigation.searchEvidence ?? searchSavedEvidence;
           const searchResult = "searchEvidence" in request ? savedEvidenceSearchSchema.parse(selectedSearch(project, context, request,
             work.stages, (revision) => this.store.get(projectID, revision))) : undefined;
           work.stages.push({ revision: project.revision, contextKey: retrievalContextKey(context),
@@ -398,7 +433,7 @@ export class DiscoveryService {
           this.store.checkpointRetrieval(job.id, work, context.manifest);
           if ("retrieveEvidence" in request) {
             requested.push(...request.retrieveEvidence.recordIDs);
-            context = nextGapContext(project, context, requested);
+            context = nextGapContext(project, context, requested, extendedAt(stage + 1));
           } else {
             witnessed.push(...searchResult!.records.map((r) => r.id));
             context = searchContext(context, searchResult!, stage);
