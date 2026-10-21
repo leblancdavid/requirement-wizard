@@ -85,6 +85,11 @@ export type ExecutionState = {
   assessmentRuns?: AssessmentRun[];
   assessmentRequests?: Record<string, { token: string; reason: string; at: string }>;
 };
+/** Read-only inputs to freshness/progress/order calculations. Worker progress,
+ * sessions, command output and historical diagnostics do not affect these results. */
+export type ExecutionEvaluation = Pick<ExecutionState, "config" | "assessments" | "workspaceAssessments" | "mainAssessments" | "delivered" | "assessmentRequests" | "run" | "history"> & {
+  assessmentRuns?: Pick<AssessmentRun, "operation" | "capture" | "head" | "impacts">[];
+};
 export const emptyExecution = (): ExecutionState => ({ schemaVersion: executionSchemaVersion, version: 0, assessments: {}, delivered: {}, history: [] });
 export function assessmentWorkflowCompatible(assessment: Assessment) {
   if (assessment.compatibility !== undefined) return assessment.compatibility === assessmentCompatibility;
@@ -99,8 +104,8 @@ export function invalidateDelivery(state: ExecutionState, requirementID: string)
 export function eligibleRequirements(project: Project) {
   return project.requirements.filter((r) => r.status === "accepted" && project.epics.some((e) => e.id === r.epicID && !e.archived));
 }
-/** Scoped to one immutable snapshot/evaluation, never retained across writes. */
-export function createExecutionIndex(project: Project, state: ExecutionState) {
+/** Reusable only while the immutable project and dependency configuration match. */
+export function createExecutionIndex(project: Project, state: ExecutionEvaluation) {
   const requirements = new Map(eligibleRequirements(project).map((r) => [r.id, r]));
   const contexts = new Map<string, string | undefined>();
   return { requirements, context(id: string) {
@@ -112,7 +117,7 @@ export function createExecutionIndex(project: Project, state: ExecutionState) {
   } };
 }
 export type ExecutionIndex = ReturnType<typeof createExecutionIndex>;
-export function deliveredRequirement(project: Project, state: ExecutionState, id: string, index?: ExecutionIndex) {
+export function deliveredRequirement(project: Project, state: ExecutionEvaluation, id: string, index?: ExecutionIndex) {
   const r = index ? index.requirements.get(id) : eligibleRequirements(project).find((r) => r.id === id), d = state.delivered[id];
   const main = state.mainAssessments?.[id] ?? (state.assessments[id]?.scope === "main" ? state.assessments[id] : undefined);
   if (state.assessmentRequests?.[id] && main?.requestToken !== state.assessmentRequests[id]!.token) return false;
@@ -125,10 +130,10 @@ function contextMatches(project: Project, id: string, fingerprint: string, depen
   try { return fingerprint === assessmentContextFingerprint(project, id, dependencies); }
   catch { return false; } // Removed/unapproved targets or unresolved dependencies cannot be current.
 }
-export function assessmentCurrent(project: Project, state: ExecutionState, id: string, assessment: Assessment | undefined = state.assessments[id], index?: ExecutionIndex) {
+export function assessmentCurrent(project: Project, state: ExecutionEvaluation, id: string, assessment: Assessment | undefined = state.assessments[id], index?: ExecutionIndex) {
   return assessmentFreshness(project, state, id, assessment, index).status === "current";
 }
-export function assessmentFreshness(project: Project, state: ExecutionState, id: string, assessment: Assessment | undefined = state.assessments[id], index?: ExecutionIndex): {
+export function assessmentFreshness(project: Project, state: ExecutionEvaluation, id: string, assessment: Assessment | undefined = state.assessments[id], index?: ExecutionIndex): {
   status: "not-assessed" | "current" | "needs-reassessment";
   reason?: "requirement" | "decisions" | "policy" | "model" | "code" | "manual";
   message: string;
@@ -157,7 +162,7 @@ export function assessmentFreshness(project: Project, state: ExecutionState, id:
   } else if (evidence && (assessment.captureFingerprint !== evidence.capture!.fingerprint || !impact && assessment.head !== evidence.head)) return stale("code", "Code snapshot changed since this assessment; no compatible scoped footprint is available.");
   return { status: "current", message: "Current against saved decisions and the latest checked code snapshot; filesystem changes are detected by Check implementation." };
 }
-export function prerequisiteOnBranch(project: Project, state: ExecutionState, id: string): string | undefined {
+export function prerequisiteOnBranch(project: Project, state: ExecutionEvaluation, id: string): string | undefined {
   if (state.config?.strategy !== "branch") return;
   const r = eligibleRequirements(project).find((r) => r.id === id); if (!r) return;
   for (const run of [state.run, ...state.history].filter((r): r is ExecutionRun => !!r)) {
@@ -168,7 +173,7 @@ export function prerequisiteOnBranch(project: Project, state: ExecutionState, id
     }
   }
 }
-export function implementationPlan(project: Project, state: ExecutionState, index = createExecutionIndex(project, state)) {
+export function implementationPlan(project: Project, state: ExecutionEvaluation, index = createExecutionIndex(project, state)) {
   const requirements = eligibleRequirements(project);
   const edges = new Map<string, string[]>();
   for (const r of requirements) {

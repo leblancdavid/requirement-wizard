@@ -32,6 +32,43 @@ function complete(store: ProjectStore, project: Project, result = proposal(proje
 
 const selection = { providerID: "openai", modelID: "example" } as const;
 
+test("workspace job reads bound ordinary history before decoding and preserve advisory help ordering", () => {
+  const directory = mkdtempSync(join(testDirectory, "workspace-jobs-")), path = join(directory, "project.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = complete(store, store.create("Polling", "Keep history", selection));
+    const seed = store.jobs(p.id)[0]!;
+    store.close();
+    const db = new Database(path);
+    try {
+      const insert = db.prepare("INSERT INTO jobs VALUES (?, ?, ?)");
+      db.transaction(() => {
+        for (let i = 0; i < 45; i++) {
+          const id = `ordinary-${i}`;
+          insert.run(id, p.id, JSON.stringify({ ...seed, id, status: "completed" }));
+          if (i % 3 === 0) {
+            const id = `help-${i}`;
+            insert.run(id, p.id, JSON.stringify({ ...seed, id, status: "running", leaseUntil: Date.now() + 60000,
+              helpRequest: { questionID: p.questions[0]!.id, action: "why" } }));
+          }
+        }
+      })();
+    } finally { db.close(); }
+    store = new ProjectStore(path);
+    const all = store.jobs(p.id), original = store.get(p.id);
+    assert.deepEqual(store.workspaceJobs(p.id), { jobs: all.filter((j) => !j.helpRequest).slice(-20), helpJobs: all.filter((j) => j.helpRequest) });
+    assert.equal(store.discoveryActive(p.id), false, "Live advisory help does not block implementation");
+    const active = store.beginJob(p.id, p.revision).job;
+    assert.equal(store.discoveryActive(p.id), true, "Pending startup leases block implementation");
+    store.failJob(active.id, "cancelled", "Stop fixture");
+    assert.equal(store.discoveryActive(p.id), false);
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.get(p.id), original);
+    assert.deepEqual(store.jobs(p.id).slice(0, -1), all, "Reopening and polling never rewrite saved job evidence");
+    assert.deepEqual(store.workspaceJobs(p.id).jobs.map((j) => j.id), [...all.filter((j) => !j.helpRequest), store.getJob(active.id)].slice(-20).map((j) => j.id));
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("legacy pending jobs without a startup lease recover explicitly without changing saved decisions or completed work", () => {
   const directory = mkdtempSync(join(testDirectory, "legacy-pending-")), path = join(directory, "project.sqlite");
   let store = new ProjectStore(path);

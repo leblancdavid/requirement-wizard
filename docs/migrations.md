@@ -19,6 +19,33 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Assessment responsiveness
+
+SQLite **3 → 3**, execution schema **1 → 1**, assessment identity/fingerprint
+formats unchanged. This is a query/render optimization, not a data migration.
+Existing saved jobs, assessments, activity entries, workspace outputs, dates and
+delivery evidence are not rewritten on startup or invalidated. No model calls
+are replayed. Full history remains accessible through existing history APIs;
+workspace polling selects its existing last-20 ordinary-job window in SQL before
+decoding payloads, with advisory help history retained.
+
+Execution saves retain immediate transactional CAS, worker/discovery exclusions
+and atomic activity publication. Already-indexed activity IDs are checked inside
+the same write transaction before historical revision resolution, matching the
+existing insert-if-absent behavior. A failed write is retriable without advancing
+the caller's version; first/new outcomes still resolve original revision evidence.
+The browser's calculation projection is memory-only and never persisted. It retains
+capture/impact inputs and does not certify freshness from revision/version alone.
+Existing version/future-format rejection remains in place on full record reads.
+
+Regression coverage includes SQL-only checkpoint guards/stale rejection, skipped
+historical resolution, last-20/help ordering and old-job preservation across reopen,
+same-version worker projections and calculation parity/invalidation. Existing
+transactional migration/backfill and repeated-reopen tests remain applicable.
+Type checking, all 540 deterministic tests, the UI build and full browser checks
+passed on Node 22.23.3; no user database, saved evidence or live model connection
+was used for verification.
+
 ## Epic workflow review
 
 Area-boundary correction (2026-10-21): SQLite **3 → 3**, review/checkpoint format

@@ -1,5 +1,5 @@
 import { coverage } from "./coverage.js";
-import { assessmentFreshness, createExecutionIndex, deliveredRequirement, eligibleRequirements, type ExecutionIndex, type ExecutionState } from "./execution.js";
+import { assessmentFreshness, createExecutionIndex, deliveredRequirement, eligibleRequirements, type ExecutionIndex, type ExecutionEvaluation } from "./execution.js";
 import type { Project } from "./model.js";
 import { pendingRefinementRequirementIDs } from "./resolution.js";
 
@@ -19,7 +19,7 @@ export type ProgressStage = ProgressScore & {
 };
 
 /** Local evidence only: the strongest aggregate/main result cannot certify the working folder. */
-export function localAssessmentCounts(project: Project, execution: ExecutionState, requirementIDs?: readonly string[], index?: ExecutionIndex): LocalAssessmentCounts {
+export function localAssessmentCounts(project: Project, execution: ExecutionEvaluation, requirementIDs?: readonly string[], index?: ExecutionIndex): LocalAssessmentCounts {
   const selected = requirementIDs ? new Set(requirementIDs) : undefined;
   const requirements = eligibleRequirements(project).filter((r) => !selected || selected.has(r.id));
   const counts: LocalAssessmentCounts = { total: requirements.length, assessed: 0, complete: 0, partial: 0, missing: 0, unknown: 0, notAssessed: 0, stale: 0, completePercent: 0 };
@@ -38,8 +38,7 @@ export function localAssessmentDetail(counts: LocalAssessmentCounts) {
   return `${counts.assessed} / ${counts.total} assessed locally · ${counts.complete} complete locally · ${counts.partial} partial · ${counts.missing} missing · ${counts.unknown} unknown · ${counts.notAssessed} not assessed${counts.stale ? ` · ${counts.stale} need reassessment` : ""}`;
 }
 
-export function projectProgress(project: Project, execution: ExecutionState, definition = coverage(project)) {
-  const index = createExecutionIndex(project, execution);
+export function projectProgress(project: Project, execution: ExecutionEvaluation, definition = coverage(project), index = createExecutionIndex(project, execution)) {
   const ratio = (done: number, total: number) => total ? Math.min(done === total ? 100 : 99, Math.round(100 * done / total)) : 0;
   const active = project.epics.filter((epic) => !epic.archived);
   const requirements = project.requirements.filter((r) => active.some((e) => e.id === r.epicID));

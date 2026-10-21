@@ -6,6 +6,7 @@ import { resolve, join } from "node:path";
 import { ProjectStore } from "./store.js";
 import { emptyExecution } from "../core/execution.js";
 import { randomUUID } from "node:crypto";
+import { executionActivities } from "../core/project-activity.js";
 
 test("activity filters the full history, hides routine revisions and anchors pages during new work", () => {
   const store = new ProjectStore(":memory:");
@@ -79,6 +80,43 @@ test("saved outcomes use their linked revision's feature names and never rewrite
     store.saveExecution(p.id, state);
     assert.deepEqual(store.activity(p.id, { type: "implementation" }).entries, [entry]);
     assert.equal(store.get(p.id, revision).epics.find((e) => e.id === "files")!.title, "Original files");
+  } finally { store.close(); }
+});
+
+test("recorded execution outcomes skip historical snapshot resolution before constructing entries", () => {
+  const state = emptyExecution();
+  state.assessmentRuns = Array.from({ length: 20 }, (_, i) => ({ id: `run-${i}`, operation: "assess", revision: 1,
+    bindingID: "fixture", status: "completed", stage: "Done", requirementIDs: [], completedIDs: [], reused: 0,
+    startedAt: "2026-10-21T00:00:00Z", checks: [], progress: [] }));
+  const known = new Set(state.assessmentRuns.map((r) => `assessment:${r.id}:${r.status}`));
+  let reads = 0;
+  const resolve = () => { reads++; return undefined; };
+  assert.deepEqual(executionActivities(state, undefined, resolve, (id) => known.has(id)), []);
+  assert.equal(reads, 0, "Progress saves must not reload already-indexed historical revisions");
+  state.assessmentRuns[0]!.status = "failed";
+  const changed = executionActivities(state, undefined, resolve, (id) => known.has(id));
+  assert.equal(reads, 1); assert.equal(changed.length, 1); assert.equal(changed[0]!.id, "assessment:run-0:failed");
+});
+
+test("progress saves use SQL guards without decoding project, execution or discovery history", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = store.create("Lightweight checkpoint", "Keep input", { providerID: "openai", modelID: "fixture" });
+    const state = emptyExecution();
+    store.saveExecution(p.id, state);
+    const stale = structuredClone(state);
+    const get = store.get.bind(store), execution = store.execution.bind(store), jobs = store.jobs.bind(store);
+    try {
+      store.get = () => { throw new Error("Checkpoint decoded the entire project"); };
+      store.execution = () => { throw new Error("Checkpoint decoded prior execution history"); };
+      store.jobs = () => { throw new Error("Checkpoint decoded discovery history"); };
+      state.assessmentStatus = "Assessing next requirement";
+      store.saveExecution(p.id, state);
+      assert.equal(state.version, stale.version + 1);
+      assert.throws(() => store.saveExecution(p.id, stale), /Implementation state changed/);
+      assert.equal(stale.version, 1, "Rejected writes do not advance the caller's version");
+    } finally { store.get = get; store.execution = execution; store.jobs = jobs; }
+    assert.equal(store.execution(p.id).assessmentStatus, state.assessmentStatus);
   } finally { store.close(); }
 });
 

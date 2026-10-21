@@ -87,14 +87,17 @@ export function jobActivity(job: Job, project?: Project): ProjectActivity | unde
     features: focus ? [{ id: focus, title: project?.epics.find((e) => e.id === focus)?.title ?? focus }] : [] };
 }
 
-export function executionActivities(state: ExecutionState, project: Project, resolve?: (revision: number) => Project | undefined): ProjectActivity[] {
+export function executionActivities(state: ExecutionState, project?: Project, resolve?: (revision: number) => Project | undefined,
+  recorded: (id: string) => boolean = () => false): ProjectActivity[] {
   const entries: ProjectActivity[] = [];
   for (const run of [...state.history, ...(state.run ? [state.run] : [])]) {
     if (run.status === "running") continue;
-    const snapshot = resolve ? resolve(run.revision) : project.revision === run.revision ? project : undefined;
+    const id = `execution:${run.id}:${run.status}:${run.units.map((u) => u.delivery).join(",")}`;
+    if (recorded(id)) continue;
+    const snapshot = resolve ? resolve(run.revision) : project?.revision === run.revision ? project : undefined;
     const problem = ["failed", "interrupted", "paused"].includes(run.status);
     const delivered = run.units.filter((u) => u.delivery === "delivered").length;
-    entries.push({ id: `execution:${run.id}:${run.status}:${run.units.map((u) => u.delivery).join(",")}`, revision: run.revision, type: problem ? "problems" : "implementation", title: `Implementation ${run.status}`,
+    entries.push({ id, revision: run.revision, type: problem ? "problems" : "implementation", title: `Implementation ${run.status}`,
       summary: `${run.requirementIDs.length} requirements · ${delivered} delivery units delivered to main${run.diagnostic ? ` · ${run.diagnostic}` : ""}`,
       reason: `Implementation run ${run.id}`, highlight: true, at: run.createdAt,
       features: [...new Set(run.units.map((u) => u.epicID))].map((id) => ({ id, title: snapshot?.epics.find((e) => e.id === id)?.title ?? id })),
@@ -102,9 +105,11 @@ export function executionActivities(state: ExecutionState, project: Project, res
   }
   for (const run of state.assessmentRuns ?? []) {
     if (run.status === "running") continue;
-    const snapshot = resolve ? resolve(run.revision) : project.revision === run.revision ? project : undefined;
+    const id = `assessment:${run.id}:${run.status}`;
+    if (recorded(id)) continue;
+    const snapshot = resolve ? resolve(run.revision) : project?.revision === run.revision ? project : undefined;
     const problem = ["failed", "interrupted", "blocked"].includes(run.status);
-    entries.push({ id: `assessment:${run.id}:${run.status}`, revision: run.revision, type: problem ? "problems" : "implementation", title: `${run.operation === "verify-main" ? "Main verification" : "Implementation assessment"} ${run.status}`,
+    entries.push({ id, revision: run.revision, type: problem ? "problems" : "implementation", title: `${run.operation === "verify-main" ? "Main verification" : "Implementation assessment"} ${run.status}`,
       summary: `${run.completedIDs.length} of ${run.requirementIDs.length} requirements checked · ${run.reused} reused${run.diagnostic ? ` · ${run.diagnostic}` : ""}`, reason: `Assessment run ${run.id}`, highlight: true, at: run.startedAt,
       features: [...new Set(run.requirementIDs.map((id) => snapshot?.requirements.find((r) => r.id === id)?.epicID).filter((id): id is string => !!id))].map((id) => ({ id, title: snapshot?.epics.find((e) => e.id === id)?.title ?? id })), changes: [] });
   }

@@ -23,7 +23,8 @@ import { EpicOverview } from "./epic-overview.js";
 import { LazyDetails } from "./lazy-details.js";
 import { projectProgress } from "../core/progress.js";
 import { ActivityProvider, ActivityFeedback, HeaderActivity, Spinner, useActivity } from "./activity.js";
-import { createExecutionIndex, deliveredRequirement, type ExecutionState, type WorkspaceRepository } from "../core/execution.js";
+import { createExecutionIndex, deliveredRequirement, type ExecutionEvaluation, type ExecutionState, type WorkspaceRepository } from "../core/execution.js";
+import { executionEvaluation } from "./execution-state.js";
 import { SnapshotRefresh } from "./snapshot.js";
 import type { SnapshotTokens } from "../web/snapshot.js";
 import { questionReviewFingerprint, reviewFingerprint } from "../core/model.js";
@@ -134,7 +135,13 @@ function App() {
   const project = data?.project;
   const pendingRefinementIDs = useMemo(() => project ? pendingRefinementRequirementIDs(project) : new Set<string>(), [project]);
   const summary = data?.coverage;
-  const mapProgress = useMemo(() => project && data ? projectProgress(project, data.execution, data.coverage) : null, [project, data?.execution, data?.coverage]);
+  const evaluationCache = useRef<ExecutionEvaluation | null>(null);
+  const evaluation = useMemo(() => {
+    evaluationCache.current = data ? executionEvaluation(data.execution, evaluationCache.current) : null;
+    return evaluationCache.current;
+  }, [data?.execution]);
+  const executionIndex = useMemo(() => project && evaluation ? createExecutionIndex(project, evaluation) : null, [project, evaluation?.config]);
+  const mapProgress = useMemo(() => project && evaluation && executionIndex ? projectProgress(project, evaluation, data!.coverage, executionIndex) : null, [project, evaluation, data?.coverage, executionIndex]);
   const busy = pending || !!data?.active || !!data?.implementationActive;
   useActivity(pending, actionLabel);
   useActivity(loading, "Loading workspace…");
@@ -303,10 +310,9 @@ function App() {
   const latestSubmission = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status));
   const requirements = project?.requirements.filter((item) => epicID === "all" || item.epicID === epicID) ?? [];
   const implementationRemaining = useMemo(() => {
-    if (!project || !data) return 0;
-    const index = createExecutionIndex(project, data.execution);
-    return [...index.requirements.values()].filter((r) => !deliveredRequirement(project, data.execution, r.id, index)).length;
-  }, [project, data?.execution]);
+    if (!project || !evaluation || !executionIndex) return 0;
+    return [...executionIndex.requirements.values()].filter((r) => !deliveredRequirement(project, evaluation, r.id, executionIndex)).length;
+  }, [project, evaluation, executionIndex]);
   const lastJob = data?.jobs.at(-1);
   const responseStatus = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status))?.status;
   const inspectRepository = useCallback(() => api<WorkspaceRepository>(`projects/${project?.id}/execution-repository`), [project?.id]);
@@ -441,7 +447,7 @@ function App() {
               continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} />}
             {needsInitialization && tab !== "implementation" && <p role="status">Initialization must complete before gap discovery. Retry the folder scan below.</p>}
             {tab !== "implementation" && tab !== "requirements" && data.workspace && !project.scans.length && <WorkspaceScan project={project} scanJob={lastScan} disabled={busy || connectionChanged} scan={(resumeJobID) => act(async () => { await api(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); setTab("requirements"); })} />}
-            {tab === "implementation" && <ImplementationTab key={project.id} project={project} state={data.execution} active={data.implementationActive} disabled={pending || data.active} discoveryActive={data.active} connected={!!data.workspace} workspaceID={data.workspace?.bindingID} epicID={epicID} inspectRepository={inspectRepository} action={implementationAction} />}
+            {tab === "implementation" && <ImplementationTab key={project.id} project={project} state={data.execution} evaluation={evaluation!} executionIndex={executionIndex!} active={data.implementationActive} disabled={pending || data.active} discoveryActive={data.active} connected={!!data.workspace} workspaceID={data.workspace?.bindingID} epicID={epicID} inspectRepository={inspectRepository} action={implementationAction} />}
             {(tab === "history" || tab === "research") && <div className="filter-row"><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Changes & outcomes</button><button className={tab === "research" ? "active" : ""} onClick={() => setTab("research")}>Research sources</button></div>}
             {tab === "discover" && <>
               <QuestionCleanup project={project} disabled={busy || connectionChanged} queuedIDs={protectedQuestionIDs} replaceDisabled={!project.scans.length} retire={(ids, regenerate) => act(() => dismissQuestions(ids, regenerate))} />

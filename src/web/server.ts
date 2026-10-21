@@ -174,8 +174,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         if (rawTokens !== undefined && typeof rawTokens !== "string") throw new Error("Invalid snapshot tokens.");
         const known = rawTokens === undefined ? undefined : parseSnapshotTokens(rawTokens);
         const current = revisionSnapshot(project);
-        const allJobs = options.store.jobs(id);
-        const jobs = allJobs.filter((j) => !j.helpRequest).slice(-20).map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, ...job }) => ({ ...job,
+        const recent = options.store.workspaceJobs(id);
+        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, ...job }) => ({ ...job,
           gapContinuationAvailable: canContinueGapExploration({ ...job, retrievalWork }),
           ...(retrievalWork ? { retrievalWork: { format: retrievalWork.format, research: retrievalWork.research, stages: retrievalWork.stages, attempts: retrievalWork.attempts, originJobID: retrievalWork.originJobID, reuse: retrievalWork.reuse, continuation: retrievalWork.continuation, ...(retrievalWork.requestedPolicy ? { requestedPolicy: retrievalWork.requestedPolicy } : {}) } } : {}),
           ...(scan ? { scan: { ...scan, sources: [] } } : {}),
@@ -183,7 +183,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
             resumable: ["failed", "cancelled", "interrupted"].includes(job.status) && job.expectedRevision === project.revision && scanWork.bindingID === options.store.workspace(id)?.bindingID } } : {}) }));
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? revisionSnapshot(options.store.get(id, lastRound.expectedRevision)).coverage.percent : null;
-        const helpJobs = allJobs.filter((j) => j.helpRequest).map(({ result: _, researchEvidence: __, ...job }) => job);
+        const helpJobs = recent.helpJobs.map(({ result: _, researchEvidence: __, ...job }) => job);
         const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
         if (known) {
           const encoded = snapshotEncoder.encode(snapshot, known, ["project", "coverage"]);

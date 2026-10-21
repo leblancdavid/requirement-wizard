@@ -137,7 +137,7 @@ export class ProjectStore {
   close() { this.syncWorkspaces(); this.db.close(); }
 
   execution(id: string): ExecutionState {
-    this.get(id);
+    if (!this.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(id)) throw new Error("Project or revision not found.");
     const row = this.db.prepare("SELECT payload FROM execution_state WHERE project_id = ?").get(id) as { payload: string } | undefined;
     return row ? JSON.parse(row.payload) as ExecutionState : emptyExecution();
   }
@@ -150,11 +150,17 @@ export class ProjectStore {
       if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
       const live = this.db.prepare("SELECT owner FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()) as { owner: string } | undefined;
       if (live && live.owner !== owner || owner && !live) throw new Error("Implementation worker lease changed or expired.");
-      if (this.execution(id).version !== state.version) throw new Error("Implementation state changed. Refresh before continuing.");
+      const saved = this.db.prepare("SELECT version FROM execution_state WHERE project_id = ?").get(id) as { version: number } | undefined;
+      if ((saved?.version ?? 0) !== state.version) throw new Error("Implementation state changed. Refresh before continuing.");
       const next = { ...state, version: state.version + 1 };
       this.db.prepare("INSERT INTO execution_state VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET version = excluded.version, payload = excluded.payload")
         .run(id, next.version, JSON.stringify(next));
-      for (const entry of executionActivities(next, this.get(id), (revision) => activitySnapshot(this.db, id, revision))) saveActivity(this.db, id, entry);
+      const recorded = this.db.prepare("SELECT 1 FROM project_activity WHERE project_id = ? AND event_id = ?");
+      const snapshots = new Map<number, Project | undefined>();
+      for (const entry of executionActivities(next, undefined, (revision) => {
+        if (!snapshots.has(revision)) snapshots.set(revision, activitySnapshot(this.db, id, revision));
+        return snapshots.get(revision);
+      }, (eventID) => !!recorded.get(id, eventID))) saveActivity(this.db, id, entry);
       this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(id);
       state.version = next.version;
     }).immediate();
@@ -178,7 +184,12 @@ export class ProjectStore {
   executionExpired(id: string) { return !!this.db.prepare("SELECT 1 FROM execution_leases WHERE project_id = ? AND lease_until <= ?").get(id, Date.now()); }
   acknowledgeExpiredExecution(id: string) { this.db.prepare("DELETE FROM execution_leases WHERE project_id = ? AND lease_until <= ?").run(id, Date.now()); }
 
-  discoveryActive(id: string) { return this.jobs(id).some((job) => !job.helpRequest && ["pending", "running"].includes(job.status) && (job.leaseUntil ?? 0) > Date.now()); }
+  discoveryActive(id: string) {
+    return !!this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ?
+      AND json_extract(payload, '$.helpRequest') IS NULL
+      AND json_extract(payload, '$.status') IN ('pending', 'running')
+      AND json_extract(payload, '$.leaseUntil') > ? LIMIT 1`).get(id, Date.now());
+  }
   assertNoExecution(id: string) { if (this.executionActive(id)) throw new OperationConflictError(executionBlockReason); }
 
   /** Upgrade a startup reservation to the canonical repository resource atomically. */
@@ -752,6 +763,16 @@ export class ProjectStore {
       ? this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid").all(projectID)
       : this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid DESC LIMIT ?").all(projectID, Math.max(1, Math.min(200, limit))).reverse();
     return (rows as Array<{ payload: string }>).map((row) => readStoredJob(row.payload));
+  }
+
+  /** Bound ordinary job payload decoding before loading model output/checkpoints.
+   * Advisory help retains its existing full-history API behavior. */
+  workspaceJobs(projectID: string): { jobs: Job[]; helpJobs: Job[] } {
+    const jobs = this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ?
+      AND json_extract(payload, '$.helpRequest') IS NULL ORDER BY rowid DESC LIMIT 20`).all(projectID) as { payload: string }[];
+    const helpJobs = this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ?
+      AND json_extract(payload, '$.helpRequest') IS NOT NULL ORDER BY rowid`).all(projectID) as { payload: string }[];
+    return { jobs: jobs.reverse().map((row) => readStoredJob(row.payload)), helpJobs: helpJobs.map((row) => readStoredJob(row.payload)) };
   }
 
   /** Read only backlog receipts, not the growing collection of model results/manifests. */

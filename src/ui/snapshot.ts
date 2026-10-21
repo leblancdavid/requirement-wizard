@@ -51,10 +51,15 @@ export class SnapshotRefresh<T extends VersionedSnapshot> {
   }
   complete(ticket: RefreshTicket<T>, sections: Partial<T>, tokens: SnapshotTokens | null, selectedID: string | null, aborted = false): T | null {
     if (aborted || selectedID !== ticket.projectID || ticket.sequence <= this.accepted) return null;
-    const snapshot = tokens ? mergeSnapshotSections(ticket.baseline, sections, tokens) : shareSnapshot(ticket.baseline?.snapshot ?? null, sections as T);
+    let snapshot = tokens ? mergeSnapshotSections(ticket.baseline, sections, tokens) : shareSnapshot(ticket.baseline?.snapshot ?? null, sections as T);
     if (snapshot.project.id !== ticket.projectID) throw new Error("Workspace refresh returned a different project.");
     const previous = this.cached?.snapshot;
     if (previous?.project.id === ticket.projectID && (previous.project.revision > snapshot.project.revision || previous.project.revision === snapshot.project.revision && previous.execution.version > snapshot.execution.version)) return null;
+    // Execution checkpoints replace the section, but equal settings/results/history
+    // remain immutable. Preserve those identities for targeted UI memoization.
+    if (previous?.project.id === ticket.projectID && previous.execution !== snapshot.execution) {
+      snapshot = { ...snapshot, execution: shareSnapshot(previous.execution, snapshot.execution) };
+    }
     this.accepted = ticket.sequence;
     this.cached = { snapshot, tokens: tokens ?? {} };
     return snapshot;

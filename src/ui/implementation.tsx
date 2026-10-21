@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Project } from "../core/model.js";
-import { assessmentCurrent, assessmentFreshness, createExecutionIndex, eligibleRequirements, implementationPlan, type Assessment, type AssessmentRun, type ExecutionConfig, type ExecutionState, type WorkspaceRepository } from "../core/execution.js";
+import { assessmentCurrent, assessmentFreshness, eligibleRequirements, implementationPlan, type Assessment, type AssessmentRun, type ExecutionConfig, type ExecutionEvaluation, type ExecutionIndex, type ExecutionState, type WorkspaceRepository } from "../core/execution.js";
 import "./implementation.css";
 import { ActivityFeedback, Spinner, useActivity } from "./activity.js";
 import { localAssessmentCounts, localAssessmentDetail } from "../core/progress.js";
@@ -11,8 +11,8 @@ import { planningCurrent, planningEdgeID, reviewedPlanningConfig } from "../core
 import { Pagination, PagedList, usePagination } from "./pagination.js";
 
 export const ImplementationTab = React.memo(ImplementationView);
-function ImplementationView({ project, state, active, disabled, discoveryActive = false, connected, workspaceID, epicID, action, inspectRepository }: {
-  project: Project; state: ExecutionState; active: boolean; disabled: boolean; discoveryActive?: boolean; connected: boolean; workspaceID?: string; epicID: string;
+function ImplementationView({ project, state, evaluation, executionIndex, active, disabled, discoveryActive = false, connected, workspaceID, epicID, action, inspectRepository }: {
+  project: Project; state: ExecutionState; evaluation: ExecutionEvaluation; executionIndex: ExecutionIndex; active: boolean; disabled: boolean; discoveryActive?: boolean; connected: boolean; workspaceID?: string; epicID: string;
   action: (name: string, body: Record<string, unknown>) => Promise<void>;
   inspectRepository: () => Promise<WorkspaceRepository>;
 }) {
@@ -30,11 +30,10 @@ function ImplementationView({ project, state, active, disabled, discoveryActive 
     finally { if (request === inspection.current) setDetecting(false); }
   }
   useEffect(() => { setRepository(null); void detectRepository(); return () => { inspection.current++; }; }, [project.id, workspaceID, connected]);
-  const executionIndex = useMemo(() => createExecutionIndex(project, state), [project, state]);
   const { plan, error } = useMemo(() => {
-    try { return { plan: implementationPlan(project, state, executionIndex), error: "" }; }
+    try { return { plan: implementationPlan(project, evaluation, executionIndex), error: "" }; }
     catch (e) { return { plan: [], error: (e as Error).message }; }
-  }, [project, state, executionIndex]);
+  }, [project, evaluation, executionIndex]);
   const repositoryChanged = repository?.status === "detected" && !!state.config && repository.repository!.toLowerCase() !== state.config.repository.toLowerCase();
   const approvedInScope = eligibleRequirements(project).filter((r) => epicID === "all" || r.epicID === epicID);
   const assessmentReason = !connected ? "Connect the repository’s local root folder in Settings before assessing it."
@@ -49,10 +48,10 @@ function ImplementationView({ project, state, active, disabled, discoveryActive 
     && (state.planning.status !== "approved" || !planningCurrent(project, state, workspaceID)) ? "Review and approve a current implementation plan before coding, or dismiss the proposal to retain manual planning." : "";
   const run = state.run, canAssess = !assessmentReason, ready = !deliveryReason && !error && !planningReason;
   const assessmentRun = state.assessmentRuns?.at(-1);
-  const assessedIDs = useMemo(() => new Set(eligibleRequirements(project).filter((r) => assessmentCurrent(project, state, r.id, state.assessments[r.id], executionIndex)).map((r) => r.id)), [project, state, executionIndex]);
+  const assessedIDs = useMemo(() => new Set(eligibleRequirements(project).filter((r) => assessmentCurrent(project, evaluation, r.id, evaluation.assessments[r.id], executionIndex)).map((r) => r.id)), [project, evaluation, executionIndex]);
   const currentAssessments = [...assessedIDs].map((id) => state.assessments[id]!);
   const localCounts = useMemo(() => new Map(project.epics.map((epic) => [epic.id,
-    localAssessmentCounts(project, state, eligibleRequirements(project).filter((r) => r.epicID === epic.id).map((r) => r.id), executionIndex)])), [project, state, executionIndex]);
+    localAssessmentCounts(project, evaluation, eligibleRequirements(project).filter((r) => r.epicID === epic.id).map((r) => r.id), executionIndex)])), [project, evaluation, executionIndex]);
   const resumable = !!run && run.status !== "completed";
   const codingLabel = run?.status === "awaiting-merge" ? "Verify delivery" : resumable ? "Resume implementation" : "Start implementation";
   const nextStep = deliveryReason || error || (active ? "Implementation work is running. Progress appears below." : planningReason

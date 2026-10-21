@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeSnapshotSections, shareSnapshot, SnapshotRefresh } from "./snapshot.js";
 import { SnapshotEncoder, parseSnapshotTokens } from "../web/snapshot.js";
+import { executionEvaluation } from "./execution-state.js";
+import { emptyExecution } from "../core/execution.js";
+import { projectSchema } from "../core/model.js";
+import { implementationPlan, createExecutionIndex } from "../core/execution.js";
+import { projectProgress } from "../core/progress.js";
+import { requirementFingerprint } from "../core/implementation.js";
+import { assessmentContextFingerprint } from "../core/execution-context.js";
 
 test("unchanged polls retain sections while independent checkpoint and worker changes arrive", () => {
   const previous = { project: { revision: 7 }, execution: { version: 3, status: "running" }, jobs: [{ progress: "Checking" }], active: true, workspace: null };
@@ -89,4 +96,74 @@ test("overlapping refreshes use their request baseline and reject stale, cancell
   assert.throws(() => finish(refresh.begin("a"), other), /different project/);
   const fallback = refresh.begin("b");
   assert.deepEqual(refresh.complete(fallback, other, null, "b"), other, "Older servers can still return complete snapshots");
+});
+
+test("checkpoint polling preserves nested execution identities and calculation inputs across progress updates", () => {
+  const refresh = new SnapshotRefresh<{ project: { id: string; revision: number }; execution: ReturnType<typeof emptyExecution> }>();
+  const state = emptyExecution();
+  state.assessmentRuns = [{ id: "run", operation: "assess", revision: 1, bindingID: "fixture", status: "running", stage: "Starting",
+    requirementIDs: [], completedIDs: [], reused: 0, startedAt: "now", checks: [], progress: [] }];
+  const first = refresh.complete(refresh.begin("p"), { project: { id: "p", revision: 1 }, execution: state }, null, "p")!;
+  const evaluation = executionEvaluation(first.execution);
+  const checkpoint = structuredClone(first); checkpoint.execution.version++;
+  checkpoint.execution.assessmentRuns![0]!.stage = "Checking source";
+  checkpoint.execution.assessmentRuns![0]!.progress.push("Checking source");
+  const next = refresh.complete(refresh.begin("p"), checkpoint, null, "p")!;
+  assert.notEqual(next.execution, first.execution);
+  assert.equal(next.execution.assessments, first.execution.assessments);
+  assert.equal(next.execution.history, first.execution.history);
+  assert.equal(executionEvaluation(next.execution, evaluation), evaluation, "Progress-only updates must not rebuild plans or scores");
+  // Captures/impacts, results, manual marks and settings must still invalidate calculations.
+  let current = evaluation;
+  for (const change of [
+    () => { checkpoint.execution.assessmentRuns![0]!.head = "new-head"; },
+    () => { checkpoint.execution.assessmentRuns![0]!.impacts = { r: { reusable: false, reason: "Changed code" } }; },
+    () => { checkpoint.execution.assessmentRequests = { r: { token: "new", reason: "User request", at: "now" } }; },
+  ]) {
+    change();
+    const next = executionEvaluation(checkpoint.execution, current);
+    assert.notEqual(next, current);
+    current = next;
+  }
+  const interrupted = structuredClone(next); interrupted.execution.assessmentRuns![0]!.status = "interrupted";
+  const stopped = refresh.complete(refresh.begin("p"), interrupted, null, "p")!;
+  assert.equal(stopped.execution.assessmentRuns![0]!.status, "interrupted", "Same-version worker projections still update visible state");
+});
+
+test("calculation projection matches full-state freshness and updates for checkpoints and changed decisions", () => {
+  const project = projectSchema.parse({ id: "p", name: "Projection", revision: 1, model: { providerID: "openai", modelID: "fixture" },
+    sources: [{ id: "source", kind: "initial", epicID: "project", text: "Keep work" }], questions: [], summary: "", goals: [], actors: [], assumptions: [],
+    requirements: [{ id: "r", epicID: "project", status: "accepted", statement: "Save work", rationale: "Keep work", acceptance: ["Survives restart"], sourceIDs: ["source"] }] });
+  const state = emptyExecution();
+  state.config = { repository: "owner/repo", strategy: "main", branch: "implementation", providerID: "openai", modelID: "fixture", checks: ["npm test"], dependencies: {} };
+  const fingerprint = requirementFingerprint(project.requirements[0]!);
+  const contextFingerprint = assessmentContextFingerprint(project, "r");
+  state.assessments.r = { status: "complete", scope: "workspace", fingerprint, contextFingerprint, explanation: "Synthetic code evidence",
+    head: "head", capturedAt: "now", files: [], evidenceIDs: [], scenarios: [], omissions: 0, verified: false };
+  state.workspaceAssessments = { r: state.assessments.r };
+  state.delivered.r = { fingerprint, contextFingerprint, main: "head", at: "now", repository: "owner/repo", checks: [] };
+  let previous = executionEvaluation(state);
+  const index = createExecutionIndex(project, previous);
+  assert.equal(projectProgress(project, previous).stages[2]!.localAssessment!.complete, 1);
+  assert.deepEqual(projectProgress(project, previous, undefined, index), projectProgress(project, previous));
+  const progressOnly = executionEvaluation({ ...state, version: 20, assessmentStatus: "Still checking" }, previous);
+  assert.equal(progressOnly, previous);
+  assert.deepEqual(projectProgress(project, progressOnly, undefined, index), projectProgress(project, state));
+  for (const change of [
+    () => {},
+    () => { state.assessments = { r: { ...state.assessments.r!, status: "partial" } }; state.workspaceAssessments = { ...state.assessments }; },
+    () => { state.assessmentRequests = { r: { token: "mark", at: "now", reason: "Known change" } }; },
+    () => { state.config = { ...state.config!, dependencies: { r: [] }, repository: "other/repo" }; },
+  ]) {
+    change();
+    const projected = executionEvaluation(structuredClone(state), previous);
+    assert.deepEqual(projectProgress(project, projected), projectProgress(project, state));
+    assert.deepEqual(implementationPlan(project, projected), implementationPlan(project, state));
+    previous = projected;
+  }
+  const changedProject = structuredClone(project);
+  changedProject.requirements[0]!.acceptance = ["Updated acceptance behavior"];
+  const changedIndex = createExecutionIndex(changedProject, previous);
+  assert.deepEqual(projectProgress(changedProject, previous, undefined, changedIndex), projectProgress(changedProject, state));
+  assert.equal(projectProgress(changedProject, previous).stages[2]!.localAssessment!.stale, 1);
 });

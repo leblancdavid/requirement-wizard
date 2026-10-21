@@ -8,6 +8,42 @@ assessment and real GitHub delivery/installer integration remain unqualified.
 
 ## Browser workflow
 
+### Assessment responsiveness
+
+Implementation checkpoint saves now check versions and active discovery leases in
+SQL without decoding the prior execution state or all discovery jobs. Historical
+activity entries already indexed are skipped before resolving their specification
+revisions; newly recorded outcomes still publish atomically with the checkpoint.
+Result, session and cancellation checkpoints remain immediate (no delayed saves).
+Browser polling decodes only the latest 20 ordinary jobs while preserving advisory
+help history. Nested execution settings/results retain identity across polls, and
+progress-only assessment updates do not rebuild implementation plans or scores.
+New captures/impact metadata, results, decisions, settings and manual reassessment
+requests still update freshness and progress. Visible worker detail uses the full
+snapshot, including same-version interrupted-worker projections.
+
+`npm run benchmark:implementation` uses disposable synthetic SQLite data and local
+HTTP requests, without inference, Git operations or a connected workspace. On Node
+22.23.3, the same 150-requirement/41-source/115-job/20-assessment-run fixture before
+and after this optimization measured median progress saves **11.30 → 0.59 ms** and
+unchanged HTTP snapshots **3.80 → 2.51 ms** (30 measured requests/saves after five
+warm-ups). Corresponding p95 values were **12.88 → 0.68 ms** and **8.54 → 3.92 ms**.
+These are synthetic local measurements, not a guarantee of live check duration or
+render responsiveness on a particular project. No model, filesystem-capture,
+verification-command or end-to-end live assessment speedup is established.
+
+Saved formats, fingerprints, main verification and assessment reuse rules are
+unchanged; see [migration compatibility](migrations.md#assessment-responsiveness).
+
+Verification (2026-10-21): type checking, all **540 deterministic tests**, the
+production UI build, full `npm run test:browser` and diff checks passed. The browser
+fixture reported zero observed long tasks across its large-project interactions
+and a 69 ms initial Implement-tab switch for 500 requirements; this is not a live
+assessment or cross-machine benchmark. Tests ran in an isolated Node 22.23.3
+copy to avoid changing the repository's Node 20 native dependencies. An initial
+long-path copy hit Windows Git-worktree failures; the shorter-path run passed.
+The existing Vite chunk-size warning remains. No live model calls were made.
+
 The main action group is **Check progress → Prepare plan → Start implementation**.
 The coding action becomes **Resume implementation** for an unfinished run and
 **Verify delivery** while awaiting a merge. A next-step message explains setup,
