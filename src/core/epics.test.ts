@@ -5,6 +5,7 @@ import { analysisSchema, projectSchema, type Project } from "./model.js";
 import { coverage } from "./coverage.js";
 import { dimensions } from "./epics.js";
 import { buildContext, ContextBudgetError } from "./context.js";
+import { applyRound } from "./round.js";
 
 function fixture(store: ProjectStore) { return store.create("Jobs", "A single owner needs to track jobs on one computer.", { providerID: "openai", modelID: "fixture" }); }
 function round(store: ProjectStore, project: Project, extra: Record<string, unknown> = {}) {
@@ -56,6 +57,57 @@ test("reorganizing confirmed material needs review and stale organization cannot
     const nextReview = project.organizationReviews.at(-1)!;
     project = store.note(project.id, project.revision, "A new constraint");
     assert.throws(() => store.reviewOrganization(project.id, project.revision, nextReview.id, true), /outdated/);
+  } finally { store.close(); }
+});
+
+test("identical new epic declarations resolve once without losing alias references", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const initial = fixture(store);
+    const project = round(store, initial, {
+      organization: [epic("new:jobs"), epic("new:jobs")], questions: [question("new:jobs")],
+      requirements: [{ localID: "new:r", epicID: "new:jobs", statement: "Save jobs", rationale: "Track work", sourceIDs: [initial.sources[0]!.id], acceptance: ["Reload a saved job"] }],
+    });
+    const jobs = project.epics.filter((item) => item.title === "Jobs");
+    assert.equal(jobs.length, 1);
+    assert.equal(project.questions[0]!.epicID, jobs[0]!.id);
+    assert.equal(project.requirements[0]!.epicID, jobs[0]!.id);
+  } finally { store.close(); }
+});
+
+test("ambiguous or malformed aliases fail before ID allocation or project mutation", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = fixture(store);
+    const requirement = { localID: "new:q", statement: "Save jobs", rationale: "Track work", sourceIDs: [project.sources[0]!.id], acceptance: ["Reload a saved job"] };
+    const cases: Array<[Record<string, unknown>, RegExp]> = [
+      [{ questions: [question("inbox", "existing-id")] }, /questions\[0\]\.localID must use a nonempty new: alias/],
+      [{ questions: [question("inbox", "")] }, /questions\[0\]\.localID must use/],
+      [{ questions: [question("inbox", "new: ")] }, /questions\[0\]\.localID must use/],
+      [{ organization: [epic("jobs")] }, /organization\[0\]\.epicID must use/],
+      [{ organization: [epic("new:jobs"), epic("new:jobs", "Other")] }, /conflicting definitions/],
+      [{ organization: [epic("new:q")], questions: [question("new:q")] }, /questions\[0\]\.localID repeats.*organization\[0\]/],
+      [{ questions: [question("inbox")], requirements: [requirement] }, /requirements\[0\]\.localID repeats.*questions\[0\]/],
+      [{ requirements: [requirement], researchFindings: [{ localID: "new:q", url: "https://example.com/", title: "Jobs", finding: "Evidence", epicID: "project" }] }, /researchFindings\[0\]\.localID repeats.*requirements\[0\]/],
+    ];
+    for (const [extra, diagnostic] of cases) {
+      const result = analysisSchema.parse({ summary: "Jobs", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], ...extra });
+      const before = structuredClone(project);
+      assert.throws(() => applyRound(project, result, () => { assert.fail("Invalid aliases must fail before allocating IDs"); }), (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, diagnostic);
+        assert.match(error.message, /No proposals were applied; saved submissions are retained/);
+        return true;
+      });
+      assert.deepEqual(project, before);
+      assert.throws(() => round(store, project, extra), diagnostic);
+      assert.deepEqual(store.get(project.id), before);
+    }
+    // A later explicit retry can publish a corrected response against the same revision.
+    const retried = round(store, project, { questions: [question("inbox")], requirements: [{ ...requirement, localID: "new:r" }] });
+    assert.equal(retried.questions.length, 1);
+    assert.equal(retried.requirements.length, 1);
+    assert.deepEqual(retried.sources, project.sources);
   } finally { store.close(); }
 });
 

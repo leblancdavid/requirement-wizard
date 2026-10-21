@@ -21,6 +21,12 @@ export function reconciliationCandidates(project: Project, item: Submission, sub
   const visit = (id: string) => { for (const dependency of project.epics.find((e) => e.id === id)?.dependencies ?? []) if (!areas.has(dependency)) { areas.add(dependency); visit(dependency); } };
   for (const id of [...areas]) visit(id);
   const linked = new Set(question?.evidenceIDs ?? []);
+  if (requirement) {
+    const sources = new Set(requirement.sourceIDs);
+    const sourceQuestions = new Set(project.sources.filter((s) => sources.has(s.id) && s.questionID).map((s) => s.questionID));
+    for (const q of project.questions) if (sourceQuestions.has(q.id) || q.evidenceIDs?.some((id) => id === requirement.id || sources.has(id))
+      || q.sourceID && sources.has(q.sourceID)) linked.add(q.id);
+  }
   const text = input.type === "note" ? input.text : input.type === "review" ? `${input.requirementText}\n${input.note}` : `${input.questionText}\n${input.answer.text}`;
   const protectedIDs = new Set(submissions.filter((s) => s.id !== item.id && !s.conflict && ["queued", "saved", "processing", "needs-attention"].includes(s.status))
     .flatMap((s) => s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : []));

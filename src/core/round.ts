@@ -4,7 +4,36 @@ import { proposalSimilarityWarnings } from "./similarity.js";
 import { validConcepts, validateAnalysisReferences, type Project, type Analysis, type ResearchEvidence } from "./model.js";
 import { applyPendingChanges } from "./pending-changes.js";
 
+/** Only identical epic declarations can be collapsed without guessing reference intent. */
+function prepareAliases(project: Project, result: Analysis): Analysis {
+  const declarations = new Map<string, string>();
+  const fail = (message: string): never => { throw new Error(`${message} No proposals were applied; saved submissions are retained. Resume discovery explicitly to request a corrected response.`); };
+  const declare = (alias: string | undefined, path: string) => {
+    if (alias === undefined) return; // Optional record aliases are assigned durable IDs.
+    if (!alias.startsWith("new:") || !alias.slice(4).trim()) fail(`${path} must use a nonempty new: alias.`);
+    const previous = declarations.get(alias);
+    if (previous) fail(`${path} repeats the alias declared at ${previous}. New epics, questions, requirements and research findings must have distinct aliases across the entire response.`);
+    declarations.set(alias, path);
+  };
+  const epics = new Map<string, string>();
+  const organization = result.organization?.filter((op, index) => {
+    if (op.type !== "upsert" || project.epics.some((item) => item.id === op.epicID)) return true;
+    const definition = JSON.stringify(op);
+    const previous = epics.get(op.epicID);
+    if (previous === definition) return false;
+    if (previous !== undefined) fail(`organization[${index}].epicID repeats a new epic alias with conflicting definitions.`);
+    declare(op.epicID, `organization[${index}].epicID`);
+    epics.set(op.epicID, definition);
+    return true;
+  });
+  for (const key of ["questions", "requirements", "researchFindings"] as const) {
+    for (const [index, item] of (result[key] ?? []).entries()) declare(item.localID, `${key}[${index}].localID`);
+  }
+  return { ...result, organization };
+}
+
 export function applyRound(project: Project, result: Analysis, newID: () => string, research: ResearchEvidence[] = [], resolutionTriggerSourceIDs: string[] = []) {
+  result = prepareAliases(project, result);
   let omittedConcepts = 0;
   result = { ...result, questions: result.questions.map((question) => {
     if (!question.concepts) return question;
@@ -31,8 +60,7 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
   if (updated !== project) applyPendingChanges(project, result);
   const aliases = new Map<string, string>();
   const register = (alias: string | undefined) => {
-    if (!alias) return newID();
-    if (!alias.startsWith("new:") || aliases.has(alias)) throw new Error("New records and epics need unique new: aliases.");
+    if (alias === undefined) return newID();
     const id = newID(); aliases.set(alias, id); return id;
   };
   for (const op of result.organization ?? []) if (op.type === "upsert" && !project.epics.some((item) => item.id === op.epicID)) register(op.epicID);

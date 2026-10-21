@@ -443,7 +443,7 @@ function areaTitle(epic?: Project["epics"][number]) {
 
 function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, help, initialText, initialKind, draft, onDraft: persistDraft, number, disabled, dismissDisabled, onDismiss, status, onSave, notice }: { question: Project["questions"][number]; area: string; purpose?: string; expanded: boolean; onToggle: () => void; onCancel: () => void; help: HelpControls; initialText?: string; initialKind?: Draft["kind"]; draft?: Draft; onDraft: (draft: Draft) => void; number: number; disabled: boolean; dismissDisabled: boolean; onDismiss?: () => Promise<void>; status?: string; onSave: (kind: "answer" | "delegation" | "deferral", text: string) => Promise<void>; notice?: React.ReactNode }) {
   const [text, setText] = useState(draft?.text ?? initialText ?? ""); const [kind, setKind] = useState<Draft["kind"]>(draft?.kind ?? initialKind ?? (question.status === "delegated" ? "delegation" : question.status === "deferred" ? "deferral" : "answer"));
-  const fingerprint = questionReviewFingerprint(question);
+  const fingerprint = useMemo(() => questionReviewFingerprint(question), [question]);
   const [basis, setBasis] = useState(draft?.fingerprint ?? fingerprint);
   const changed = basis !== fingerprint;
   const onDraft = (next: Draft) => persistDraft({ ...next, fingerprint: basis });
@@ -453,13 +453,23 @@ function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, h
   const [helpReveal, setHelpReveal] = useState(0);
   const [explaining, setExplaining] = useState(false);
   const explanationInFlight = useRef(false);
-  async function explain(phrase: string, context: string) {
+  const explain = useCallback(async (phrase: string, context: string) => {
     if (explanationInFlight.current || help.busy) return;
     explanationInFlight.current = true; setExplaining(true); setHelpReveal((value) => value + 1);
     try { await help.request({ questionID: question.id, action: "follow-up", message: `${wordHelpContext(phrase, context)}Start with a short, plain-language summary in one or two sentences as the first paragraph (for an inline tooltip). Then explain what it changes for this project's choice. Keep any assumptions or caveats explicit.` }); }
     finally { explanationInFlight.current = false; setExplaining(false); }
-  }
-  const annotated = (text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => <AnnotatedText text={text} concepts={question.concepts?.filter((c) => c.field === field && c.optionIndex === optionIndex)} onExplain={explain} onCancel={help.cancel} busy={explaining || help.busy} jobs={help.jobs.filter((job) => job.helpRequest?.questionID === question.id)} revision={help.revision} />;
+  }, [help, question.id]);
+  // Answer keystrokes do not change the word/concept controls. Reuse their
+  // elements rather than rebuilding every word and scanning help history.
+  const annotations = useMemo(() => {
+    const jobs = help.jobs.filter((job) => job.helpRequest?.questionID === question.id);
+    const render = (text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => <AnnotatedText text={text} concepts={question.concepts?.filter((c) => c.field === field && c.optionIndex === optionIndex)} onExplain={explain} onCancel={help.cancel} busy={explaining || help.busy} jobs={jobs} revision={help.revision} />;
+    return {
+      text: render(question.text, "text"), whyItMatters: render(question.whyItMatters, "whyItMatters"),
+      options: question.options.map((option, index) => ({ label: render(option.label, "label", index), consequence: render(option.consequence, "consequence", index) })),
+    };
+  }, [question, help, explaining, explain]);
+  const annotated = (_text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => field === "text" || field === "whyItMatters" ? annotations[field] : annotations.options[optionIndex!]![field];
   const render = () => {
   return <article className={`question-card ${expanded ? "expanded" : "collapsed"}`}><div className="question-meta"><span>{area}{question.category ? ` · ${dimensionLabels[question.category]}` : ""}</span><span role="status">{status ?? (question.status === "pending" ? "To answer" : question.status === "answered" ? "Answered" : question.status)}</span></div><div className="question-title"><h3 aria-label={question.text}>{expanded ? annotated(question.text, "text") : <button aria-expanded={false} onClick={onToggle}>{question.text}</button>}</h3>{expanded && currentQuestion ? <span className="quiet">Current question</span> : <button className="quiet" aria-expanded={expanded} onClick={onToggle}>{expanded ? "Collapse" : initialText ? "Edit answer" : "Answer"}</button>}</div>{!expanded && initialText && <p className="answer-preview">{initialText}</p>}{expanded && <div className="question-body"><p>{annotated(question.whyItMatters, "whyItMatters")}</p>{purpose && <details className="question-context"><summary>About this feature</summary><p>{purpose}</p></details>}{status === "processing" && <p className="correction-hint">This response is being reviewed. A correction will be saved for the next round.</p>}{status === "queued" && <p className="correction-hint">Saving changes replaces this waiting response. Its earlier version stays in history.</p>}<div className="options">{question.options.map((option, index) => <div className={`option ${kind === "answer" && text === option.label ? "chosen" : ""}`} key={index}><span className="option-circle">{String.fromCharCode(65 + index)}</span><div className="option-copy"><strong>{annotated(option.label, "label", index)}</strong><small>{annotated(option.consequence, "consequence", index)}</small></div><button type="button" className="option-choose" aria-label={`Choose ${option.label}. ${option.consequence}`} aria-pressed={kind === "answer" && text === option.label} disabled={disabled} onClick={() => { setKind("answer"); setText(option.label); onDraft({ kind: "answer", text: option.label }); }}>{kind === "answer" && text === option.label ? "✓ Selected" : "Choose"}</button></div>)}</div>
     {notice}
@@ -487,7 +497,7 @@ function ReviewForm({ project, requirementID, submissions, disabled, onReview }:
   const availability = decisionAvailability(project, [requirementID], submissions);
   return <ActionScope reason={changed ? "Review the updated requirement and supporting context first." : "This review is being saved or already waiting for processing."}><div className="review-form">
     <label>Review rationale (optional)<input maxLength={12000} value={note} onChange={(event) => { setNote(event.target.value); setBasis((current) => current ?? { contextKey, revision: project.revision }); }} placeholder="Anything to add or change?" /></label>
-    {availability.state !== "ready" && <p role="status">{availability.reason} A saved review will need your attention instead of applying automatically.</p>}
+    {availability.state !== "ready" && <p role="status">{availability.questionIDs?.length ? <>Approval: {availability.reason} You can still reject this requirement and use your note to request different behavior; rejection does not answer or retire these questions.</> : <>{availability.reason} A saved review will need your attention instead of applying automatically.</>}</p>}
     {changed && <p role="status">Supporting information changed. Your note is retained. <button className="quiet" onClick={() => setBasis({ contextKey, revision: project.revision })}>I have reviewed the updated information</button></p>}
     <div className="button-row"><ActionButton className="secondary" disabled={disabled || changed} onClick={() => void onReview("accepted", note, basis?.revision ?? project.revision)}>Confirm requirement</ActionButton><ActionButton className="quiet" disabled={disabled || changed} onClick={() => void onReview("rejected", note, basis?.revision ?? project.revision)}>Reject</ActionButton></div>
   </div></ActionScope>;

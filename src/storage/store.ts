@@ -389,7 +389,7 @@ export class ProjectStore {
         const response = input.input;
         const reviewed = response.reviewedRevision === undefined ? project : this.get(id, response.reviewedRevision);
         item.decisionBasis = { format: 1, contextKey: decisionContextKey(reviewed, [response.requirementID]) };
-        const availability = decisionAvailability(project, [response.requirementID], this.submissions(id), [], { contextKey: item.decisionBasis.contextKey });
+        const availability = decisionAvailability(project, [response.requirementID], this.submissions(id), [], { contextKey: item.decisionBasis.contextKey, action: response.action });
         if (availability.state !== "ready") {
           item.status = "needs-attention"; item.conflict = true;
           item.diagnostic = `${availability.reason} Your review and note were retained, but the decision was not applied. Resubmit after reviewing the updated information.`;
@@ -424,7 +424,7 @@ export class ProjectStore {
             item.status = "needs-attention"; item.conflict = true; item.diagnostic = "Requirement changed. Review the current wording and resubmit; your original decision and note are retained.";
             this.saveSubmission(item); continue;
           }
-          const availability = decisionAvailability(project, [input.requirementID], this.submissions(id), [], { excludeSubmissionID: item.id, contextKey: item.decisionBasis?.contextKey });
+          const availability = decisionAvailability(project, [input.requirementID], this.submissions(id), [], { excludeSubmissionID: item.id, contextKey: item.decisionBasis?.contextKey, action: input.action });
           if (availability.state !== "ready") {
             item.status = "needs-attention"; item.conflict = true;
             item.diagnostic = `${availability.reason} Your review and note were retained, but the decision was not applied. Resubmit after reviewing the updated information.`;
@@ -601,7 +601,7 @@ export class ProjectStore {
     if (note.length > 12000) throw new Error("Review note must be at most 12000 characters.");
     if (action !== "accepted" && action !== "rejected") throw new Error("Choose accepted or rejected.");
     return this.mutate(id, revision, "Human requirement review", (project) => {
-      const availability = decisionAvailability(project, [requirementID], this.submissions(id), this.jobs(id), { excludeSubmissionID: submissionID });
+      const availability = decisionAvailability(project, [requirementID], this.submissions(id), this.jobs(id), { excludeSubmissionID: submissionID, action });
       if (availability.state !== "ready") throw new OperationConflictError(availability.reason);
       const requirement = project.requirements.find((item) => item.id === requirementID);
       if (!requirement) throw new Error("Requirement not found.");

@@ -38,14 +38,10 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const refinement = refinementProgress ? refinementActivity(refinementProgress) : undefined;
   const completed = refinementProgress ? refinementProgress.completed : lastJob?.kind === "scan" ? lastJob.scanProgress?.completed : undefined;
   const total = refinementProgress ? refinementProgress.total : lastJob?.kind === "scan" ? lastJob.scanProgress?.total : undefined;
-  const discoveryHeadline = refinement?.headline ?? (active ? processing.length ? `Processing ${processing.length} ${processing.length === 1 ? "response" : "responses"}` : task
-    : blocked.length ? "AI follow-up blocked by context size" : paused ? "Processing paused" : attention.length ? "Needs attention"
-    : failed ? `Last ${lastJob.kind === "scan" ? "scan" : "round"} ${lastJob.status}` : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting discovery"
-    : lastJob?.status === "cancelled" ? "Processing stopped" : lastJob?.status === "completed" ? lastJob.gapReport
-      ? lastJob.gapReport.state === "checked" ? "Gap task checked" : lastJob.gapReport.state === "waiting" ? "Gap exploration waiting"
-        : lastJob.gapReport.state === "blocked" ? "Gap exploration blocked" : "Saved gap checks reused" : "Up to date" : "Ready when you are");
-  const outcome = recent.find((item) => item.title !== "Question help");
-  const headline = taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? (!refinement && !active && !blocked.length && !paused && !attention.length && !failed && outcome ? `${outcome.title} · ${outcome.status}` : discoveryHeadline);
+   const discoveryHeadline = active ? refinement?.headline ?? (processing.length ? `Processing ${processing.length} ${processing.length === 1 ? "response" : "responses"}` : task)
+     : blocked.length ? "AI follow-up blocked by context size" : paused ? "Processing paused" : attention.length ? "Needs attention"
+     : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting discovery" : "Ready when you are";
+   const headline = taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? discoveryHeadline;
   const liveStage = running[0]?.stage ?? refinement?.label ?? stage.join(" ");
   const canResume = !active && (paused || waiting.length > 0 || saved.length > 0);
   const resumeLabel = paused ? "Resume discovery" : "Process waiting answers";

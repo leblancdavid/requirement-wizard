@@ -13,8 +13,12 @@ support is deferred.
 
 A playable browser workspace is available. AI organizes your idea into epics, asks
 clickable questions, researches relevant uncertainties, and estimates how well each
-area is defined. The top-right **Overall progress** card expands into Definition,
-Requirements review and Implementation scores, with epic-level breakdowns.
+area is defined. The top-right **Overall progress** card expands into definition
+coverage, requirements review and verified main-delivery scores, with epic breakdowns.
+The breakdown separates saved questions answered and local code findings from
+definition coverage and verified delivery to main. Missing/outdated definition
+assessments display **Not assessed** / **Needs assessment**, rather than a misleading
+zero. Local code findings do not earn main-delivery credit.
 Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 Gap discovery can request additional exact saved evidence in up to three bounded stages,

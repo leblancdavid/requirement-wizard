@@ -19,6 +19,59 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Design and Review typing isolation
+
+Only transient React draft storage/rendering changes. Source and target SQLite,
+JSON, workspace artifacts, saved submissions, fingerprint/context-key rules and
+schema versions are unchanged. No migration, startup rewrite, data reset or model
+replay is needed. Review submission still records the original draft's review
+basis and requires explicit confirmation when its requirement/context changes.
+
+## Requirement rejection with unresolved clarifications
+
+Ordinary rejection now bypasses only the unanswered/deferred/delegated clarification
+gate; approval and pending-input/evidence/worker checks are unchanged. SQLite **3 → 3**,
+project/submission JSON and workspace formats, decision-basis keys, assessment semantics
+and fingerprints are unchanged. No migration, reset, rewrite or model replay is needed.
+Existing blocked rejections retain their exact note, decision, provenance and diagnostic;
+read-only recovery offers a new explicit review, never automatic application. Questions
+are not answered or retired merely by rejecting. Original histories and completed work
+remain intact; no partially applied upgrade exists to recover.
+Review follow-up now prioritizes explicitly linked questions within the same four-candidate
+and context-budget limits. This changes new-call navigation only, not saved evidence,
+freshness keys or completed-check reuse. Upgrade coverage reopens an older blocked
+rejection twice with exact project/submission/job preservation, then explicitly resubmits
+without rewriting the original attempt or replaying a model call.
+Verification: all **460** deterministic tests passed on Node 22.23.3, including
+direct/queued rejection, approval guards, replacement follow-up and reopen recovery.
+UI build passed with the existing chunk-size warning. The browser suite stopped at
+`src/web/browser-check.ts`'s queue-status assertion: expected **Saved gap checks reused**,
+received **Ready when you are**; full browser verification remains incomplete. No live
+model calls or user-data repair were performed.
+
+## Discovery alias validation
+
+Discovery now preflights response-local aliases and collapses only identical new-epic
+declarations. Saved SQLite/JSON/workspace formats, versions, fingerprints, completed-check
+reuse and assessment semantics are unchanged. No forward transformation, reset, startup
+rewrite or automatic model replay is required. Existing IDs, human evidence, histories
+and saved submissions remain intact. A failed round requires explicit resume; ambiguous
+references are rejected rather than guessed or silently renamed. Existing scan-checkpoint
+normalization remains unchanged. Type check and all 453 deterministic tests passed on
+Node 22, including scan-checkpoint legacy reuse and corrected-response retry.
+
+## Project progress presentation
+
+Separate answer/local-code summaries and explicit missing/outdated definition labels
+are derived at read time from existing project/execution records. Source/target
+SQLite, JSON and workspace formats, versions, fingerprints, assessment freshness
+and the overall calculation are unchanged. No migration, reset, rewrite or model
+replay is needed; saved evidence and completed work remain intact across restart.
+Deterministic progress checks cover old/missing assessments, answer states, scope
+exclusions and read-only derivation. No new persisted format needs an upgrade fixture.
+Verification: Node 22 type check, all 451 deterministic tests, UI build and full
+Playwright browser checks passed, including local/main separation and mobile layout.
+
 ## Refinement run progress
 
 Refinement stage/count/status telemetry is an additive browser snapshot section and

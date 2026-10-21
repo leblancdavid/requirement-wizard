@@ -47,6 +47,20 @@ for (const status of ["pending", "deferred", "delegated"] as const) {
   });
 }
 
+test("legacy rejection blocked by an unanswered clarification offers explicit retry with its retained note", () => {
+  const { project, submission } = fixture();
+  project.questions[0]!.status = "pending";
+  if (submission.input.type === "review") submission.input.action = "rejected";
+  const before = structuredClone({ project, submission });
+  const html = renderToStaticMarkup(createElement(RetainedReviewNotice, { project, submissions: [submission], submission,
+    reviewCurrent: () => assert.fail("Retry must be explicit"), openQuestion: () => {} }));
+  assert.match(html, /earlier blocker is no longer active/);
+  assert.match(html, /saved decision has not been applied/);
+  assert.match(html, /Review current requirement with saved note/);
+  assert.ok(!html.includes("Open blocking clarification"));
+  assert.deepEqual({ project, submission }, before);
+});
+
 test("resolved question does not hide a different unfinished input or changed requirement", () => {
   const { project, submission } = fixture();
   project.requirements[0]!.statement = "Updated behavior";

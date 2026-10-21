@@ -3,7 +3,7 @@ import test from "node:test";
 import { projectSchema, reviewFingerprint, type Project } from "./model.js";
 import { emptyExecution, type Assessment, type ExecutionState } from "./execution.js";
 import { requirementFingerprint } from "./implementation.js";
-import { localAssessmentCounts, projectProgress } from "./progress.js";
+import { localAssessmentCounts, progressLabel, projectProgress } from "./progress.js";
 import { coverage } from "./coverage.js";
 
 function fixture() {
@@ -25,6 +25,30 @@ test("empty stages stay zero and retain unknown definition areas", () => {
   assert.deepEqual(result.stages.map((s) => s.percent), [0, 0, 0]);
   assert.deepEqual(result.stages[0]!.epics.map((e) => e.epicID), ["project"]);
   assert.equal(result.stages[0]!.epics[0]!.status, "Not assessed");
+  assert.equal(progressLabel(result.stages[0]!), "Not assessed");
+  assert.deepEqual(result.questions, { answered: 0, total: 0, percent: 0 });
+});
+
+test("saved answers are visible independently of absent or outdated definition coverage", () => {
+  const project = fixture();
+  project.epics.push({ ...project.epics[0]!, id: "archived", archived: true });
+  project.questions = ["answered", "answered", "pending", "deferred", "delegated", "retired"].map((status, i) => ({
+    id: `q${i}`, epicID: "project", text: "A choice?", whyItMatters: "Behavior", options: [], status: status as Project["questions"][number]["status"],
+  }));
+  project.questions.push({ ...project.questions[0]!, id: "old", epicID: "archived" });
+  const before = JSON.stringify(project);
+  const initial = projectProgress(project, emptyExecution());
+  assert.deepEqual(initial.questions, { answered: 2, total: 5, percent: 40 });
+  assert.equal(progressLabel(initial.stages[0]!), "Not assessed");
+  const definition = coverage(project);
+  const outdated = { ...definition, percent: 40, epics: definition.epics.map((e) => ({ ...e, assessed: true, stale: true })) };
+  const old = projectProgress(project, emptyExecution(), outdated);
+  assert.equal(progressLabel(old.stages[0]!), "Needs assessment");
+  assert.equal(progressLabel(old.stages[0]!.epics[0]!), "Needs assessment");
+  assert.equal(old.stages[0]!.percent, 40, "Saved score remains available for the existing overall estimate");
+  const current = projectProgress(project, emptyExecution(), { ...outdated, stale: false, epics: outdated.epics.map((e) => ({ ...e, stale: false })) });
+  assert.equal(progressLabel(current.stages[0]!), "40%");
+  assert.equal(JSON.stringify(project), before, "Presentation never rewrites saved answers or evidence");
 });
 
 test("stage totals use current active scope, reviewed decisions, and actual main delivery", () => {

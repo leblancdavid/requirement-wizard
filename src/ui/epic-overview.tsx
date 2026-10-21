@@ -1,6 +1,6 @@
 import React, { type ReactNode } from "react";
 import type { Project } from "../core/model.js";
-import { localAssessmentDetail, type ProgressScore } from "../core/progress.js";
+import { localAssessmentDetail, progressLabel, type ProgressScore } from "../core/progress.js";
 import { LazyDetails } from "./lazy-details.js";
 import "./epic-overview.css";
 
@@ -22,10 +22,11 @@ export function EpicOverview({ epic, title, implementation, definition, review, 
       <p className="epic-delivery"><strong>{implementation.percent}% delivered</strong><span>{implementation.detail}</span></p>
       <div className="meter" role="meter" aria-label={`${title} delivered to main`} aria-valuenow={implementation.percent} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${implementation.percent}%` }} /></div>
     </>}
+    {implementation.localAssessment && <p>Local code: {implementation.localAssessment.complete} complete · {implementation.localAssessment.partial} partial · {implementation.localAssessment.stale} need reassessment</p>}
     <p className="epic-outstanding">{pendingRequirements} {pendingRequirements === 1 ? "requirement" : "requirements"} awaiting review · {openQuestions} open {openQuestions === 1 ? "question" : "questions"}</p>
     <div className="button-row"><button className="quiet" onClick={() => navigate("discover")}>Open Design →</button><button className="quiet" onClick={() => navigate("review")}>Open Review →</button><button className="quiet" onClick={() => navigate("implementation")}>Open Implement →</button></div>
     <LazyDetails className="epic-map-details" summary="View details">{() => <>
-      {definition && <p>Definition coverage: {definition.percent}% estimated · {definition.status}. {definition.detail}. This estimates recorded decisions, not build completion.</p>}
+      {definition && <p>Definition coverage: {progressLabel(definition)} · {definition.status}. {definition.detail}. This estimates recorded decisions, not questions answered or build completion.</p>}
       {implementation.localAssessment && <p>Local code: {localAssessmentDetail(implementation.localAssessment)}. Local code is separate from delivery to main.</p>}
       {!!epic.dependencies.length && <p>Depends on: {epic.dependencies.join(", ")}</p>}
       {children()}

@@ -19,7 +19,7 @@ export function RetainedReviewNotice({ project, submissions, jobs = [], submissi
   const resolved = resolvedReviewAttempts(project, submissions).get(submission.id);
   if (resolved) return <section aria-label="Resolved review attempt"><p>Already {input.action === "accepted" ? "approved" : "rejected"} by a later completed review{resolved.changedWording ? " of updated wording" : ""}. This earlier attempt is history only; there is nothing to process.</p><button type="button" className="secondary" onClick={reviewCurrent}>View {input.action === "accepted" ? "approved" : "rejected"} story</button></section>;
   const target = project.requirements.find((r) => r.id === input.requirementID);
-  const availability = decisionAvailability(project, [input.requirementID], submissions, jobs, { excludeSubmissionID: submission.id });
+  const availability = decisionAvailability(project, [input.requirementID], submissions, jobs, { excludeSubmissionID: submission.id, action: input.action });
   const changed = !!target && reviewFingerprint(target) !== input.fingerprint;
   return <section aria-label="Current review recovery">
     <p role="status">{availability.state === "ready"

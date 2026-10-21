@@ -53,7 +53,7 @@ export function decisionContextKey(project: Project, requirementIDs: readonly st
 /** Shared UI/storage policy. This is explicit relationship checking, not a
  * semantic conflict verdict. Call inside the write transaction before applying. */
 export function decisionAvailability(project: Project, requirementIDs: readonly string[], submissions: Submission[], jobs: Job[] = [],
-  options: { excludeSubmissionID?: string; contextKey?: string; now?: number } = {}): DecisionAvailability {
+  options: { excludeSubmissionID?: string; contextKey?: string; now?: number; action?: "accepted" | "rejected" } = {}): DecisionAvailability {
   const { targets, areas, sources, questions, targetAreas } = decisionScope(project, requirementIDs);
   const empty = { submissionIDs: [], jobIDs: [] };
   // Even a focused discovery job publishes against a whole-project revision.
@@ -85,7 +85,10 @@ export function decisionAvailability(project: Project, requirementIDs: readonly 
       return questionIDs.has(input.questionID) || !!question && areas.has(question.epicID) || !!s.appliedSourceID && sources.has(s.appliedSourceID);
     })());
   if (waiting.length) return { ...empty, state: "waiting", reason: "Process the pending human input for this requirement or its dependencies before applying this decision. Your response can still be saved for another review.", submissionIDs: waiting.map((s) => s.id) };
-  const unresolved = questions.filter((q) => ["pending", "deferred", "delegated"].includes(q.status));
+  // A rejection declines this behavior; it does not resolve or approve its open
+  // choices. Preserve the questions for follow-up instead of requiring answers
+  // about behavior the human may be explicitly replacing in their review note.
+  const unresolved = options.action === "rejected" ? [] : questions.filter((q) => ["pending", "deferred", "delegated"].includes(q.status));
   if (unresolved.length) {
     return { ...empty, state: "waiting", questionIDs: unresolved.map((q) => q.id),
       reason: `Answer the linked clarification in Design and process its follow-up before applying this decision: ${unresolved.map((q) => `“${q.text}” (${q.status}; ${project.epics.find((e) => e.id === q.epicID)?.title ?? q.epicID})`).join("; ")}. Deferral or delegation does not resolve the choice.` };

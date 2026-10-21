@@ -1,5 +1,65 @@
 # Browser workspace, epics, and estimated completeness
 
+## Understanding project progress
+
+The processing header describes current work, queued responses, pauses and responses
+needing attention, rather than promoting saved background outcomes to current status.
+With nothing running or waiting it shows **Ready when you are**. Previous assessment,
+implementation and discovery outcomes remain available in **Processing & queue**.
+This is presentation-only; saved jobs and evidence are unchanged.
+
+The header shows saved answer counts and current local complete/partial counts as
+well as the existing overall estimate. Its breakdown separates **Questions answered**,
+**Local implementation**, **Definition coverage**, **Requirements review**, and
+**Verified delivery to main**. Questions in active areas count immediately; retired
+questions are excluded, while deferred/delegated questions remain unanswered.
+
+Missing definition assessments show **Not assessed**; outdated assessments show
+**Needs assessment**, without a coverage meter. Small task-sized discovery passes do
+not refresh whole-area coverage. These labels do not establish missing decisions.
+The overall estimate retains its existing equal-weight calculation using saved
+definition coverage, review, and main delivery (unassessed coverage counts as zero).
+Local completeness uses current approved-requirement assessments only; unknown,
+unassessed and stale results are distinguished from missing code. Neither local
+code nor manual claims certify delivery to main. This presentation change performs
+no model calls, data upgrades or automatic reassessments.
+Verification: type check, all 451 deterministic tests, UI build and full browser
+checks passed on Node 22.23.3. Browser checks include separate answer/local sections,
+live local-checkpoint updates without main credit and mobile progress layout.
+
+## Typing in Design and Review
+
+Review's **Anything to add?** editor keeps keystrokes local and retains the latest
+draft in the queue without rerendering the whole review list on each character.
+Submission reads that latest draft; paging, review recovery and explicit acceptance
+of updated requirement context preserve it. Existing stale-review checks remain.
+Design answer edits reuse unchanged word/concept explanation elements instead of
+rebuilding them on each character. Text updates immediately, without debouncing.
+These changes address code-level rendering hotspots; no measured typing-latency
+improvement on a user's live project is claimed.
+Portable Node 22.23.3 ran all 453 deterministic tests successfully. The first type
+check passed; a later check encountered a concurrent `findLast`/library-target
+error in `src/storage/decision-availability.test.ts`. The browser run passed the
+typing, latest-note submission, paging retention and stale-draft checks before an
+unrelated processing-header assertion expected **Saved gap checks reused** instead
+of **Ready when you are**. The complete browser suite is not recorded as passing.
+System Node 20 could not load the installed Node-22 SQLite module.
+
+## Discovery alias failures
+
+Model-created epics, questions, requirements and research findings share one response-local
+`new:` alias namespace. Exact repeated new-epic declarations are collapsed without changing
+their references; conflicting epic definitions, cross-kind alias collisions and malformed
+aliases reject the round before alias allocation or pending-decision updates. Diagnostics
+identify the offending field and, for collisions, the original declaration, without echoing
+model values. The discovery prompt explicitly describes the shared namespace.
+
+Saved submissions remain intact. After updating/restarting the app, explicitly resume
+discovery to request a corrected response; do not re-enter answers or reset project data.
+No automatic live retry was performed. Type check and all 453 deterministic tests passed
+on Node 22, including alias collision atomicity, identical declaration/reference handling
+and explicit corrected-response retry. Live model behavior remains unverified.
+
 ## Exploring gaps in large projects
 
 After the initial interpretation, **Explore next gaps** works from a durable task
@@ -547,8 +607,17 @@ relationship checks in `src/core/decision-availability.ts`. Relevant work includ
 target(s), linked clarification/evidence, feature/shared input and transitive dependency
 input. Applied responses with unfinished or failed follow-up still count as pending;
 retained conflicting/superseded responses do not permanently block replacement decisions.
-An explicitly linked unanswered/deferred/delegated clarification must be answered and
-processed first. These are deterministic safeguards, not semantic proof of consistency.
+For approval, an explicitly linked unanswered/deferred/delegated clarification must be
+answered and processed first. Ordinary requirement rejection does not require answering
+questions about the behavior being declined: reject with a note to request a replacement
+such as beacon respawning instead of partner revival. Rejection retains those questions
+unchanged; normal follow-up can propose replacements and retire obsolete questions with
+provenance. Explicitly linked questions are prioritized among the bounded, budget-checked
+review follow-up candidates rather than relying only on wording similarity; oversized
+optional candidates still cannot block the original review. Pending human input, changed evidence, stale revisions and active-worker
+protections still apply to rejection. Earlier blocked rejections remain unapplied history;
+use **Review current requirement with saved note** and explicitly reject again. These are
+deterministic safeguards, not semantic proof of consistency.
 
 - Direct reviews, cleanup approvals, duplicate removals and cleanup dismissals cannot
   change a live discovery/scan snapshot, including a worker in another local process.

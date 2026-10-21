@@ -20,6 +20,19 @@ type ReviewFilter = "pending" | "refinements" | "submitted" | "reviewed";
 type ReviewItem = { id: string; kind: "requirement"; requirement: Project["requirements"][number] }
   | { id: string; kind: "refinement"; refinement: Project["refinements"][number] };
 
+type ReviewDraft = { note: string; fingerprint: string; contextKey: string; revision: number };
+
+// Keep keystrokes local: persisting a draft must not rerender the review queue.
+function ReviewNote({ initialValue, change }: { initialValue: string; change: (note: string) => void }) {
+  // The editor remounts when its card closes/reopens. Do not synchronize text
+  // from polling props: a delayed background render must not replace new input.
+  const [text, setText] = useState(initialValue);
+  return <label>Anything to add? (optional)<textarea rows={3} maxLength={12000} value={text} onChange={(event) => {
+    const note = event.target.value;
+    setText(note); change(note);
+  }} placeholder="I approve this, but we also need to consider…" /></label>;
+}
+
 export function reviewItems(project: Project, submissions: Submission[], filter: ReviewFilter, epicID = "all"): ReviewItem[] {
   const scoped = (id: string) => epicID === "all" || id === epicID;
   const refinements = project.refinements.filter((p) => (scoped(project.requirements.find((r) => r.id === p.requirementID)?.epicID ?? p.original.epicID)
@@ -85,7 +98,8 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
 }) {
   const [filter, setFilter] = useState<ReviewFilter>("pending");
   const [expanded, setExpanded] = useState<string | null | undefined>(undefined);
-  const [drafts, setDrafts] = useState<Record<string, { note: string; fingerprint: string; contextKey: string; revision: number }>>({});
+  const drafts = useRef<Record<string, ReviewDraft>>({});
+  const [, refreshDrafts] = useState(0);
   const [message, setMessage] = useState("");
   const [recoveryTarget, setRecoveryTarget] = useState<string>();
   const saveDuplicate: RemoveDuplicate | undefined = removeDuplicate && (async (...args) => {
@@ -178,7 +192,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
       const withdrawn = r.status === "rejected" && reviewUpdateFor(project, "requirement", r.id)?.kind === "withdrawn";
       const fingerprint = reviewFingerprint(r);
       const contextKey = decisionContextKey(project, [r.id]);
-      const draft = drafts[r.id];
+      const draft = drafts.current[r.id];
       const changed = !!draft && (draft.fingerprint !== fingerprint || draft.contextKey !== contextKey);
       const availability = decisionAvailability(project, [r.id], submissions);
       const latest = [...reviews].reverse().find((s) => s.input.type === "review" && s.input.requirementID === r.id);
@@ -186,9 +200,11 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
       const blocked = changed || sending.includes(`review:${r.id}`) || !!latest && ["queued", "saved", "processing"].includes(latest.status);
       const save = async (action: "accepted" | "rejected") => {
         setMessage("");
-        const note = draft?.note ?? "";
-        if (await submit({ type: "review", requirementID: r.id, requirementText: r.statement, fingerprint, action, note, reviewedRevision: draft?.revision ?? project.revision }, `review:${r.id}`)) {
-          setDrafts((current) => { const next = { ...current }; delete next[r.id]; return next; });
+        const currentDraft = drafts.current[r.id];
+        const note = currentDraft?.note ?? "";
+        if (await submit({ type: "review", requirementID: r.id, requirementText: r.statement, fingerprint, action, note, reviewedRevision: currentDraft?.revision ?? project.revision }, `review:${r.id}`)) {
+          delete drafts.current[r.id];
+          refreshDrafts((version) => version + 1);
           advance(item.id); setMessage(`${action === "accepted" ? "Approval" : "Rejection"} response saved. Safety checks run before applying it; see Submitted for processing or another-review notices.`);
         }
       };
@@ -200,10 +216,16 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
             {related.map((other) => <section key={other.id} aria-label={`Compare requirement ${other.id}`}><h4>{other.statement}</h4><p>{requirementStatus(other.status)} · {project.epics.find((e) => e.id === other.epicID)?.title} · {other.id}</p><p>{other.rationale}</p><ul>{other.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{other.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details></section>)}
           </details>}
           {r.reviewNote && <p>{r.reviewNote}</p>}{response && <p className="save-notice"><strong>AI response:</strong> {response}</p>}
-          <label>Anything to add? (optional)<textarea rows={3} maxLength={12000} value={draft?.note ?? ""} onChange={(event) => setDrafts((current) => ({ ...current, [r.id]: { note: event.target.value, fingerprint: current[r.id]?.fingerprint ?? fingerprint, contextKey: current[r.id]?.contextKey ?? contextKey, revision: current[r.id]?.revision ?? project.revision } }))} placeholder="I approve this, but we also need to consider…" /></label>
-          {availability.state !== "ready" && <p role="status">{availability.reason} A saved review will need your attention instead of applying automatically.</p>}
+          <ReviewNote initialValue={draft?.note ?? ""} change={(note) => {
+            const current = drafts.current[r.id];
+            drafts.current[r.id] = { note, fingerprint: current?.fingerprint ?? fingerprint, contextKey: current?.contextKey ?? contextKey, revision: current?.revision ?? project.revision };
+          }} />
+          {availability.state !== "ready" && <p role="status">{availability.questionIDs?.length ? <>Approval: {availability.reason} You can still reject this requirement and use your note to request different behavior; rejection does not answer or retire these questions.</> : <>{availability.reason} A saved review will need your attention instead of applying automatically.</>}</p>}
           <ClarificationLinks availability={availability} openQuestion={openQuestion} />
-          {changed && <p role="alert">This requirement or its supporting context changed while you were writing. Your note is retained. Read the updated information, then <button className="quiet" onClick={() => setDrafts((current) => ({ ...current, [r.id]: { note: draft!.note, fingerprint, contextKey, revision: project.revision } }))}>Use note with updated requirement</button>.</p>}
+          {changed && <p role="alert">This requirement or its supporting context changed while you were writing. Your note is retained. Read the updated information, then <button className="quiet" onClick={() => {
+            drafts.current[r.id] = { note: drafts.current[r.id]!.note, fingerprint, contextKey, revision: project.revision };
+            refreshDrafts((version) => version + 1);
+          }}>Use note with updated requirement</button>.</p>}
           <div className="button-row"><ActionButton className="primary" disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton><ActionButton className="secondary" disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : "This review is being saved or is already waiting for processing."} onClick={() => void save("rejected")}>Reject</ActionButton>
           {r.status !== "rejected" && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={r.id} disabled={disabled || blocked} save={saveDuplicate} />}
           </div>
@@ -221,7 +243,8 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
         if (s.input.type !== "review") return;
         const input = s.input, target = project.requirements.find((r) => r.id === input.requirementID);
         if (!target) return;
-        setDrafts((current) => ({ ...current, [target.id]: current[target.id] ?? { note: input.note, fingerprint: reviewFingerprint(target), contextKey: decisionContextKey(project, [target.id]), revision: project.revision } }));
+        drafts.current[target.id] ??= { note: input.note, fingerprint: reviewFingerprint(target), contextKey: decisionContextKey(project, [target.id]), revision: project.revision };
+        refreshDrafts((version) => version + 1);
         setFilter(["accepted", "rejected"].includes(target.status) ? "reviewed" : "pending");
         setRecoveryTarget(target.id);
         setExpanded(`requirement:${target.id}`);

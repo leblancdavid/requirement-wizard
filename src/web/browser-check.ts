@@ -320,8 +320,10 @@ try {
   await headerProgress.click();
   const progressDialog = page.getByRole("dialog", { name: "Project progress", exact: true });
   await expect(progressDialog).toBeVisible();
-  await expect(progressDialog.locator(".progress-stage")).toHaveCount(3);
-  for (const stage of ["Questions / Definition", "Requirements review", "Implementation"]) {
+  await expect(progressDialog.locator(".progress-stage")).toHaveCount(5);
+  await expect(progressDialog.getByRole("region", { name: "Questions answered", exact: true })).toContainText("0 / 3 (0%)");
+  await expect(progressDialog.getByRole("region", { name: "Local implementation", exact: true })).toBeVisible();
+  for (const stage of ["Definition coverage", "Requirements review", "Verified delivery to main"]) {
     const row = progressDialog.locator(".progress-stage").filter({ has: page.locator("summary strong", { hasText: stage }) });
     await row.locator("summary").click();
     await expect(row.locator(".progress-epics")).toBeVisible();
@@ -377,7 +379,8 @@ try {
   await expect(card.locator(".question-meta")).toContainText("Permissions");
   await page.screenshot({ path: ".reqwizit-state/browser-questions.png", fullPage: true });
   const answer = card.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true });
-  await answer.fill("My unfinished answer");
+   await answer.pressSequentially("My unfinished answer");
+   await expect(answer).toHaveValue("My unfinished answer");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(answer).toBeHidden();
   await page.goBack();
@@ -947,12 +950,17 @@ try {
    await expect(page.getByRole("tab", { name: /Review/ })).toContainText("2");
    const reviewPanel = page.getByRole("region", { name: "Requirement review", exact: true });
    const addendum = reviewPanel.getByLabel("Anything to add? (optional)");
-   await addendum.fill("Also export jobs");
+    await addendum.pressSequentially("Also export jobs");
     await page.getByRole("tab", { name: "Design" }).click();
    await page.getByRole("tab", { name: /Review/ }).click();
-   await expect(addendum).toHaveValue("Also export jobs");
-   await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
-   await expect.poll(() => reviewReleases.length).toBe(1);
+    await expect(addendum).toHaveValue("Also export jobs");
+    await addendum.pressSequentially(" as CSV");
+    await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect.poll(() => reviewReleases.length).toBe(1);
+    const typedReview = store.submissions(reviewProject.id).find((s) => s.input.type === "review")!.input;
+    assert.equal(typedReview.type, "review");
+    assert.equal(typedReview.type === "review" ? typedReview.note : undefined, "Also export jobs as CSV",
+      "Submitting must read the latest locally typed note, not the last queue render");
    await expect(reviewPanel.locator(".review-card").first()).toContainText("Send job notifications");
    await expect(addendum).toHaveValue("");
    await reviewPanel.getByRole("button", { name: "Reject", exact: true }).click();
@@ -1365,12 +1373,12 @@ try {
        const queueAssessment = queueState.assessmentRuns!.at(-1)!;
        queueAssessment.status = "running"; queueAssessment.stage = "Assessing requirement 2/4: Reset a forgotten password";
        queueAssessment.completedIDs = [listing.requirements[0]!.id]; queueAssessment.currentRequirementID = listing.requirements[1]!.id;
-       let queueImplementationActive = true, queueHelpActive = true;
+        let queueImplementationActive = true, queueHelpActive = true, queueHasWaiting = true;
        const snapshotRoute = `**/api/projects/${listing.id}`;
        await page.route(snapshotRoute, async (route) => {
            const response = await fullSnapshot(route);
            await fulfillSnapshot(route, response, { ...await response.json(), execution: queueState, implementationActive: queueImplementationActive, implementationOperation: "check",
-             queuePaused: false, submissions: [{ id: "waiting-note", projectID: listing.id, input: { type: "note", epicID: "project", text: "Retained while assessment works" }, auto: true, research: false, applied: false, status: "queued", submittedAt: "2026-10-01T00:00:00.000Z" }, ...Array.from({ length: 60 }, (_, index) => ({ id: `history-${index}`, projectID: listing.id, input: { type: "note", epicID: "project", text: `Historical saved response ${index}` }, auto: false, research: false, applied: true, status: "completed", submittedAt: "2026-10-01T00:00:00.000Z" }))],
+              queuePaused: false, submissions: [...(queueHasWaiting ? [{ id: "waiting-note", projectID: listing.id, input: { type: "note", epicID: "project", text: "Retained while assessment works" }, auto: true, research: false, applied: false, status: "queued", submittedAt: "2026-10-01T00:00:00.000Z" }] : []), ...Array.from({ length: 60 }, (_, index) => ({ id: `history-${index}`, projectID: listing.id, input: { type: "note", epicID: "project", text: `Historical saved response ${index}` }, auto: false, research: false, applied: true, status: "completed", submittedAt: "2026-10-01T00:00:00.000Z" }))],
             helpJobs: [{ id: "queue-help-fixture", projectID: listing.id, expectedRevision: listing.revision, model: listing.model, leaseUntil: null, status: queueHelpActive ? "running" : "cancelled" }] });
        });
        await page.route(`**/api/projects/${listing.id}/cancel-help`, async (route) => {
@@ -1402,18 +1410,18 @@ try {
         await expect(listPanel.locator(".requirement-detail > summary").nth(1)).toContainText("Assessed · unknown");
          await expect(listPanel.locator(".implementation-row-status").nth(1)).toContainText("Coding: not started");
          await headerProgress.click();
-         const implementationProgress = progressDialog.locator(".progress-stage").nth(2);
+          const implementationProgress = progressDialog.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Verified delivery to main" }) });
          await implementationProgress.locator("summary").click();
-         await expect(implementationProgress.getByRole("meter", { name: "Local code completeness", exact: true })).toHaveAttribute("aria-valuenow", "25");
+          await expect(progressDialog.getByRole("meter", { name: "Local code completeness", exact: true })).toHaveAttribute("aria-valuenow", "25");
          await expect(implementationProgress.getByRole("meter", { name: "Local code completeness: Account access", exact: true })).toHaveAttribute("aria-valuenow", "0");
-         await expect(implementationProgress.getByRole("meter", { name: "Implementation progress", exact: true })).toHaveAttribute("aria-valuenow", "0");
+         await expect(implementationProgress.getByRole("meter", { name: "Verified delivery to main progress", exact: true })).toHaveAttribute("aria-valuenow", "0");
          // A complete local checkpoint appears in both views through polling while the run continues.
          const completedLocal = listing.requirements[0]!;
          queueState.assessments[completedLocal.id] = { ...queueState.assessments[completedLocal.id]!, status: "complete" };
-         await expect(implementationProgress.getByRole("meter", { name: "Local code completeness", exact: true })).toHaveAttribute("aria-valuenow", "50");
+          await expect(progressDialog.getByRole("meter", { name: "Local code completeness", exact: true })).toHaveAttribute("aria-valuenow", "50");
          await expect(implementationProgress.getByRole("meter", { name: "Local code completeness: Account access", exact: true })).toHaveAttribute("aria-valuenow", "50");
-         await expect(implementationProgress.getByRole("meter", { name: "Implementation progress", exact: true })).toHaveAttribute("aria-valuenow", "0");
-         await expect(implementationProgress.getByRole("group", { name: "Local code assessment", exact: true })).toContainText("4 / 4 assessed locally · 2 complete locally · 0 partial · 1 missing · 1 unknown");
+         await expect(implementationProgress.getByRole("meter", { name: "Verified delivery to main progress", exact: true })).toHaveAttribute("aria-valuenow", "0");
+          await expect(progressDialog.getByRole("group", { name: "Local code assessment", exact: true })).toContainText("4 / 4 assessed locally · 2 complete locally · 0 partial · 1 missing · 1 unknown");
          await page.setViewportSize({ width: 390, height: 844 });
          assert.equal(await progressDialog.evaluate((element) => element.scrollWidth > element.clientWidth), false, "Local and main progress breakdowns fit mobile width");
          await page.screenshot({ path: ".reqwizit-state/browser-local-assessment-progress.png" });
@@ -1462,18 +1470,25 @@ try {
        await page.reload(); await expect(sharedQueueTrigger).toContainText("Main verification");
        await sharedQueueTrigger.click(); await sharedQueue.getByRole("button", { name: "Stop implementation", exact: true }).click();
        await expect(sharedQueue.getByRole("button", { name: "Stop implementation", exact: true })).toHaveCount(0);
-        await expect(sharedQueueTrigger).toContainText("Main verification · interrupted");
+         await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready to process");
         await expect(sharedQueueTrigger.getByRole("progressbar")).toHaveCount(0);
         await expect(sharedQueueTrigger.locator(".activity-spinner")).toHaveCount(0);
        await sharedQueue.getByText(/^Recent background work/).click();
        await expect(sharedQueue).toContainText("Assessment stopped; earlier results retained.");
        queueAssessment.status = "failed"; queueAssessment.diagnostic = "Verification command failed; local assessment retained.";
-       await expect(sharedQueueTrigger).toContainText("Main verification · failed");
+        await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready to process");
        await expect(sharedQueue).toContainText("Verification command failed; local assessment retained.");
        queueAssessment.status = "completed"; queueAssessment.diagnostic = "Verified main assessment finished.";
-       await expect(sharedQueueTrigger).toContainText("Main verification · completed");
-       await page.keyboard.press("Escape");
-       await page.unroute(snapshotRoute);
+        await expect(sharedQueue).toContainText("Verified main assessment finished.");
+        await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready to process");
+        await page.keyboard.press("Escape");
+        queueHasWaiting = false;
+        queueAssessment.status = "interrupted";
+        await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready when you are");
+        await expect(sharedQueueTrigger.getByRole("progressbar")).toHaveCount(0);
+        await page.reload();
+        await expect(sharedQueueTrigger.locator("strong")).toHaveText("Ready when you are");
+        await page.unroute(snapshotRoute);
        await page.unroute(`**/api/projects/${listing.id}/cancel-help`);
         await page.unroute(`**/api/projects/${listing.id}/execution-stop`);
         // Relevant human context can change without changing requirement wording.
@@ -1619,11 +1634,18 @@ try {
             await page.getByRole("tab", { name: /Review/ }).click();
             const reviewPages = reviewPanel.getByRole("navigation", { name: "Review pages", exact: true });
             await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
-            await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).fill("Keep this review draft");
+             await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).fill("Keep this review draft");
+             largeProject.requirements[0]!.statement = "Updated large requirement 0";
+             largeProject.revision++;
+             await expect(reviewPanel.getByRole("button", { name: "Use note with updated requirement", exact: true })).toBeVisible();
+             await expect(reviewPanel.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
+             await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).pressSequentially(" while stale");
+             await reviewPanel.getByRole("button", { name: "Use note with updated requirement", exact: true }).click();
+             await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep this review draft while stale");
             await reviewPages.getByRole("button", { name: "Next", exact: true }).click();
             await expect(reviewPages).toContainText("26–50 of 500");
             await reviewPages.getByRole("button", { name: "Previous", exact: true }).click();
-            await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep this review draft");
+             await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep this review draft while stale");
             await reviewPages.getByRole("combobox").selectOption("10");
             await expect(reviewPanel.locator(".review-card")).toHaveCount(10);
             await reviewPanel.locator(".review-card-heading").last().click();

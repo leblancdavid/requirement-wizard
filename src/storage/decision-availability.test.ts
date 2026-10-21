@@ -65,6 +65,91 @@ test("decision availability follows transitive dependencies, shared input and ex
   } finally { store.close(); }
 });
 
+for (const status of ["pending", "deferred", "delegated"] as const) {
+  test(`rejection bypasses ${status} clarification for direct and queued reviews without resolving it`, () => {
+    const store = new ProjectStore(":memory:");
+    try {
+      let p = seed(store);
+      const worker = store.beginJob(p.id, p.revision).job;
+      store.claimJob(worker.id, Date.now() + 60_000);
+      store.finishJob(worker.id, { summary: "Linked choice", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [],
+        questions: [{ text: "How should the surviving player revive their partner?", whyItMatters: "Choose the mechanic", epicID: "feature",
+          evidenceIDs: p.requirements.slice(0, 2).map((r) => r.id), options: [{ label: "Revive", consequence: "Partner acts" }, { label: "Respawn", consequence: "Beacon return" }] }] });
+      p = store.get(p.id);
+      const q = p.questions.at(-1)!;
+      if (status !== "pending") p = store.answer(p.id, p.revision, q.id, { kind: status === "deferred" ? "deferral" : "delegation", text: "Decide later within limits" });
+      const questions = structuredClone(p.questions), r = p.requirements[0]!;
+      assert.throws(() => store.review(p.id, p.revision, r.id, "accepted", ""), /linked clarification/);
+      const note = "I actually want to change these requirements. When a player dies, they respawn at the last spawn beacon. Spawn beacons are found throughout the level.";
+      p = store.review(p.id, p.revision, r.id, "rejected", note);
+      assert.equal(p.requirements[0]!.status, "rejected");
+      const request = review(p, 1, note);
+      const rejection = { ...request, input: { ...request.input, action: "rejected" as const } };
+      assert.equal(store.enqueue(p.id, rejection).status, "queued");
+      store.applyQueued(p.id);
+      const saved = store.submissions(p.id)[0]!, current = store.get(p.id);
+      assert.equal(saved.applied, true); assert.equal(saved.status, "saved");
+      assert.deepEqual(saved.input, rejection.input);
+      assert.equal(current.requirements[1]!.status, "rejected");
+      assert.deepEqual(current.questions, questions, "Rejection must not fabricate answers or retire linked choices");
+      assert.match(current.sources.find((s) => s.id === saved.appliedSourceID)!.text, /last spawn beacon/);
+      assert.deepEqual(store.get(p.id, p.revision), p, "Earlier evidence remains immutable");
+    } finally { store.close(); }
+  });
+}
+
+test("reject-with-comment follow-up can retire an obsolete linked clarification and propose replacement behavior", async () => {
+  const store = new ProjectStore(":memory:");
+  let questionID = "", requirementID = "", calls = 0;
+  const comment = "When a player dies, they respawn at the last spawn beacon. Spawn beacons are found throughout the level.";
+  const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(p, options) {
+    calls++;
+    assert.equal(p.requirements.find((r) => r.id === requirementID)!.status, "rejected");
+    assert.ok(options.context.manifest.includedIDs.includes(questionID));
+    assert.ok(JSON.stringify(options.context.data).includes(comment));
+    const source = p.sources.filter((s) => s.kind === "rejection" && s.requirementID === requirementID).at(-1)!;
+    return { summary: "Beacon replacement proposed", goals: [], actors: [], assumptions: [], questions: [],
+      reviewResponses: [{ sourceID: source.id, text: "Proposed beacon respawning and retired the obsolete partner-revival question." }],
+      requirements: [{ statement: "Dead players respawn at the last spawn beacon", rationale: "Human replacement request", epicID: "feature", sourceIDs: [source.id], acceptance: ["A player returns at their last spawn beacon after death"] }],
+      retireQuestions: [{ questionID, reason: "The human replaced partner revival with beacon respawning" }] };
+  } }));
+  try {
+    let p = seed(store); requirementID = p.requirements[0]!.id;
+    const worker = store.beginJob(p.id, p.revision).job; store.claimJob(worker.id, Date.now() + 60_000);
+    store.finishJob(worker.id, { summary: "Linked clarification", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [],
+      questions: [{ text: "How should a surviving partner revive the other player?", whyItMatters: "Choose revival behavior", epicID: "feature", evidenceIDs: [requirementID], options: [{ label: "Interact", consequence: "Partner must act" }, { label: "Item", consequence: "Partner spends an item" }] }] });
+    p = store.get(p.id); questionID = p.questions.at(-1)!.id;
+    const request = review(p, 0, comment);
+    queue.submit(p.id, { ...request, auto: true, input: { ...request.input, action: "rejected" } });
+    const deadline = Date.now() + 3000;
+    while (queue.isActive(p.id)) { assert.ok(Date.now() < deadline); await new Promise((accept) => setTimeout(accept, 5)); }
+    const current = store.get(p.id);
+    assert.equal(calls, 1);
+    assert.equal(store.submissions(p.id)[0]!.status, "completed", store.submissions(p.id)[0]!.diagnostic);
+    assert.equal(current.questions.find((q) => q.id === questionID)!.status, "retired");
+    assert.equal(current.requirements.find((r) => r.id === requirementID)!.status, "rejected");
+    assert.equal(current.requirements.at(-1)!.status, "proposed", "Replacement still needs human approval");
+  } finally { await queue.close(); store.close(); }
+});
+
+test("rejection retains pending-input, changed-context and live-worker safeguards", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), ids = [p.requirements[0]!.id], options = { action: "rejected" as const };
+    const pending = note(p, "feature");
+    assert.equal(decisionAvailability(p, ids, [pending], [], options).state, "waiting");
+    const worker = store.beginJob(p.id, p.revision).job;
+    assert.throws(() => store.review(p.id, p.revision, ids[0]!, "rejected", "Changed behavior"), /active work/);
+    store.failJob(worker.id, "cancelled", "Fixture stopped");
+    const request = review(p);
+    store.note(p.id, p.revision, "Changed relevant evidence", "feature");
+    const saved = store.enqueue(p.id, { ...request, input: { ...request.input, action: "rejected" } });
+    assert.equal(saved.status, "needs-attention"); assert.equal(saved.applied, false);
+    assert.match(saved.diagnostic!, /Relevant human evidence/);
+    assert.equal(store.get(p.id).requirements[0]!.status, "proposed");
+  } finally { store.close(); }
+});
+
 test("live snapshot jobs block direct decisions, while help, completed and expired jobs do not", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -287,6 +372,41 @@ test("cross-connection approval and queue application cannot invalidate an activ
     assert.throws(() => second.beginJob(p.id, ready.revision), /Project changed/);
     assert.equal(approved.requirements[0]!.status, "accepted");
   } finally { first.close(); second.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("older blocked rejection survives repeated reopen unchanged and requires an explicit new review", () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "rejection-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    let p = seed(store);
+    const r = p.requirements[0]!, worker = store.beginJob(p.id, p.revision).job;
+    store.claimJob(worker.id, Date.now() + 60_000);
+    store.finishJob(worker.id, { summary: "Linked choice", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [],
+      questions: [{ text: "Which original behavior?", whyItMatters: "Intent", epicID: "feature", evidenceIDs: [r.id], options: [{ label: "One", consequence: "First" }, { label: "Two", consequence: "Second" }] }] });
+    p = store.get(p.id);
+    // The former gate retained both actions identically. Preserve that older
+    // needs-attention shape, including its original decision basis/diagnostic.
+    const request = review(p, 0, "Respawn at the last spawn beacon instead.");
+    const legacy = store.enqueue(p.id, request);
+    assert.equal(legacy.status, "needs-attention");
+    if (legacy.input.type === "review") legacy.input.action = "rejected";
+    store.saveSubmission(legacy);
+    const jobs = structuredClone(store.jobs(p.id));
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.submissions(p.id), [legacy]);
+      assert.deepEqual(store.get(p.id), p);
+      assert.deepEqual(store.jobs(p.id), jobs, "Startup must not replay model calls");
+    }
+    store.applyQueued(p.id);
+    assert.deepEqual(store.submissions(p.id), [legacy], "Resume must not apply the old blocked decision");
+    store.enqueue(p.id, { ...request, id: randomUUID(), input: { ...request.input, action: "rejected" } });
+    store.applyQueued(p.id);
+    assert.equal(store.get(p.id).requirements[0]!.status, "rejected");
+    assert.deepEqual(store.submissions(p.id)[0], legacy, "Original attempt remains exact history");
+    assert.equal(store.submissions(p.id)[1]!.applied, true);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("legacy submissions preserve target-only provenance and new evidence bases survive reopening; future formats are never overwritten", () => {
