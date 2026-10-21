@@ -8,3 +8,6 @@
 .duplicate-removal { width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .duplicate-removal select { width: 100%; min-width: 0; max-width: 100%; }
 .review-update { overflow-wrap: anywhere; }
+.item-processing-error { margin: 1rem; }
+.item-processing-error > button { float: none; font-size: inherit; }
+.item-processing-error p { color: inherit; }

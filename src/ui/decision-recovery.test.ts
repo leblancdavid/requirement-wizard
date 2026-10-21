@@ -4,7 +4,38 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { projectSchema, reviewFingerprint, type Submission } from "../core/model.js";
 import { decisionAvailability } from "../core/decision-availability.js";
-import { RetainedReviewNotice } from "./decision-recovery.js";
+import { ItemProcessingNotice, RetainedReviewNotice } from "./decision-recovery.js";
+import { ReviewQueue, pendingReviews } from "./review.js";
+
+test("item errors show saved diagnostics and distinguish follow-up retry from decision conflicts", () => {
+  const { submission } = fixture();
+  const conflict = renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, resume: () => assert.fail("No automatic retry") }));
+  assert.match(conflict, /role="alert"/);
+  assert.match(conflict, /Answer the linked clarification/);
+  assert.match(renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, error: "" })), /Answer the linked clarification/);
+  assert.ok(!conflict.includes("Resume discovery"));
+  submission.conflict = false; submission.applied = true;
+  const failed = renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, resume: () => {} }));
+  assert.match(failed, /Resume discovery/);
+  assert.match(failed, /without submitting it again/);
+  submission.status = "completed";
+  assert.equal(renderToStaticMarkup(createElement(ItemProcessingNotice, { submission })), "");
+  assert.match(renderToStaticMarkup(createElement(ItemProcessingNotice, { error: "Request failed; draft retained" })), /Request failed; draft retained/);
+});
+
+test("default Review card contains failed review diagnostic, clarification navigation and retained note", () => {
+  const { project, submission } = fixture();
+  project.questions[0]!.status = "pending";
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project, submissions: [submission], epicID: "all", sending: [], disabled: false,
+    submit: async () => { assert.fail("Rendering must not submit"); }, refine: () => {}, reviewRefinement: async () => false, openQuestion: () => {} }));
+  assert.match(html, /Item processing error/);
+  assert.match(html, /Open blocking clarification in Design/);
+  assert.match(html, /Keep my exact note/);
+  project.requirements[0]!.status = "accepted"; submission.applied = true; submission.conflict = false;
+  assert.equal(pendingReviews(project, [submission]).length, 1, "Failed follow-up stays discoverable on the default list");
+  submission.status = "completed";
+  assert.equal(pendingReviews(project, [submission]).length, 0);
+});
 
 function fixture() {
   const project = projectSchema.parse({ id: "project", name: "Recovery", revision: 5, model: { providerID: "openai", modelID: "fixture" },

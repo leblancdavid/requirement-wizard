@@ -33,6 +33,7 @@ import type { FolderPreview } from "../core/folder-preview.js";
 import { ActionButton, ActionScope } from "./action-button.js";
 import { discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
+import { ItemProcessingNotice } from "./decision-recovery.js";
 
 type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
@@ -79,6 +80,7 @@ function App() {
   const [tab, setTab] = useState<"discover" | "review" | "implementation" | "requirements" | "research" | "history">("discover");
   const [epicID, setEpicID] = useState("all");
   const [error, setError] = useState("");
+  const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
   const [actionLabel, setActionLabel] = useState("Saving changes…");
   const [loading, setLoading] = useState(true);
@@ -194,7 +196,7 @@ function App() {
   useEffect(() => { localStorage.setItem("reqwizit-auto", String(auto)); }, [auto]);
   useEffect(() => { localStorage.setItem("reqwizit-research", String(research)); }, [research]);
   useEffect(() => {
-    setData(null); setEpicID("all"); setTab("discover"); setQuestionFilter("open"); setExpandedQuestion(null); setSavedMessage(null); setError("");
+    setData(null); setItemErrors({}); setEpicID("all"); setTab("discover"); setQuestionFilter("open"); setExpandedQuestion(null); setSavedMessage(null); setError("");
     if (id) { setLoading(true); localStorage.setItem("reqwizit-project", id); void load(id).catch((error: Error) => { setError(error.message); }).finally(() => setLoading(false)); }
   }, [id]);
   useEffect(() => {
@@ -241,12 +243,12 @@ function App() {
     const submissionID = requests.current.get(payload) ?? crypto.randomUUID();
     requests.current.set(payload, submissionID);
     inFlight.current.add(key); setSending([...inFlight.current]); setError("");
+    setItemErrors((errors) => ({ ...errors, [key]: "" }));
     try {
       const saved = await api<Submission>(`projects/${projectID}/submit`, { id: submissionID, input, auto, research: useResearch, ...(replaces ? { replaces } : {}) });
       requests.current.delete(payload);
-      if (saved.status === "needs-attention") setError(saved.diagnostic ?? "Your response was saved but needs another review before applying.");
-      await load(projectID); await list(); return true;
-    } catch (error) { setError(error instanceof Error ? error.message : "Could not submit response. Your draft is retained."); return false; }
+      await load(projectID); await list(); return saved.status !== "needs-attention";
+    } catch (error) { setItemErrors((errors) => ({ ...errors, [key]: error instanceof Error ? error.message : "Could not submit response. Your draft is retained." })); return false; }
     finally { inFlight.current.delete(key); setSending([...inFlight.current]); }
   }
   async function create(event: FormEvent) {
@@ -369,19 +371,23 @@ function App() {
                 const submission = latestSubmission(question.id);
                 const response = submission?.input.type === "answer" ? submission.input.answer : undefined;
                 const source = project.sources.find((item) => item.id === question.sourceID);
-                return <QuestionCard key={`${project.id}:${question.id}:${submission?.id ?? question.sourceID ?? "new"}`} question={question} area={areaTitle(epics.find((epic) => epic.id === question.epicID))} purpose={epics.find((epic) => epic.id === question.epicID)?.purpose} expanded={activeQuestionID === question.id} onToggle={() => setExpandedQuestion(activeQuestionID === question.id ? null : question.id)} onCancel={() => { drafts.current.delete(question.id); setExpandedQuestion(null); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={response?.text ?? source?.text} initialKind={response?.kind ?? (source && ["answer", "delegation", "deferral"].includes(source.kind) ? source.kind as Draft["kind"] : undefined)} number={index + 1} disabled={sending.includes(question.id)} dismissDisabled={busy || connectionChanged} onDismiss={question.status === "pending" && !question.sourceID && !protectedQuestionIDs.has(question.id) ? () => act(() => dismissQuestions([question.id])) : undefined} status={sending.includes(question.id) ? "Saving…" : responseStatus(question.id)} onSave={(kind, text) => saveAnswer(question, kind, text)} notice={<ReviewUpdateNotice project={project} recordType="question" recordID={question.id} />} />;
+                return <QuestionCard key={`${project.id}:${question.id}:${submission?.id ?? question.sourceID ?? "new"}`} question={question} area={areaTitle(epics.find((epic) => epic.id === question.epicID))} purpose={epics.find((epic) => epic.id === question.epicID)?.purpose} expanded={activeQuestionID === question.id} onToggle={() => setExpandedQuestion(activeQuestionID === question.id ? null : question.id)} onCancel={() => { drafts.current.delete(question.id); setExpandedQuestion(null); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={response?.text ?? source?.text} initialKind={response?.kind ?? (source && ["answer", "delegation", "deferral"].includes(source.kind) ? source.kind as Draft["kind"] : undefined)} number={index + 1} disabled={sending.includes(question.id)} dismissDisabled={busy || connectionChanged} onDismiss={question.status === "pending" && !question.sourceID && !protectedQuestionIDs.has(question.id) ? () => act(() => dismissQuestions([question.id])) : undefined} status={sending.includes(question.id) ? "Saving…" : responseStatus(question.id)} onSave={(kind, text) => saveAnswer(question, kind, text)} notice={<><ItemProcessingNotice error={itemErrors[question.id]} submission={[...data.submissions].reverse().find((s) => s.input.type === "answer" && s.input.questionID === question.id)} resume={() => void act(explore)} disabled={busy || connectionChanged} /><ReviewUpdateNotice project={project} recordType="question" recordID={question.id} /></>} />;
               })}
-              {questionPaging.pages > 1 && <Pagination paging={questionPaging} label="Design bottom" onNavigate={() => setExpandedQuestion(null)} />}
+               {questionPaging.pages > 1 && <Pagination paging={questionPaging} label="Design bottom" onNavigate={() => setExpandedQuestion(null)} />}
+               <ItemProcessingNotice error={itemErrors.note} />
               <details className="add-information"><summary>Add information</summary><form className="note-card" onSubmit={(event) => { event.preventDefault(); const submitted = note; void submit({ type: "note", text: submitted, epicID: epicID === "all" ? "project" : epicID }, "note").then((saved) => { if (saved) setNote((current) => current === submitted ? "" : current); }); }}><label>Add an idea, correction, or constraint<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Something else the project should consider…" maxLength={12000} required /></label><button className="secondary" title={sending.includes("note") ? "Your note is being saved." : !note.trim() ? "Write an idea, correction or constraint first." : undefined} disabled={sending.includes("note") || !note.trim()}>{sending.includes("note") ? "Saving…" : "Add to project →"}</button></form></details>
             </>}
-            <div hidden={tab !== "review"}><ReviewQueue key={project.id} project={project} submissions={data.submissions} jobs={data.jobs} epicID={epicID} sending={sending} submit={submit}
+             <div hidden={tab !== "review"}><ReviewQueue key={project.id} project={project} submissions={data.submissions} jobs={data.jobs} epicID={epicID} sending={sending} submit={submit} itemErrors={itemErrors} resume={() => void act(explore)}
               openQuestion={(id) => { const q = project.questions.find((q) => q.id === id); if (!q) return; setEpicID(q.epicID); setTab("discover"); setQuestionFilter(queuedQuestionIDs.has(id) ? "submitted" : q.status === "answered" ? "answered" : q.status === "pending" ? "open" : "later"); setExpandedQuestion(id); }}
                disabled={busy || !!data.active || connectionChanged || needsInitialization} disabledReason={discoveryReason}
               refine={() => void act(async () => { await api(`projects/${project.id}/analyze`, { revision: project.revision, refinementOnly: true, research: false, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) }); })}
-               reviewRefinement={async (proposalID, accept) => {
-                let saved = false;
-                await act(async () => { await mutate("refinement-review", { proposalID, accept }); saved = true; });
-                 return saved;
+                reviewRefinement={async (proposalID, accept) => {
+                  const key = `refinement:${proposalID}`;
+                  setItemErrors((errors) => ({ ...errors, [key]: "" }));
+                  setPending(true);
+                  try { await mutate("refinement-review", { proposalID, accept }); await load(); return true; }
+                  catch (error) { setItemErrors((errors) => ({ ...errors, [key]: error instanceof Error ? error.message : "Could not save refinement decision." })); return false; }
+                  finally { setPending(false); }
                }}
                refreshRefinement={(proposalID) => void act(async () => { await api(`projects/${project.id}/refresh-refinement`, { revision: project.revision, proposalID }); })}
                removeDuplicate={async (revision, removeID, keepID, note) => {
@@ -409,7 +415,8 @@ function App() {
                 {editingEpic === epic.id && <EpicForm title={epic.title} purpose={epic.purpose} disabled={busy} onSave={(title, purpose) => act(async () => { await mutate("epic", { epicID: epic.id, title, purpose }); setEditingEpic(null); })} />}
                 {!members.length && <p>No requirements recorded for this feature yet.</p>}
                 {members.map((requirement) => <details className="requirement-detail" key={requirement.id}><summary><span className={`badge ${requirement.status}`}>{requirement.status === "accepted" ? "Confirmed" : requirement.status === "needs-review" ? "Needs review" : requirement.status === "proposed" ? "Proposed" : "Rejected"}</span><strong>{requirement.statement}</strong></summary><article className="requirement-card"><p>{requirement.rationale}</p><h4>Acceptance scenarios</h4><ul>{requirement.acceptance.map((item) => <li key={item}>{item}</li>)}</ul><details><summary>Supporting decisions</summary>{requirement.sourceIDs.map((sourceID) => <Evidence key={sourceID} id={sourceID} project={project} />)}</details><label>Organize into<select aria-label={`Feature for ${requirement.statement}`} disabled={busy} value={requirement.epicID} onChange={(event) => void act(() => mutate("organize", { operations: [{ type: "move", recordID: requirement.id, epicID: event.target.value }] }))}>{epics.map((area) => <option key={area.id} value={area.id}>{areaTitle(area)}</option>)}</select></label><p className="review-note">{requirement.reviewNote}</p>
-                  <ReviewUpdateNotice project={project} recordType="requirement" recordID={requirement.id} />
+                   <ReviewUpdateNotice project={project} recordType="requirement" recordID={requirement.id} />
+                   <ItemProcessingNotice error={itemErrors[`review:${requirement.id}`]} submission={[...data.submissions].reverse().find((s) => s.input.type === "review" && s.input.requirementID === requirement.id)} resume={() => void act(explore)} disabled={busy || connectionChanged} />
                   <ReviewForm project={project} requirementID={requirement.id} submissions={data.submissions} disabled={sending.includes(`review:${requirement.id}`) || data.submissions.some((s) => s.input.type === "review" && s.input.requirementID === requirement.id && ["queued", "saved", "processing"].includes(s.status))} onReview={async (action, note, reviewedRevision) => { await submit({ type: "review", requirementID: requirement.id, requirementText: requirement.statement, fingerprint: reviewFingerprint(requirement), action, note, reviewedRevision }, `review:${requirement.id}`); }} />
                 </article></details>)}
                 <details className="feature-decisions"><summary>Saved answers & notes</summary>{related.filter((q) => q.sourceID).map((q) => <div key={q.id}><strong>{q.text}</strong><p className="source-excerpt">{project.sources.find((s) => s.id === q.sourceID)?.text}</p><button className="quiet" onClick={() => { setEpicID(epic.id); setTab("discover"); setQuestionFilter(queuedQuestionIDs.has(q.id) ? "submitted" : q.status === "answered" ? "answered" : "later"); setExpandedQuestion(q.id); }}>Edit answer</button></div>)}{project.sources.filter((s) => s.kind === "note" && s.epicID === epic.id).map((s) => <p className="source-excerpt" key={s.id}>{s.text}</p>)}</details>
@@ -472,7 +479,6 @@ function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, h
   const annotated = (_text: string, field: "text" | "whyItMatters" | "label" | "consequence", optionIndex?: number) => field === "text" || field === "whyItMatters" ? annotations[field] : annotations.options[optionIndex!]![field];
   const render = () => {
   return <article className={`question-card ${expanded ? "expanded" : "collapsed"}`}><div className="question-meta"><span>{area}{question.category ? ` · ${dimensionLabels[question.category]}` : ""}</span><span role="status">{status ?? (question.status === "pending" ? "To answer" : question.status === "answered" ? "Answered" : question.status)}</span></div><div className="question-title"><h3 aria-label={question.text}>{expanded ? annotated(question.text, "text") : <button aria-expanded={false} onClick={onToggle}>{question.text}</button>}</h3>{expanded && currentQuestion ? <span className="quiet">Current question</span> : <button className="quiet" aria-expanded={expanded} onClick={onToggle}>{expanded ? "Collapse" : initialText ? "Edit answer" : "Answer"}</button>}</div>{!expanded && initialText && <p className="answer-preview">{initialText}</p>}{expanded && <div className="question-body"><p>{annotated(question.whyItMatters, "whyItMatters")}</p>{purpose && <details className="question-context"><summary>About this feature</summary><p>{purpose}</p></details>}{status === "processing" && <p className="correction-hint">This response is being reviewed. A correction will be saved for the next round.</p>}{status === "queued" && <p className="correction-hint">Saving changes replaces this waiting response. Its earlier version stays in history.</p>}<div className="options">{question.options.map((option, index) => <div className={`option ${kind === "answer" && text === option.label ? "chosen" : ""}`} key={index}><span className="option-circle">{String.fromCharCode(65 + index)}</span><div className="option-copy"><strong>{annotated(option.label, "label", index)}</strong><small>{annotated(option.consequence, "consequence", index)}</small></div><button type="button" className="option-choose" aria-label={`Choose ${option.label}. ${option.consequence}`} aria-pressed={kind === "answer" && text === option.label} disabled={disabled} onClick={() => { setKind("answer"); setText(option.label); onDraft({ kind: "answer", text: option.label }); }}>{kind === "answer" && text === option.label ? "✓ Selected" : "Choose"}</button></div>)}</div>
-    {notice}
     {changed && <p role="status">This question or its choices changed after processing. Your draft is retained. Read the updated question, then <button type="button" className="quiet" onClick={() => { setBasis(fingerprint); persistDraft({ kind, text, fingerprint }); }}>Use draft with updated question</button>.</p>}
     {disabled && <ActivityFeedback label="Saving response…" />}
     <p className="word-help-hint">Unclear wording? Click any word, then ? to ask what it means. Underlined concepts explain instantly.</p>
@@ -485,7 +491,8 @@ function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, h
         <ActionButton className="primary" reason={changed ? "Review the updated question and choose Use draft with updated question first." : !text.trim() ? "Choose an option or write a response first." : undefined} disabled={disabled || changed || !text.trim()}>{initialText ? "Save changes →" : "Save response →"}</ActionButton></div>
       {kind === "delegation" && <small className="delegation-note">Delegation records permission within your stated limits. It does not turn this text into a confirmed product preference.</small>}
     </form></div>}
-  </article>;
+    {notice}
+   </article>;
   };
   return <ActionScope reason={disabled ? "Your response is being saved. Wait for it to finish." : undefined}>{render()}</ActionScope>;
 }

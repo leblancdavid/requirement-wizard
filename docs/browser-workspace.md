@@ -29,6 +29,22 @@ live local-checkpoint updates without main credit and mobile progress layout.
 
 ## Typing in Design and Review
 
+Design question cards and Review requirement/refinement cards now display their own
+submission or processing errors, including on collapsed cards. Failed requirement
+follow-up stays in **To review** even if its decision was already applied. Its
+**Resume discovery** action retries follow-up, not the human decision; scope follows
+the selected feature, and the existing queue remains available for diagnostics.
+Unapplied conflicting reviews show the current blocker and **Open blocking clarification
+in Design** directly on the requirement. Answer with **My answer**, process follow-up,
+then review and resubmit the retained decision/note. Deferral/delegation does not settle
+that choice. If the blocker has cleared, the card says so instead of treating a saved
+historical diagnostic as the current state. No decision is automatically reapplied.
+Request failures retain drafts and no longer force navigation to Processing & queue.
+Verification: type check, all 462 deterministic tests, UI build and diff checks passed.
+Browser checks passed the new in-card error and saved-note recovery assertions, then
+stopped at the previously documented unrelated processing-header expectation (**Saved
+gap checks reused** versus **Ready when you are**). The full browser suite did not pass.
+
 Review's **Anything to add?** editor keeps keystrokes local and retains the latest
 draft in the queue without rerendering the whole review list on each character.
 Submission reads that latest draft; paging, review recovery and explicit acceptance

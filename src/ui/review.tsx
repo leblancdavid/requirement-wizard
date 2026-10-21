@@ -8,12 +8,16 @@ import { SubmissionOverlapStatus } from "./submission-overlap.js";
 import { Pagination, usePagination } from "./pagination.js";
 import { ReviewUpdateNotice } from "./review-update.js";
 import { reviewUpdateFor } from "../core/review-completion.js";
-import { ClarificationLinks, RetainedReviewNotice } from "./decision-recovery.js";
+import { ClarificationLinks, ItemProcessingNotice, RetainedReviewNotice } from "./decision-recovery.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 
 export function pendingReviews(project: Project, submissions: Submission[]) {
   const waiting = new Set(submissions.filter((s) => s.input.type === "review" && ["queued", "saved", "processing"].includes(s.status)).map((s) => s.input.type === "review" ? s.input.requirementID : ""));
-  return project.requirements.filter((r) => ["proposed", "needs-review"].includes(r.status) && !waiting.has(r.id) && project.epics.some((e) => e.id === r.epicID && !e.archived));
+  const resolved = resolvedReviewAttempts(project, submissions);
+  const latest = new Map<string, Submission>();
+  for (const submission of submissions) if (submission.input.type === "review") latest.set(submission.input.requirementID, submission);
+  const failed = new Set([...latest].filter(([, s]) => s.status === "needs-attention" && !resolved.has(s.id)).map(([id]) => id));
+  return project.requirements.filter((r) => (["proposed", "needs-review"].includes(r.status) || failed.has(r.id)) && !waiting.has(r.id) && project.epics.some((e) => e.id === r.epicID && !e.archived));
 }
 
 type ReviewFilter = "pending" | "refinements" | "submitted" | "reviewed";
@@ -89,12 +93,13 @@ function DuplicateRemoval({ project, submissions, jobs, removeID, keepID, disabl
     : <ActionButton className="secondary" disabled={disabled} onClick={() => setOpen(true)}>Remove as duplicate…</ActionButton>;
 }
 
-export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion }: {
+export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, itemErrors = {}, resume }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
   disabled: boolean; disabledReason?: string; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
   refreshRefinement?: (proposalID: string) => void; removeDuplicate?: RemoveDuplicate;
   openQuestion?: (id: string) => void;
+  itemErrors?: Record<string, string>; resume?: () => void;
 }) {
   const [filter, setFilter] = useState<ReviewFilter>("pending");
   const [expanded, setExpanded] = useState<string | null | undefined>(undefined);
@@ -162,6 +167,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
           }
         };
         return <article className="question-card review-card refinement-card" key={item.id}>
+          <ItemProcessingNotice error={itemErrors[item.id]} />
           <button className="review-card-heading" aria-expanded={active === item.id} onClick={() => setExpanded(active === item.id ? null : item.id)}>
             <span className="badge">{withdrawn ? p.resolution ? "Resolution withdrawn" : "Refinement withdrawn" : p.resolution ? pending ? "Resolution proposed" : p.status === "accepted" ? "Resolution approved" : "Resolution dismissed" : pending ? "Refinement proposed" : p.status === "accepted" ? "Refinement approved" : "Current wording kept"}{stale ? " · Outdated" : ""}</span>
             <strong>{p.statement}</strong><small>{project.epics.find((e) => e.id === (target?.epicID ?? p.original.epicID))?.title} · Current requirement: {requirementStatus(target?.status ?? p.original.status)}</small>
@@ -194,14 +200,14 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
       const contextKey = decisionContextKey(project, [r.id]);
       const draft = drafts.current[r.id];
       const changed = !!draft && (draft.fingerprint !== fingerprint || draft.contextKey !== contextKey);
-      const availability = decisionAvailability(project, [r.id], submissions);
+      const availability = decisionAvailability(project, [r.id], submissions, jobs);
       const latest = [...reviews].reverse().find((s) => s.input.type === "review" && s.input.requirementID === r.id);
       const response = latest?.response;
-      const blocked = changed || sending.includes(`review:${r.id}`) || !!latest && ["queued", "saved", "processing"].includes(latest.status);
+      const blocked = changed || sending.includes(`review:${r.id}`) || !!latest && (["queued", "saved", "processing"].includes(latest.status) || latest.status === "needs-attention" && latest.applied && !latest.conflict);
       const save = async (action: "accepted" | "rejected") => {
         setMessage("");
         const currentDraft = drafts.current[r.id];
-        const note = currentDraft?.note ?? "";
+        const note = currentDraft?.note ?? (latest?.conflict && latest.input.type === "review" ? latest.input.note : "");
         if (await submit({ type: "review", requirementID: r.id, requirementText: r.statement, fingerprint, action, note, reviewedRevision: currentDraft?.revision ?? project.revision }, `review:${r.id}`)) {
           delete drafts.current[r.id];
           refreshDrafts((version) => version + 1);
@@ -209,6 +215,12 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
         }
       };
       return <article className="question-card review-card" key={item.id}>
+        <ItemProcessingNotice submission={latest && !resolvedAttempts.has(latest.id) ? latest : undefined} error={itemErrors[`review:${r.id}`]} resume={resume} disabled={disabled} />
+        {latest && !resolvedAttempts.has(latest.id) && <RetainedReviewNotice project={project} submissions={submissions} jobs={jobs} submission={latest} openQuestion={openQuestion} resume={resume} disabled={disabled} reviewCurrent={() => {
+          if (latest.input.type !== "review") return;
+          drafts.current[r.id] ??= { note: latest.input.note, fingerprint, contextKey, revision: project.revision };
+          refreshDrafts((version) => version + 1); setRecoveryTarget(r.id); setExpanded(item.id);
+        }} />}
         <button className="review-card-heading" aria-expanded={active === item.id} onClick={() => setExpanded(active === item.id ? null : item.id)}><span className={`badge ${r.status}`}>{withdrawn ? "Proposal withdrawn" : r.status === "proposed" ? "New requirement" : r.status === "needs-review" ? "Revised requirement" : requirementStatus(r.status)}</span><strong>{r.statement}</strong><small>{project.epics.find((e) => e.id === r.epicID)?.title}</small></button>
           {active === item.id && <div className="requirement-card"><ReviewUpdateNotice project={project} recordType="requirement" recordID={r.id} /><p>{r.rationale}</p><h4>Acceptance scenarios</h4><ul>{r.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{r.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
           {related.length > 0 && <details className="save-notice"><summary>Possible overlaps or conflicts ({related.length})</summary>
@@ -216,7 +228,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
             {related.map((other) => <section key={other.id} aria-label={`Compare requirement ${other.id}`}><h4>{other.statement}</h4><p>{requirementStatus(other.status)} · {project.epics.find((e) => e.id === other.epicID)?.title} · {other.id}</p><p>{other.rationale}</p><ul>{other.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><details><summary>Supporting decisions</summary>{other.sourceIDs.map((id) => <p key={id} className="source-excerpt">{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details></section>)}
           </details>}
           {r.reviewNote && <p>{r.reviewNote}</p>}{response && <p className="save-notice"><strong>AI response:</strong> {response}</p>}
-          <ReviewNote initialValue={draft?.note ?? ""} change={(note) => {
+          <ReviewNote key={latest?.conflict ? latest.id : r.id} initialValue={draft?.note ?? (latest?.conflict && latest.input.type === "review" ? latest.input.note : "")} change={(note) => {
             const current = drafts.current[r.id];
             drafts.current[r.id] = { note, fingerprint: current?.fingerprint ?? fingerprint, contextKey: current?.contextKey ?? contextKey, revision: current?.revision ?? project.revision };
           }} />

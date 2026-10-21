@@ -534,6 +534,8 @@ try {
   await expect.poll(() => store.submissions(safetyProjectID).filter((s) => s.input.type === "answer" && s.status === "completed").length).toBe(1);
   await page.getByRole("tab", { name: /^Review/ }).click();
   const recoveryReview = page.getByRole("region", { name: "Requirement review", exact: true });
+  await expect(recoveryReview.getByRole("region", { name: "Item processing error" })).toContainText("Something needs attention");
+  await expect(recoveryReview.getByLabel("Anything to add? (optional)")).toHaveValue("Saving jobs is essential.");
   await recoveryReview.getByRole("button", { name: /^Submitted/ }).click();
   await expect(recoveryReview.getByRole("region", { name: "Current review recovery" })).toContainText("earlier blocker is no longer active");
   await expect(recoveryReview.getByText("Previous attempt diagnostic (saved history)")).toBeVisible();

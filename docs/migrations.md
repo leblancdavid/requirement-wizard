@@ -19,6 +19,14 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Item-local processing recovery
+
+Item-local processing-error/recovery presentation also leaves persisted formats,
+versions, fingerprints and decision gates unchanged. Existing saved failed reviews
+and answers are read directly; no migration, reset, replay or startup rewrite is
+required. Original diagnostics/history remain saved. Recovery and follow-up retries
+require explicit user actions and never manufacture clarification answers.
+
 ## Design and Review typing isolation
 
 Only transient React draft storage/rendering changes. Source and target SQLite,

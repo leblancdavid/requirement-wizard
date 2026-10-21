@@ -3,6 +3,16 @@ import { decisionAvailability, type DecisionAvailability } from "../core/decisio
 import { reviewFingerprint, type Job, type Project, type Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 
+export function ItemProcessingNotice({ submission, error, resume, disabled }: {
+  submission?: Submission; error?: string; resume?: () => void; disabled?: boolean;
+}) {
+  if (!error && submission?.status !== "needs-attention") return null;
+  return <section className="error item-processing-error" aria-label="Item processing error">
+    <p role="alert"><strong>Something needs attention.</strong> {error || submission?.diagnostic || "Your response was saved but could not be processed."}</p>
+    {submission?.status === "needs-attention" && !submission.conflict && <><p>Your response is retained. Retry its follow-up without submitting it again.</p>{resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Resume discovery</button>}</>}
+  </section>;
+}
+
 export function ClarificationLinks({ availability, openQuestion }: { availability: DecisionAvailability; openQuestion?: (id: string) => void }) {
   return openQuestion && availability.questionIDs?.length ? <div className="button-row">{availability.questionIDs.map((id, index) =>
     <button type="button" className="quiet" key={id} onClick={() => openQuestion(id)}>Open blocking clarification{availability.questionIDs!.length > 1 ? ` ${index + 1}` : ""} in Design</button>)}</div> : null;
@@ -10,9 +20,10 @@ export function ClarificationLinks({ availability, openQuestion }: { availabilit
 
 /** Saved diagnostics describe the failed attempt, not necessarily today's state.
  * Rechecking is read-only; retry always requires a new explicit human review. */
-export function RetainedReviewNotice({ project, submissions, jobs = [], submission, openQuestion, reviewCurrent }: {
+export function RetainedReviewNotice({ project, submissions, jobs = [], submission, openQuestion, reviewCurrent, resume, disabled }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; submission: Submission;
   openQuestion?: (id: string) => void; reviewCurrent: () => void;
+  resume?: () => void; disabled?: boolean;
 }) {
   if (submission.input.type !== "review" || submission.applied || !submission.conflict || submission.status !== "needs-attention") return null;
   const input = submission.input;
@@ -26,6 +37,7 @@ export function RetainedReviewNotice({ project, submissions, jobs = [], submissi
       ? "The earlier blocker is no longer active. Your saved decision has not been applied. Review the current requirement and resubmit; your note can be reused."
       : `Current blocker: ${availability.reason}`}{changed ? " The requirement changed since this saved review; compare its updated wording and scenarios." : ""}</p>
     <ClarificationLinks availability={availability} openQuestion={openQuestion} />
+    {!!availability.submissionIDs.length && resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Process blocking input</button>}
     {target && project.epics.some((e) => e.id === target.epicID && !e.archived) && <button type="button" className="secondary" onClick={reviewCurrent}>Review current requirement with saved note</button>}
   </section>;
 }
