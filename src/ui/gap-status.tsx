@@ -1,11 +1,17 @@
 import React from "react";
-import type { Job } from "../core/model.js";
+import type { Job, Project } from "../core/model.js";
 
-export function GapExplorationStatus({ job }: { job: Job }) {
+export function GapExplorationStatus({ job, project }: { job: Job; project?: Project }) {
   const report = job.gapReport;
   if (!report) return null;
   return <section aria-label="Gap exploration backlog"><h3>Gap exploration backlog</h3>
-    <p>{report.checked} checked · {report.pending} pending · {report.waiting} waiting for decisions · {report.blocked} context blocked · {report.total} tasks</p>
+    <p>{report.checked} checked · {report.pending} pending · {report.waiting} waiting for decisions · {report.blocked - (report.requestBlocked ?? 0)} context blocked{report.requestBlocked ? ` · ${report.requestBlocked} request-limit blocked` : ""} · {report.total} tasks</p>
+    {!!report.requestBlocked && <><p>Request-limit blocked checks remain incomplete after six attempts. Explore next gaps skips their unchanged inputs and continues other pending checks, without granting more calls or discarding saved evidence.</p>
+      <details><summary>Checks blocked by the request limit · {report.requestBlocked}</summary><ul>{report.exhaustedTasks?.map((task) => {
+        const record = project && [...project.requirements, ...project.questions, ...project.sources].find((r) => r.id === task.targetRecordID);
+        const label = record ? "statement" in record ? record.statement : record.text : task.targetRecordID;
+        return <li key={`${task.targetRecordID}:${task.lens}`}>{task.lens} check: {label}</li>;
+      })}</ul>{report.requestBlocked > (report.exhaustedTasks?.length ?? 0) && <p>Not all blocked checks are listed here (at most 20).</p>}</details></>}
     <p>{job.retrievalWork ? `${job.retrievalWork.stages.length} evidence navigation stages saved · ${job.retrievalWork.attempts} of ${job.retrievalWork.continuation ? 6 : 3} model requests attempted across retries. Exact loaded evidence only; navigation hints cannot be cited.` : report.modelCalls ? "One model request attempted." : "No model request made."}{report.projectedReviewSnapshots ? ` ${report.projectedReviewSnapshots} superseded plain review snapshots omitted; original evidence remains saved.` : ""}</p>
     {job.retrievalWork?.continuation && <p>One-time continuation granted from a saved exhausted task: up to three additional requests, six cumulative attempts and five navigation stages maximum. Resume retains this allowance and all spent attempts; no second grant is available.</p>}
     {job.retrievalWork?.requestedPolicy && <p>Requested for new searches in this job: {job.retrievalWork.requestedPolicy === "prefix-aux-v1" ? "Experimental prefix-preserving auxiliary merge (prefix-aux-v1)" : "Default prefix search"}. Saved stages below retain their original policy, even after switching back.</p>}

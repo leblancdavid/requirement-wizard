@@ -35,6 +35,8 @@ to load its exact evidence and analyze it.
 For an exhausted saved gap task, **Continue exploration** offers an explicit one-time
 allowance of up to three additional requests (six cumulative attempts maximum), retaining
 saved stages and spent calls. Ordinary Resume does not reset the limit or grant calls.
+After six attempts without a final response, unchanged checks remain request-limit blocked;
+**Explore next gaps** moves to other pending checks rather than repeatedly selecting them.
 The [deterministic retrieval baseline](docs/retrieval-baseline.md) records first-query
 hits, intentional misses and exact-use blockers on large synthetic saved projects.
 An [offline candidate evaluation](docs/retrieval-evaluation.md) compares bounded retrieval

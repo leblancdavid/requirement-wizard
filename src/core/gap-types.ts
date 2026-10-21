@@ -18,7 +18,11 @@ export const gapReportSchema = z.object({ format: z.literal(1), state: z.enum(["
   modelCalls: z.number().int().min(0).max(6), explanation: z.string().min(1).max(1200),
   projectedReviewSnapshots: z.number().int().nonnegative().optional(),
   blockedTasks: z.array(gapBlockSchema).max(20).optional(),
+  requestBlocked: z.number().int().nonnegative().optional(),
+  exhaustedTasks: z.array(gapReuseSchema).max(20).optional(),
   reusedChecks: z.array(gapReuseSchema).max(20).optional(),
 }).strict().refine((report) => report.checked + report.pending + report.waiting + report.blocked === report.total,
-  "Gap task counts do not match the saved total.");
+  "Gap task counts do not match the saved total.")
+  .refine((report) => (report.requestBlocked ?? 0) <= report.blocked && (report.exhaustedTasks?.length ?? 0) <= (report.requestBlocked ?? 0),
+    "Request-limit blockers must be included in blocked task counts.");
 export type GapReport = z.infer<typeof gapReportSchema>;

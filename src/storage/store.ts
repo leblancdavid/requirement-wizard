@@ -18,7 +18,7 @@ import { planIncrementalResolution } from "../core/incremental-resolution.js";
 import { answerScopeSchema, decisionBasisSchema, overlapFollowupSchema, pendingChangesSchema, requirementEvidenceIDs, reviewActionSchema, type AnswerScope } from "../core/model.js";
 import { answerScopeMatches, captureAnswerScope, validateScopedAnswerResult } from "../core/input-scope.js";
 import { gapCheckSchema, gapReportSchema, type GapReport } from "../core/gap-types.js";
-import { retrievalWorkSchema, type RetrievalWork } from "../core/gap-retrieval.js";
+import { retrievalAllowanceSchema, retrievalWorkSchema, type RetrievalWork } from "../core/gap-retrieval.js";
 import type { GapHistory } from "../core/gap-backlog.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
@@ -757,6 +757,12 @@ export class ProjectStore {
       json_extract(payload, '$.status') AS status, json_extract(payload, '$.kind') AS kind,
       json_extract(payload, '$.helpRequest') AS help, json_extract(payload, '$.context.refinementOnly') AS refinement,
       json_extract(payload, '$.context.decisionProjection.format') AS projectionFormat,
+      json_extract(payload, '$.model') AS model,
+      json_type(payload, '$.retrievalWork') AS retrievalType,
+      json_extract(payload, '$.retrievalWork.format') AS retrievalFormat,
+      json_extract(payload, '$.retrievalWork.attempts') AS retrievalAttempts,
+      json_extract(payload, '$.retrievalWork.continuation') AS retrievalContinuation,
+      json_type(payload, '$.retrievalWork.final') IS NOT NULL AS hasRetrievalFinal,
       json_extract(payload, '$.context.gapExploration') AS exploration, json_extract(payload, '$.gapReport') AS report,
       CASE WHEN json_type(payload, '$.context.gapExploration.check') IS NULL
         THEN json_extract(payload, '$.context.includedIDs') END AS legacyIncludedIDs
@@ -765,12 +771,18 @@ export class ProjectStore {
       id: string; revision: number; status: Job["status"]; kind: string | null; help: string | null;
       refinement: number | null; exploration: string | null; report: string | null; legacyIncludedIDs: string | null;
       projectionFormat: number | null;
+      model: string | null; retrievalType: string | null; retrievalFormat: number | null;
+      retrievalAttempts: number | null; retrievalContinuation: string | null; hasRetrievalFinal: number;
     }[];
     return rows.map((row) => {
       if (row.projectionFormat !== null && row.projectionFormat !== 1) throw new Error("Unsupported current-decision projection format. Saved evidence was not overwritten.");
       const exploration = row.exploration ? JSON.parse(row.exploration) as NonNullable<Job["context"]>["gapExploration"] : undefined;
       if (exploration?.check !== undefined) gapCheckSchema.parse(exploration.check);
       return { id: row.id, expectedRevision: row.revision, status: row.status, ...(row.kind ? { kind: row.kind } : {}),
+        ...(row.model ? { model: modelSelection.parse(JSON.parse(row.model)) } : {}),
+        ...(row.retrievalType ? { retrievalAllowance: retrievalAllowanceSchema.parse({ format: row.retrievalFormat,
+          attempts: row.retrievalAttempts, continuation: row.retrievalContinuation ? JSON.parse(row.retrievalContinuation) : undefined,
+          hasFinal: !!row.hasRetrievalFinal }) } : {}),
         ...(row.help ? { helpRequest: true } : {}), context: { gapExploration: exploration, refinementOnly: !!row.refinement,
           ...(row.legacyIncludedIDs ? { includedIDs: z.array(z.string()).parse(JSON.parse(row.legacyIncludedIDs)) } : {}) },
         ...(row.report ? { gapReport: gapReportSchema.parse(JSON.parse(row.report)) } : {}) };

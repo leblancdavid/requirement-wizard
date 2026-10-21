@@ -149,11 +149,20 @@ multiple features resume the project queue. Automatic-processing preferences sti
 An opened Review requirement captures a transient copy of its displayed wording,
 scenarios and evidence basis, even before a note is typed. When relevant information
 changes, the card retains the note, displays previous wording/scenarios or explains a
-context-only change, and lists new relevant supporting evidence. Existing explicit
-**Use note with updated requirement** acknowledgement is required before resubmitting.
+context-only change, and lists new relevant supporting evidence. An **Updated since you
+started reviewing** warning appears immediately above the decision buttons. No separate
+acknowledgement is needed: Approve, Reject or Request changes uses the currently
+displayed revision and retains the note. Submission-time checks still prevent a decision
+from applying to information changed after that display; old decisions are never replayed.
 This is a comparison with the current browser review, not a reconstructed historical
 snapshot or an exhaustive semantic evidence diff. Reloading clears these transient drafts
 and comparisons; durable submitted notes/history remain recoverable as before.
+
+Verification (2026-10-21): type check, all 512 deterministic tests, UI build and full
+`test:browser` check passed (runtime checks on Node 22.23.3). Coverage includes warning
+placement, wording/context-only updates, retained review/change-request notes, decisions
+using the displayed revision without acknowledgement, failed-submit retention and the
+focused resolver. The existing Vite chunk-size warning remains non-blocking.
 
 Approval/rejection still require current evidence, worker ownership and transactional
 storage checks. No approval is automatically reapplied after an answer. Targeted change
@@ -286,8 +295,8 @@ gap checks reused** versus **Ready when you are**). The full browser suite did n
 
 Review's **Anything to add?** editor keeps keystrokes local and retains the latest
 draft in the queue without rerendering the whole review list on each character.
-Submission reads that latest draft; paging, review recovery and explicit acceptance
-of updated requirement context preserve it. Existing stale-review checks remain.
+Submission reads that latest draft; paging, review recovery and automatic display
+of updated requirement context preserve it. Existing submission-time stale-review checks remain.
 Design answer edits reuse unchanged word/concept explanation elements instead of
 rebuilding them on each character. Text updates immediately, without debouncing.
 These changes address code-level rendering hotspots; no measured typing-latency
@@ -401,8 +410,21 @@ citation or changes. Invalid requests identify duplicate, already-loaded, unavai
 not-offered handles; unknown model-supplied strings are not echoed as record IDs.
 
 This does not restore attempts already consumed by a failed call. A six-request task is
-still exhausted and incomplete; retry does not gain another allowance. Select another
-feature to explore independent work rather than retrying the unchanged exhausted task.
+still exhausted and incomplete; retry does not gain another allowance. **Explore next
+gaps** skips matching six-attempt checks without a saved final response and selects another
+pending check. This applies to the same target/lens/evidence key and saved model/connection;
+unrelated revisions do not reset the blocker. A genuinely changed evidence/scope key can
+create new work, but the original failure and six attempts remain in history.
+
+The backlog separates **request-limit blocked** from context-size blockers and lists up
+to 20 exhausted checks with their target/lens. They do not count as checked or complete.
+If the selected scope contains only blocked or waiting tasks, the app reports that without
+inference or a specification revision. Saved final responses still follow publication
+recovery without another model call, even when their six attempts have been spent. Tasks
+at three attempts keep the existing explicit **Continue exploration** option. Startup
+never starts another task automatically. The navigation browser check covers routing away
+from a legacy exhausted check, retained history, reload and mobile layout
+(`.reqwizit-state/browser-gap-exhausted.png`). Live discovery quality remains unqualified.
 
 If relevant handles are absent from those indexes, the model can instead return ONLY
 `{searchEvidence:{format:1,query:"quartz archive",limit:8}}`. This searches omitted saved

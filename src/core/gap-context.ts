@@ -22,7 +22,9 @@ export function restoreGapTaskContext(project: Project, exploration: NonNullable
 
 export class GapBacklogIdle extends Error {
   constructor(readonly report: GapReport) {
-    super(report.state === "blocked" ? "Gap tasks remain blocked by exact evidence size or the local planning bound. Other saved checks are retained. No model call was made; review the selected feature's context scope or retry to reach further unexamined tasks."
+    super(report.state === "blocked" ? report.requestBlocked && !report.pending
+      ? "Gap tasks remain incomplete: some exhausted their six-request continuation allowance; others may be blocked by evidence size. Their saved stages and decisions are retained. No model call was made. Explore another feature or review genuinely missing evidence/scope; retrying unchanged cannot grant more requests."
+      : "Gap tasks remain blocked by exact evidence size or the local planning bound. Other saved checks are retained. No model call was made; review the selected feature's context scope or retry to reach further unexamined tasks."
       : report.waiting ? "Gap exploration is waiting for unresolved Design questions. Answer and process them before exploring those decisions again. Other compatible completed checks are retained."
       : "All current backlog tasks have compatible saved checks. No model call was made. This is not proof of specification completeness; new or changed evidence can add or reopen tasks.");
   }

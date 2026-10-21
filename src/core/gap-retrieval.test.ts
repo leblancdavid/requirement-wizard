@@ -1098,11 +1098,14 @@ test("continuation failures survive restart and ordinary retries cannot reset si
     for (let i = 0; i < 2; i++) last = await resumed.analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
     assert.equal(last!.retrievalWork!.attempts, 6); assert.equal(calls, 6);
     const bounded = await resumed.analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
-    assert.match(bounded.diagnostic!, /six-request continuation bound/); assert.equal(calls, 6);
-    await assert.rejects(() => resumed.analyze(f.p.id, f.p.revision, { continueGapJobID: bounded.id }), /without an existing continuation/);
+    assert.equal(bounded.gapReport!.requestBlocked, 1); assert.equal(calls, 7, "only a different pending task gets a request");
+    assert.notDeepEqual(bounded.context!.gapExploration, last!.context!.gapExploration);
+    assert.equal(bounded.retrievalWork!.attempts, 1, "the new task has its own allowance; the exhausted task is not reset");
+    assert.deepEqual(store.getJob(last!.id), last!);
+    await assert.rejects(() => resumed.analyze(f.p.id, f.p.revision, { continueGapJobID: last!.id }), /without an existing continuation/);
     assert.deepEqual(store.get(f.p.id), f.p);
-    assert.throws(() => retrievalWorkSchema.parse({ ...bounded.retrievalWork, continuation: undefined }), /Extended retrieval/);
-    assert.throws(() => retrievalWorkSchema.parse({ ...bounded.retrievalWork, continuation: { ...bounded.retrievalWork!.continuation, format: 99 } }));
+    assert.throws(() => retrievalWorkSchema.parse({ ...last!.retrievalWork, continuation: undefined }), /Extended retrieval/);
+    assert.throws(() => retrievalWorkSchema.parse({ ...last!.retrievalWork, continuation: { ...last!.retrievalWork!.continuation, format: 99 } }));
   } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
 });
 

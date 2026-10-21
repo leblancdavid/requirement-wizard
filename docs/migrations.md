@@ -19,6 +19,54 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Review update warning instead of acknowledgement
+
+Presentation/workflow only; persisted formats, fingerprints and decision-context rules
+are unchanged. New Review decisions use the currently displayed revision rather than
+the unsent draft's initial comparison revision. The original draft/note is kept for
+comparison, with an update warning above the decision buttons. Existing submissions,
+conflicts and saved evidence are not rewritten or automatically retried. No startup
+migration, reassessment or model call is required; submission-time stale checks remain.
+
+## Exhausted gap-task scheduling and blocker reporting
+
+SQLite **3 → 3**, gap report **1 → 1** with optional `requestBlocked` and bounded
+`exhaustedTasks` fields. No schema conversion, startup sweep, evidence-key change,
+allowance reset, inference replay or assessment invalidation. Existing saved projects,
+jobs, checkpoint/final responses and historical reports remain byte-for-byte unchanged on
+reopen. New reports include request-limit blockers within the existing `blocked` total,
+not `checked`; `requestBlocked` is a subgroup and its list is capped at 20. Old reports
+without these fields retain their original meaning and counts.
+
+The read-only backlog projection now recognizes failed/cancelled/interrupted/stale gap
+jobs with a valid one-time continuation receipt, six spent attempts and no saved final
+response. For the same target/lens/current evidence key and model/connection, the task is
+blocked rather than pending. A later compatible completed check wins; valid saved final
+responses remain available for publication recovery. Three-attempt tasks retain explicit
+continuation eligibility. Unknown/malformed allowance and receipt formats reject reads
+without overwriting saved payloads; diagnostics alone never establish exhaustion.
+
+Storage reads only allowance/model metadata, not growing navigation bodies or saved
+output, for scheduling. On the next explicit Explore/Resume action, another pending task
+may run under its own allowance; the exhausted task receives no calls or new grant. If
+only blocked/waiting work remains, the no-call report creates no specification revision.
+Unrelated revision/summary changes do not reset the blocker. A genuinely changed
+evidence/scope key or different model/connection is distinct work, with original attempts
+and evidence retained. No user must reset data or edit decisions just to upgrade.
+
+Upgrade tests cover legacy six-attempt payloads and repeated reopening without rewriting
+them, parity between full-job and compact scheduling metadata, blocked-not-checked counts,
+next-task routing, no-call all-blocked scopes, saved-final exclusion, model/evidence changes
+and rejection of future allowance/receipt formats. Browser checks exercise the matching
+request-limit label and target/lens list, next-task routing, retained history, reload and
+mobile layout. No live provider calls or user-data edits are required for these checks.
+Verification on Node 22.23.3: typecheck, all 511 deterministic tests, standard browser
+checks, the navigation browser check and whitespace checks passed. A read-only plan of
+Rust Grind Galaxy revision 1694 reported one request-limit blocker and selected another
+check; it did not infer or write project data. Existing large-bundle warnings remain
+non-blocking. Older builds with strict report readers do not support the new optional
+blocker fields; reopen newly saved reports with the updated app rather than downgrading.
+
 ## Explicit navigation for saved IDs in quoted explanations
 
 SQLite **3 → 3**, retrieval envelope **1 → 1**, evidence-basis compatibility

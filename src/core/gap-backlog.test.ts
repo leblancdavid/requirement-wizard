@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { currentDecisionProjection, reviewSnapshot } from "./current-decisions.js";
-import { gapBacklog, gapEvidence } from "./gap-backlog.js";
-import { planGapContext } from "./gap-context.js";
+import { gapBacklog, gapEvidence, gapReport } from "./gap-backlog.js";
+import { planGapContext, restoreGapTaskContext } from "./gap-context.js";
 import { planContext } from "./working-set.js";
 import { proposeRefinements, reviewRefinement } from "./refinement.js";
 import type { Analysis, Job, Project } from "./model.js";
@@ -314,6 +314,80 @@ test("blocked task receipts prevent repeated oversized preflight from starving l
   } finally { store.close(); }
 });
 
+test("legacy exhausted allowances reopen unchanged, remain blocked rather than checked, and let independent tasks proceed", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "reqwizit-gap-exhausted-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = seed(store), target = p.requirements[0]!;
+    let calls = 0;
+    const failing = new DiscoveryService(store, { async analyze() { calls++; throw new Error("Curated inference failure"); } });
+    let failed: Job | undefined;
+    for (let i = 0; i < 3; i++) failed = await failing.analyze(p.id, p.revision, { focusEpicID: target.epicID });
+    failed = await failing.analyze(p.id, p.revision, { continueGapJobID: failed!.id });
+    for (let i = 0; i < 2; i++) failed = await failing.analyze(p.id, p.revision, { focusEpicID: target.epicID });
+    assert.equal(calls, 6); assert.equal(failed.retrievalWork!.attempts, 6);
+    // The saved job predates request-blocker report fields. Upgrade derives the
+    // blocker from its actual allowance, not from diagnostic text or a rewrite.
+    assert.equal(failed.gapReport!.requestBlocked, undefined);
+    const original = JSON.stringify(failed);
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(path);
+      assert.equal(JSON.stringify(store.getJob(failed.id)), original);
+      assert.deepEqual(store.get(p.id), p);
+      assert.deepEqual(gapBacklog(p, store.gapHistory(p.id)), gapBacklog(p, store.jobs(p.id)));
+      const tasks = gapBacklog(p, store.gapHistory(p.id));
+      const blocked = tasks.find((t) => t.record.id === target.id && t.lens === "behavior")!;
+      assert.equal(blocked.state, "blocked"); assert.equal(blocked.exhaustedJobID, failed.id);
+      assert.equal(gapReport(tasks).requestBlocked, 1); assert.equal(gapReport(tasks).checked, 0);
+    }
+    const next = await new DiscoveryService(store, { async analyze(_p, options) {
+      calls++;
+      assert.notDeepEqual(options.context.manifest.gapExploration, failed!.context!.gapExploration);
+      return empty();
+    } }).analyze(p.id, p.revision, { focusEpicID: target.epicID });
+    assert.equal(next.status, "completed", next.diagnostic); assert.equal(calls, 7);
+    assert.equal(next.context!.gapExploration!.check!.lens, "failures");
+    assert.equal(next.gapReport!.requestBlocked, 1);
+    assert.equal(next.gapReport!.exhaustedTasks![0]!.sourceJobID, failed.id);
+    assert.equal(JSON.stringify(store.getJob(failed.id)), original);
+    assert.deepEqual(store.get(p.id).sources, p.sources);
+    const unchanged = store.get(p.id);
+    assert.equal(gapBacklog(unchanged, store.gapHistory(p.id)).find((t) => t.record.id === target.id && t.lens === "behavior")!.state, "blocked");
+    const changed = store.note(p.id, unchanged.revision, "New genuine rule affecting the first feature", target.epicID);
+    assert.equal(gapBacklog(changed, store.gapHistory(p.id)).find((t) => t.record.id === target.id && t.lens === "behavior")!.state, "pending");
+    assert.equal(JSON.stringify(store.getJob(failed.id)), original, "new evidence never replaces the exhausted original");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("all-exhausted scopes stop without inference or revisions, while saved final responses and different models are not blocked", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = store.get(seed(store).id), catalog = gapBacklog(p, []);
+    for (const task of catalog) {
+      const context = restoreGapTaskContext(p, { targetRecordID: task.record.id, check: { format: 1,
+        compatibility: "gap-evidence-v1", lens: task.lens, inputKey: task.inputKey } }, task.record.epicID);
+      const j = store.beginJob(p.id, p.revision).job; store.claimJob(j.id, Date.now() + 60000);
+      store.checkpointRetrieval(j.id, { format: 1, research: false, attempts: 6, stages: [],
+        continuation: { format: 1, sourceJobID: "curated-original-exhaustion", fromStage: 0 } }, context.manifest);
+      store.failJob(j.id, "failed", "Curated older exhausted task");
+    }
+    const saved = store.jobs(p.id), report = gapReport(gapBacklog(p, store.gapHistory(p.id)));
+    assert.equal(report.requestBlocked, catalog.length); assert.equal(report.checked, 0); assert.equal(report.pending, 0);
+    let calls = 0;
+    const idle = await new DiscoveryService(store, { async analyze() { calls++; return empty(); } }).analyze(p.id, p.revision);
+    assert.equal(idle.status, "completed", idle.diagnostic); assert.equal(idle.gapReport!.state, "blocked", JSON.stringify({ calls, report: idle.gapReport, task: idle.context?.gapExploration }));
+    assert.equal(idle.gapReport!.modelCalls, 0); assert.equal(calls, 0); assert.deepEqual(store.get(p.id), p);
+    assert.deepEqual(store.jobs(p.id).slice(0, -1), saved);
+    const withFinal = structuredClone(saved);
+    const last = withFinal.at(-1)!;
+    last.retrievalWork!.final = { contextKey: "0".repeat(64), output: empty() };
+    assert.equal(gapBacklog(p, withFinal).filter((t) => t.state === "blocked").length, catalog.length - 1,
+      "an exact saved final response can still be published without another model call");
+    const different = { ...p, model: { ...p.model, modelID: "different-fixture" } };
+    assert.equal(gapBacklog(different, store.gapHistory(p.id)).filter((t) => t.state === "blocked").length, 0);
+  } finally { store.close(); }
+});
+
 test("future gap-check and report formats reject reads without overwriting saved payloads", () => {
   const directory = mkdtempSync(join(tmpdir(), "reqwizit-gap-future-")), path = join(directory, "projects.sqlite");
   let store: ProjectStore | undefined = new ProjectStore(path);
@@ -322,11 +396,13 @@ test("future gap-check and report formats reject reads without overwriting saved
     const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000); store.attachContext(job.id, context.manifest);
     store.failJob(job.id, "failed", "Fixture stopped");
     const original = store.getJob(job.id); store.close(); store = undefined;
-    for (const field of ["check", "report", "projection"] as const) {
+    for (const field of ["check", "report", "projection", "allowance", "continuation"] as const) {
       const raw = structuredClone(original) as Job;
       if (field === "check") (raw.context!.gapExploration!.check as { format: number }).format = 99;
       else if (field === "report") raw.gapReport = { ...context.gapReport!, format: 99 as 1 };
-      else (raw.context!.decisionProjection as { format: number }).format = 99;
+      else if (field === "projection") (raw.context!.decisionProjection as { format: number }).format = 99;
+      else raw.retrievalWork = { format: field === "allowance" ? 99 as 1 : 1, research: false, attempts: 6, stages: [],
+        continuation: { format: field === "continuation" ? 99 as 1 : 1, sourceJobID: "older-source", fromStage: 0 } };
       const db = new Database(path), payload = JSON.stringify(raw); db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(payload, job.id); db.close();
       store = new ProjectStore(path);
       assert.throws(() => store!.getJob(job.id)); assert.throws(() => store!.gapHistory(p.id)); store.close(); store = undefined;

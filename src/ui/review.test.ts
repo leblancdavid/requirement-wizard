@@ -24,6 +24,19 @@ test("gap backlog status distinguishes saved checks, unresolved decisions and no
   assert.ok(!html.includes("100%")); assert.deepEqual(job, before);
 });
 
+test("gap status separates request-limit blockers from context blockers and names the incomplete saved check", () => {
+  const project = fixture(), target = project.requirements[0]!;
+  const job: Job = { id: "next-gap-job", projectID: project.id, expectedRevision: project.revision, model: project.model,
+    status: "completed", leaseUntil: null, gapReport: { format: 1, state: "checked", checked: 1, pending: 0, waiting: 1, blocked: 2,
+      total: 4, modelCalls: 1, requestBlocked: 1, exhaustedTasks: [{ format: 1, compatibility: "gap-evidence-v1", lens: "behavior",
+        targetRecordID: target.id, inputKey: "0".repeat(64), sourceJobID: "saved-six-attempt-job" }], explanation: "Partial task check only." } };
+  const before = structuredClone(job);
+  const html = renderToStaticMarkup(createElement(GapExplorationStatus, { job, project }));
+  assert.match(html, /1 context blocked/); assert.match(html, /1 request-limit blocked/);
+  assert.match(html, /remain incomplete after six attempts/); assert.match(html, /continues other pending checks/);
+  assert.ok(html.includes(target.statement)); assert.deepEqual(job, before);
+});
+
 test("pilot status distinguishes requested default from saved experimental policy and explains bounded auxiliary omissions", () => {
   const p = fixture(), context = planGapContext(p, [], "inbox");
   const request = { searchEvidence: { format: 1 as const, query: "gameplay", limit: 2 } };
@@ -80,6 +93,29 @@ function fixture(): Project {
     fingerprint: reviewFingerprint(r), status: "pending", statement: `Refined ${r.id}`, rationale: "Observable behavior", acceptance: ["Behavior is preserved"], reason: "Abstracted code", createdAtRevision: 1 }));
   return project;
 }
+
+test("updated Review warns immediately above decisions without an acknowledgement gate", () => {
+  for (const contextOnly of [false, true]) {
+    const p = fixture();
+    p.refinements = [];
+    const r = p.requirements[1]!;
+    const draft = { note: "Keep my note", edited: true, fingerprint: reviewFingerprint(r), contextKey: decisionContextKey(p, [r.id]), revision: p.revision, original: structuredClone(r) };
+    if (contextOnly) p.sources.push({ id: "new-context", kind: "note", text: "New gameplay constraint", epicID: "inbox" });
+    else r.statement = "Updated aiming behavior";
+    p.revision++;
+    const before = structuredClone(p);
+    const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
+      focusRequirementID: r.id, draftStore: { current: { [r.id]: draft } }, refine: () => {}, submit: async () => true, reviewRefinement: async () => true }));
+    assert.match(html, /role="alert"><strong>Updated since you started reviewing\.<\/strong>[^<]*<\/p><div class="button-row">/);
+    assert.match(html, /Keep my note/);
+    assert.doesNotMatch(html, /Use note with updated requirement/);
+    for (const label of ["Approve", "Reject", "Request changes"]) {
+      assert.match(html, new RegExp(`<button class="[^"]+">${label}</button>`));
+    }
+    assert.equal(draft.revision, 1, "The original comparison basis is retained");
+    assert.deepEqual(p, before);
+  }
+});
 
 test("Review uses Refine as the single duplicate/conflict workflow without running it on render", () => {
   const p = fixture(), before = structuredClone(p);

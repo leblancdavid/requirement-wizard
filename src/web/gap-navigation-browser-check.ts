@@ -7,6 +7,7 @@ import { ProjectStore } from "../storage/store.js";
 import { analysisSchema } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
 import type { SavedEvidenceSearch } from "../core/gap-navigation.js";
+import { planGapContext } from "../core/gap-context.js";
 
 // Real UI/API, isolated memory database, deterministic adapter; no provider access.
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -41,6 +42,18 @@ store.finishJob(pageSeed.id, { ...empty(), requirements: ["Retain offline drafts
 })) });
 paging = store.get(paging.id);
 const pagingBefore = structuredClone(paging);
+let exhaustedProject = store.create("Exhausted check scheduling", "Retain incomplete checks and every saved decision", { providerID: "openai", modelID: "fixture" });
+const exhaustedSeed = store.beginJob(exhaustedProject.id, exhaustedProject.revision).job; store.claimJob(exhaustedSeed.id, Date.now() + 60000);
+store.finishJob(exhaustedSeed.id, { ...empty(), requirements: [{ epicID: "inbox", statement: "Preserve exhausted workflow", rationale: "Original input",
+  acceptance: ["Saved work remains intact"], sourceIDs: [exhaustedProject.sources[0]!.id] }] });
+exhaustedProject = store.get(exhaustedProject.id);
+const exhaustedContext = planGapContext(exhaustedProject, [], "inbox");
+const exhaustedSeedJob = store.beginJob(exhaustedProject.id, exhaustedProject.revision).job; store.claimJob(exhaustedSeedJob.id, Date.now() + 60000);
+store.checkpointRetrieval(exhaustedSeedJob.id, { format: 1, research: false, attempts: 6, stages: [],
+  continuation: { format: 1, sourceJobID: "curated-original-exhaustion", fromStage: 0 } }, exhaustedContext.manifest);
+store.failJob(exhaustedSeedJob.id, "failed", "Evidence retrieval reached its six-request continuation bound.");
+const exhaustedOriginal = structuredClone(store.getJob(exhaustedSeedJob.id));
+let exhaustedNextCalls = 0;
 const checkpoint = store.checkpointRetrieval.bind(store);
 let interrupted = false, pagingInterrupted = false, calls = 0, pagingCalls = 0;
 store.checkpointRetrieval = (...args) => {
@@ -56,6 +69,12 @@ const connections: Connections = {
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {},
 };
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(_snapshot, options) {
+  if (_snapshot.id === exhaustedProject.id) {
+    exhaustedNextCalls++;
+    assert.notDeepEqual(options.context.manifest.gapExploration, exhaustedContext.manifest.gapExploration);
+    assert.equal(options.context.manifest.gapExploration!.check!.lens, "failures");
+    return empty();
+  }
   if (_snapshot.id === paging.id) {
     pagingCalls++;
     assert.equal(options.research, false);
@@ -200,6 +219,25 @@ try {
   assert.deepEqual(store.getJob(exhausted.id), exhausted);
   assert.deepEqual(store.get(paging.id).sources, paging.sources);
   assert.deepEqual(store.get(paging.id).requirements, paging.requirements);
+  await page.locator(".sidebar").getByRole("button", { name: /Exhausted check scheduling/ }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  await page.getByLabel("Filter by feature").selectOption("inbox");
+  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await expect.poll(() => store.jobs(exhaustedProject.id).at(-1)!.status).toBe("completed");
+  assert.equal(exhaustedNextCalls, 1);
+  assert.equal(store.jobs(exhaustedProject.id).at(-1)!.gapReport!.requestBlocked, 1);
+  assert.deepEqual(store.getJob(exhaustedSeedJob.id), exhaustedOriginal);
+  await page.locator(".topbar .queue-trigger").click();
+  await expect(status).toContainText("1 request-limit blocked");
+  await expect(status).toContainText("remain incomplete after six attempts");
+  await status.getByText("Checks blocked by the request limit · 1", { exact: true }).click();
+  await expect(status).toContainText("behavior check: Preserve exhausted workflow");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-gap-exhausted.png", fullPage: true });
+  await page.getByRole("button", { name: "Close processing queue" }).click();
+  await page.reload(); assert.equal(exhaustedNextCalls, 1);
+  assert.deepEqual(store.getJob(exhaustedSeedJob.id), exhaustedOriginal);
+  assert.deepEqual(store.get(exhaustedProject.id).requirements, exhaustedProject.requirements);
   assert.deepEqual(errors, []);
   console.log("Saved-evidence navigation browser check passed: undisplayed handle search, exact load, durable interruption, cross-revision paging/retry, shared-budget exhaustion, omissions/continuation/blocker UI, history, reload and mobile width.");
 } catch (error) {

@@ -70,7 +70,7 @@ export function ReviewComparison({ original, current, project, evidenceIDs }: { 
   const addedSources = decisionEvidenceSources(project, [current.id]).filter((s) => !(evidenceIDs ?? original.sourceIDs).includes(s.id));
   return <section className="review-comparison" aria-label="Changes since you started reviewing">
     <h4>Changes since you started reviewing</h4>
-    {wordingChanged ? <><h5>Previously displayed</h5><p>{original.statement}</p><p>{original.rationale}</p><ul>{original.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><p>The current wording and acceptance scenarios are shown above.</p></> : <p>The wording and scenarios are unchanged, but supporting information changed. Read the current supporting decisions and linked clarifications before confirming again.</p>}
+    {wordingChanged ? <><h5>Previously displayed</h5><p>{original.statement}</p><p>{original.rationale}</p><ul>{original.acceptance.map((text, i) => <li key={i}>{text}</li>)}</ul><p>The current wording and acceptance scenarios are shown above.</p></> : <p>The wording and scenarios are unchanged, but supporting information changed. Read the current supporting decisions and linked clarifications before making your decision.</p>}
     {!!addedSources.length && <><h5>New supporting evidence</h5>{addedSources.map((source) => <p className="source-excerpt" key={source.id}><strong>{source.kind}:</strong> {source.text}</p>)}</>}
   </section>;
 }
@@ -276,8 +276,8 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
       const fingerprint = reviewFingerprint(r);
       const contextKey = decisionContextKey(project, [r.id]);
       const latest = [...reviews].reverse().find((s) => s.input.type === "review" && s.input.requirementID === r.id);
-      // Capture what was actually displayed, even before a note is typed.
-      // Polling must not silently turn an old displayed decision into a new one.
+      // Retain the initial display for comparison and the update warning.
+      // A new decision uses the currently rendered revision, not this draft basis.
       if (isVisible && active === item.id && !drafts.current[r.id]) drafts.current[r.id] = reviewDraft(project, r, latestNote(submissions, r.id));
       const draft = drafts.current[r.id];
       // A captured display basis is not a user-edited note. A later submission
@@ -288,12 +288,12 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
       const approvalNeedsDecision = decisionClarifications(project, [r.id]).length > 0;
       const retainedConflict = !!latest && !resolvedAttempts.has(latest.id) && latest.conflict && !latest.applied && latest.status === "needs-attention";
       const response = latest?.response;
-      const blocked = changed || sending.includes(`review:${r.id}`) || !!latest && (["queued", "saved", "processing"].includes(latest.status) || latest.status === "needs-attention" && latest.applied && !latest.conflict);
+      const blocked = sending.includes(`review:${r.id}`) || !!latest && (["queued", "saved", "processing"].includes(latest.status) || latest.status === "needs-attention" && latest.applied && !latest.conflict);
       const save = async (action: ReviewAction, requestedChanges?: string) => {
         setMessage("");
         const currentDraft = drafts.current[r.id];
         const note = action === "changes-requested" ? requestedChanges ?? "" : currentDraft?.note ?? (latest?.conflict && latest.input.type === "review" && latest.input.action !== "changes-requested" ? latest.input.note : "");
-        if (await submit({ type: "review", requirementID: r.id, requirementText: r.statement, fingerprint, action, note, reviewedRevision: currentDraft?.revision ?? project.revision }, `review:${r.id}`)) {
+        if (await submit({ type: "review", requirementID: r.id, requirementText: r.statement, fingerprint, action, note, reviewedRevision: project.revision }, `review:${r.id}`)) {
           delete drafts.current[r.id];
           refreshDrafts((version) => version + 1);
           advance(item.id); setMessage(action === "changes-requested" ? "Change request saved. No approval or rejection was applied. Process its follow-up, then review the revised wording or replacement proposal." : `${action === "accepted" ? "Approval" : "Rejection"} response saved. Safety checks run before applying it; see Submitted for processing or another-review notices.`);
@@ -325,15 +325,12 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
           {clarifications([r.id])}
           {!retainedConflict && !!availability.submissionIDs.length && (processBlocking || resume) && <ActionButton className="secondary" disabled={disabled} onClick={() => processBlocking ? processBlocking(availability.submissionIDs) : resume?.()}>Process blocking input</ActionButton>}
           {changed && <ReviewComparison original={draft?.original} evidenceIDs={draft?.evidenceIDs} current={r} project={project} />}
-          {changed && <p role="alert">This requirement or its supporting context changed while you were writing. Your note is retained. Read the updated information, then <button className="quiet" onClick={() => {
-            drafts.current[r.id] = { ...reviewDraft(project, r, drafts.current[r.id]!.note), edited: drafts.current[r.id]!.edited, changeNote: drafts.current[r.id]!.changeNote };
-            refreshDrafts((version) => version + 1);
-          }}>Use note with updated requirement</button>.</p>}
-          <div className="button-row"><ActionButton className="primary" disabled={blocked || approvalNeedsDecision} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : approvalNeedsDecision ? "Answer the linked clarification here or in Design, process its follow-up, then review this requirement again." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton><ActionButton className="secondary" disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement before submitting." : "This review is being saved or is already waiting for processing."} onClick={() => void save("rejected")}>Reject</ActionButton>
+          {changed && <p className="save-notice" role="alert"><strong>Updated since you started reviewing.</strong> This requirement or its supporting information changed. Your note is retained. Check the changes above before choosing a decision below.</p>}
+          <div className="button-row"><ActionButton className="primary" disabled={blocked || approvalNeedsDecision} reason={approvalNeedsDecision ? "Answer the linked clarification here or in Design, process its follow-up, then review this requirement again." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton><ActionButton className="secondary" disabled={blocked} reason="This review is being saved or is already waiting for processing." onClick={() => void save("rejected")}>Reject</ActionButton>
           {r.status !== "rejected" && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={r.id} disabled={disabled || blocked} save={saveDuplicate} />}
            </div>
           {r.status !== "rejected" && <ActionButton className="secondary" disabled={blocked} onClick={() => setChangeTarget(r.id)}>Request changes</ActionButton>}
-          {changeTarget === r.id && r.status !== "rejected" && <ChangeRequestForm initialText={draft?.changeNote ?? (latest?.conflict && latest.input.type === "review" && latest.input.action === "changes-requested" ? latest.input.note : "")} disabled={blocked} reason={changed ? "Read the updated requirement and choose Use note with updated requirement first." : "This requirement already has a response being saved or processed."} change={(text) => {
+          {changeTarget === r.id && r.status !== "rejected" && <ChangeRequestForm initialText={draft?.changeNote ?? (latest?.conflict && latest.input.type === "review" && latest.input.action === "changes-requested" ? latest.input.note : "")} disabled={blocked} reason="This requirement already has a response being saved or processed." change={(text) => {
             drafts.current[r.id] = { ...(drafts.current[r.id] ?? reviewDraft(project, r, "")), changeNote: text };
           }} send={(text) => save("changes-requested", text)} close={() => setChangeTarget(undefined)} />}
         </div>}

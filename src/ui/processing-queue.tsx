@@ -86,7 +86,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
         {!active && refinement && <section aria-label="Refinement outcome"><h3>{refinement.headline}</h3><p>{refinement.label}</p><p>{progress.at(-1)}</p></section>}
          {!active && failed && <p className="job-error">Last {lastJob.kind === "scan" ? "scan" : "round"} {lastJob.status}: {lastJob.diagnostic}</p>}
          {!active && lastJob && continueExploration && <GapContinuation key={lastJob.id} job={lastJob} available={continuationAvailable} disabled={disabled} continueExploration={continueExploration} />}
-        {!active && lastJob?.gapReport && <GapExplorationStatus job={lastJob} />}
+         {!active && lastJob?.gapReport && <GapExplorationStatus job={lastJob} project={project} />}
         {paused && <p role="status">Discovery is paused. Saved submissions are retained.</p>}
         {executionWaiting && !paused && waiting.length > 0 && <p role="status">Responses are saved and waiting for assessment or implementation to finish. Automatic follow-up resumes afterward for responses submitted with automatic processing enabled.</p>}
         {blocked.length > 0 && <p role="status">Context preflight stopped {blocked.length} {blocked.length === 1 ? "response" : "responses"} before starting an AI batch. Review that feature's cross-cutting notes and dependency scope in Project map, or split its work, then resume to recheck. The saved answers and approvals remain intact.</p>}

@@ -2,13 +2,15 @@ import { createHash } from "node:crypto";
 import type { Job, Project } from "./model.js";
 import { currentDecisionProjection } from "./current-decisions.js";
 import { gapCheckSchema, gapLensSchema, gapReportSchema, type GapLens, type GapReport } from "./gap-types.js";
+import { retrievalAllowanceSchema, type RetrievalAllowance } from "./gap-retrieval.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Record = Project["requirements"][number] | Project["questions"][number] | Project["sources"][number];
 /** Storage may supply metadata only; backlog selection never needs old model output. */
 export type GapHistory = Pick<Job, "id" | "expectedRevision" | "status"> & { kind?: string; helpRequest?: unknown;
+  model?: Job["model"]; retrievalAllowance?: RetrievalAllowance; retrievalWork?: Job["retrievalWork"];
   context?: Pick<NonNullable<Job["context"]>, "gapExploration" | "refinementOnly"> & { includedIDs?: string[] }; gapReport?: Job["gapReport"] };
-export type GapTask = { record: Record; lens: GapLens; inputKey: string; recordIDs: string[]; supportingRecordIDs: string[]; state: "pending" | "checked" | "waiting" | "blocked" };
+export type GapTask = { record: Record; lens: GapLens; inputKey: string; recordIDs: string[]; supportingRecordIDs: string[]; state: "pending" | "checked" | "waiting" | "blocked"; exhaustedJobID?: string };
 
 /** Revision-independent identities, computed from explicit evidence and conservative feature human guardrails. */
 export function gapEvidence(project: Project) {
@@ -82,12 +84,23 @@ export function gapBacklog(project: Project, jobs: GapHistory[], focusEpicID?: s
     if (initial) records.push({ ...initial, epicID: focusEpicID });
   }
   const completed = new Set<string>(), blocked = new Set<string>(), lastRecord = new Map<string, number>(), lastArea = new Map<string, number>();
+  const exhausted = new Map<string, string>();
   const areas = new Map(records.map((r) => [r.id, r.epicID]));
   const savedJobs = new Map(jobs.map((job) => [job.id, job]));
   jobs.forEach((job, index) => {
     const exploration = job.context?.gapExploration;
     if (exploration?.check) gapCheckSchema.parse(exploration.check);
     if (job.gapReport) gapReportSchema.parse(job.gapReport);
+    const allowance = job.retrievalAllowance ?? (job.retrievalWork ? retrievalAllowanceSchema.parse({ format: job.retrievalWork.format,
+      attempts: job.retrievalWork.attempts, continuation: job.retrievalWork.continuation, hasFinal: !!job.retrievalWork.final }) : undefined);
+    if (allowance) retrievalAllowanceSchema.parse(allowance);
+    if (exploration?.check && !job.kind && !job.helpRequest && !job.context?.refinementOnly
+      && ["failed", "cancelled", "interrupted", "stale"].includes(job.status)
+      && allowance?.attempts === 6 && allowance.continuation && !allowance.hasFinal
+      && job.model?.providerID === project.model.providerID && job.model.modelID === project.model.modelID
+      && job.model.connectionID === project.model.connectionID) {
+      exhausted.set(`${exploration.targetRecordID}:${exploration.check.lens}:${exploration.check.inputKey}`, job.id);
+    }
     for (const task of job.gapReport?.blockedTasks ?? []) if (task.planner === "staged-evidence-v1") blocked.add(`${task.targetRecordID}:${task.lens}:${task.inputKey}`);
     for (const task of job.gapReport?.reusedChecks ?? []) {
       const original = savedJobs.get(task.sourceJobID);
@@ -106,9 +119,11 @@ export function gapBacklog(project: Project, jobs: GapHistory[], focusEpicID?: s
   const tasks: GapTask[] = records.flatMap((record) => {
     const basis = evidence(record);
     const lenses: GapLens[] = "statement" in record ? gapLensSchema.options : ["behavior"];
-    return lenses.map((lens) => ({ record, lens, ...basis,
-      state: completed.has(`${record.id}:${lens}:${basis.inputKey}`) ? "checked" : basis.waiting ? "waiting"
-        : blocked.has(`${record.id}:${lens}:${basis.inputKey}`) ? "blocked" : "pending" }));
+    return lenses.map((lens) => {
+      const key = `${record.id}:${lens}:${basis.inputKey}`;
+      return { record, lens, ...basis, ...(exhausted.has(key) ? { exhaustedJobID: exhausted.get(key) } : {}),
+        state: completed.has(key) ? "checked" : basis.waiting ? "waiting" : blocked.has(key) || exhausted.has(key) ? "blocked" : "pending" };
+    });
   });
   return tasks;
 }
@@ -116,7 +131,10 @@ export function gapBacklog(project: Project, jobs: GapHistory[], focusEpicID?: s
 export function gapReport(tasks: GapTask[]): GapReport {
   const checked = tasks.filter((t) => t.state === "checked").length, waiting = tasks.filter((t) => t.state === "waiting").length;
   const blocked = tasks.filter((t) => t.state === "blocked").length;
+  const exhausted = tasks.filter((t) => t.state === "blocked" && t.exhaustedJobID);
   return { format: 1, state: "idle", total: tasks.length, checked, waiting, blocked,
+    ...(exhausted.length ? { requestBlocked: exhausted.length, exhaustedTasks: exhausted.slice(0, 20).map((task) => ({ format: 1 as const,
+      compatibility: "gap-evidence-v1" as const, targetRecordID: task.record.id, lens: task.lens, inputKey: task.inputKey, sourceJobID: task.exhaustedJobID! })) } : {}),
     pending: tasks.length - checked - waiting - blocked, modelCalls: 0,
     explanation: "Task checks describe bounded exploration of recorded evidence, not completeness, correctness or verified implementation. Unrelated omitted history was not reviewed." };
 }

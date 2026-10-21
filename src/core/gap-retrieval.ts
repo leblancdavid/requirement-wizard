@@ -13,9 +13,15 @@ export const retrievalRequestSchema = z.object({ retrieveEvidence: z.object({ fo
 }).strict() }).strict();
 const evidenceBasisSchema = z.object({ format: z.literal(1), compatibility: z.literal("gap-stage-evidence-v1"),
   key: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const continuationReceiptSchema = z.object({ format: z.literal(1), sourceJobID: z.string().min(1),
+  fromStage: z.number().int().min(0).max(2) }).strict();
+/** Read-only scheduling metadata; never includes old model output or navigation bodies. */
+export const retrievalAllowanceSchema = z.object({ format: z.literal(1), attempts: z.number().int().min(0).max(6),
+  continuation: continuationReceiptSchema.optional(), hasFinal: z.boolean() }).strict()
+  .refine((work) => work.continuation ? work.attempts >= 3 : work.attempts <= 3, "Unsupported retrieval allowance.");
+export type RetrievalAllowance = z.infer<typeof retrievalAllowanceSchema>;
 export const retrievalWorkSchema = z.object({ format: z.literal(1),
-  continuation: z.object({ format: z.literal(1), sourceJobID: z.string().min(1),
-    fromStage: z.number().int().min(0).max(2) }).strict().optional(),
+  continuation: continuationReceiptSchema.optional(),
   requestedPolicy: savedEvidencePolicySchema.optional(),
   research: z.boolean(),
   stages: z.array(z.object({ revision: z.number().int().positive(), contextKey: z.string().regex(/^[a-f0-9]{64}$/),
