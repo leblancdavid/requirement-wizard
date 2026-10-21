@@ -176,6 +176,13 @@ desired-handle discovery, exact use, omissions, context sizes and cumulative att
 over 1,487–5,987 saved records. Intentional lexical/field/scan misses, distractor-only
 completion and oversized evidence remain measured failures, not a reason to raise budgets.
 This establishes a regression baseline, not semantic quality or a new milestone exit.
+An [offline candidate comparison](retrieval-evaluation.md) adds a museum-domain evaluation
+set and finds both field/window coverage gains and ranking/sampling regressions. No policy
+is promoted to production, no model allowance is increased and no live quality is qualified.
+The [prefix-preserving merge experiment](retrieval-merge.md) isolates field-aware gains
+without density ranking and verifies actual service/checkpoint, legacy receipt and stale
+loaded-evidence recovery. It remains opt-in for tests; candidate rollout, paging and live
+quality are not qualified and do not establish another milestone exit.
 
 Dependencies: M2 and M1 research recommendation; M3 required for full client verification.
 Covers RW-009–010 and RW-013–014.

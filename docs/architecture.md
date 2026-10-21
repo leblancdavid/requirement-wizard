@@ -210,6 +210,12 @@ Older completed checks/approvals and implementation identities are unchanged.
 The test-only [first-query baseline](retrieval-baseline.md) drives these production
 planner/service/checkpoint boundaries with large synthetic saved catalogs, measuring
 desired handles separately from completed jobs. It does not add a runtime retrieval path.
+The [test-only candidate evaluation](retrieval-evaluation.md) compares bounded ordering,
+field coverage and sampling without changing production receipts, cursors or fingerprints.
+An [opt-in prefix/auxiliary merge](retrieval-merge.md) uses an injectable saved-search
+dependency to exercise the actual service/checkpoint path. Service construction still
+defaults to original prefix search. Additive versioned experimental receipt metadata is
+validated before checkpoints; old receipts/cursors retain their issued semantics.
 `gap-navigation.ts` adds strict saved-record lexical search as an alternative navigation
 reply. It returns at most eight handles/excerpted labels, never detailed-evidence authority;
 the model must explicitly load selected records before citing or changing them. Queries

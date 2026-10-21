@@ -6,7 +6,7 @@ import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext } from "../core/working-set.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
 import { checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
-import { searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch } from "../core/gap-navigation.js";
+import { savedEvidenceSearchSchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch } from "../core/gap-navigation.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
@@ -45,7 +45,8 @@ function schemaDiagnostic(error: z.ZodError): string {
 
 /** Shared application boundary. No model or storage operations belong in UI components. */
 export class DiscoveryService {
-  constructor(readonly store: ProjectStore, private readonly adapter: DiscoveryAdapter) {}
+  constructor(readonly store: ProjectStore, private readonly adapter: DiscoveryAdapter,
+    private readonly navigation: { searchEvidence?: typeof searchSavedEvidence } = {}) {}
 
   requiresInitialization(projectID: string) {
     const project = this.store.get(projectID);
@@ -380,8 +381,8 @@ export class DiscoveryService {
           }
           const request = "searchEvidence" in output ? searchEvidenceSchema.parse(output) : validateRetrieval(context, output, witnessed);
           if (work.stages.length >= 2) throw new Error("Evidence stage limit reached. No proposals applied; completed stages retained. Search, continuation and exact loading share the same budget; unseen page results cannot support analysis without exact loading.");
-          const searchResult = "searchEvidence" in request ? searchSavedEvidence(project, context, request,
-            work.stages, (revision) => this.store.get(projectID, revision)) : undefined;
+          const searchResult = "searchEvidence" in request ? savedEvidenceSearchSchema.parse((this.navigation.searchEvidence ?? searchSavedEvidence)(project, context, request,
+            work.stages, (revision) => this.store.get(projectID, revision))) : undefined;
           work.stages.push({ revision: project.revision, contextKey: retrievalContextKey(context),
             evidenceBasis: retrievalEvidenceBasis(context), includedIDs: [...context.manifest.includedIDs], request, searchResult, sessionID: this.store.getJob(job.id).sessionID });
           this.store.checkpointRetrieval(job.id, work, context.manifest);
@@ -391,7 +392,7 @@ export class DiscoveryService {
           } else {
             witnessed.push(...searchResult!.records.map((r) => r.id));
             context = searchContext(context, searchResult!, stage);
-            report(`Saved-evidence search: ${searchResult!.records.length} handles, ${searchResult!.omittedMatches} further prefix matches omitted, ${searchResult!.unexaminedRecords} records unexamined, ${searchResult!.prefixLimitedRecords} text prefixes limited. Snapshot revision ${searchResult!.page!.snapshotRevision}, record position ${searchResult!.page!.recordOffset}, text window ${searchResult!.page!.textOffset / 4096 + 1}; ${searchResult!.page!.next ? "continuation available within the shared remaining budget" : "no continuation offered within this window"}. Navigation only, not exhaustive; load exact evidence before use.`);
+            report(`Saved-evidence search: ${searchResult!.records.length} handles, ${searchResult!.omittedMatches} further ${searchResult!.policy ? "" : "prefix "}matches omitted, ${searchResult!.unexaminedRecords} records unexamined, ${searchResult!.prefixLimitedRecords} text prefixes limited. ${searchResult!.page ? `Snapshot revision ${searchResult!.page.snapshotRevision}, record position ${searchResult!.page.recordOffset}, text window ${searchResult!.page.textOffset / 4096 + 1}; ${searchResult!.page.next ? "continuation available within the shared remaining budget" : "no continuation offered within this window"}.` : searchResult!.policy ? "Experimental prefix/auxiliary merge; no continuation offered." : "No continuation metadata offered."} Navigation only, not exhaustive; load exact evidence before use.`);
           }
           stage++;
         }

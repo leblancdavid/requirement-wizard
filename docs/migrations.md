@@ -69,6 +69,60 @@ match. Delivery decision identity is independent of assessment workflow prose.
 
 ## Implemented migration ledger
 
+### Prefix-preserving auxiliary merge evaluation (2026-10-20)
+
+Source/target SQLite **3 → 3**, retrieval work **1 → 1**, saved-search result **1 → 1**,
+execution **1 → 1**, workspace **2 → 2**. New search results can carry an optional separately
+versioned `policy: {format:1,id:"prefix-aux-v1",...bounded counts}` with explicit experimental
+limitation text. This is an opt-in service dependency for evaluation; all browser/terminal
+construction retains original prefix search. No user setting or automatic policy switch exists.
+New candidate results offer no cursor; existing witnessed legacy cursors retain old snapshot
+search semantics. Unknown policy versions and policy/page/limitation mismatches are rejected.
+
+Existing payloads retain their exact representation: no migration, startup rewrite, reset,
+reassessment or model replay. Original receipts (including no-page/no-basis legacy receipts)
+are reused as issued; policy change does not invent better results or missing provenance.
+Navigation does not establish citation authority; changed loaded/human evidence still blocks
+final reuse. No gap/assessment identity or request/context budget changes. Existing completed
+checks, approvals, history and current implementation assessments remain valid. No partial
+upgrade exists to recover. Old binaries are not qualified for new experimental receipts;
+new policy receipts are created only in disposable opt-in test databases, not user projects.
+
+Recovery tests preserve raw older receipts across repeated reopening, adopt missing evidence
+bases only from immutable verified inputs, reuse committed candidate search/final calls without
+replay, reject relevant changed evidence, retain cumulative attempts, and repeatedly reject
+future policy payloads without overwriting data. See [algorithm, results and verification](retrieval-merge.md).
+Verification: type checking and all **446** deterministic tests passed on portable Node
+22.23.3. The initial incorrect loaded-area recovery assumption and its corrected safety
+test are recorded in the report, not represented as a passing run. Original baseline and
+earlier comparison files remain unchanged; no user database was opened or upgraded.
+UI production build, all four serial default-policy browser checks via `test:browser:all`,
+both CLI help entry points and diff checking passed. No browser retries were used; the
+existing bundle-size warning remains. Candidate UI rollout is still unverified and disabled.
+
+### Bounded retrieval candidate evaluation (2026-10-20)
+
+Source/target SQLite **3 → 3**, retrieval work **1 → 1**, execution **1 → 1**, workspace
+**2 → 2**. Adds only test-only retrieval policies, a second-domain catalog and comparative
+measurements. No candidate is wired into production search, service, prompts or checkpoint
+storage. The original baseline corpus/queries/tests are unchanged. No ranking, cursor,
+search-receipt schema, compatibility/freshness identity or model/context budget changes
+for saved projects; approvals, history, completed gap checks and implementation assessments
+remain valid. No data transformation, startup rewrite, reassessment or replay is required;
+there is no partial migration to recover. Disposable fixture stores are the only databases
+opened by the evaluation.
+
+Experimental results are not saved as production search receipts and invent no cursor or
+model-call provenance. Tests exercise production exact loading and citation checks locally;
+the unchanged baseline retains end-to-end service/checkpoint and upgrade checks. Promoting
+a candidate later requires separate versioned search/cursor compatibility and recovery tests.
+See [candidate measurements, regressions and limits](retrieval-evaluation.md).
+Verification: type checking and all **434** deterministic tests passed on portable Node
+22.23.3, including the original baseline and existing migration/reopen tests. Production
+search/service and the original baseline corpus/test files have no diff.
+UI build, all four serial browser checks via `test:browser:all`, both CLI help entry points
+and diff checking also passed. No browser retries; the existing bundle-size warning remains.
+
 ### Deterministic first-query retrieval baseline (2026-10-20)
 
 Source/target SQLite **3 → 3**, retrieval work **1 → 1**, execution **1 → 1**, workspace

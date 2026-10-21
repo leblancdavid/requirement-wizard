@@ -53,6 +53,12 @@ The [deterministic first-query baseline](retrieval-baseline.md) measures fixed q
 1,487–5,987 saved records through the real service/checkpoints. It retains intentional
 paraphrase, distractor, field/window/scan and oversized-load failures; completing a job does
 not imply the desired evidence was retrieved. It changes no search semantics or budgets.
+The [offline candidate comparison](retrieval-evaluation.md) adds field-aware/ranking/sampling
+experiments and a second domain. It records regressions as well as gains; none is enabled
+in the browser's saved-evidence search.
+The [prefix-preserving merge evaluation](retrieval-merge.md) now exercises auxiliary-field
+gains through real service/checkpoints and legacy receipt reuse, without enabling the
+candidate for browser/terminal projects or changing their budgets.
 
 Gap tasks can defer saved static-file motivation instead of requiring the entire file
 closure up front. Human constraints/addenda, current decisions and applicable guardrails

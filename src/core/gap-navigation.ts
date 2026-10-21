@@ -23,9 +23,20 @@ export const savedEvidenceSearchSchema = z.object({ format: z.literal(1),
   }).strict()).max(8),
   scannedRecords: z.number().int().min(0).max(5000), unexaminedRecords: z.number().int().nonnegative(),
   omittedMatches: z.number().int().nonnegative(), prefixLimitedRecords: z.number().int().nonnegative(),
-  limitation: z.literal("Navigation only, not evidence. Literal lexical matching of bounded saved-record prefixes; no exhaustive or semantic search claim. Load exact records before citing or changing anything."),
+  limitation: z.enum(["Navigation only, not evidence. Literal lexical matching of bounded saved-record prefixes; no exhaustive or semantic search claim. Load exact records before citing or changing anything.",
+    "Experimental navigation only, not evidence. Saved-order primary prefixes take priority; auxiliary field prefixes fill unused slots within the same scan budget. No exhaustive or semantic search claim. Load exact records before citing or changing anything."]),
+  policy: z.object({ format: z.literal(1), id: z.literal("prefix-aux-v1"),
+    primaryCharacters: z.number().int().min(0).max(1_000_000), auxiliaryCharacters: z.number().int().min(0).max(1_000_000),
+    auxiliaryRecords: z.number().int().min(0).max(5000), auxiliaryLimitedRecords: z.number().int().min(0).max(5000),
+  }).strict().optional(),
   page: searchPageSchema.optional(),
-}).strict();
+}).strict().superRefine((result, ctx) => {
+  if (!!result.policy !== result.limitation.startsWith("Experimental") || result.policy && (result.page
+    || result.policy.primaryCharacters + result.policy.auxiliaryCharacters > 1_000_000
+    || result.policy.auxiliaryRecords > result.scannedRecords || result.policy.auxiliaryLimitedRecords > result.policy.auxiliaryRecords)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Experimental navigation requires its bounded policy receipt and cannot invent continuation metadata." });
+  }
+});
 export type SavedEvidenceSearch = z.infer<typeof savedEvidenceSearchSchema>;
 type SearchWitness = { includedIDs: string[]; searchResult?: SavedEvidenceSearch };
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
