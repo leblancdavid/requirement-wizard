@@ -266,6 +266,7 @@ export type Job = {
     isolatedTask?: boolean;
     gapExploration?: { targetRecordID: string; check?: z.infer<typeof gapCheckSchema> };
     gapRetrieval?: boolean;
+    epicReview?: import("./epic-review-types.js").EpicReview;
     decisionProjection?: { format: 1; omittedReviewSourceIDs: string[]; retainedReviewNoteSourceIDs: string[]; projectedReceiptSourceIDs?: string[] };
     refinementOnly?: boolean;
     refinementTarget?: { requirementID: string; fingerprint: string; contextKey?: string };
@@ -282,6 +283,7 @@ export type Job = {
   helpRequest?: QuestionHelpRequest;
   helpResponse?: QuestionHelpResponse;
   gapReport?: GapReport;
+  epicReviewReport?: import("./epic-review-types.js").EpicReviewReport;
   retrievalWork?: import("./gap-retrieval.js").RetrievalWork;
   scan?: { workspaceKey: string; snapshot: Project["scans"][number]; sources: Project["sources"] };
   scanWork?: ScanWork;

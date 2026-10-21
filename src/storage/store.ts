@@ -18,6 +18,7 @@ import { planIncrementalResolution } from "../core/incremental-resolution.js";
 import { answerScopeSchema, decisionBasisSchema, overlapFollowupSchema, pendingChangesSchema, requirementEvidenceIDs, reviewActionSchema, type AnswerScope } from "../core/model.js";
 import { answerScopeMatches, captureAnswerScope, validateScopedAnswerResult } from "../core/input-scope.js";
 import { gapCheckSchema, gapReportSchema, type GapReport } from "../core/gap-types.js";
+import { epicReviewSchema, epicReviewReportSchema, type EpicReviewReport } from "../core/epic-review-types.js";
 import { retrievalAllowanceSchema, retrievalWorkSchema, type RetrievalWork } from "../core/gap-retrieval.js";
 import type { GapHistory } from "../core/gap-backlog.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
@@ -38,6 +39,8 @@ function readStoredJob(payload: string): Job {
   if (job.result?.pendingChanges !== undefined) pendingChangesSchema.parse(job.result.pendingChanges);
   if (job.context?.gapExploration?.check !== undefined) gapCheckSchema.parse(job.context.gapExploration.check);
   if (job.gapReport !== undefined) gapReportSchema.parse(job.gapReport);
+  if (job.context?.epicReview !== undefined) epicReviewSchema.parse(job.context.epicReview);
+  if (job.epicReviewReport !== undefined) epicReviewReportSchema.parse(job.epicReviewReport);
   if (job.retrievalWork !== undefined) retrievalWorkSchema.parse(job.retrievalWork);
   if (job.context?.decisionProjection !== undefined) z.object({ format: z.literal(1), omittedReviewSourceIDs: z.array(z.string()), retainedReviewNoteSourceIDs: z.array(z.string()), projectedReceiptSourceIDs: z.array(z.string()).optional() }).strict().parse(job.context.decisionProjection);
   return job;
@@ -808,6 +811,26 @@ export class ProjectStore {
     }).immediate();
   }
 
+  attachEpicReviewReport(id: string, report: EpicReviewReport, finish = false): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Epic review worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      job.epicReviewReport = epicReviewReportSchema.parse(report);
+      if (finish) {
+        if (report.modelCalls || job.context?.epicReview) throw new Error("Invalid no-call epic review outcome.");
+        job.status = "completed"; job.leaseUntil = null;
+      }
+      this.saveJob(job); return job;
+    }).immediate();
+  }
+
+  /** Keep the epic planner independent of potentially large legacy navigation/output history. */
+  epicReviewHistory(projectID: string): Job[] {
+    return (this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? AND json_type(payload, '$.context.epicReview') IS NOT NULL ORDER BY rowid")
+      .all(projectID) as { payload: string }[]).map((row) => readStoredJob(row.payload));
+  }
+
   /** A checkpoint is evidence of a completed navigation call, never a gap check. */
   checkpointRetrieval(id: string, input: RetrievalWork, context: NonNullable<Job["context"]>) {
     this.db.transaction(() => {
@@ -1037,10 +1060,15 @@ export class ProjectStore {
       } else {
         this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
           const before = structuredClone(project);
-          if (job.context?.gapExploration?.check) {
+          if (job.context?.gapExploration?.check || job.context?.epicReview) {
             // Older/deterministic adapters may omit the optional area field.
             // A bounded gap task defaults to its detailed target, never an unseen inbox.
             for (const record of [...result.questions, ...result.requirements]) record.epicID ??= job.context.focusEpicID ?? "project";
+          }
+          if (job.context?.epicReview) {
+            if (result.refinements?.length || result.pendingChanges?.changes.length || result.reviewChanges?.length
+              || result.organization?.length || result.assessments?.length || result.resolutionCheck) throw new Error("Epic workflow reviews propose gaps only; cleanup, wider changes and whole-area assessments are not authorized.");
+            if (result.questions.some((q) => !q.evidenceIDs?.length)) throw new Error("Epic review questions require exact detailed evidence IDs.");
           }
           const reviews = this.submissions(project.id).filter((s) => s.applied && s.input.type === "review" && job.context?.submissionIDs?.includes(s.id));
           const changeRequests = reviews.filter((s) => s.input.type === "review" && s.input.action === "changes-requested");
@@ -1188,6 +1216,8 @@ export class ProjectStore {
         job.status = "completed";
       }
       job.result = result;
+      if (job.status === "completed" && job.context?.epicReview && job.epicReviewReport) job.epicReviewReport = {
+        ...job.epicReviewReport, reviewed: job.epicReviewReport.reviewed + 1, pending: Math.max(0, job.epicReviewReport.pending - 1) };
       if (job.status === "completed" && job.context?.gapExploration?.check && job.gapReport) job.gapReport = { ...job.gapReport,
         state: "checked", checked: job.gapReport.checked + 1, pending: Math.max(0, job.gapReport.pending - 1) };
       job.leaseUntil = null;

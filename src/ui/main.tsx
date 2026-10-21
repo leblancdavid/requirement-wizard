@@ -241,6 +241,11 @@ function App() {
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before exploring.");
     if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, savedEvidencePolicy: evidencePilot ? "prefix-aux-v1" : "prefix", ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
+  async function reviewEpic() {
+    if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before reviewing.");
+    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, gapMode: "epic",
+      research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
+  }
   async function continueExploration() {
     if (project && lastJob) await api(`projects/${project.id}/continue-exploration`, { revision: project.revision, jobID: lastJob.id });
   }
@@ -427,6 +432,11 @@ function App() {
         <section className="workspace">
           <div className="discovery-column">
             <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "review" ? "Review one requirement at a time" : tab === "implementation" ? "Build one requirement at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div>{tab !== "implementation" && <button className="primary" disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(explore, "Starting discovery…")}>{data.active && <Spinner />}{data.active ? "Discovering…" : "Explore next gaps →"}</button>}</div>
+            {tab !== "implementation" && <section className="insight-card" aria-label="Epic workflow discovery"><h3>Review workflows, one epic at a time</h3>
+              <p>Review related requirements together across normal behavior, failures and acceptance. Linked evidence is prepared locally, without model-driven search or paging. Dependency-boundary packages follow workflow reviews. The older Explore next gaps action keeps its separate per-record checks.</p>
+              <button className="primary" disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(reviewEpic, "Preparing epic workflow evidence…")}>Review next epic workflow</button>
+              <small>{epicID === "all" ? "Works epic by epic across the project." : "Uses the selected feature and its declared dependency boundaries."} Reviews are bounded checks, not proof of completeness. Saved responses remain paused; use Resume to process them.</small>
+            </section>}
             {lastJob && tab !== "implementation" && <GapContinuation key={lastJob.id} job={lastJob} available={!!lastJob.gapContinuationAvailable} disabled={busy || connectionChanged || needsInitialization}
               continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} />}
             {needsInitialization && tab !== "implementation" && <p role="status">Initialization must complete before gap discovery. Retry the folder scan below.</p>}

@@ -19,6 +19,45 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Epic workflow review
+
+SQLite **3 → 3**; additive, separately versioned format-1 `context.epicReview` and
+`epicReviewReport` job envelopes. Existing retrieval checkpoint format **1 → 1** is reused
+for at most one exact-load stage, three cumulative attempts and a validated final response;
+legacy continuation receipts/allowances are not accepted for epic review. No startup
+rewrite, migration sweep, inference, data reset or implementation-assessment invalidation.
+Old projects/jobs, evidence IDs, completed checks, history and workspace outputs are not
+rewritten. Old per-record/lens checks are not equivalent to combined package reviews and
+remain available under the old action; no old check is silently promoted or discarded.
+
+New identities bind package kind, epic membership and exact current evidence/guardrails.
+Changed grouping or genuinely changed evidence creates new review work with old evidence
+retained. Unrelated revision increments alone do not invalidate compatible packages.
+Saved additionally loaded records receive independent exact-freshness checks, including
+outside the base package. Failed-attempt reuse can reconstruct its original revision to
+avoid either stale facts or an allowance reset. New planning reads only epic-review job
+history rather than parsing large legacy navigation outputs.
+
+Checkpoint writes remain leased and expected-revision checked. Completed loads are replayed
+locally, not through the model; final responses are validated and saved before atomic
+publication. A publication interruption can reuse a compatible final without inference.
+No-call idle reports never advance the specification. Future/malformed new envelopes reject
+reads without overwriting saved payloads; old missing envelopes retain legacy semantics.
+Forward compatibility does not authorize downgrading an app to a version unaware of these
+new review semantics.
+
+Upgrade tests use an on-disk older project/job set, verify unchanged old jobs, saved-load/final
+preservation, repeated reopen and publication-failure recovery without repeated calls, and
+reject a future review format. See [epic workflow review](epic-workflow-review.md) for checks
+actually run and remaining live semantic/performance qualification. No user database or
+live provider was used.
+
+Verification: Windows Node 22.23.3 typecheck, 533 deterministic tests, latest 21 epic
+tests (including cross-revision publication recovery), all browser suites, UI build,
+both CLI help commands and whitespace/link checks passed. Browser failures and their
+corrections are retained in the linked verification record. No live model qualification
+is claimed.
+
 ## Review update warning instead of acknowledgement
 
 Presentation/workflow only; persisted formats, fingerprints and decision-context rules

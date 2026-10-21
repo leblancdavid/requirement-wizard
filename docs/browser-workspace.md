@@ -326,6 +326,16 @@ and explicit corrected-response retry. Live model behavior remains unverified.
 
 ## Exploring gaps in large projects
 
+**Review next epic workflow** is the new alternative for combined, epic-scoped reviews.
+It prepares exact linked evidence locally, reviews up to six related records across all
+three lenses together, and permits only one extra evidence batch before final review.
+Declared dependency-boundary packages follow workflow packages. Select a feature to
+restrict scope. It has separate reviewed/waiting/blocked progress in **Processing & queue**
+and preserves all legacy checks. Manual epic reviews leave queued responses paused;
+use ordinary Resume to process them. See [epic workflow review](epic-workflow-review.md)
+for grouping limits, upgrade compatibility, recovery and outstanding live qualification.
+The existing per-record path described below is unchanged.
+
 After the initial interpretation, **Explore next gaps** works from a durable task
 backlog rather than loading a whole feature. Requirements offer three bounded lenses:
 workflow/behavior, failures/recovery, and acceptance boundaries. Questions and human

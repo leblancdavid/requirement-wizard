@@ -142,6 +142,12 @@ for important workflows.
 - A scenario can expose a new decision and link it to the affected workflow.
 - Include relevant permissions, invalid inputs, retries, and partial failures rather
   than applying every edge-case question to every project.
+- Offer epic-by-epic bounded workflow reviews combining behavior, recovery and acceptance,
+  with exact linked evidence prepared locally and a separate dependency-boundary pass
+  (DEC-028). Preserve legacy checks without treating them as full workflow reviews.
+  Report missing evidence/waiting decisions explicitly; exhausted navigation is not a
+  completeness claim. The implemented first slice uses candidate record packages, not
+  inferred complete workflows; see [epic workflow review](epic-workflow-review.md).
 
 **RW-010 — Targeted research.** Research explicit uncertainties using configured
 search/fetch tools and retain source URLs, retrieval dates, findings, and limitations.

@@ -62,6 +62,11 @@ implemented under `src/`. See [decisions.md](decisions.md),
   the source transaction; anchored SQL pages return at most 25 filtered entries, and
   a lightweight head endpoint announces new work without reloading older pages.
 - `src/service/discovery.ts`: in-process orchestration and runtime adapter contract.
+  `src/core/epic-review.ts` adds a separate manual epic/workflow-package path: local
+  exact-evidence preparation, combined lenses, bounded declared-dependency passes,
+  one batched extra load, saved-attempt/final recovery and independent review identities.
+  It uses existing job transactions without adopting or rewriting legacy gap checks.
+  See [epic workflow review](epic-workflow-review.md).
   Question clarification shares bounded runtime/job orchestration but saves only
   advisory responses; it cannot apply discovery proposals or mutate project decisions.
 - `src/service/queue.ts`: durable-submission orchestration, per-project serial rounds,

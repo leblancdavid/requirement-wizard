@@ -129,6 +129,14 @@ Exit checks:
 
 ## M4 — Research, scenario review, and readiness
 
+DEC-028 first slice adds a manual epic workflow review alongside per-record gap checks:
+local exact linked-evidence preparation, combined behavior/failure/acceptance reviews,
+bounded declared-dependency passes, independent saved checks and explicit evidence
+blockers. Deterministic/API/browser qualification is recorded in
+[epic workflow review](epic-workflow-review.md). Live semantic quality/cost comparison,
+curated/named workflows and undeclared cross-epic discovery remain follow-on work;
+this does not complete M4/readiness exit criteria.
+
 Progress: the dedicated requirement Review queue, optional addenda, durable AI responses,
 stable-ID revisions and source-linked explicit scope removal are implemented (DEC-020).
 Deterministic/browser checks pass; live review-note interpretation remains unqualified.

@@ -110,7 +110,7 @@ export class DiscoveryQueue {
     return item;
   }
 
-  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy } = {}) {
+  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic" } = {}) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
@@ -125,6 +125,21 @@ export class DiscoveryQueue {
       if (availability.state !== "ready") throw new OperationConflictError(availability.reason);
     }
     if (options.focusEpicID && !project.epics.some((e) => e.id === options.focusEpicID && !e.archived)) throw new Error("Focused epic does not exist.");
+    if (options.gapMode) {
+      if (this.closing) throw new Error("The application is closing.");
+      if (options.refinementOnly || options.savedEvidencePolicy) throw new Error("Epic review cannot use legacy retrieval or refinement options.");
+      // Manual review is not permission to retry queued human follow-up first.
+      this.service.store.pauseQueue(id, true);
+      const controller = new AbortController();
+      const progress: string[] = []; this.messages.set(id, progress);
+      this.refinementRuns.delete(id);
+      const promise = Promise.resolve().then(async () => {
+        await this.service.analyze(id, project.revision, { gapMode: "epic", focusEpicID: options.focusEpicID, research: options.research,
+          signal: controller.signal, onProgress: (message) => { progress.push(message); if (progress.length > 20) progress.shift(); } });
+      }).catch((error) => { progress.push(safeMessage(error instanceof Error ? error.message : error)); }).finally(() => this.active.delete(id));
+      this.active.set(id, { controller, promise });
+      return;
+    }
     this.service.store.recoverExpiredJobs();
     this.reconcile(id);
     if (options.refinementOnly) { this.start(id, options); return; }

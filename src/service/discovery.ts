@@ -9,6 +9,8 @@ import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenc
 import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch, type SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
+import { planEpicReview, epicReviewContext, validateEpicReviewFinal } from "../core/epic-review.js";
+import { epicReviewBlockedSchema } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
 import { prepareScanAnalysis } from "../core/scan.js";
@@ -205,10 +207,13 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic";
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
     if (options.savedEvidencePolicy !== undefined) savedEvidencePolicySchema.parse(options.savedEvidencePolicy);
+    if (options.gapMode !== undefined && options.gapMode !== "epic") throw new Error("Unsupported gap discovery mode.");
+    if (options.gapMode && (options.helpRequest || options.refinementOnly || options.recordIDs?.length || options.submissionIDs?.length
+      || options.isolatedTask || options.requiredEpicIDs?.length || options.continueGapJobID || options.savedEvidencePolicy !== undefined)) throw new Error("Epic review requires a separate manual exploration, without legacy retrieval or submission options.");
     if (!options.helpRequest) this.assertCanDiscover(projectID);
     const continuationSource = options.continueGapJobID ? this.assertGapContinuation(projectID, expectedRevision, options.continueGapJobID) : undefined;
     if (continuationSource && (options.helpRequest || options.refinementOnly || options.recordIDs?.length || options.submissionIDs?.length
@@ -237,7 +242,13 @@ export class DiscoveryService {
       const pairRecords = pair ? [...pair, ...triggerSourceIDs, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
       const generalExploration = !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
+      const epicPlan = options.gapMode ? planEpicReview(project, this.store.epicReviewHistory(projectID), options.focusEpicID, this.store.submissions(projectID), (revision) => this.store.get(projectID, revision)) : undefined;
+      if (epicPlan && !epicPlan.task) {
+        options.onProgress?.("No pending epic packages: review saved blockers or answer waiting decisions. No model request made.");
+        return this.store.attachEpicReviewReport(job.id, epicPlan.report, true);
+      }
       let context = continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
+        : epicPlan?.task?.context ? epicPlan.task.context
         : generalExploration ? planGapContext(project, this.store.gapHistory(projectID), options.focusEpicID, (revision) => this.store.get(projectID, revision))
         : planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
         requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
@@ -255,7 +266,7 @@ export class DiscoveryService {
       }
       if (pair) context.manifest.refinementPair = { requirementIDs: pair, contextKey: resolutionContextKey(project, pair, triggerSourceIDs),
         ...(options.includeUnapproved ? { includeUnapproved: true } : {}), ...(triggerSourceIDs.length ? { triggerSourceIDs } : {}) };
-      if (!options.helpRequest && !options.refinementOnly) addRelatedRecordHints(project, context);
+      if (!options.helpRequest && !options.refinementOnly && !epicPlan) addRelatedRecordHints(project, context);
       if (refinementTarget) context.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
       // Detailed context can include historical reviews. Only the job's current
       // submission batch authorizes review follow-up, matching publication checks.
@@ -309,10 +320,70 @@ export class DiscoveryService {
         onProgress: report,
         onTelemetry: (telemetry) => this.store.attachTelemetry(job.id, telemetry),
         context,
-        research: continuationSource?.retrievalWork?.research ?? (options.helpRequest || options.refinementOnly ? false : options.research ?? false),
+        research: continuationSource?.retrievalWork?.research ?? epicPlan?.task?.prior?.retrievalWork?.research ?? (options.helpRequest || options.refinementOnly ? false : options.research ?? false),
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
       controller.signal.throwIfAborted();
+      if (epicPlan?.task) {
+        const review = epicPlan.task.review;
+        const prior = epicPlan.task.prior;
+        const work: RetrievalWork = prior?.retrievalWork ? { ...structuredClone(prior.retrievalWork), originJobID: prior.id }
+          : { format: 1, research: adapterOptions.research, stages: [], attempts: 0 };
+        const reviewReport = { ...epicPlan.report, modelCalls: work.attempts };
+        const checkpoint = () => {
+          reviewReport.modelCalls = work.attempts;
+          this.store.checkpointRetrieval(job.id, work, context.manifest);
+          this.store.attachEpicReviewReport(job.id, reviewReport);
+        };
+        const block = (reason: string): never => {
+          reviewReport.pending--; reviewReport.blocked++;
+          reviewReport.blockers = [{ packageID: review.packageID, epicID: review.epicID, reason }, ...reviewReport.blockers].slice(0, 20);
+          this.store.attachEpicReviewReport(job.id, reviewReport);
+          throw new Error(`Epic workflow review needs evidence: ${reason} No proposals applied. Saved stages retained; this unchanged package is blocked, not reviewed.`);
+        };
+        report(`Reviewing ${review.kind === "boundary" ? "dependency boundary" : "workflow package"} in ${project.epics.find((e) => e.id === review.epicID)?.title ?? review.epicID}: ${review.recordIDs.length} records together; exact linked evidence prepared locally. No search/paging calls.`);
+        // Only one batched exact load is supported; final analysis capacity is reserved.
+        if (work.stages.length > 1 || work.continuation) throw new Error("Unsupported epic-review retrieval state; original evidence retained.");
+        if (work.stages[0]) {
+          const saved = work.stages[0];
+          if (saved.evidenceBasis?.key !== retrievalEvidenceBasis(context).key || !("retrieveEvidence" in saved.request)) throw new Error("Saved epic evidence changed; original stage retained without replay.");
+          context = epicReviewContext(project, review, saved.request.retrieveEvidence.recordIDs, true);
+        }
+        checkpoint();
+        while (true) {
+          controller.signal.throwIfAborted();
+          if (work.final) {
+            if (work.final.evidenceBasis?.key !== retrievalEvidenceBasis(context).key) throw new Error("Saved epic final evidence changed; original response retained without replay.");
+            validateEpicReviewFinal(project, context, work.final.output);
+            if (prior?.sessionID) this.store.attachSession(job.id, prior.sessionID);
+            if (prior?.telemetry) this.store.attachTelemetry(job.id, prior.telemetry);
+            if (prior?.researchEvidence) this.store.attachResearch(job.id, prior.researchEvidence);
+            return this.store.finishJob(job.id, work.final.output);
+          }
+          if (work.attempts >= 3) block("Three model attempts were spent across retries. Review the connection or genuinely change the missing evidence/scope.");
+          work.attempts++; checkpoint();
+          const raw = await this.adapter.analyze(project, { ...adapterOptions, context });
+          controller.signal.throwIfAborted();
+          if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
+          if (raw && typeof raw === "object" && "reviewBlocked" in raw) block(epicReviewBlockedSchema.parse(raw).reviewBlocked.reason);
+          if (raw && typeof raw === "object" && "searchEvidence" in raw) block("Search/paging is not available in epic review. Supply or link the specific missing evidence instead.");
+          if (raw && typeof raw === "object" && "retrieveEvidence" in raw) {
+            if (work.stages.length || work.attempts >= 3) block("Additional evidence was requested after the one-batch loading allowance. Final analysis cannot cite unseen records.");
+            const request = validateRetrieval(context, raw);
+            work.stages.push({ revision: project.revision, contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context),
+              includedIDs: [...context.manifest.includedIDs], request, sessionID: this.store.getJob(job.id).sessionID });
+            checkpoint();
+            try { context = epicReviewContext(project, review, request.retrieveEvidence.recordIDs, true); }
+            catch (error) { if (error instanceof ContextBudgetError) block("The requested exact evidence and human guardrails exceed the context bound; no evidence was truncated."); throw error; }
+            continue;
+          }
+          if (JSON.stringify(raw)?.length > 96000) throw new Error("Epic review output exceeds the 96,000-character saved-output bound.");
+          const output = parseDiscoveryAnalysis(raw).result;
+          validateEpicReviewFinal(project, context, output);
+          work.final = { contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context), revision: project.revision, output };
+          checkpoint();
+        }
+      }
       if (context.gapReport && !context.manifest.gapRetrieval) this.store.attachGapReport(job.id, { ...context.gapReport, modelCalls: 1 });
       let output: unknown;
       if (context.manifest.gapRetrieval) {

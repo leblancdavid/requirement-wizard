@@ -2,6 +2,17 @@ import React from "react";
 import type { Job, Project } from "../core/model.js";
 
 export function GapExplorationStatus({ job, project }: { job: Job; project?: Project }) {
+  if (job.epicReviewReport) {
+    const report = job.epicReviewReport;
+    const review = job.context?.epicReview;
+    return <section aria-label="Epic workflow review progress"><h3>Epic workflow review</h3>
+      {review && <p>{project?.epics.find((e) => e.id === review.epicID)?.title ?? review.epicID} · {review.kind === "boundary" ? "Dependency boundary" : "Candidate workflow package"} · {review.recordIDs.length} target records</p>}
+      <p>{report.reviewed} reviewed · {report.pending} pending · {report.waiting} waiting for decisions · {report.blocked} evidence blocked · {report.total} packages</p>
+      <p>{report.modelCalls} of 3 model attempts spent across retries; at most one batched exact load, then final review. No model-driven search or paging. Completed evidence stages are retained.</p>
+      {!!report.blockers.length && <details><summary>Evidence blockers</summary><ul>{report.blockers.map((b) => <li key={b.packageID}>{project?.epics.find((e) => e.id === b.epicID)?.title ?? b.epicID}: {b.reason}</li>)}</ul><small>At most 20 blockers listed. Blocked packages do not count as reviewed.</small></details>}
+      <p>{report.explanation}</p><small>Counts describe this review's input scope/revision, not live completeness. Existing legacy checks remain separate; compatible workflow reviews are reused.</small>
+    </section>;
+  }
   const report = job.gapReport;
   if (!report) return null;
   return <section aria-label="Gap exploration backlog"><h3>Gap exploration backlog</h3>

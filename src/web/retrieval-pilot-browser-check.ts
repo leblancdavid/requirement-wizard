@@ -70,7 +70,7 @@ try {
   await expect(status).toContainText("Requested for new searches in this job: Experimental");
   await expect(status).toContainText("Saved policy: Experimental");
   await expect(status).toContainText("/ 1,000,000 scan characters"); await expect(status).toContainText("auxiliary records examined");
-  await expect(status).toContainText("Zero omissions is not proof"); await expect(status).toContainText("No candidate continuation offered");
+  await expect(status).toContainText("Zero omissions is not proof"); await expect(status).toContainText("No candidate search-page continuation offered");
   await expect(status).toContainText("1 of 3 model requests");
   await page.screenshot({ path: ".reqwizit-state/browser-retrieval-pilot-interrupted.png", fullPage: true });
   await page.getByRole("button", { name: "Close processing queue" }).click();
