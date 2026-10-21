@@ -38,6 +38,8 @@ import { ActionButton, ActionScope } from "./action-button.js";
 import { discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { ItemProcessingNotice } from "./decision-recovery.js";
+import { AttemptCleanup } from "./attempt-cleanup.js";
+import { resolvedReviewAttempts } from "../core/review-attempts.js";
 
 type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: Job[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
@@ -348,18 +350,27 @@ function App() {
   const issueRequirementID = issue?.requirementID ?? (issueSubmission?.input.type === "review" ? issueSubmission.input.requirementID : undefined);
   const issueQuestion = issueSubmission?.input.type === "answer" ? project?.questions.find((q) => issueSubmission.input.type === "answer" && q.id === issueSubmission.input.questionID) : undefined;
   const issueHistory = data?.submissions.filter((s) => issueRequirementID ? s.input.type === "review" && s.input.requirementID === issueRequirementID : issueQuestion ? s.input.type === "answer" && s.input.questionID === issueQuestion.id : s.id === issueSubmission?.id) ?? [];
+  const resolvedAttempts = useMemo(() => project && data ? resolvedReviewAttempts(project, data.submissions) : new Map(), [project, data?.submissions]);
 
   return <ActionScope reason={discoveryReason || "Wait for the current save to finish."}><div className="app">
     {issue && issue.projectID === project?.id && data && <IssueDialog key={project.id} close={() => setIssue(undefined)}>
       <p>Current saved information · Actions use the same checks as Review. Closing returns you to your previous view.</p>
       {error && <p role="alert">{error}</p>}
+      {issueHistory.some((s) => resolvedAttempts.has(s.id)) && <p role="status">A later decision was saved. Earlier failed attempts are history only; all original notes are preserved, not applied. Current wording may still need review.</p>}
+      {issueRequirementID && <AttemptCleanup key={issueRequirementID} submissions={issueHistory.filter((s) => !resolvedAttempts.has(s.id))} disabled={pending} dismiss={async (submissionIDs) => {
+        const items = await api<Submission[]>(`projects/${project.id}/dismiss-review-attempts`, { revision: project.revision, requirementID: issueRequirementID, submissionIDs });
+        await load().catch((error: Error) => setError(error.message)); return items;
+      }} undo={async (attempts) => {
+        await api(`projects/${project.id}/restore-review-attempts`, { revision: project.revision, requirementID: issueRequirementID, attempts });
+        await load().catch((error: Error) => setError(error.message));
+      }} />}
       {issueRequirementID ? renderReview(issueRequirementID) : issueQuestion ? renderClarification(issueQuestion) : issueSubmission ? <><p>{attentionSummary(project, data.submissions, issueSubmission, data.jobs)}</p><p className="source-excerpt">{issueSubmission.input.type === "note" ? issueSubmission.input.text : "The original item is no longer available. Its response is retained below."}</p>{["needs-attention", "saved", "queued"].includes(issueSubmission.status) && !issueSubmission.conflict && <ActionButton className="secondary" disabled={busy || connectionChanged} onClick={() => processBlocking([issueSubmission.id])}>Retry follow-up</ActionButton>}</> : <p role="status">This saved response is no longer available.</p>}
       <LazyDetails summary={<>Saved attempts &amp; notes · {issueHistory.length}</>}>{() => <PagedList items={issueHistory.slice().reverse()} itemID={(s) => s.id} label="Saved attempts">{(s) => <article className="queue-item" key={s.id}>
-        <small>{new Date(s.submittedAt).toLocaleString()} · {s.archivedAt ? "Archived · history only" : s.status}</small>
+        <small>{new Date(s.submittedAt).toLocaleString()} · {s.archivedAt ? "Archived · history only" : resolvedAttempts.has(s.id) ? "Resolved · history only" : s.status}</small>
         {s.input.type === "review" && <p><strong>Wording at this attempt:</strong> {s.input.requirementText}</p>}
         <p className="source-excerpt">{s.input.type === "review" ? `${s.input.action}${s.applied ? " · applied" : " · not applied"}: ${s.input.note || "No addendum"}` : s.input.type === "answer" ? s.input.answer.text : s.input.text}</p>
         {s.diagnostic && <details><summary>Previous attempt diagnostic</summary><p>{s.diagnostic}</p></details>}
-        {s.input.type === "review" && !s.applied && s.conflict && s.status === "needs-attention" && s.overlapFollowup?.state !== "pending" && <details><summary>Archive attempt…</summary><p>This only moves this unapplied attempt to history. Its note is preserved. It does not resolve questions, apply a decision or retry follow-up.</p><ActionButton className="secondary" disabled={pending} onClick={() => void act(async () => { await api(`projects/${project.id}/archive-review-attempt`, { revision: project.revision, submissionID: s.id }); })}>Confirm archive attempt</ActionButton></details>}
+        {s.input.type === "review" && !resolvedAttempts.has(s.id) && !s.applied && s.conflict && s.status === "needs-attention" && s.overlapFollowup?.state !== "pending" && <details><summary>Archive attempt…</summary><p>This only moves this unapplied attempt to history. Its note is preserved. It does not resolve questions, apply a decision or retry follow-up.</p><ActionButton className="secondary" disabled={pending} onClick={() => void act(async () => { await api(`projects/${project.id}/archive-review-attempt`, { revision: project.revision, submissionID: s.id }); })}>Confirm archive attempt</ActionButton></details>}
       </article>}</PagedList>}</LazyDetails>
     </IssueDialog>}
     <aside className="sidebar">

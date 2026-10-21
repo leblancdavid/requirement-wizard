@@ -838,7 +838,7 @@ try {
   await expect(page.locator(".queue-drawer-heading")).toContainText("1 processing · 1 waiting");
   await expect(page.locator(".queue-panel")).toContainText("Corrected job details");
   await page.locator(".queue-panel > details > summary").filter({ hasText: "Replaced responses" }).click();
-  await expect(page.locator(".queue-item .badge.superseded")).toHaveCount(1);
+   await expect(page.locator(".queue-item").filter({ has: page.getByText("What job details should be saved?", { exact: true }) }).locator(".badge.superseded")).toHaveCount(1);
   await expect(details).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveCount(0);
    await expect(page.getByRole("tab", { name: "Design" })).toContainText("1");
@@ -2034,7 +2034,7 @@ try {
               historyProject = store.get(historyProject.id);
               const historyBlocker = store.enqueue(historyProject.id, { id: crypto.randomUUID(), auto: false, research: false, input: { type: "note", epicID: "project", text: "Resolve this constraint before approval" } });
               const historyInputs = historyProject.requirements.map((r) => ({ type: "review" as const, requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted" as const, note: "" }));
-              for (const input of [historyInputs[0]!, historyInputs[1]!, historyInputs[1]!]) store.enqueue(historyProject.id, { id: crypto.randomUUID(), auto: false, research: false, input });
+               for (const input of [{ ...historyInputs[0]!, action: "rejected" as const, note: "Keep this earlier rejection note in history" }, historyInputs[1]!, historyInputs[1]!]) store.enqueue(historyProject.id, { id: crypto.randomUUID(), auto: false, research: false, input });
               await page.evaluate((id) => { localStorage.setItem("reqwizit-project", id); }, historyProject.id);
               await page.reload(); await page.getByRole("tab", { name: /^Review/ }).click();
               await reviewPanel.getByRole("button", { name: /^Submitted/ }).click();
@@ -2053,8 +2053,10 @@ try {
               await expect(page.getByRole("button", { name: /^Processing & queue:/ })).not.toHaveAccessibleName(/need attention/);
               await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
               await expect(reviewPanel.getByRole("region", { name: "Resolved review attempt" })).toHaveCount(3);
-              await expect(reviewPanel.getByRole("region", { name: "Current review recovery" })).toHaveCount(0);
-              await reviewPanel.getByRole("button", { name: "View approved story", exact: true }).first().click();
+               await expect(reviewPanel.getByRole("region", { name: "Current review recovery" })).toHaveCount(0);
+               await reviewPanel.getByText("Previous attempt & note (saved history)", { exact: true }).last().click();
+               await expect(reviewPanel).toContainText("Keep this earlier rejection note in history");
+               await reviewPanel.getByRole("button", { name: "View current requirement", exact: true }).first().click();
               await expect(reviewPanel.getByRole("button", { name: /Approved.*Second reviewed story/ }).first()).toHaveAttribute("aria-expanded", "true");
               await page.setViewportSize({ width: 390, height: 844 });
               assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Resolved review history fits mobile width");
@@ -2086,7 +2088,7 @@ try {
     const resolverInbox = page.getByRole("region", { name: "Needs attention inbox", exact: true });
     await expect(resolverInbox).toContainText("Needs attention · 1 item");
     await expect(resolverInbox).toContainText("4 saved attempts");
-    await resolverInbox.getByRole("button", { name: "View & resolve", exact: true }).click();
+     await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
     const resolverDialog = page.getByRole("dialog", { name: "View & resolve", exact: true });
     await expect(resolverDialog).toContainText("Both players return to their latest shared beacon");
     await expect(resolverDialog.getByRole("button", { name: "Approve", exact: true })).toHaveAttribute("aria-disabled", "true");
@@ -2099,8 +2101,8 @@ try {
     await expect(resolverDialog).toBeVisible();
     await page.mouse.click(2, 2);
     await expect(resolverDialog).toHaveCount(0);
-    await expect(resolverInbox.getByRole("button", { name: "View & resolve", exact: true })).toBeFocused();
-    await resolverInbox.getByRole("button", { name: "View & resolve", exact: true }).click();
+     await expect(resolverInbox.getByRole("button", { name: "Answer question", exact: true })).toBeFocused();
+     await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
     await expect(resolverDialog.getByLabel("Anything to add? (optional)")).toHaveValue("Keep this resolver draft");
     assert.deepEqual(await resolverDialog.evaluate((dialog) => {
       const body = dialog.querySelector(".issue-dialog-body")!;
@@ -2108,8 +2110,8 @@ try {
     }), { overflow: "hidden", bodyOverflow: "auto", scrolls: true, headerVisible: true }, "Only the dialog body scrolls, inside the rounded shell");
     await resolverDialog.getByRole("button", { name: "Close ×", exact: true }).click();
     await expect(page.getByLabel("Filter by feature", { exact: true })).toHaveValue("project");
-    await expect(resolverInbox.getByRole("button", { name: "View & resolve", exact: true })).toBeFocused();
-    await resolverInbox.getByRole("button", { name: "View & resolve", exact: true }).click();
+     await expect(resolverInbox.getByRole("button", { name: "Answer question", exact: true })).toBeFocused();
+     await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
     await expect(resolverDialog.getByLabel("Anything to add? (optional)")).toHaveValue("Keep this resolver draft");
     await resolverDialog.getByText("Saved attempts & notes · 4", { exact: true }).click();
     await expect(resolverDialog).toContainText("Use spawn beacons, not partner revival.");
@@ -2117,11 +2119,19 @@ try {
     await resolverDialog.getByRole("button", { name: "Confirm archive attempt", exact: true }).click();
     await expect(resolverDialog).toContainText("Archived · history only");
     await expect(resolverDialog.getByRole("button", { name: "Approve", exact: true })).toHaveAttribute("aria-disabled", "true");
-    assert.equal(store.get(resolverProject.id).questions[0]!.status, "pending", "Archiving never answers the clarification");
+     assert.equal(store.get(resolverProject.id).questions[0]!.status, "pending", "Archiving never answers the clarification");
+     await resolverDialog.getByRole("button", { name: "Dismiss old attempts (3)", exact: true }).click();
+     await expect(resolverDialog).toContainText("Old attempts dismissed. All notes and history kept.");
+     await expect(resolverInbox).toHaveCount(0);
+     assert.equal(store.submissions(resolverProject.id).filter((s) => s.archivedAt).length, 4);
+     assert.equal(store.get(resolverProject.id).questions[0]!.status, "pending", "Bulk dismissal never answers a question or changes approval");
+     await resolverDialog.getByRole("button", { name: "Undo dismissal", exact: true }).click();
+     await expect(resolverInbox).toContainText("3 saved attempts");
+     assert.equal(store.submissions(resolverProject.id).filter((s) => s.archivedAt).length, 1, "Undo affects only the bulk-dismissed attempts");
     await resolverDialog.getByRole("button", { name: "Close ×", exact: true }).click();
     await page.getByRole("button", { name: /^Processing & queue:/ }).click();
     const resolverDrawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
-    await resolverDrawer.getByRole("region", { name: "Needs attention inbox", exact: true }).getByRole("button", { name: "View & resolve", exact: true }).click();
+     await resolverDrawer.getByRole("region", { name: "Needs attention inbox", exact: true }).getByRole("button", { name: "Answer question", exact: true }).click();
     await expect(resolverDialog).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await resolverDialog.evaluate((dialog) => dialog.scrollWidth > dialog.clientWidth), false, "Resolver fits mobile width");
@@ -2133,7 +2143,7 @@ try {
     await expect(resolverInbox).toContainText("3 saved attempts");
     assert.equal(store.submissions(resolverProject.id).filter((s) => s.archivedAt).length, 1);
     assert.equal(resolverCalls, 0, "Viewing, archiving and reload never start inference");
-    await resolverInbox.getByRole("button", { name: "View & resolve", exact: true }).click();
+     await resolverInbox.getByRole("button", { name: "Answer question", exact: true }).click();
     await resolverDialog.getByLabel("Anything to add? (optional)").fill("Preserve this note through clarification follow-up");
     await resolverDialog.getByLabel("Your answer to Where should players return before reaching a beacon?", { exact: true }).fill("Return to the mission entrance.");
     await resolverDialog.getByRole("button", { name: "Save response →", exact: true }).click();

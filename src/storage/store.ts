@@ -23,6 +23,7 @@ import type { GapHistory } from "../core/gap-backlog.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
+import { dismissibleReviewAttempt, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
 import { questionReviewFingerprint, reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
@@ -333,6 +334,55 @@ export class ProjectStore {
       item.archivedAt = new Date().toISOString();
       this.saveSubmission(item);
       return item;
+    }).immediate();
+  }
+
+  dismissReviewAttempts(id: string, expectedRevision: number, requirementID: string, submissionIDs: string[]): Submission[] {
+    return this.db.transaction(() => {
+      if (this.get(id).revision !== expectedRevision) throw new StaleRevisionError();
+      const ids = z.array(z.string().min(1).max(200)).min(1).max(reviewAttemptBatchLimit).parse(submissionIDs);
+      if (new Set(ids).size !== ids.length) throw new Error("Duplicate attempt IDs.");
+      const saved = new Map(this.submissions(id).map((s) => [s.id, s]));
+      const items = ids.map((key) => {
+        const item = saved.get(key);
+        if (!item || item.input.type !== "review" || item.input.requirementID !== requirementID
+          || item.applied || !item.conflict || item.overlapFollowup?.state === "pending"
+          || !(dismissibleReviewAttempt(item) || item.status === "superseded" && item.archivedAt)) {
+          throw new Error("These attempts changed. Refresh before dismissing them. Applied decisions and unfinished processing cannot be dismissed.");
+        }
+        return item;
+      });
+      const archivedAt = new Date().toISOString();
+      for (const item of items) {
+        if (item.status === "superseded") continue;
+        item.status = "superseded"; item.archivedAt = archivedAt;
+        this.saveSubmission(item);
+      }
+      return items;
+    }).immediate();
+  }
+
+  restoreReviewAttempts(id: string, expectedRevision: number, requirementID: string, attempts: { submissionID: string; archivedAt: string }[]): Submission[] {
+    return this.db.transaction(() => {
+      if (this.get(id).revision !== expectedRevision) throw new StaleRevisionError();
+      const input = z.array(z.object({ submissionID: z.string().min(1).max(200), archivedAt: z.string().datetime() }).strict()).min(1).max(reviewAttemptBatchLimit).parse(attempts);
+      if (new Set(input.map((s) => s.submissionID)).size !== input.length) throw new Error("Duplicate attempt IDs.");
+      const saved = new Map(this.submissions(id).map((s) => [s.id, s]));
+      const items = input.map(({ submissionID, archivedAt }) => {
+        const item = saved.get(submissionID);
+        if (!item || item.input.type !== "review" || item.input.requirementID !== requirementID
+          || item.applied || !item.conflict || item.overlapFollowup?.state === "pending"
+          || !(item.status === "superseded" && item.archivedAt === archivedAt || dismissibleReviewAttempt(item) && !item.archivedAt)) {
+          throw new Error("These attempts changed. Refresh before undoing the dismissal.");
+        }
+        return item;
+      });
+      for (const item of items) {
+        if (!item.archivedAt) continue;
+        item.status = "needs-attention"; delete item.archivedAt;
+        this.saveSubmission(item);
+      }
+      return items;
     }).immediate();
   }
 

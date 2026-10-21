@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { projectSchema, reviewFingerprint, type Submission } from "./model.js";
-import { resolvedReviewAttempts } from "./review-attempts.js";
+import { resolvedReviewAttempts, reviewAttemptBatchLimit } from "./review-attempts.js";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { DiscoveryService } from "../service/discovery.js";
@@ -22,6 +22,11 @@ function fixture() {
   project.sources.push({ id: "approval", kind: "confirmation", requirementID: "story", epicID: "inbox", text: "Saved human approval" });
   return { project, failed, completed };
 }
+
+test("a full dismissal Undo batch fits the authenticated API body limit", () => {
+  const attempts = Array.from({ length: reviewAttemptBatchLimit }, () => ({ submissionID: randomUUID(), archivedAt: new Date().toISOString() }));
+  assert.ok(Buffer.byteLength(JSON.stringify({ revision: 1, requirementID: randomUUID(), attempts })) < 128000);
+});
 
 test("later completed human approval resolves duplicate failed attempts without changing their originals", () => {
   const { project, failed, completed } = fixture();
@@ -42,28 +47,23 @@ test("a later explicit approval of updated wording replaces a plain old attempt,
   assert.equal(failed.applied, false);
 });
 
-for (const mode of ["note", "different-action", "unfinished", "applied-failure", "missing-source", "superseded-source", "changed-wording", "needs-review", "earlier-success", "future-attempt", "malformed-fingerprint", "archived", "other-project"] as const) {
+for (const mode of ["change-request", "unfinished", "applied-failure", "missing-source", "earlier-success", "future-attempt", "malformed-fingerprint", "other-project"] as const) {
   test(`review history keeps ${mode} actionable instead of assuming it is resolved`, () => {
     const { project, failed, completed } = fixture();
     if (failed.input.type !== "review" || completed.input.type !== "review") throw new Error("fixture");
-    if (mode === "note") failed.input.note = "Still needs consideration";
-    if (mode === "different-action") failed.input.action = "rejected";
-    if (mode === "unfinished") completed.status = "saved";
+    if (mode === "change-request") failed.input.action = "changes-requested";
+    if (mode === "unfinished") { completed.status = "queued"; completed.applied = false; }
     if (mode === "applied-failure") failed.applied = true;
     if (mode === "missing-source") delete completed.appliedSourceID;
-    if (mode === "superseded-source") project.sources.push({ id: "new-source", kind: "rejection", text: "Later decision", epicID: "inbox", requirementID: "story", supersedes: "approval" });
-    if (mode === "changed-wording") project.requirements[0]!.acceptance.push("A newly added scenario");
-    if (mode === "needs-review") project.requirements[0]!.status = "needs-review";
     if (mode === "earlier-success") completed.submittedAt = "2026-10-20T11:00:00Z";
     if (mode === "future-attempt") failed.submittedAt = "2026-10-21T12:00:00Z";
     if (mode === "malformed-fingerprint") failed.input.fingerprint = "unknown old format";
-    if (mode === "archived") project.epics.find((e) => e.id === "inbox")!.archived = true;
     if (mode === "other-project") completed.projectID = "another-project";
     assert.equal(resolvedReviewAttempts(project, [failed, completed]).size, 0);
   });
 }
 
-test("later rejection resolves only a matching earlier rejection, with equal timestamps ordered durably", () => {
+test("later rejection resolves earlier failed decisions, with equal timestamps ordered durably", () => {
   const { project, failed, completed } = fixture();
   if (failed.input.type !== "review" || completed.input.type !== "review") throw new Error("fixture");
   failed.input.action = completed.input.action = "rejected";
@@ -71,6 +71,32 @@ test("later rejection resolves only a matching earlier rejection, with equal tim
   project.requirements[0]!.status = "rejected"; project.sources[1]!.kind = "rejection";
   assert.equal(resolvedReviewAttempts(project, [failed, completed]).size, 1);
   assert.equal(resolvedReviewAttempts(project, [completed, failed]).size, 0);
+});
+
+test("replaced failed attempts do not return after later edits, decisions or archiving; no current approval is inferred", () => {
+  const { project, failed, completed } = fixture();
+  project.requirements[0]!.acceptance.push("New scenario needs review");
+  project.requirements[0]!.status = "needs-review";
+  project.epics.find((e) => e.id === "inbox")!.archived = true;
+  project.sources.push({ id: "new-source", kind: "rejection", text: "Later decision", epicID: "inbox", requirementID: "story", supersedes: "approval" });
+  const before = structuredClone(project);
+  assert.equal(resolvedReviewAttempts(project, [failed, completed]).size, 1);
+  assert.deepEqual(project, before);
+});
+
+test("a saved current decision closes failed opposite decisions with notes without applying the notes", () => {
+  const { project, failed, completed } = fixture();
+  if (failed.input.type !== "review") throw new Error("fixture");
+  failed.input.action = "rejected"; failed.input.note = "  Original note stays verbatim\n";
+  for (const status of ["saved", "processing", "needs-attention", "completed"] as const) {
+    completed.status = status;
+    const before = structuredClone({ project, failed, completed });
+    assert.equal(resolvedReviewAttempts(project, [failed, completed]).get(failed.id)?.submissionID, completed.id);
+    assert.equal(resolvedReviewAttempts(project, [failed, completed]).has(completed.id), false, "The later decision's own follow-up is never hidden");
+    assert.deepEqual({ project, failed, completed }, before);
+  }
+  failed.overlapFollowup = { format: 1, state: "pending", discoveryJobID: "job", requirementIDs: ["story"], triggerSourceIDs: ["idea"], candidateCount: 0, pairs: [] };
+  assert.equal(resolvedReviewAttempts(project, [failed, completed]).size, 0, "Unfinished overlap follow-up is protected");
 });
 
 test("legacy failed attempts reconcile on repeated SQLite reopen without rewriting payloads, pausing an idle queue, or inference", async () => {
@@ -83,7 +109,7 @@ test("legacy failed attempts reconcile on repeated SQLite reopen without rewriti
     store.finishJob(seed.id, { summary: "History", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [{ statement: "Requested behavior", rationale: "Intent", acceptance: ["Observable outcome"], sourceIDs: [p.sources[0]!.id] }] });
     p = store.get(p.id);
     const input = { type: "review" as const, requirementID: p.requirements[0]!.id, requirementText: p.requirements[0]!.statement, fingerprint: reviewFingerprint(p.requirements[0]!), action: "accepted" as const, note: "" };
-    const old: Submission = { id: randomUUID(), projectID: p.id, status: "needs-attention", conflict: true, applied: false, auto: false, research: false, submittedAt: "2026-10-20T11:00:00Z", diagnostic: "Original historical diagnostic", input };
+    const old: Submission = { id: randomUUID(), projectID: p.id, status: "needs-attention", conflict: true, applied: false, auto: false, research: false, submittedAt: "2026-10-20T11:00:00Z", diagnostic: "Original historical diagnostic", input: { ...input, action: "rejected", note: "Preserve this old rejection note exactly" } };
     const approval = store.enqueue(p.id, { id: randomUUID(), auto: false, research: false, input });
     store.applyQueued(p.id);
     const applied = store.submissions(p.id).find((s) => s.id === approval.id)!;

@@ -22,7 +22,17 @@ export function attentionSummary(project: Project, submissions: Submission[], it
   if (item.input.type !== "review") return item.diagnostic ?? "Review this saved response and its follow-up.";
   if (item.applied || !item.conflict) return item.contextBlock ? "Follow-up context is blocked. Review context scope before retrying." : "Follow-up needs attention. Retry processing, not the decision.";
   const availability = decisionAvailability(project, [item.input.requirementID], submissions, jobs, { excludeSubmissionID: item.id, action: item.input.action });
-  return availability.state === "ready" ? "The earlier blocker has cleared. Review the current requirement before submitting a new decision." : availability.reason;
+  return availability.state === "ready" ? "Ready to review: choose your decision on the current requirement, or dismiss old attempts if you no longer want to submit them. Their notes stay in history." : availability.reason;
+}
+
+export function attentionAction(project: Project, submissions: Submission[], item: Submission, jobs: Job[] = []) {
+  if (item.contextBlock) return "Review context";
+  if (item.input.type !== "review") return item.conflict ? "Review response" : "Retry processing";
+  if (item.applied || !item.conflict) return "Retry processing";
+  const availability = decisionAvailability(project, [item.input.requirementID], submissions, jobs, { excludeSubmissionID: item.id, action: item.input.action });
+  if (availability.submissionIDs.length) return "Process blocking input";
+  if (availability.questionIDs?.length) return "Answer question";
+  return availability.state === "ready" ? "Review requirement" : "Review changes";
 }
 
 export function AttentionInbox({ project, submissions, jobs = [], open }: {
@@ -38,7 +48,7 @@ export function AttentionInbox({ project, submissions, jobs = [], open }: {
         <p role="status">{attentionSummary(project, submissions, latest, jobs)}</p>
         {input.type === "review" && !latest.conflict && latest.diagnostic && <p className="job-error">{latest.diagnostic}</p>}
         <SubmissionOverlapStatus submission={latest} /><small>{attempts.length} saved {attempts.length === 1 ? "attempt" : "attempts"}{target ? ` · ${project.epics.find((e) => e.id === target.epicID)?.title ?? target.epicID}` : ""}</small>
-        <div><button type="button" className="secondary" onClick={() => open(latest.id)}>View &amp; resolve</button></div>
+        <div><button type="button" className="secondary" onClick={() => open(latest.id)}>{attentionAction(project, submissions, latest, jobs)}</button></div>
       </article>;
     }}</PagedList>
   </section>;

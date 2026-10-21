@@ -70,6 +70,47 @@ test("archiving legacy conflicting reviews preserves original evidence across re
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("bulk dismissal and undo preserve legacy notes, remain atomic and protect unfinished work across reopen", () => {
+  const directory = mkdtempSync(resolve(".reqwizit-state/dismiss-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = seed(store), target = p.requirements[0]!.id;
+    const waiting = store.enqueue(p.id, { id: randomUUID(), auto: false, research: false, input: note(p, "project").input });
+    const first = store.enqueue(p.id, review(p)), second = store.enqueue(p.id, review(p, 0, "Different original note"));
+    const other = store.enqueue(p.id, review(p, 1));
+    const ids = [first.id, second.id], original = store.submissions(p.id);
+    assert.throws(() => store.dismissReviewAttempts(p.id, p.revision - 1, target, ids), /changed|revision/i);
+    assert.throws(() => store.dismissReviewAttempts(p.id, p.revision, target, [...ids, other.id]), /changed/);
+    assert.throws(() => store.dismissReviewAttempts(p.id, p.revision, target, [...ids, waiting.id]), /changed/);
+    assert.deepEqual(store.submissions(p.id), original, "Invalid batches do not partially dismiss anything");
+    const pending = { ...second, overlapFollowup: { format: 1 as const, state: "pending" as const, discoveryJobID: "job", requirementIDs: [target], triggerSourceIDs: [p.sources[0]!.id], candidateCount: 0, pairs: [] } };
+    store.saveSubmission(pending);
+    assert.throws(() => store.dismissReviewAttempts(p.id, p.revision, target, ids), /unfinished/);
+    assert.equal(store.submissions(p.id).find((s) => s.id === first.id)!.status, "needs-attention");
+    store.saveSubmission(second);
+    const archived = store.dismissReviewAttempts(p.id, p.revision, target, ids);
+    const undo = archived.map((s) => ({ submissionID: s.id, archivedAt: s.archivedAt! }));
+    assert.ok(archived.every((s) => s.status === "superseded" && s.archivedAt));
+    assert.deepEqual(archived.map((s) => s.input), [first.input, second.input]);
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.dismissReviewAttempts(p.id, p.revision, target, ids), archived, "Lost-response retry preserves archive timestamps");
+    const dismissed = store.submissions(p.id);
+    assert.throws(() => store.restoreReviewAttempts(p.id, p.revision, target, [undo[0]!, { ...undo[1]!, archivedAt: "2020-01-01T00:00:00.000Z" }]), /changed/);
+    assert.deepEqual(store.submissions(p.id), dismissed, "Invalid undo rolls back the whole batch");
+    assert.throws(() => store.restoreReviewAttempts(p.id, p.revision - 1, target, undo), /changed|revision/i);
+    store.saveSubmission({ ...archived[1]!, applied: true });
+    assert.throws(() => store.restoreReviewAttempts(p.id, p.revision, target, undo), /changed/);
+    assert.equal(store.submissions(p.id).find((s) => s.id === first.id)!.status, "superseded", "Applied evidence prevents the entire undo");
+    store.saveSubmission(archived[1]!);
+    assert.deepEqual(store.restoreReviewAttempts(p.id, p.revision, target, undo), [first, second]);
+    assert.deepEqual(store.restoreReviewAttempts(p.id, p.revision, target, undo), [first, second], "Undo is retryable");
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.submissions(p.id), original);
+    assert.deepEqual(store.get(p.id), p, "Neither dismissal nor undo changes specification evidence");
+    assert.deepEqual(decisionAvailability(p, [target], store.submissions(p.id)).submissionIDs, [waiting.id]);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("decision availability follows transitive dependencies, shared input and explicit cross-feature links, not independent features", () => {
   const store = new ProjectStore(":memory:");
   try {

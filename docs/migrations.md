@@ -19,12 +19,48 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Requirement-level attention cleanup
+
+SQLite **3 → 3**. No payload conversion, startup sweep, revision/fingerprint change,
+assessment invalidation or model replay. A read-only forward compatibility projection
+now recognizes later applied approval/rejection submissions with matching retained
+confirmation/rejection source provenance as replacements for earlier unapplied failed
+decision conflicts, including opposite choices and nonempty notes. A valid saved review
+fingerprint and durable ordering/timestamps remain required. Missing provenance is not
+manufactured. Original bytes, notes and diagnostics remain intact; old notes are not
+applied or treated as change requests. Change requests and pending overlap work stay
+actionable. The later submission's own processing is never hidden.
+
+Resolution describes historical failed attempts, not current requirement approval. It
+does not revert when wording/status/feature archival or source supersession changes
+later. Those changes retain their existing current-review safety checks and can require
+a new decision, without resurrecting old failed submissions. Older databases benefit
+on read/reopen; no user-data reset or repeated inference is necessary.
+
+Explicit requirement-level dismissal uses existing `superseded` + `archivedAt` fields.
+Dismissal and Undo each validate the expected project revision, exact bounded batch,
+project/requirement ownership and eligibility in one immediate transaction. A changed
+member rejects the whole batch. Undo checks each original archive timestamp and never
+restores applied decisions, queued work or pending overlap processing. Original input,
+IDs, diagnostic and submitted timestamp are unchanged. Retrying dismissal/Undo after a
+lost response or reopening is idempotent; UI Undo is available until dialog close.
+Queue pause/leases are unchanged; restoring an attempt does not automatically retry it.
+No destructive conversion needs a separate backup. Existing future-envelope rejection
+continues unchanged.
+
+Upgrade coverage includes saved opposite decisions with exact notes across repeated
+SQLite reopen and no startup inference/payload rewrite, transactional batch rejection,
+repeated dismissal/Undo, timestamp mismatch, real pending-input protection and
+authenticated bounded API requests. See [browser verification](browser-workspace.md#find-and-resolve-processing-problems)
+for executed checks and the remaining non-blocking UI bundle warning.
+
 ## Focused issue recovery and attempt archiving
 
 SQLite **3 → 3**; no startup sweep, revision/fingerprint change, inference replay,
 assessment invalidation or workspace-artifact migration. Grouping and current-blocker
 display are read-only projections over existing submissions, including legacy attempts.
-Existing conservative completed-review reconciliation remains unchanged.
+The original completed-review reconciliation was subsequently broadened by
+[requirement-level attention cleanup](#requirement-level-attention-cleanup).
 
 Explicit archiving transitions a `needs-attention`, unapplied conflicting review to the
 existing `superseded` state, adding only optional ISO `archivedAt` metadata. Older rows
@@ -775,6 +811,10 @@ Verification: type checking, all **370 deterministic tests** (including the new
 bounded-exploration and legacy SQLite reopen checks), and whitespace checks passed.
 
 ### Resolved historical review attempts (2026-10-20)
+
+Historical policy below; [requirement-level attention cleanup](#requirement-level-attention-cleanup)
+subsequently broadened reconciliation to include notes/opposite decisions and prevent
+old attempts returning after later edits. Original evidence remains unchanged.
 
 Source/target SQLite **3 → 3**, execution payload **1 → 1**, workspace **2 → 2**;
 project, submission and job JSON formats and all fingerprints are unchanged. This is

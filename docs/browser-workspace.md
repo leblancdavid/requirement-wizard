@@ -37,7 +37,10 @@ affected items, not failed attempts. Entries show the current wording and curren
 decision blocker; previously saved diagnostics do not establish today's blocker.
 The inbox and attempt history are paginated.
 
-**View & resolve** opens the exact item in a focused dialog, bypassing feature,
+Each inbox item names its next step: **Answer question**, **Process blocking input**,
+**Review requirement** / **Review changes**, or **Retry processing** (context-size
+problems use **Review context**). These open the exact item in a focused dialog;
+opening it does not submit a decision or start processing. The dialog bypasses feature,
 review-status and page filters without changing the underlying view. It shows current
 wording, acceptance scenarios, evidence, linked clarification editors, processing and
 review/change-request actions using the existing Review checks. Related pending
@@ -46,8 +49,8 @@ for saved responses offer the same shortcut; requirement changes in activity det
 offer **View current requirement**. Job/execution-level problems retain their existing
 queue/implementation recovery paths rather than inventing a requirement target.
 
-Answer the clarification, use **Process blocking input** when automatic processing is
-off, then review the updated information and explicitly submit a new decision. The
+Answer any clarification, use **Process blocking input** when automatic processing is
+off, then review the updated information and explicitly submit your decision once. The
 dialog does not automatically retry inference or reapply an old approval/rejection.
 Review drafts survive closing/reopening the resolver within the current browser
 workspace; reload clears unsent drafts. Escape, Close, or clicking the backdrop returns
@@ -59,15 +62,42 @@ The corner/backdrop follow-up passed type checking, UI build, diff checks and th
 full browser check on Node 22.23.3, including backdrop dismissal, focus/draft
 restoration, inside clicks, inside-to-backdrop drags and body-only scrolling.
 
+Once a later approval/rejection is applied with saved source evidence, earlier failed,
+unapplied decision conflicts become history automatically—even opposite decisions or
+attempts containing notes. No old note is applied. This does not wait for AI follow-up:
+the later decision's own unfinished/failed processing remains visible separately. Later
+wording changes or a new decision cannot resurrect those old failed attempts; the
+current requirement can still need a fresh review. Unapplied change requests and
+unfinished overlap follow-up are not automatically dismissed.
+
+For existing stuck items, **Dismiss old attempts** at the top of the dialog dismisses
+eligible failed attempts for that requirement together (up to 1,000 per action).
+It preserves every note and does not change requirements, questions, saved decisions
+or unfinished processing. **Undo dismissal** restores only that batch while the dialog
+remains open. Neither action starts a model call. If notes still describe wanted changes,
+submit them through **Request changes** rather than dismissing them as obsolete.
+
 Expand **Saved attempts & notes** for original wording, notes, timestamps and historical
 diagnostics. **Archive attempt… → Confirm archive attempt** moves only an unapplied,
 conflicting review to history. It preserves the original input/diagnostic, does not
 answer or retire a question, and cannot archive an applied decision or unfinished
 follow-up. Remaining clarifications stay accessible in Design and the requirement.
-Previously proven resolved attempts still move to history through the existing
-conservative reconciliation rules; notes are not silently discarded.
+Proven resolved attempts remain visible as **Resolved · history only**; old diagnostics
+do not establish a current blocker. Reviewed history also retains original notes.
 
-See [upgrade compatibility](migrations.md#focused-issue-recovery-and-attempt-archiving).
+See [upgrade compatibility](migrations.md#requirement-level-attention-cleanup).
+
+Attention simplification verification (2026-10-21, Node 22.23.3): type check,
+all **497 deterministic tests**, UI build, full browser checks and diff checks passed.
+Coverage includes opposite failed decisions with retained notes becoming history,
+no resurrection after later edits, protected failed/unfinished follow-up, transactional
+bulk dismissal/Undo across SQLite reopen, authenticated API bounds and a full Undo
+batch fitting the 128 kB request limit. Browser checks exercise the next-step labels,
+preserved rejection notes, one-click dismissal, Undo without restoring an earlier
+individual archive, unchanged linked questions, reload, focus and mobile layout.
+The final shared 1,000-attempt bound was type/test/build checked after the browser run;
+the browser fixture uses three attempts. No live model calls or user-data cleanup ran.
+The existing approximately 553 kB Vite chunk warning remains non-blocking.
 
 Verification (2026-10-21, Node 22.23.3): type check, all **496 deterministic tests**,
 UI build, full `npm run test:browser` and diff checks passed. New coverage includes

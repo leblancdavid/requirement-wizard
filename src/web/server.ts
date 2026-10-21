@@ -29,6 +29,7 @@ import type { ExecutionAdapter } from "../runtime/execution.js";
 import type { ModelSelection } from "../core/model.js";
 import { SnapshotEncoder, parseSnapshotTokens, snapshotHeader } from "./snapshot.js";
 import { savedEvidencePolicySchema } from "../core/gap-navigation.js";
+import { reviewAttemptBatchLimit } from "../core/review-attempts.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -293,6 +294,14 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (action === "archive-review-attempt") {
         const input = z.object({ revision, submissionID: z.string().min(1).max(200) }).strict().parse(raw);
         json(res, 200, options.store.archiveReviewAttempt(id, input.revision, input.submissionID)); return;
+      }
+      if (action === "dismiss-review-attempts") {
+        const input = z.object({ revision, requirementID: z.string().min(1).max(200), submissionIDs: z.array(z.string().min(1).max(200)).min(1).max(reviewAttemptBatchLimit) }).strict().parse(raw);
+        json(res, 200, options.store.dismissReviewAttempts(id, input.revision, input.requirementID, input.submissionIDs)); return;
+      }
+      if (action === "restore-review-attempts") {
+        const input = z.object({ revision, requirementID: z.string().min(1).max(200), attempts: z.array(z.object({ submissionID: z.string().min(1).max(200), archivedAt: z.string().datetime() }).strict()).min(1).max(reviewAttemptBatchLimit) }).strict().parse(raw);
+        json(res, 200, options.store.restoreReviewAttempts(id, input.revision, input.requirementID, input.attempts)); return;
       }
       if (action === "answer") {
         const input = z.object({ revision, questionID: z.string(), answer: answerSchema }).strict().parse(raw);

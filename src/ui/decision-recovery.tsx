@@ -29,7 +29,7 @@ export function RetainedReviewNotice({ project, submissions, jobs = [], submissi
   const input = submission.input;
   const changeRequest = input.action === "changes-requested";
   const resolved = resolvedReviewAttempts(project, submissions).get(submission.id);
-  if (resolved) return <section aria-label="Resolved review attempt"><p>Already {input.action === "accepted" ? "approved" : "rejected"} by a later completed review{resolved.changedWording ? " of updated wording" : ""}. This earlier attempt is history only; there is nothing to process.</p><button type="button" className="secondary" onClick={reviewCurrent}>View {input.action === "accepted" ? "approved" : "rejected"} story</button></section>;
+  if (resolved) return <section aria-label="Resolved review attempt"><p>A later saved decision replaces this failed attempt{resolved.changedWording ? " after reviewing updated wording" : ""}. Its original note is kept in history, not applied. There is nothing to resubmit.</p><button type="button" className="secondary" onClick={reviewCurrent}>View current requirement</button></section>;
   const target = project.requirements.find((r) => r.id === input.requirementID);
   const availability = decisionAvailability(project, [input.requirementID], submissions, jobs, { excludeSubmissionID: submission.id, action: input.action });
   const changed = !!target && reviewFingerprint(target) !== input.fingerprint;

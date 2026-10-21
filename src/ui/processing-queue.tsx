@@ -70,7 +70,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
       <small>{new Date(item.submittedAt).toLocaleString()}{item.jobID ? ` · Batch ${item.jobID.slice(0, 8)}` : ""}{item.input.type === "answer" ? ` · ${item.input.answer.kind}` : ""}</small>
       {openIssue && <button type="button" className="secondary" onClick={() => openIssue(item.id)}>View &amp; resolve</button>}
       {item.archivedAt && <p>Archived attempt · {new Date(item.archivedAt).toLocaleString()}. No decision or follow-up was applied.</p>}
-      {resolvedAttempts.has(item.id) && <p>Already {item.input.type === "review" && item.input.action === "rejected" ? "rejected" : "approved"} by a later completed review. Nothing to process. See Reviewed for the current story and original attempt history.</p>}
+       {resolvedAttempts.has(item.id) && <p>A later saved decision replaces this failed attempt. Its original note is kept in history, not applied. Nothing to resubmit.</p>}
       {item.diagnostic && (resolvedAttempts.has(item.id) ? <details><summary>Previous attempt diagnostic (saved history)</summary><p>{item.diagnostic}</p></details> : <p className="job-error">{item.diagnostic}</p>)}
       <SubmissionOverlapStatus submission={item} />
     </article>);

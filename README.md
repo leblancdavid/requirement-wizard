@@ -102,6 +102,10 @@ Requirement decisions also check related queued input, clarification and depende
 Reviews with changed evidence are retained for another human review, not applied
 silently; direct approvals cannot invalidate a live discovery snapshot. See
 [decision safety](docs/browser-workspace.md#decision-safety-during-queued-work).
+A later saved approval/rejection clears older failed decision conflicts automatically,
+keeping original notes in history. For obsolete stuck attempts, **Dismiss old attempts**
+clears them per requirement with **Undo dismissal**; genuine unfinished processing stays
+visible. Attention items name the next step rather than asking you to repeat decisions.
 Completed response rounds also reconcile related waiting review items: revise
 unapproved wording/choices, withdraw obsolete proposals, and retire questions when
 justified. Changes explain their processing source, preserve drafts/history, and

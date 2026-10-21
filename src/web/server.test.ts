@@ -100,6 +100,22 @@ test("archive-review-attempt API authenticates history-only cleanup and rejects 
     const other = store.create("Other", "Other scope", project.model);
     assert.equal((await fetch(`${app.origin}/api/projects/${other.id}/archive-review-attempt`, { method: "POST", headers: { "Content-Type": "application/json", "X-Reqwizit-Token": app.token, Origin: app.origin }, body: JSON.stringify({ revision: other.revision, submissionID: attempt.id }) })).status, 400);
     assert.deepEqual(store.get(project.id), project);
+    const batchBody = { revision: project.revision, requirementID: r.id, submissionIDs: [attempt.id] };
+    const batch = (action: string, value: unknown, headers: Record<string, string> = { "X-Reqwizit-Token": app.token, Origin: app.origin }) => fetch(`${app.origin}/api/projects/${project.id}/${action}`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(value) });
+    assert.equal((await batch("dismiss-review-attempts", batchBody, {})).status, 403);
+    assert.equal((await batch("dismiss-review-attempts", batchBody, { "X-Reqwizit-Token": app.token, Origin: "https://untrusted.example" })).status, 403);
+    assert.equal((await batch("dismiss-review-attempts", { ...batchBody, submissionIDs: [] })).status, 400);
+    assert.equal((await batch("dismiss-review-attempts", { ...batchBody, submissionIDs: Array.from({ length: 1001 }, () => randomUUID()) })).status, 400);
+    assert.equal((await batch("dismiss-review-attempts", { ...batchBody, submissionIDs: [attempt.id, attempt.id] })).status, 400);
+    assert.equal((await batch("dismiss-review-attempts", { ...batchBody, requirementID: "another" })).status, 400);
+    assert.equal((await batch("dismiss-review-attempts", { ...batchBody, revision: project.revision - 1 })).status, 409);
+    assert.equal((await batch("dismiss-review-attempts", batchBody)).status, 200);
+    const undo = { revision: project.revision, requirementID: r.id, attempts: [{ submissionID: attempt.id, archivedAt: archived.archivedAt }] };
+    assert.equal((await batch("restore-review-attempts", undo, {})).status, 403);
+    assert.equal((await batch("restore-review-attempts", { ...undo, attempts: [{ submissionID: attempt.id, archivedAt: "bad" }] })).status, 400);
+    assert.equal((await batch("restore-review-attempts", { ...undo, revision: project.revision - 1 })).status, 409);
+    assert.equal((await batch("restore-review-attempts", undo)).status, 200);
+    assert.deepEqual(store.submissions(project.id).find((s) => s.id === attempt.id), attempt);
   } finally { await app.close(); store.close(); }
 });
 

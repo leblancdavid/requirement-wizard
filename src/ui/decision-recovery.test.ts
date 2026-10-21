@@ -6,7 +6,8 @@ import { projectSchema, reviewFingerprint, type Submission } from "../core/model
 import { decisionAvailability } from "../core/decision-availability.js";
 import { ItemProcessingNotice, RetainedReviewNotice } from "./decision-recovery.js";
 import { ReviewQueue, pendingReviews } from "./review.js";
-import { AttentionInbox, attentionGroups, attentionSummary } from "./attention.js";
+import { AttentionInbox, attentionGroups, attentionSummary, attentionAction } from "./attention.js";
+import { AttemptCleanup } from "./attempt-cleanup.js";
 
 test("item errors show saved diagnostics and distinguish follow-up retry from decision conflicts", () => {
   const { submission } = fixture();
@@ -132,9 +133,9 @@ test("attention inbox groups stable targets, preserves distinct notes and shows 
   const before = structuredClone(items);
   assert.equal(attentionGroups(project, items).length, 1);
   assert.deepEqual(attentionGroups(project, items)[0]!.attempts.map((s) => s.id), [submission.id, repeated.id]);
-  assert.match(attentionSummary(project, items, repeated)!, /earlier blocker has cleared/);
+  assert.match(attentionSummary(project, items, repeated)!, /Ready to review/);
   const html = renderToStaticMarkup(createElement(AttentionInbox, { project, submissions: items, open: () => assert.fail("Explicit action required") }));
-  assert.equal((html.match(/View &amp; resolve/g) ?? []).length, 1);
+  assert.equal((html.match(/Review requirement<\/button>/g) ?? []).length, 1);
   assert.match(html, /2 saved attempts/);
   assert.ok(!html.includes("Answer the linked clarification in Design"));
   project.questions[0]!.status = "pending";
@@ -165,5 +166,28 @@ test("attention paging bounds large inboxes and never merges different IDs with 
   assert.equal(attentionGroups(project, items).length, 600);
   const html = renderToStaticMarkup(createElement(AttentionInbox, { project, submissions: items, open: () => {} }));
   assert.match(html, /600 items/);
-  assert.equal((html.match(/View &amp; resolve/g) ?? []).length, 25);
+  assert.equal((html.match(/Review changes<\/button>/g) ?? []).length, 25);
+});
+
+test("one dismissal control covers old decisions and notes but not saved decisions or processing failures", () => {
+  const { submission } = fixture();
+  const opposite = structuredClone(submission); opposite.id = "opposite";
+  if (opposite.input.type === "review") opposite.input.action = "rejected";
+  const applied = { ...structuredClone(submission), id: "applied", applied: true, conflict: false };
+  const html = renderToStaticMarkup(createElement(AttemptCleanup, { submissions: [submission, opposite, applied], disabled: false,
+    dismiss: async () => assert.fail("Dismissal must be explicit"), undo: async () => assert.fail("Undo must be explicit") }));
+  assert.match(html, /Dismiss old attempts \(2\)/);
+  assert.match(html, /All notes stay in history/);
+  assert.equal(renderToStaticMarkup(createElement(AttemptCleanup, { submissions: [applied], disabled: false, dismiss: async () => [], undo: async () => {} })), "");
+});
+
+test("attention action names the current next step rather than asking for another decision on a processing error", () => {
+  const { project, submission } = fixture();
+  assert.equal(attentionAction(project, [submission], submission), "Review requirement");
+  project.questions[0]!.status = "pending";
+  assert.equal(attentionAction(project, [submission], submission), "Answer question");
+  const waiting: Submission = { ...structuredClone(submission), id: "waiting", applied: false, conflict: false, status: "queued", input: { type: "note", epicID: "project", text: "New constraint" } };
+  assert.equal(attentionAction(project, [submission, waiting], submission), "Process blocking input");
+  submission.applied = true; submission.conflict = false;
+  assert.equal(attentionAction(project, [submission], submission), "Retry processing");
 });
