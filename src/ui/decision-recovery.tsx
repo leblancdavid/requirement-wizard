@@ -27,6 +27,7 @@ export function RetainedReviewNotice({ project, submissions, jobs = [], submissi
 }) {
   if (submission.input.type !== "review" || submission.applied || !submission.conflict || submission.status !== "needs-attention") return null;
   const input = submission.input;
+  const changeRequest = input.action === "changes-requested";
   const resolved = resolvedReviewAttempts(project, submissions).get(submission.id);
   if (resolved) return <section aria-label="Resolved review attempt"><p>Already {input.action === "accepted" ? "approved" : "rejected"} by a later completed review{resolved.changedWording ? " of updated wording" : ""}. This earlier attempt is history only; there is nothing to process.</p><button type="button" className="secondary" onClick={reviewCurrent}>View {input.action === "accepted" ? "approved" : "rejected"} story</button></section>;
   const target = project.requirements.find((r) => r.id === input.requirementID);
@@ -34,10 +35,10 @@ export function RetainedReviewNotice({ project, submissions, jobs = [], submissi
   const changed = !!target && reviewFingerprint(target) !== input.fingerprint;
   return <section aria-label="Current review recovery">
     <p role="status">{availability.state === "ready"
-      ? "The earlier blocker is no longer active. Your saved decision has not been applied. Review the current requirement and resubmit; your note can be reused."
+      ? changeRequest ? "The earlier blocker is no longer active. Your change request has not been applied. Review the current requirement and resubmit; your feedback can be reused." : "The earlier blocker is no longer active. Your saved decision has not been applied. Review the current requirement and resubmit; your note can be reused."
       : `Current blocker: ${availability.reason}`}{changed ? " The requirement changed since this saved review; compare its updated wording and scenarios." : ""}</p>
     <ClarificationLinks availability={availability} openQuestion={openQuestion} />
     {!!availability.submissionIDs.length && resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Process blocking input</button>}
-    {target && project.epics.some((e) => e.id === target.epicID && !e.archived) && <button type="button" className="secondary" onClick={reviewCurrent}>Review current requirement with saved note</button>}
+    {target && project.epics.some((e) => e.id === target.epicID && !e.archived) && <button type="button" className="secondary" onClick={reviewCurrent}>{changeRequest ? "Review current requirement with saved feedback" : "Review current requirement with saved note"}</button>}
   </section>;
 }

@@ -38,6 +38,18 @@ implemented under `src/`. See [decisions.md](decisions.md),
   linked clarification, dependency guardrails and live discovery snapshots inside
   write transactions; browser review explains the same policy. New reviews/wording
   proposals retain their basis without rewriting legacy provenance or completed checks.
+- `src/core/input-scope.ts`: conservative server-side answer-scope capture, immutable
+  source/receipt checks and target-bounded follow-up validation. Queue tasks include
+  scoped requirements as mandatory evidence; generic/legacy input stays feature-wide.
+  Scope-aware decision/pair keys have read-only v1 compatibility, and legacy individual
+  check hashes are verified against their original revision before equivalent reuse.
+  Global live-worker publication exclusion is unchanged. See [upgrade compatibility](migrations.md#narrower-decision-blockers-and-scoped-answer-evidence).
+- Targeted change requests reuse durable review submission/queue/recovery with the
+  separate `changes-requested` intent and marked note evidence. Storage leaves current
+  decisions intact and limits publication to target revisions/replacement proposals or
+  linked clarification. Approved targets use existing refinements; unapproved targets
+  use pending changes. Runtime schemas/prompt mirror this scope; no new execution or
+  whole-feature mutation permission is granted. See [compatibility](migrations.md#targeted-requirement-change-requests).
 - `src/core/pending-changes.ts`, `review-completion.ts`: validated, current-input-bound
   updates to unapproved records and a publication-time impact pass. Up to four optional
   related candidates fit into the existing single-response context. Completion uses

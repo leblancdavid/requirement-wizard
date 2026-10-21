@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectSchema, reviewFingerprint, type Project, type Submission } from "../core/model.js";
-import { DuplicateRemovalForm, ReviewQueue, reviewItems } from "./review.js";
+import { DuplicateRemovalForm, ReviewQueue, ReviewComparison, reviewItems, reviewReadiness, reviewProcessingScope } from "./review.js";
+import { decisionClarifications, decisionContextKey, decisionEvidenceSources } from "../core/decision-availability.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { pageWindow, PagedList } from "./pagination.js";
@@ -10,6 +11,7 @@ import { GapExplorationStatus } from "./gap-status.js";
 import type { Job } from "../core/model.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { planGapContext } from "../core/gap-context.js";
+import { ChangeRequestForm } from "./change-request.js";
 
 test("gap backlog status distinguishes saved checks, unresolved decisions and no-call reuse without a completeness claim", () => {
   const job: Job = { id: "gap-job", projectID: "project", expectedRevision: 1, model: { providerID: "openai", modelID: "fixture" },
@@ -135,6 +137,9 @@ test("outdated proposals expose explicit dismissal, targeted refresh and human d
   const p = fixture();
   p.requirements = p.requirements.filter((r) => r.id !== "pause");
   p.requirements[0]!.statement = "Current jump wording";
+  // Keep this test focused on the stale card; the queue now prefers ready work.
+  p.refinements[1]!.status = "dismissed";
+  p.requirements[1]!.status = "accepted";
   const before = structuredClone(p);
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
     refine: () => assert.fail("No model calls on render"), refreshRefinement: () => assert.fail("No refresh on render"),
@@ -185,4 +190,84 @@ test("completion notices expose job/revision provenance and withdrawn suggestion
   assert.match(html, /Proposal withdrawn after processing/); assert.match(html, /no human rejection was inferred/);
   assert.match(html, /completed-job/); assert.match(html, /saved-response/); assert.match(html, /revision 2/);
   assert.deepEqual(p, before);
+});
+
+test("review readiness distinguishes linked decisions, pending processing and stale proposals without treating all Design questions as blockers", () => {
+  const p = fixture(); p.refinements = [];
+  p.questions.push({ id: "unrelated", text: "An unrelated choice?", whyItMatters: "Another behavior", options: [], epicID: "inbox", status: "pending" });
+  const item = reviewItems(p, [], "pending")[0]!;
+  assert.equal(reviewReadiness(p, item, []), "ready");
+  p.questions.push({ id: "linked", text: "Which aim behavior?", whyItMatters: "Required choice", options: [], epicID: "inbox", status: "pending", evidenceIDs: ["aim"] });
+  for (const status of ["pending", "deferred", "delegated"] as const) {
+    p.questions[1]!.status = status;
+    assert.equal(reviewReadiness(p, item, []), "decision");
+    assert.deepEqual(decisionClarifications(p, ["aim"]).map((q) => q.id), ["linked"]);
+  }
+  const job: Job = { id: "worker", projectID: p.id, expectedRevision: 1, model: p.model, status: "running", leaseUntil: Date.now() + 60000 };
+  assert.equal(reviewReadiness(p, item, [], [job]), "updating");
+  assert.deepEqual(decisionClarifications(p, ["aim"]).map((q) => q.id), ["linked"], "Worker priority must not hide clarification navigation");
+  assert.equal(reviewReadiness(p, item, [], [job], true), "changed");
+  const waiting: Submission = { id: "answer", projectID: p.id, status: "queued", auto: false, research: false, applied: false, submittedAt: "2026-10-21", input: { type: "answer", questionID: "linked", questionText: p.questions[1]!.text, sourceID: null, answer: { kind: "answer", text: "Concrete behavior" } } };
+  assert.equal(reviewReadiness(p, item, [waiting]), "updating");
+  waiting.conflict = true;
+  assert.equal(reviewReadiness(p, item, [waiting]), "decision", "An unapplied conflicted answer must not hold the processing gate");
+  p.questions[1]!.status = "answered";
+  assert.equal(reviewReadiness(p, item, [waiting]), "ready");
+  const failed: Submission = { ...waiting, id: "failed-review", status: "needs-attention", conflict: false, applied: true, input: { type: "review", requirementID: "aim", requirementText: p.requirements[1]!.statement, fingerprint: reviewFingerprint(p.requirements[1]!), action: "accepted", note: "" } };
+  assert.equal(reviewReadiness(p, item, [failed]), "attention", "Failed follow-up must not look like active updating");
+  assert.equal(p.questions[0]!.status, "pending");
+});
+
+test("Review shows readiness counts and inline questions, prefers a ready card, and remains read-only on render", () => {
+  const p = fixture(); p.refinements = [];
+  p.questions.push({ id: "linked", text: "Which aim behavior?", whyItMatters: "Required choice", options: [], epicID: "inbox", status: "deferred", evidenceIDs: ["aim"] });
+  const before = structuredClone(p);
+  const props = { project: p, submissions: [], epicID: "all", sending: [], disabled: false, refine: () => assert.fail("No model call"), submit: async () => assert.fail("No submission"), reviewRefinement: async () => assert.fail("No decision") };
+  const html = renderToStaticMarkup(createElement(ReviewQueue, props));
+  assert.match(html, /Ready to review <span>1<\/span>/);
+  assert.match(html, /Needs a decision <span>1<\/span>/);
+  assert.match(html, /aria-expanded="true"[^>]*>.*?Behavior pause/);
+  p.requirements = p.requirements.filter((r) => r.id !== "pause");
+  const inline = renderToStaticMarkup(createElement(ReviewQueue, { ...props, renderClarification: (q) => createElement("p", null, `Inline: ${q.text}`) }));
+  assert.match(inline, /Decisions needed before approval/);
+  assert.match(inline, /Inline: Which aim behavior\?/);
+  assert.match(inline, /aria-disabled="true"[^>]*>Approve<\/button>/);
+  assert.match(inline, /<button class="secondary">Reject<\/button>/);
+  assert.match(inline, /Deferring or delegating does not settle/);
+  assert.deepEqual({ ...p, requirements: before.requirements }, before);
+});
+
+test("processing a Review blocker follows a shared clarification outside the target feature and retains broader queue scope for mixed input", () => {
+  const p = fixture();
+  p.questions.push({ id: "shared", text: "Shared decision?", whyItMatters: "Affects aim", options: [], epicID: "project", status: "pending", evidenceIDs: ["aim"] });
+  const answer: Submission = { id: "answer", projectID: p.id, status: "queued", auto: false, research: false, applied: false, submittedAt: "2026-10-21", input: { type: "answer", questionID: "shared", questionText: "Shared decision?", sourceID: null, answer: { kind: "answer", text: "Human choice" } } };
+  const note: Submission = { ...answer, id: "note", input: { type: "note", epicID: "inbox", text: "Feature constraint" } };
+  const before = structuredClone({ p, answer, note });
+  assert.deepEqual(reviewProcessingScope(p, [answer, note], ["answer"]), { focusEpicID: "project" });
+  assert.deepEqual(reviewProcessingScope(p, [answer, note], ["note"]), { focusEpicID: "inbox" });
+  assert.deepEqual(reviewProcessingScope(p, [answer, note], ["answer", "note"]), {});
+  assert.deepEqual({ p, answer, note }, before);
+});
+
+test("Review comparison shows new relevant human evidence even when the requirement does not directly cite the new answer", () => {
+  const p = fixture(), original = structuredClone(p.requirements[1]!);
+  const originalEvidence = decisionEvidenceSources(p, ["aim"]).map((s) => s.id);
+  p.sources.push({ id: "shared-answer", kind: "answer", text: "Never expose private reports", epicID: "project", questionID: "shared" });
+  const before = structuredClone(p);
+  const html = renderToStaticMarkup(createElement(ReviewComparison, { project: p, original, current: p.requirements[1]!, evidenceIDs: originalEvidence }));
+  assert.match(html, /wording and scenarios are unchanged/);
+  assert.match(html, /New supporting evidence/);
+  assert.match(html, /Never expose private reports/);
+  assert.ok(!original.sourceIDs.includes("shared-answer"));
+  // New scoped bases retain shared evidence; legacy key compatibility is checked separately.
+  assert.deepEqual(JSON.parse(decisionContextKey(p, ["aim"])), ["human-review-basis-v2", [["aim", reviewFingerprint(original)]], ["idea", "shared-answer"], [["inbox", false, []], ["project", false, []]], [], []]);
+  assert.deepEqual(p, before);
+});
+
+test("change requests use a separate required feedback editor without treating feedback as a decision", () => {
+  const html = renderToStaticMarkup(createElement(ChangeRequestForm, { initialText: "", disabled: false, change: () => {}, send: async () => assert.fail("No submission on render"), close: () => {} }));
+  assert.match(html, /Requested changes/); assert.match(html, /not approval or rejection/);
+  assert.match(html, /maxlength="12000"/i); assert.match(html, /aria-disabled="true"[^>]*>Send change request/);
+  const retained = renderToStaticMarkup(createElement(ChangeRequestForm, { initialText: "Keep my exact requested changes", disabled: true, reason: "Review updated evidence first", change: () => {}, send: async () => false, close: () => {} }));
+  assert.match(retained, /Keep my exact requested changes/); assert.match(retained, /Review updated evidence first/);
 });

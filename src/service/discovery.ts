@@ -243,8 +243,10 @@ export class DiscoveryService {
         .filter((item) => item.applied && item.input.type === "review" && options.submissionIDs?.includes(item.id)
           && item.appliedSourceID && !project.sources.some((source) => source.supersedes === item.appliedSourceID));
       context.manifest.reviewSourceIDs = batchReviews.map((item) => item.appliedSourceID!);
+      context.manifest.scopedAnswerSourceIDs = this.store.submissions(projectID).filter((item) => item.applied && item.answerScope && options.submissionIDs?.includes(item.id)
+        && item.appliedSourceID && !project.sources.some((source) => source.supersedes === item.appliedSourceID)).map((item) => item.appliedSourceID!);
       context.manifest.reviewChangeSourceIDs = batchReviews
-        .filter((item) => item.input.type === "review" && !!item.input.note.trim())
+        .filter((item) => item.input.type === "review" && item.input.action !== "changes-requested" && !!item.input.note.trim())
         .map((item) => item.appliedSourceID!);
       if (context.manifest.partial) options.onProgress?.(`Using a smaller task working set (${context.manifest.characters.toLocaleString("en-US")} characters); exact human guardrails retained. Whole-area assessments are deferred.`);
       if (context.manifest.version === "tasks-v7") options.onProgress?.("Omitted generated background rationales and unselected historical option explanations to fit the hard context bound. Exact human input, requirement wording/scenarios and selected-option consequences are retained.");

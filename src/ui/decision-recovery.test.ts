@@ -108,3 +108,16 @@ test("applied reviews are never offered another-review recovery as if their deci
   submission.applied = true;
   assert.equal(renderToStaticMarkup(createElement(RetainedReviewNotice, { project, submissions: [submission], submission, reviewCurrent: () => {} })), "");
 });
+
+test("retained change requests recover feedback without presenting it as approval or rejection", () => {
+  const { project, submission } = fixture();
+  if (submission.input.type === "review") submission.input.action = "changes-requested";
+  project.questions[0]!.status = "pending";
+  const html = renderToStaticMarkup(createElement(RetainedReviewNotice, { project, submissions: [submission], submission, reviewCurrent: () => {} }));
+  assert.match(html, /change request has not been applied/);
+  assert.match(html, /Review current requirement with saved feedback/);
+  assert.ok(!html.includes("saved decision has not been applied"));
+  const queue = renderToStaticMarkup(createElement(ReviewQueue, { project, submissions: [submission], epicID: "all", sending: [], disabled: false, submit: async () => false, refine: () => {}, reviewRefinement: async () => false }));
+  assert.match(queue, /Request changes/);
+  assert.match(queue, /<textarea[^>]*><\/textarea>/, "Change-request feedback must not prefill approval/rejection notes");
+});

@@ -84,7 +84,11 @@ Keep answering while discovery works: responses are durably queued and processed
 one at a time, each in its own revision-linked context. Each follow-up includes its
 target and supporting evidence, project/dependency guardrails and feature notes;
 unrelated feature history is explicitly omitted. Completed items stay completed.
-Ordinary answers and requirement reviews also trigger up to three targeted
+Queued requirement-linked answers can have enforced target-only follow-up, so unrelated
+same-feature reviews need not be blocked or resubmitted. Shared/general input and live
+worker snapshot protections remain conservative. Older saved evidence/checks remain
+usable through compatibility checks without startup model replay.
+Unscoped concrete answers and ordinary approval/rejection reviews may trigger up to three targeted
 duplicate/conflict pair checks for affected requirements, including new proposals.
 Fixes await your approval; ambiguous intent prompts a clarification. Discovery is
 saved before these checks, so a failed check resumes without repeating discovery.

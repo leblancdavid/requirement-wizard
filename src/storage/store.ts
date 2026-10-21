@@ -15,7 +15,8 @@ import { applyRound } from "../core/round.js";
 import { wordingKey } from "../core/similarity.js";
 import { refinementIsStale, validateResolutionEvidence } from "../core/resolution.js";
 import { planIncrementalResolution } from "../core/incremental-resolution.js";
-import { decisionBasisSchema, overlapFollowupSchema, pendingChangesSchema, requirementEvidenceIDs } from "../core/model.js";
+import { answerScopeSchema, decisionBasisSchema, overlapFollowupSchema, pendingChangesSchema, requirementEvidenceIDs, reviewActionSchema, type AnswerScope } from "../core/model.js";
+import { answerScopeMatches, captureAnswerScope, validateScopedAnswerResult } from "../core/input-scope.js";
 import { gapCheckSchema, gapReportSchema, type GapReport } from "../core/gap-types.js";
 import { retrievalWorkSchema, type RetrievalWork } from "../core/gap-retrieval.js";
 import type { GapHistory } from "../core/gap-backlog.js";
@@ -43,6 +44,11 @@ function readStoredJob(payload: string): Job {
 
 function readStoredSubmission(payload: string): Submission {
   const item = JSON.parse(payload) as Submission;
+  if (item.input.type === "review") reviewActionSchema.parse(item.input.action);
+  if (item.answerScope !== undefined) {
+    answerScopeSchema.parse(item.answerScope);
+    if (item.input.type !== "answer" || item.input.questionID !== item.answerScope.questionID) throw new Error("Saved answer scope does not match its input; no data was overwritten.");
+  }
   if (item.overlapFollowup !== undefined) overlapFollowupSchema.parse(item.overlapFollowup);
   if (item.decisionBasis !== undefined) decisionBasisSchema.parse(item.decisionBasis);
   if (item.appliedRevision !== undefined) z.number().int().min(2).parse(item.appliedRevision);
@@ -317,6 +323,11 @@ export class ProjectStore {
   }
 
   saveSubmission(item: Submission) {
+    if (item.answerScope !== undefined) {
+      answerScopeSchema.parse(item.answerScope);
+      if (item.input.type !== "answer" || item.input.questionID !== item.answerScope.questionID) throw new Error("Answer scope does not match its input.");
+    }
+    if (item.input.type === "review") reviewActionSchema.parse(item.input.action);
     if (item.appliedRevision !== undefined) z.number().int().min(2).parse(item.appliedRevision);
     if (item.decisionBasis !== undefined) decisionBasisSchema.parse(item.decisionBasis);
     if (item.overlapFollowup !== undefined) overlapFollowupSchema.parse(item.overlapFollowup);
@@ -370,6 +381,7 @@ export class ProjectStore {
         const response = input.input;
         const current = project.requirements.find((r) => r.id === response.requirementID);
         if (!current || reviewFingerprint(current) !== response.fingerprint || current.statement !== response.requirementText) throw new StaleRevisionError();
+        if (response.action === "changes-requested" && current.status === "rejected") throw new Error("Request changes on an active requirement, not a rejected record.");
         if (this.submissions(id).some((s) => s.input.type === "review" && s.input.requirementID === current.id && ["queued", "saved", "processing"].includes(s.status))) throw new Error("This requirement already has a pending review.");
       } else {
         const note = input.input;
@@ -385,6 +397,10 @@ export class ProjectStore {
         this.saveSubmission(previous);
       }
       const item: Submission = { ...input, projectID: id, status: "queued", applied: false, submittedAt: new Date().toISOString() };
+      if (item.input.type === "answer") {
+        const scope = captureAnswerScope(project, item.input.questionID);
+        if (scope) item.answerScope = scope;
+      }
       if (input.input.type === "review") {
         const response = input.input;
         const reviewed = response.reviewedRevision === undefined ? project : this.get(id, response.reviewedRevision);
@@ -392,7 +408,7 @@ export class ProjectStore {
         const availability = decisionAvailability(project, [response.requirementID], this.submissions(id), [], { contextKey: item.decisionBasis.contextKey, action: response.action });
         if (availability.state !== "ready") {
           item.status = "needs-attention"; item.conflict = true;
-          item.diagnostic = `${availability.reason} Your review and note were retained, but the decision was not applied. Resubmit after reviewing the updated information.`;
+          item.diagnostic = `${availability.reason} ${response.action === "changes-requested" ? "Your change request was retained without applying feedback or an approval/rejection." : "Your review and note were retained, but the decision was not applied."} Resubmit after reviewing the updated information.`;
         }
       }
       this.db.prepare("INSERT INTO submissions VALUES (?, ?, ?)").run(item.id, id, JSON.stringify(item));
@@ -411,26 +427,28 @@ export class ProjectStore {
         const project = this.get(id);
         const input = item.input;
         if (input.type === "answer") {
-          if (!this.answerMatches(id, project, input)) {
+          if (!this.answerMatches(id, project, input) || item.answerScope && !answerScopeMatches(project, item.answerScope)) {
             item.status = "needs-attention"; item.diagnostic = "Question or previous answer changed. Review this response and resubmit against the current question.";
             this.saveSubmission(item); continue;
           }
-          const updated = this.answer(id, project.revision, input.questionID, input.answer);
+          const updated = this.answer(id, project.revision, input.questionID, input.answer, item.answerScope);
           item.appliedSourceID = updated.questions.find((q) => q.id === input.questionID)!.sourceID!;
           item.appliedRevision = updated.revision;
         } else if (input.type === "review") {
           const current = project.requirements.find((r) => r.id === input.requirementID);
           if (!current || reviewFingerprint(current) !== input.fingerprint) {
-            item.status = "needs-attention"; item.conflict = true; item.diagnostic = "Requirement changed. Review the current wording and resubmit; your original decision and note are retained.";
+            item.status = "needs-attention"; item.conflict = true; item.diagnostic = "Requirement changed. Review the current wording and resubmit; your original response and feedback are retained.";
             this.saveSubmission(item); continue;
           }
           const availability = decisionAvailability(project, [input.requirementID], this.submissions(id), [], { excludeSubmissionID: item.id, contextKey: item.decisionBasis?.contextKey, action: input.action });
           if (availability.state !== "ready") {
             item.status = "needs-attention"; item.conflict = true;
-            item.diagnostic = `${availability.reason} Your review and note were retained, but the decision was not applied. Resubmit after reviewing the updated information.`;
+            item.diagnostic = `${availability.reason} ${input.action === "changes-requested" ? "Your change request was retained without applying feedback or an approval/rejection." : "Your review and note were retained, but the decision was not applied."} Resubmit after reviewing the updated information.`;
             this.saveSubmission(item); continue;
           }
-          const updated = this.applyReview(id, project.revision, input.requirementID, input.action, input.note, item.id);
+          const updated = input.action === "changes-requested"
+            ? this.applyChangeRequest(id, project.revision, input.requirementID, input.note, item.id)
+            : this.applyReview(id, project.revision, input.requirementID, input.action, input.note, item.id);
           item.appliedSourceID = updated.sources.at(-1)!.id;
           item.appliedRevision = updated.revision;
         } else {
@@ -570,14 +588,16 @@ export class ProjectStore {
     return this.mutate(id, revision, "Model selection changed", (project) => { project.model = modelSelection.parse(selection); });
   }
 
-  answer(id: string, revision: number, questionID: string, input: Answer) {
+  answer(id: string, revision: number, questionID: string, input: Answer, scope?: AnswerScope) {
     const answer = answerSchema.parse(input);
     return this.mutate(id, revision, "Human question response", (project) => {
       const question = project.questions.find((item) => item.id === questionID);
       if (!question || question.status === "retired") throw new Error("Question is missing or retired.");
+      if (scope && !answerScopeMatches(project, scope)) throw new StaleRevisionError();
       const previous = question.sourceID;
       const sourceID = randomUUID();
       project.sources.push({ id: sourceID, kind: answer.kind, text: answer.text, questionID, epicID: question.epicID,
+        ...(scope ? { answerScope: scope } : {}),
         ...(previous ? { supersedes: previous } : {}) });
       question.sourceID = sourceID;
       question.status = answer.kind === "answer" ? "answered" : answer.kind === "delegation" ? "delegated" : "deferred";
@@ -597,6 +617,18 @@ export class ProjectStore {
     return this.applyReview(id, revision, requirementID, action, note);
   }
 
+  private applyChangeRequest(id: string, revision: number, requirementID: string, note: string, submissionID: string) {
+    if (!note.trim() || note.length > 12000) throw new Error("Describe the changes you want (1–12000 characters).");
+    return this.mutate(id, revision, "Human requirement change request; no approval or rejection", (project) => {
+      const availability = decisionAvailability(project, [requirementID], this.submissions(id), this.jobs(id), { excludeSubmissionID: submissionID, action: "changes-requested" });
+      if (availability.state !== "ready") throw new OperationConflictError(availability.reason);
+      const requirement = project.requirements.find((r) => r.id === requirementID && r.status !== "rejected");
+      if (!requirement) throw new Error("Change request target is no longer active.");
+      project.sources.push({ id: randomUUID(), kind: "note", changeRequest: true, requirementID, epicID: requirement.epicID,
+        text: `Requirement ${requirementID}: ${requirement.statement}\nAcceptance scenarios: ${JSON.stringify(requirement.acceptance)}\nHuman request: changes requested; no approval or rejection\nRequested changes: ${note}` });
+    });
+  }
+
   private applyReview(id: string, revision: number, requirementID: string, action: "accepted" | "rejected", note: string, submissionID?: string) {
     if (note.length > 12000) throw new Error("Review note must be at most 12000 characters.");
     if (action !== "accepted" && action !== "rejected") throw new Error("Choose accepted or rejected.");
@@ -605,8 +637,8 @@ export class ProjectStore {
       if (availability.state !== "ready") throw new OperationConflictError(availability.reason);
       const requirement = project.requirements.find((item) => item.id === requirementID);
       if (!requirement) throw new Error("Requirement not found.");
-      const previous = project.sources.filter((source) => source.requirementID === requirementID ||
-        (!source.requirementID && source.kind === "confirmation" && requirement.sourceIDs.includes(source.id))).at(-1);
+      const previous = project.sources.filter((source) => !source.changeRequest && (source.requirementID === requirementID ||
+        (!source.requirementID && source.kind === "confirmation" && requirement.sourceIDs.includes(source.id)))).at(-1);
       const sourceID = randomUUID();
       project.sources.push({ id: sourceID, kind: action === "accepted" ? "confirmation" : "rejection", requirementID, epicID: requirement.epicID,
         ...(note.trim() ? { reviewAddendum: true } : {}),
@@ -926,6 +958,21 @@ export class ProjectStore {
             for (const record of [...result.questions, ...result.requirements]) record.epicID ??= job.context.focusEpicID ?? "project";
           }
           const reviews = this.submissions(project.id).filter((s) => s.applied && s.input.type === "review" && job.context?.submissionIDs?.includes(s.id));
+          const changeRequests = reviews.filter((s) => s.input.type === "review" && s.input.action === "changes-requested");
+          const scopedAnswers = this.submissions(project.id).filter((s) => s.applied && s.answerScope && job.context?.submissionIDs?.includes(s.id));
+          if (scopedAnswers.length) {
+            if (job.context?.submissionIDs?.length !== scopedAnswers.length) throw new Error("Scoped answers require isolated follow-up; no proposals were applied.");
+            for (const q of result.questions) q.epicID ??= project.questions.find((q) => q.id === scopedAnswers[0]!.answerScope!.questionID)?.epicID;
+            validateScopedAnswerResult(project, scopedAnswers.map((s) => s.answerScope!), result);
+          }
+          if (changeRequests.length) {
+            const targetIDs = new Set(changeRequests.flatMap((s) => s.input.type === "review" ? [s.input.requirementID] : []));
+            if (reviews.length !== changeRequests.length || job.context?.submissionIDs?.length !== changeRequests.length
+              || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length
+              || result.pendingChanges?.changes.some((c) => c.type !== "revise-requirement" || !targetIDs.has(c.requirementID))
+              || result.refinements?.some((p) => !targetIDs.has(p.requirementID) || p.resolution)
+              || result.questions.some((q) => !q.evidenceIDs?.some((id) => targetIDs.has(id)))) throw new Error("Change requests only authorize targeted revisions or replacement proposals and linked clarifications; no approval, rejection, unrelated changes or feature removal.");
+          }
           const pair = job.context?.refinementPair?.requirementIDs;
           if (job.context?.refinementOnly && ((!pair && result.questions.length) || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length || result.pendingChanges?.changes.length || result.researchFindings?.length)) throw new Error("Refinement-only passes may only propose requirement cleanup.");
           if (result.resolutionCheck && !pair) throw new Error("Resolution outcomes require an explicit pair task.");
@@ -950,11 +997,11 @@ export class ProjectStore {
               if (!related || !job.context?.includedIDs.includes(related.id) || [...related.sourceIDs, ...proposal.resolution.evidenceIDs].some((id) => !job.context!.includedIDs.includes(id))) throw new Error("Resolution requires both detailed requirements and all supporting evidence.");
             }
           }
-          const authorized = (sourceID: string, changes = false) => reviews.some((s) => s.appliedSourceID === sourceID && s.input.type === "review" && (!changes || !!s.input.note.trim()) &&
+          const authorized = (sourceID: string, changes = false) => reviews.some((s) => s.appliedSourceID === sourceID && s.input.type === "review" && (!changes || s.input.action !== "changes-requested" && !!s.input.note.trim()) &&
             !project.sources.some((source) => source.supersedes === sourceID));
           const submissions = this.submissions(project.id);
           const waiting = submissions.filter((s) => !s.conflict && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
-          const protects = (recordID: string) => waiting.some((s) => s.input.type === "answer" ? s.input.questionID === recordID : s.input.type === "review" && s.input.requirementID === recordID);
+          const protects = (recordID: string) => waiting.some((s) => s.input.type === "answer" ? s.input.questionID === recordID : s.input.type === "review" && s.input.requirementID === recordID && !changeRequests.some((request) => request.id === s.id));
           const taskSources = new Set(submissions.filter((s) => s.applied && job.context?.submissionIDs?.includes(s.id)
             && (s.input.type === "note" || s.input.type === "answer" && s.input.answer.kind === "answer" || s.input.type === "review" && !!s.input.note.trim()))
             .map((s) => s.appliedSourceID).filter((id): id is string => !!id && !project.sources.some((s) => s.supersedes === id)));
@@ -1020,7 +1067,7 @@ export class ProjectStore {
           if (job.context?.partial && ((result.organization?.length ?? 0) || (result.assessments?.length ?? 0))) {
             throw new Error("Partial task passes cannot reorganize areas or replace whole-area assessments.");
           }
-          const interpretation = job.context?.partial || job.context?.refinementOnly ? { summary: project.summary, analysisRevision: project.analysisRevision,
+          const interpretation = job.context?.partial || job.context?.refinementOnly || changeRequests.length || scopedAnswers.length ? { summary: project.summary, analysisRevision: project.analysisRevision,
             goals: project.goals, actors: project.actors, assumptions: project.assumptions, scopeAssessment: project.scopeAssessment } : undefined;
           // Retire old comparisons only in the successful publication transaction.
           // Failed/cancelled/stale/blocked checks leave the original proposal intact.

@@ -4,14 +4,17 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
-import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
-import { refinementIsStale } from "../core/resolution.js";
+import { decisionAvailability, decisionContextKey, decisionContextMatches, legacyDecisionContextKey } from "../core/decision-availability.js";
+import { legacyResolutionContextKey, resolutionContextMatches, resolutionPairEligible, refinementIsStale } from "../core/resolution.js";
+import { captureAnswerScope } from "../core/input-scope.js";
+import { legacyRefinementContextKey, refinementCheckCurrent } from "../service/refinement-tasks.js";
 import { proposeRefinements, reviewRefinement } from "../core/refinement.js";
 import { planContext } from "../core/working-set.js";
 import { reviewFingerprint, type Job, type Project, type Submission } from "../core/model.js";
 import { ProjectStore } from "./store.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { DiscoveryService } from "../service/discovery.js";
+import { discoveryPrompt } from "../runtime/discovery.js";
 
 function seed(store: ProjectStore) {
   let p = store.create("Decision safety", "Preserve human intent", { providerID: "openai", modelID: "fixture" });
@@ -440,4 +443,232 @@ test("legacy submissions preserve target-only provenance and new evidence bases 
     finally { check.close(); }
     store = new ProjectStore(path);
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+function linkedQuestion(store: ProjectStore, p: Project) {
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { summary: p.summary, goals: p.goals, actors: p.actors, assumptions: p.assumptions, requirements: [], retireQuestions: [],
+    questions: [{ text: "Which exact outcome for behavior zero?", whyItMatters: "Targeted clarification", epicID: "feature", evidenceIDs: [p.requirements[0]!.id], options: [{ label: "Offline", consequence: "Retain the outcome offline" }, { label: "Online", consequence: "Require connectivity" }] }] });
+  return store.get(p.id);
+}
+
+function targetedAnswer(p: Project) {
+  const q = p.questions.at(-1)!;
+  return { id: randomUUID(), auto: false, research: false, input: { type: "answer" as const, questionID: q.id, questionText: q.text, sourceID: q.sourceID ?? null, reviewedRevision: p.revision, answer: { kind: "answer" as const, text: "Retain the outcome offline" } } };
+}
+
+test("target-only change requests do not block or stale independent same-feature reviews, even when their follow-up failed", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), beforeKey = decisionContextKey(p, [p.requirements[1]!.id]), legacy = legacyDecisionContextKey(p, [p.requirements[1]!.id]);
+    const request = review(p, 0, "Revise only behavior zero");
+    const change = store.enqueue(p.id, { ...request, input: { ...request.input, action: "changes-requested" } });
+    const independent = store.enqueue(p.id, review(p, 1, ""));
+    assert.equal(independent.status, "queued");
+    store.applyQueued(p.id, [change.id]);
+    const current = store.get(p.id), saved = store.submissions(p.id)[0]!;
+    assert.equal(decisionContextKey(current, [current.requirements[1]!.id]), beforeKey);
+    assert.equal(decisionContextMatches(current, [current.requirements[1]!.id], legacy), true);
+    saved.status = "needs-attention"; saved.diagnostic = "Fixture interrupted follow-up"; store.saveSubmission(saved);
+    assert.equal(decisionAvailability(current, [current.requirements[1]!.id], store.submissions(p.id), [], { excludeSubmissionID: independent.id }).state, "ready");
+    assert.deepEqual(decisionAvailability(current, [current.requirements[0]!.id], store.submissions(p.id)).submissionIDs, [change.id]);
+    store.applyQueued(p.id, [independent.id]);
+    assert.equal(store.get(p.id).requirements[1]!.status, "accepted");
+  } finally { store.close(); }
+});
+
+test("scoped answers remain independent through application and correction, but legacy/general answers remain feature-wide", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = linkedQuestion(store, seed(store)), raw = targetedAnswer(p), basis = decisionContextKey(p, [p.requirements[1]!.id]);
+    const answer = store.enqueue(p.id, raw);
+    assert.deepEqual(answer.answerScope, { format: 1, questionID: raw.input.questionID, requirementIDs: [p.requirements[0]!.id] });
+    assert.throws(() => store.enqueue(p.id, { ...raw, id: randomUUID(), answerScope: answer.answerScope }), /Unrecognized key/);
+    assert.equal(decisionAvailability(p, [p.requirements[1]!.id], [answer]).state, "ready");
+    store.applyQueued(p.id);
+    let current = store.get(p.id);
+    assert.deepEqual(current.sources.at(-1)!.answerScope, answer.answerScope);
+    assert.equal(decisionContextKey(current, [current.requirements[1]!.id]), basis);
+    const missingProof = structuredClone(current); delete missingProof.sources.at(-1)!.answerScope;
+    assert.equal(decisionAvailability(missingProof, [current.requirements[1]!.id], store.submissions(p.id)).state, "waiting", "Missing source provenance stays conservative");
+    const saved = store.submissions(p.id)[0]!; saved.status = "completed"; store.saveSubmission(saved);
+    const correction = store.enqueue(p.id, targetedAnswer(current));
+    assert.deepEqual(correction.answerScope, answer.answerScope);
+    store.applyQueued(p.id); current = store.get(p.id);
+    assert.equal(decisionContextKey(current, [current.requirements[1]!.id]), basis);
+    const old = { ...store.submissions(p.id).at(-1)! }; delete old.answerScope;
+    assert.equal(decisionAvailability(current, [current.requirements[1]!.id], [old]).state, "waiting", "No retrospective scope inference for legacy submissions");
+    const legacyProject = linkedQuestion(store, seed(store));
+    const broad = store.answer(legacyProject.id, legacyProject.revision, legacyProject.questions.at(-1)!.id, { kind: "answer", text: "Older broad answer" });
+    assert.equal(captureAnswerScope(broad, broad.questions.at(-1)!.id), undefined, "Do not narrow corrections to old broad evidence");
+  } finally { store.close(); }
+});
+
+test("narrow blockers retain shared choices, explicit cross-record links, dependency input and active-worker protection", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = linkedQuestion(store, seed(store)), answer = store.enqueue(p.id, targetedAnswer(p));
+    const q = p.questions.at(-1)!, r = p.requirements[1]!;
+    q.evidenceIDs!.push(r.id);
+    assert.equal(decisionAvailability(p, [r.id], [answer]).state, "waiting", "A shared clarification links both targets");
+    q.evidenceIDs = [p.requirements[0]!.id];
+    q.epicID = "project";
+    assert.equal(captureAnswerScope(p, q.id), undefined);
+    assert.equal(decisionAvailability(p, [r.id], [answer]).state, "waiting", "Shared/project questions remain conservative");
+    q.epicID = "feature";
+    p.epics.find((e) => e.id === "unrelated")!.dependencies = ["feature"];
+    assert.equal(decisionAvailability(p, [p.requirements[2]!.id], [answer]).state, "waiting", "Transitive prerequisites remain relevant");
+    const request = review(p, 0, "Targeted prerequisite revision");
+    const change: Submission = { ...answer, input: { ...request.input, action: "changes-requested" } };
+    assert.equal(decisionAvailability(p, [p.requirements[2]!.id], [change]).state, "waiting");
+    p.sources.push({ id: "linked-request", kind: "note", changeRequest: true, requirementID: p.requirements[0]!.id, epicID: "feature", text: "Supporting human choice for behavior zero" });
+    r.sourceIDs.push("linked-request");
+    assert.equal(decisionAvailability(p, [r.id], [change]).state, "waiting", "Explicit source-owner dependencies must not be mistaken for independent work");
+    const worker: Job = { id: "live", projectID: p.id, expectedRevision: p.revision, model: p.model, status: "running", leaseUntil: Date.now() + 60000 };
+    assert.deepEqual(decisionAvailability(p, [r.id], [answer], [worker]).jobIDs, [worker.id]);
+  } finally { store.close(); }
+});
+
+test("a review queued during independent scoped inference applies afterwards without resubmission", async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    const p = linkedQuestion(store, seed(store));
+    let started!: () => void, release!: () => void; const running = new Promise<void>((accept) => { started = accept; }); let calls = 0;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
+      calls++;
+      const source = snapshot.sources.find((s) => options.context.manifest.scopedAnswerSourceIDs?.includes(s.id))!;
+      assert.ok(options.context.manifest.includedIDs.includes(p.requirements[0]!.id));
+      assert.match(discoveryPrompt(snapshot, options.context), /SCOPED ANSWER/);
+      started(); await new Promise<void>((accept) => { release = accept; });
+      return { summary: "Target changed", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [],
+        pendingChanges: { format: 1, changes: [{ type: "revise-requirement", requirementID: p.requirements[0]!.id, statement: "Behavior zero works offline", rationale: "Human answer", acceptance: ["Offline result is retained"], sourceIDs: [source.id], reason: "Targeted answer" }] } };
+    } }));
+    const first = queue.submit(p.id, { ...targetedAnswer(p), auto: true }); await running;
+    assert.throws(() => store.review(p.id, store.get(p.id).revision, p.requirements[1]!.id, "accepted", ""), /active work/);
+    const second = queue.submit(p.id, review(store.get(p.id), 1, ""));
+    assert.equal(second.status, "queued");
+    release();
+    const until = Date.now() + 5000;
+    while (queue.isActive(p.id)) { assert.ok(Date.now() < until); await new Promise((accept) => setTimeout(accept, 5)); }
+    const items = store.submissions(p.id);
+    assert.equal(items.find((s) => s.id === first.id)!.status, "completed", items[0]?.diagnostic);
+    assert.equal(items.find((s) => s.id === second.id)!.applied, true);
+    assert.equal(calls, 1, "No inference replay or extra independent follow-up with manual preference");
+    assert.equal(store.get(p.id).requirements[1]!.status, "accepted");
+    assert.equal(store.get(p.id).requirements[0]!.status, "proposed");
+    assert.equal(store.get(p.id).summary, p.summary, "Scoped follow-up cannot rewrite project interpretation");
+  } finally { await queue?.close(); store.close(); }
+});
+
+for (const invalid of ["unrelated", "new-requirement", "shared-question", "retirement"] as const) test(`scoped answer rejects ${invalid} output without publishing partial changes`, async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    const p = linkedQuestion(store, seed(store));
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
+      const sourceID = options.context.manifest.scopedAnswerSourceIDs![0]!;
+      return { summary: "Unsafe result", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [],
+        ...(invalid === "unrelated" ? { pendingChanges: { format: 1, changes: [{ type: "revise-requirement", requirementID: p.requirements[1]!.id, statement: "Unrelated rewrite", rationale: "Not authorized", acceptance: ["Wrong outcome"], sourceIDs: [sourceID], reason: "Wrong target" }] } }
+          : invalid === "new-requirement" ? { requirements: [{ statement: "An unrelated capability", rationale: "Not authorized", acceptance: ["Wrong outcome"], sourceIDs: [sourceID] }] }
+          : invalid === "retirement" ? { retireQuestions: [{ questionID: p.questions[0]!.id, reason: "Not authorized" }] }
+          : { questions: [{ text: "A shared choice?", whyItMatters: "Broader scope", epicID: "project", evidenceIDs: [p.requirements[0]!.id], options: p.questions[0]!.options }] }) };
+    } }));
+    queue.submit(p.id, { ...targetedAnswer(p), auto: true });
+    const until = Date.now() + 5000;
+    while (queue.isActive(p.id)) { assert.ok(Date.now() < until); await new Promise((accept) => setTimeout(accept, 5)); }
+    assert.equal(store.submissions(p.id)[0]!.status, "needs-attention");
+    assert.match(store.submissions(p.id)[0]!.diagnostic!, /Scoped answers can only revise/);
+    assert.deepEqual(store.get(p.id).requirements, p.requirements);
+    assert.equal(store.get(p.id).sources.filter((s) => s.answerScope).length, 1, "Exact human evidence survives a rejected publication");
+  } finally { await queue?.close(); store.close(); }
+});
+
+test("older review/proposal/check identities survive scope narrowing, repeated reopening and unrelated targeted input without replay", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, "narrow-upgrade-")), path = join(dir, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    let p = seed(store);
+    p = store.organize(p.id, p.revision, [{ type: "move", recordID: p.requirements[2]!.id, epicID: "feature" }]);
+    const target = p.requirements[1]!, pair = [target.id, p.requirements[2]!.id] as [string, string];
+    const reviewKey = legacyDecisionContextKey(p, [target.id]), pairKey = legacyResolutionContextKey(p, pair);
+    const worker = store.beginJob(p.id, p.revision).job; store.claimJob(worker.id, Date.now() + 60000);
+    store.attachContext(worker.id, { ...planContext(p, { recordIDs: [target.id] }).manifest, refinementOnly: true,
+      refinementTarget: { requirementID: target.id, fingerprint: reviewFingerprint(target), contextKey: legacyRefinementContextKey(p, target) } });
+    store.finishJob(worker.id, { summary: p.summary, goals: p.goals, actors: p.actors, assumptions: p.assumptions, requirements: [], questions: [], retireQuestions: [], refinements: [] });
+    p = store.get(p.id);
+    const queued = store.enqueue(p.id, review(p, 1, "")); queued.decisionBasis = { format: 1, contextKey: reviewKey }; store.saveSubmission(queued);
+    const request = review(p, 0, "Revise only behavior zero");
+    const change = store.enqueue(p.id, { ...request, input: { ...request.input, action: "changes-requested" } }); store.applyQueued(p.id, [change.id]);
+    const legacyJob = store.getJob(worker.id), snapshot = store.get(p.id), saved = store.submissions(p.id);
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.get(p.id), snapshot); assert.deepEqual(store.submissions(p.id), saved); assert.deepEqual(store.getJob(worker.id), legacyJob);
+      assert.equal(decisionContextMatches(snapshot, [target.id], reviewKey), true);
+      assert.equal(refinementCheckCurrent(snapshot, snapshot.requirements[1]!, legacyJob, () => store.get(p.id, worker.expectedRevision)), true);
+      assert.equal(resolutionContextMatches(snapshot, pair, pairKey), true);
+      assert.equal(refinementIsStale(snapshot, { id: "legacy-proposal", requirementID: target.id, original: structuredClone(target), fingerprint: reviewFingerprint(target), status: "pending", statement: "Clearer behavior one", rationale: "Same intent", acceptance: ["Preserved outcome"], reason: "Older saved suggestion", createdAtRevision: p.revision, decisionBasis: { format: 1, contextKey: reviewKey } }), false);
+      const pairJob: Job = { ...legacyJob, context: { ...legacyJob.context!, refinementTarget: undefined, refinementPair: { requirementIDs: pair, contextKey: pairKey } }, result: { ...legacyJob.result!, resolutionCheck: { format: 1, outcome: "distinct", explanation: "Existing completed comparison" } } };
+      assert.equal(resolutionPairEligible(snapshot, pair, [pairJob], { includeUnapproved: true }), false);
+    }
+    store.applyQueued(p.id, [queued.id]);
+    assert.equal(store.submissions(p.id).find((s) => s.id === queued.id)!.applied, true);
+    assert.deepEqual(store.submissions(p.id).find((s) => s.id === queued.id)!.decisionBasis, queued.decisionBasis, "Compatible legacy provenance is not rewritten");
+    const latest = store.get(p.id), changed = store.note(p.id, latest.revision, "A genuinely shared constraint", "project");
+    assert.equal(resolutionContextMatches(changed, pair, pairKey), false);
+    assert.equal(refinementCheckCurrent(changed, changed.requirements[1]!, legacyJob, () => store.get(p.id, worker.expectedRevision)), false);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("changed scope rejects queued answers and future scope formats remain unmodified on disk", () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, "answer-scope-upgrade-")), path = join(dir, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    let p = linkedQuestion(store, seed(store));
+    const queued = store.enqueue(p.id, targetedAnswer(p));
+    p = store.organize(p.id, p.revision, [{ type: "move", recordID: p.requirements[0]!.id, epicID: "unrelated" }]);
+    store.applyQueued(p.id);
+    const retained = store.submissions(p.id)[0]!;
+    assert.equal(retained.status, "needs-attention"); assert.equal(retained.applied, false);
+    assert.deepEqual(retained.answerScope, queued.answerScope);
+    assert.equal(store.get(p.id).sources.some((s) => s.answerScope), false);
+    assert.equal(store.get(p.id).questions.at(-1)!.status, "pending");
+    const before = store.get(p.id); store.close();
+    const db = new Database(path), future = JSON.stringify({ ...retained, answerScope: { ...retained.answerScope, format: 2 } });
+    db.prepare("UPDATE submissions SET payload = ? WHERE id = ?").run(future, retained.id); db.close();
+    store = new ProjectStore(path);
+    assert.throws(() => store.submissions(p.id)); assert.deepEqual(store.get(p.id), before);
+    const inspect = new Database(path);
+    assert.equal((inspect.prepare("SELECT payload FROM submissions WHERE id = ?").get(retained.id) as { payload: string }).payload, future); inspect.close();
+    assert.equal(decisionContextMatches(before, [before.requirements[1]!.id], "unsupported-future-basis"), false);
+    assert.equal(resolutionContextMatches(before, before.requirements.slice(0, 2).map((r) => r.id), "unsupported-future-pair-basis"), false);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const mode of ["failed", "cancelled"] as const) test(`${mode} scoped follow-up preserves its boundary and does not block an independent direct review`, async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    const p = linkedQuestion(store, seed(store)); let calls = 0, started!: () => void;
+    const running = new Promise<void>((accept) => { started = accept; });
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_snapshot, options) {
+      calls++;
+      if (calls === 1) {
+        started();
+        if (mode === "failed") throw new Error("Fixture failure");
+        await new Promise<void>((_accept, reject) => options.signal.addEventListener("abort", () => reject(new Error("Fixture cancelled")), { once: true }));
+      }
+      return { summary: p.summary, goals: p.goals, actors: p.actors, assumptions: p.assumptions, questions: [], requirements: [], retireQuestions: [] };
+    } }));
+    queue.submit(p.id, { ...targetedAnswer(p), auto: true }); await running;
+    if (mode === "cancelled") queue.stop(p.id);
+    const idle = async () => { const until = Date.now() + 5000; while (queue!.isActive(p.id)) { assert.ok(Date.now() < until); await new Promise((accept) => setTimeout(accept, 5)); } };
+    await idle();
+    const item = store.submissions(p.id)[0]!; assert.equal(item.status, "needs-attention"); assert.equal(item.applied, true);
+    const current = store.get(p.id);
+    assert.equal(decisionAvailability(current, [current.requirements[1]!.id], [item]).state, "ready");
+    const approved = store.review(p.id, current.revision, current.requirements[1]!.id, "accepted", "");
+    const basis = decisionContextKey(approved, [approved.requirements[1]!.id]);
+    queue.resume(p.id); await idle();
+    assert.equal(store.submissions(p.id)[0]!.status, "completed"); assert.equal(calls, 2);
+    assert.equal(store.get(p.id).sources.filter((s) => s.answerScope).length, 1);
+    assert.equal(decisionContextKey(store.get(p.id), [approved.requirements[1]!.id]), basis);
+  } finally { await queue?.close(); store.close(); }
 });

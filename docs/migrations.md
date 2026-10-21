@@ -19,6 +19,108 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Narrower decision blockers and scoped answer evidence
+
+SQLite **3 → 3**; no startup payload sweep, revision rewrite, data reset or inference
+replay. New queued answers optionally retain server-captured `answerScope` **format 1**
+(`questionID`, unique `requirementIDs`, at most eight). Applying them saves the same
+scope on the original answer/delegation/deferral source in the same transaction.
+Source kind, question ownership and scope must agree. Client submission bodies cannot
+provide this internal metadata. Old submissions/sources without it remain conservative;
+missing applied-source provenance does not qualify as scoped. New corrections to older
+broad sources are not silently narrowed. Requirement IDs and exact human text are intact.
+
+New review/proposal evidence strings use `human-review-basis-v2`; new pair identities use
+`resolution-evidence-v2`; individual check hashes use `refinement-task-v2:<sha256>`.
+The decision-basis envelope remains **format 1**, separate from these key-policy versions
+and project optimistic revisions. Requirement fingerprints, assessment/execution formats,
+workspace layout and original completed results do not change. New bases additionally
+capture linked-question feature/evidence routing. Genuinely relevant input still stales
+the affected work; unrelated scoped input no longer does so merely by sharing a feature.
+
+Forward compatibility is implemented through read-only adapters, not replacement keys:
+
+- Version-1 review and pair keys retain their captured fields. Compatibility projection
+  ignores only structurally independent targeted evidence using retained immutable source
+  metadata; unscoped/unknown evidence, explicit supporting sources, shared relationships,
+  dependencies, wider addenda and pinned trigger/correction lineage remain relevant.
+  Missing historic fields are not invented. Original keys and diagnostics stay saved.
+- Legacy individual SHA-256 checks are first verified against their original immutable
+  `expectedRevision` snapshot, then compared using scoped identities. Unchanged legacy
+  hashes also remain usable directly. Unknown hash policies/missing unverifiable evidence
+  are never certified current. No completed paid call is automatically repeated on startup.
+- Older jobs/proposals/submissions are not rewritten or automatically applied. A retained
+  conflicted review still needs explicit resubmission even if a narrower blocker clears.
+- Unsupported future answer-scope formats fail validation without overwriting payloads.
+  Unknown key policies fail closed for reuse. Downgrading to builds unaware of scoped
+  answer evidence/new keys is unsupported once new work has been saved.
+
+Scope is checked again before queued answer application. Follow-up publication rejects
+out-of-scope changes atomically; failures/cancellation retain the applied evidence for
+explicit retry. Existing leases, expected revisions, shared/dependency guards and global
+live-worker exclusion remain in force. This is not per-feature concurrent publication.
+
+Verification (2026-10-21, Node 22.23.3): all **491 deterministic tests** and full
+browser checks passed. Upgrade cases cover unchanged evidence across repeated reopening,
+legacy review/proposal/pair/check reuse, genuinely shared evidence invalidation, changed
+queued scope, missing applied-source proof, future formats without overwrite, and atomic
+publication failures/cancellation with explicit retry. After the final scope-capture
+optimization, type checking and all **31 decision-availability tests** passed again.
+No live model calls were made; live scoped generation remains unqualified.
+
+## Targeted requirement change requests
+
+SQLite **3 → 3**; existing payloads have no conversion or startup rewrite. New review
+submissions add the intent `action: "changes-requested"`, with required nonblank `note`,
+the existing exact target snapshot and version-1 relevant-evidence basis. Applying this
+input adds a source of existing kind `note`, with optional `changeRequest: true` and
+`requirementID`; it does not create confirmation/rejection evidence or supersede a prior
+approval. Human text, IDs, revisions and job/submission provenance remain intact.
+Unapproved revisions use existing version-1 pending changes; approved replacements use
+existing refinement records and explicit human approval. No new table/schema counter,
+assessment format, workspace layout or fingerprint version is needed.
+
+Old approval/rejection notes and existing generic notes are **not** inferred to be change
+requests. For records without the new marker, decision-basis contents, freshness and
+completed work remain unchanged. New requested feedback is genuinely new human evidence
+and can invalidate relevant review/proposal bases under the existing safety rules; that
+is not an upgrade-triggered reset. Explicit request intent is distinguished in UI/history.
+
+Queued application and result publication use existing transactional expected-revision,
+evidence, pending-input and worker guards. Applying a request saves feedback atomically
+without deciding the requirement. Invalid/cancelled follow-up retains that applied source
+for explicit retry, never automatically repeats inference on reopening, and cannot
+partially approve/reject or publish unrelated edits. Restart recovery preserves older
+queued reviews and new requests. Unsupported future review actions are rejected on
+saved-submission read/write without rewriting their payloads. Downgrading to a build
+that predates change requests is unsupported once this new intent has been saved.
+
+Compatibility verification (2026-10-21): all **479 deterministic tests** passed on
+Node 22.23.3. The change-request suite covers old decision/evidence preservation,
+repeated SQLite reopen with unchanged saved requests and no startup inference,
+interrupted/cancelled follow-up and explicit retry without duplicate note sources,
+live-snapshot queue ownership, stale reviewed evidence, malformed/out-of-target result
+rollback, and unsupported future-action payload preservation. The existing legacy-review,
+assessment and transactional migration suites also passed. No data repair/reset or
+live model calls were performed; live generation for the new intent remains unqualified.
+
+## Inline Review clarifications and readiness
+
+SQLite **3 → 3**, project/submission JSON, workspace artifacts, schema versions,
+decision-context/fingerprint semantics, saved assessments and completed work are unchanged.
+Readiness counts, inline answer editors and previous-displayed-requirement comparisons
+are presentation/routing changes only. Comparisons and unsent drafts are transient React
+state, not new persisted evidence. Inline answers use the existing durable submission
+format and validation; processing retains the existing queue/lease/revision safeguards.
+Old saved answers and reviews remain readable without reset, migration, startup rewrite
+or model replay. Original diagnostics and human evidence are not rewritten. Explicit
+acknowledgement/resubmission is still required when relevant information changes.
+Compatibility verification (2026-10-21): all **466 deterministic tests** passed on
+Node 22.23.3, including an exact version-1 decision-basis assertion, saved-review
+reopening/legacy provenance checks and the existing transactional migration suite.
+No upgrade transformation is needed; the evidence selector is shared with display
+without changing the basis contents or format.
+
 ## Item-local processing recovery
 
 Item-local processing-error/recovery presentation also leaves persisted formats,

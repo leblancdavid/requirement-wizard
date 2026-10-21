@@ -1,6 +1,6 @@
 import { reviewFingerprint, StaleRevisionError, type Analysis, type Project } from "./model.js";
-import { refinementIsStale, resolutionContextKey, validateResolutionEvidence } from "./resolution.js";
-import { decisionContextKey } from "./decision-availability.js";
+import { refinementIsStale, resolutionContextKey, resolutionContextMatches, validateResolutionEvidence } from "./resolution.js";
+import { decisionContextKey, decisionContextMatches } from "./decision-availability.js";
 
 /** Volatile run telemetry, not saved evidence or specification completeness. */
 export type RefinementProgress = {
@@ -16,7 +16,7 @@ export function refinementCandidates(project: Project) {
     && !project.refinements.some((p) => p.resolution && p.status === "pending" && !refinementIsStale(project, p)
       && [p.requirementID, p.resolution.relatedRequirementID].includes(r.id))
     && !project.refinements.some((p) => !p.resolution && p.requirementID === r.id && p.fingerprint === reviewFingerprint(r)
-      && (!p.decisionBasis || p.decisionBasis.contextKey === decisionContextKey(project, [r.id]))));
+      && (!p.decisionBasis || decisionContextMatches(project, [r.id], p.decisionBasis.contextKey))));
 }
 
 export function proposeRefinements(project: Project, proposals: NonNullable<Analysis["refinements"]>, newID: () => string, triggerSourceIDs: string[] = []) {
@@ -38,8 +38,8 @@ export function proposeRefinements(project: Project, proposals: NonNullable<Anal
       validateResolutionEvidence(project, proposal);
     }
     if (project.refinements.some((r) => proposal.resolution
-      ? r.resolutionContextKey === contextKey && r.resolution
-      : !r.resolution && r.requirementID === target.id && r.fingerprint === fingerprint && (!r.decisionBasis || r.decisionBasis.contextKey === decisionKey))) continue;
+      ? r.resolution && !!r.resolutionContextKey && resolutionContextMatches(project, [target.id, proposal.resolution.relatedRequirementID], r.resolutionContextKey, triggerSourceIDs)
+      : !r.resolution && r.requirementID === target.id && r.fingerprint === fingerprint && (!r.decisionBasis || decisionContextMatches(project, [target.id], r.decisionBasis.contextKey)))) continue;
     if (!proposal.resolution && proposal.statement === target.statement && JSON.stringify(proposal.acceptance) === JSON.stringify(target.acceptance)) continue;
     project.refinements.push({ ...proposal, id: newID(), fingerprint, original: structuredClone(target), status: "pending", createdAtRevision: project.revision + 1,
       ...(!related ? { decisionBasis: { format: 1 as const, contextKey: decisionKey } } : {}),
@@ -77,7 +77,7 @@ export function reviewRefinement(project: Project, id: string, accept: boolean, 
     return;
   }
   const sourceID = newID();
-  const previous = project.sources.filter((s) => s.requirementID === target.id || (s.kind === "confirmation" && target.sourceIDs.includes(s.id))).at(-1);
+  const previous = project.sources.filter((s) => !s.changeRequest && (s.requirementID === target.id || (s.kind === "confirmation" && target.sourceIDs.includes(s.id)))).at(-1);
   project.sources.push({ id: sourceID, kind: "confirmation", requirementID: target.id, epicID: target.epicID,
     ...(previous ? { supersedes: previous.id } : {}),
     text: `Human approved requirement cleanup. Original: ${JSON.stringify(proposal.original)}\nReplacement: ${proposal.statement}\nAcceptance scenarios: ${JSON.stringify(proposal.acceptance)}\nReason: ${proposal.reason}` });

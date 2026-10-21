@@ -7,6 +7,8 @@ import { wordingSimilarity } from "./similarity.js";
  */
 export function planIncrementalResolution(before: Project, after: Project, submission: Submission, discoveryJobID: string, jobs: Job[]): Submission["overlapFollowup"] {
   const input = submission.input;
+  if (submission.answerScope) return; // Scoped follow-up cannot launch comparisons outside its enforced targets.
+  if (input.type === "review" && input.action === "changes-requested") return; // Targeted feedback is not a request for a broader pair-check run.
   if (!submission.appliedSourceID || input.type === "note" || input.type === "answer" && input.answer.kind !== "answer") return;
   const previous = new Map(before.requirements.map((r) => [r.id, reviewFingerprint(r)]));
   const affected = new Set(after.requirements.filter((r) => previous.get(r.id) !== reviewFingerprint(r)).map((r) => r.id));

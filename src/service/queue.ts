@@ -4,9 +4,9 @@ import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
 import { planContext } from "../core/working-set.js";
 import { ContextBudgetError } from "../core/context.js";
-import { refinementContextKey, resolutionPairEligible } from "./refinement-tasks.js";
+import { refinementCheckCurrent, resolutionPairEligible } from "./refinement-tasks.js";
 import { auditApprovedRequirements } from "../core/similarity.js";
-import { refinementIsStale, resolutionContextKey, resolutionTaskForAnswer } from "../core/resolution.js";
+import { refinementIsStale, resolutionContextMatches, resolutionTaskForAnswer } from "../core/resolution.js";
 import { OperationConflictError } from "../core/operations.js";
 import { decisionAvailability } from "../core/decision-availability.js";
 import { reconciliationCandidates } from "../core/review-completion.js";
@@ -144,7 +144,7 @@ export class DiscoveryQueue {
         const completedJob = pair.jobID ? this.service.store.getJob(pair.jobID) : undefined;
         const previous = completedJob?.context?.refinementPair;
         if (completedJob?.status === "completed" && completedJob.result?.resolutionCheck?.outcome !== "blocked" && previous
-          && previous.contextKey === resolutionContextKey(current, pair.requirementIDs, previous.triggerSourceIDs)) {
+          && resolutionContextMatches(current, pair.requirementIDs, previous.contextKey, previous.triggerSourceIDs)) {
           pair.status = "completed"; save(); continue;
         }
         if (superseded || !resolutionPairEligible(current, pair.requirementIDs, this.service.store.jobs(item.projectID), { includeUnapproved: true, triggerSourceIDs: receipt.triggerSourceIDs })) {
@@ -227,11 +227,9 @@ export class DiscoveryQueue {
         }
         if (controller.signal.aborted || this.closing) return;
         project = this.service.store.get(id);
-        const completed = this.service.store.jobs(id).filter((j) => j.status === "completed" && j.context?.refinementOnly)
-          .flatMap((j) => j.context?.refinementTarget ? [j.context.refinementTarget] : []);
+        const completed = this.service.store.jobs(id).filter((j) => j.status === "completed" && j.context?.refinementOnly && j.context.refinementTarget);
         const targets = refinementCandidates(project).filter((r) => (!manual.focusEpicID || r.epicID === manual.focusEpicID)
-          && !completed.some((target) => target.requirementID === r.id && target.fingerprint === reviewFingerprint(r)
-             && target.contextKey === refinementContextKey(project, r))).map((r) => r.id);
+          && !completed.some((job) => refinementCheckCurrent(project, r, job, () => this.service.store.get(id, job.expectedRevision)))).map((r) => r.id);
         Object.assign(refinement!, { phase: "wording", completed: 0, total: targets.length });
         if (!targets.length) { report(`Overlap checks: ${pairsChecked} completed. No unchecked individual wording tasks in this scope. Review resolution proposals in Refine/To review or answer their Design questions, then Refine again for remaining overlaps. Completed checks and dismissed suggestions are retained.`); return; }
         for (const [index, requirementID] of targets.entries()) {
@@ -295,7 +293,7 @@ export class DiscoveryQueue {
             if (!epicID) throw new Error("A submitted question is no longer available. Review the retained response.");
             return epicID;
           })])],
-          recordIDs: [...(pair ?? []), ...items.flatMap((s) => [s.appliedSourceID!, ...(s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : [])])],
+          recordIDs: [...(pair ?? []), ...items.flatMap((s) => [s.appliedSourceID!, ...(s.answerScope?.requirementIDs ?? []), ...(s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : [])])],
           };
           if (!pair) for (const candidate of items.flatMap((item) => reconciliationCandidates(project, item, this.service.store.submissions(id)))) {
             if (planned.recordIDs.includes(candidate)) continue;

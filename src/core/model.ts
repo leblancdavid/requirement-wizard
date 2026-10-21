@@ -5,6 +5,8 @@ import { wordingKey } from "./similarity.js";
 import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal } from "./epics.js";
 
 const text = z.string().trim().min(1).max(12000);
+export const answerScopeSchema = z.object({ format: z.literal(1), questionID: z.string().min(1), requirementIDs: z.array(z.string().min(1)).min(1).max(8).refine((ids) => new Set(ids).size === ids.length, "Scoped target IDs must be unique") }).strict();
+export type AnswerScope = z.infer<typeof answerScopeSchema>;
 export const decisionBasisSchema = z.object({ format: z.literal(1), contextKey: z.string().min(1) }).strict();
 export const reviewUpdatesSchema = z.object({ format: z.literal(1), items: z.array(z.object({
   recordID: z.string().min(1), recordType: z.enum(["requirement", "question", "refinement"]),
@@ -25,7 +27,12 @@ const source = z.object({
   requirementID: z.string().optional(),
   /** Explicit ordinary review note, not an AI cleanup explanation. Absent on legacy evidence. */
   reviewAddendum: z.boolean().optional(),
+  /** Targeted human feedback, not an approval/rejection or permission for wider edits. */
+  changeRequest: z.literal(true).optional(),
+  answerScope: answerScopeSchema.optional(),
   epicID: z.string().default("project"),
+}).superRefine((value, context) => {
+  if (value.answerScope && (value.answerScope.questionID !== value.questionID || !["answer", "delegation", "deferral"].includes(value.kind))) context.addIssue({ code: "custom", message: "Answer scope must match its original question response." });
 });
 export const conceptSchema = z.object({
   field: z.enum(["text", "whyItMatters", "label", "consequence"]),
@@ -201,16 +208,20 @@ export const answerSchema = z.object({
 }).strict();
 export type Answer = z.infer<typeof answerSchema>;
 
+export const reviewActionSchema = z.enum(["accepted", "rejected", "changes-requested"]);
+export type ReviewAction = z.infer<typeof reviewActionSchema>;
 export const submissionSchema = z.object({
   id: z.string().uuid(),
   input: z.discriminatedUnion("type", [
     z.object({ type: z.literal("answer"), questionID: z.string(), questionText: z.string(), sourceID: z.string().nullable(), answer: answerSchema, fingerprint: z.string().min(1).max(100000).optional(), reviewedRevision: z.number().int().positive().optional() }).strict(),
     z.object({ type: z.literal("note"), text: answerSchema.shape.text, epicID: z.string() }).strict(),
-    z.object({ type: z.literal("review"), requirementID: z.string(), requirementText: z.string().min(1).max(12000), fingerprint: z.string().min(1).max(100000), action: z.enum(["accepted", "rejected"]), note: z.string().max(12000), reviewedRevision: z.number().int().positive().optional() }).strict(),
+    z.object({ type: z.literal("review"), requirementID: z.string(), requirementText: z.string().min(1).max(12000), fingerprint: z.string().min(1).max(100000), action: reviewActionSchema, note: z.string().max(12000), reviewedRevision: z.number().int().positive().optional() }).strict(),
   ]),
   auto: z.boolean(), research: z.boolean(),
   replaces: z.string().uuid().optional(),
-}).strict();
+}).strict().superRefine(({ input }, context) => {
+  if (input.type === "review" && input.action === "changes-requested" && !input.note.trim()) context.addIssue({ code: z.ZodIssueCode.custom, path: ["input", "note"], message: "Describe the changes you want before requesting changes." });
+});
 export const overlapFollowupSchema = z.object({
   format: z.literal(1), discoveryJobID: z.string().min(1),
   requirementIDs: z.array(z.string().min(1)), triggerSourceIDs: z.array(z.string().min(1)).min(1).max(8),
@@ -227,6 +238,8 @@ export type Submission = z.infer<typeof submissionSchema> & {
   response?: string;
   /** Server-captured evidence at submission/reviewed revision; absent on legacy submissions. */
   decisionBasis?: z.infer<typeof decisionBasisSchema>;
+  /** Server-captured, publication-enforced scope; absent means conservative legacy/general input. */
+  answerScope?: AnswerScope;
   overlapFollowup?: z.infer<typeof overlapFollowupSchema>;
   /** Durable preflight result; input/approval is already saved, inference not started. */
   contextBlock?: Pick<NonNullable<Job["context"]>, "revision" | "characters" | "budget" | "epicIDs" | "sectionCharacters">;
@@ -257,6 +270,7 @@ export type Job = {
     refinementPair?: { requirementIDs: [string, string]; contextKey: string; includeUnapproved?: boolean; triggerSourceIDs?: string[] };
     submissionIDs?: string[];
     reviewSourceIDs?: string[];
+    scopedAnswerSourceIDs?: string[];
     reviewChangeSourceIDs?: string[];
     losslessCompaction?: { originalCharacters: number; sharedTexts: number; references: number };
     identifierCompaction?: { originalCharacters: number; identifiers: number; references: number };

@@ -60,6 +60,7 @@ let retrievalCalls = 0;
 let rounds = 0;
 let failNextScan = false;
 let failAutomaticPair = false;
+let releaseNarrow: (() => void) | undefined, narrowCalls = 0;
 let releaseWordHelp: (() => void) | undefined;
 let login: LoginStatus = { id: "10000000-0000-4000-8000-000000000001", status: "cancelled" };
 let loginComplete = false, connected = false, blockTest = true;
@@ -108,6 +109,25 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
         { type: "revise-requirement", requirementID: requirement!.id, statement: "Updated proposed behavior", rationale: "Current explicit note", acceptance: ["The corrected result is visible"], sourceIDs: [source.id], reason: "The processed note corrected the proposed behavior" },
         { type: "withdraw-requirement", requirementID: withdrawn!.id, sourceIDs: [source.id], reason: "The processed note removed the optional proposal" },
       ] } });
+  }
+  if (project.name.startsWith("Change request browser fixture")) {
+    const source = project.sources.find((s) => s.changeRequest && options.context.manifest.reviewSourceIDs?.includes(s.id))!;
+    const target = project.requirements.find((r) => r.id === source.requirementID)!;
+    const update = { requirementID: target.id, statement: "Save reports offline", rationale: "Explicit requested correction", acceptance: ["Reports are retained without a network connection"], reason: "Requested offline behavior" };
+    return analysisSchema.parse({ summary: "Targeted change proposed", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
+      reviewResponses: [{ sourceID: source.id, text: "Offline behavior is ready for review; no approval or rejection was applied." }],
+      ...(target.status === "accepted" ? { refinements: [update] } : { pendingChanges: { format: 1, changes: [{ ...update, type: "revise-requirement", sourceIDs: [source.id] }] } }) });
+  }
+  if (project.name === "Narrow blocker browser fixture") {
+    narrowCalls++;
+    const source = project.sources.find((s) => options.context.manifest.scopedAnswerSourceIDs?.includes(s.id));
+    if (source) {
+      await new Promise<void>((accept) => { releaseNarrow = accept; options.signal.addEventListener("abort", () => accept(), { once: true }); });
+      return analysisSchema.parse({ summary: "Scoped outcome", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
+        pendingChanges: { format: 1, changes: [{ type: "revise-requirement", requirementID: source.answerScope!.requirementIDs[0]!, statement: "Reports are saved offline", rationale: "Scoped human answer", acceptance: ["A report survives loss of connectivity"], sourceIDs: [source.id], reason: "Answered linked clarification" }] } });
+    }
+    return analysisSchema.parse({ summary: "Independent review retained", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
+      reviewResponses: (options.context.manifest.reviewSourceIDs ?? []).map((sourceID) => ({ sourceID, text: "Independent approval retained; no repeat review required" })) });
   }
   if (["Resolution workflow fixture", "Resolution ambiguity fixture", "Automatic answer fixture", "Automatic review fixture"].includes(project.name)) {
     const pair = options.context.manifest.refinementPair?.requirementIDs;
@@ -511,6 +531,8 @@ try {
   await answer.fill("Owner and office team");
   await card.getByRole("button", { name: "Save changes" }).click();
   await expect(card.locator(".answer-preview")).toHaveText("Owner and office team");
+  // Viewing Review without typing must not hide a later retained Project map note.
+  await page.getByRole("tab", { name: /^Review/ }).click();
   await page.getByRole("tab", { name: "Project map", exact: true }).click();
   await expect(page.locator(".definition-details")).not.toHaveAttribute("open", "");
   const mapEpic = page.getByRole("article", { name: "Job tracking", exact: true });
@@ -522,6 +544,9 @@ try {
   await expect(page.getByText("Create and manage contractor jobs.", { exact: true })).toBeVisible();
   await page.locator(".requirement-detail > summary").click();
   await page.getByLabel("Review rationale").fill("Saving jobs is essential.");
+  await page.locator(".review-form").getByRole("button", { name: "Request changes", exact: true }).click();
+  await page.locator(".review-form").getByRole("textbox", { name: "Requested changes", exact: true }).fill("Separate feedback draft must not become an approval note");
+  await page.locator(".review-form").getByRole("button", { name: "Cancel change request", exact: true }).click();
   await page.getByRole("button", { name: "Confirm requirement" }).click();
   const safetyProjectID = store.list()[0]!.id;
   await expect.poll(() => store.submissions(safetyProjectID).some((s) => s.input.type === "review" && s.status === "needs-attention" && s.conflict && !s.applied)).toBe(true);
@@ -1008,7 +1033,7 @@ try {
     await expect(page.locator(".round-status")).toContainText("AI follow-up blocked by context size");
     await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
     await expect(reviewPanel).toContainText("Context blocked");
-    await expect(reviewPanel).toContainText("Your decision is retained");
+    await expect(reviewPanel).toContainText("Your response is retained");
     await page.reload();
     await expect(page.locator(".round-status")).toContainText("AI follow-up blocked by context size");
     await page.locator(".topbar .queue-trigger").click();
@@ -1089,7 +1114,8 @@ try {
          await autoPreference.setChecked(wasAutomatic);
          await page.getByRole("button", { name: "Back to workspace" }).click();
        }
-       for (const ambiguous of [false, true]) {
+        for (const ambiguous of [false, true]) {
+         let restoreAutomatic: boolean | undefined;
         let resolutionProject = store.create(ambiguous ? "Resolution ambiguity fixture" : "Resolution workflow fixture", "Keep reviewed report access rules", { providerID: "openai", modelID: "fixture" });
         const resolutionSeed = store.beginJob(resolutionProject.id, resolutionProject.revision).job;
         store.claimJob(resolutionSeed.id, Date.now() + 60000);
@@ -1098,7 +1124,13 @@ try {
         for (const r of resolutionProject.requirements) resolutionProject = store.review(resolutionProject.id, resolutionProject.revision, r.id, "accepted", "Preserve this reviewed scenario");
         const originals = structuredClone(resolutionProject.requirements);
         await page.reload();
-        await page.locator(".sidebar").getByRole("button", { name: new RegExp(resolutionProject.name) }).click();
+         await page.locator(".sidebar").getByRole("button", { name: new RegExp(resolutionProject.name) }).click();
+         if (ambiguous) {
+           await page.getByRole("button", { name: "Settings", exact: true }).click();
+           restoreAutomatic = await page.getByLabel("Automatically explore queued answers").isChecked();
+           await page.getByLabel("Automatically explore queued answers").uncheck();
+           await page.getByRole("button", { name: "Back to workspace" }).click();
+         }
         await page.getByRole("tab", { name: /Review/ }).click();
         await expect(reviewPanel.getByRole("region", { name: "Approved requirement audit", exact: true })).toHaveCount(0);
         await expect(reviewPanel.getByRole("button", { name: "Check approved requirements for duplicates and conflicts", exact: true })).toHaveCount(0);
@@ -1110,15 +1142,21 @@ try {
           assert.deepEqual(store.get(resolutionProject.id).requirements, originals);
           await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
           await reviewPanel.locator(".review-card-heading").filter({ hasText: "Guests can access private reports" }).click();
-          await expect(reviewPanel).toContainText("Should guests be allowed to access private reports?");
-          await reviewPanel.getByRole("button", { name: "Open blocking clarification in Design", exact: true }).click();
-          await expect(page.getByRole("tab", { name: /^Design/ })).toHaveAttribute("aria-selected", "true");
-          const clarification = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Should guests be allowed to access private reports?", exact: true }) });
-          await clarification.getByRole("button", { name: /Choose Allow private reports/ }).click();
-          await clarification.getByRole("button", { name: /^Save response/ }).click();
-          await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
-          await page.getByRole("tab", { name: /Review/ }).click();
-          await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
+           await expect(reviewPanel).toContainText("Should guests be allowed to access private reports?");
+           await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).fill("Keep this note while clarifying guest access");
+           const clarification = reviewPanel.locator(".inline-question .question-card");
+           await expect(clarification.getByRole("heading", { name: "Should guests be allowed to access private reports?", exact: true })).toBeVisible();
+           await expect(reviewPanel.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
+           await expect(reviewPanel.getByRole("button", { name: "Reject", exact: true })).toBeEnabled();
+           await clarification.getByRole("button", { name: /Choose Allow private reports/ }).click();
+           await clarification.getByRole("button", { name: /^Save response/ }).click();
+           await expect(page.getByRole("tab", { name: /Review/ })).toHaveAttribute("aria-selected", "true");
+           await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep this note while clarifying guest access");
+           await reviewPanel.getByRole("button", { name: "Process blocking input", exact: true }).click();
+           await expect.poll(() => store.submissions(resolutionProject.id).find((s) => s.input.type === "answer")?.status).toBe("completed");
+           await expect(reviewPanel.getByRole("region", { name: "Changes since you started reviewing", exact: true })).toBeVisible();
+           await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep this note while clarifying guest access");
+           await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
         }
         await expect(reviewPanel).toContainText("Resolution proposed");
         await expect(reviewPanel.getByRole("region", { name: "Related requirement resolution", exact: true })).toContainText("reject the redundant");
@@ -1152,9 +1190,124 @@ try {
         assert.equal(store.get(resolutionProject.id).requirements.length, 2);
         await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
         await expect(reviewPanel).toContainText("Resolution approved");
-        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Resolution workflow must fit mobile width");
+         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Resolution workflow must fit mobile width");
+         if (restoreAutomatic !== undefined) {
+           await page.getByRole("button", { name: "Settings", exact: true }).click();
+           await page.getByLabel("Automatically explore queued answers").setChecked(restoreAutomatic);
+           await page.getByRole("button", { name: "Back to workspace" }).click();
+         }
       }
-      let cleanup = store.create("Cleanup fixture", "Jump and aim", { providerID: "openai", modelID: "fixture" });
+       for (const approved of [false, true]) {
+         let changes = store.create(`Change request browser fixture ${approved ? "approved" : "proposed"}`, "Save reports and keep audit history", { providerID: "openai", modelID: "fixture" });
+         const seed = store.beginJob(changes.id, changes.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+         store.finishJob(seed.id, { summary: "Reports", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Save reports", "Keep audit history"].map((statement) => ({ statement, rationale: "Requested behavior", sourceIDs: [changes.sources[0]!.id], acceptance: [statement], epicID: "inbox" })) });
+         changes = store.get(changes.id);
+         if (approved) changes = store.review(changes.id, changes.revision, changes.requirements[0]!.id, "accepted", "Keep original approval");
+         const original = structuredClone(changes.requirements);
+         await page.reload();
+         await page.locator(".sidebar").getByRole("button", { name: new RegExp(changes.name) }).click();
+         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         const automatic = await page.getByLabel("Automatically explore queued answers").isChecked();
+         await page.getByLabel("Automatically explore queued answers").uncheck();
+         await page.getByRole("button", { name: "Back to workspace" }).click();
+         await page.getByRole("tab", { name: /Review/ }).click();
+         await page.getByLabel("Filter by feature").selectOption("all");
+         if (approved) {
+           await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
+           await reviewPanel.locator(".review-card-heading").filter({ hasText: "Save reports" }).click();
+         }
+         await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).fill("Keep my separate review note");
+         await reviewPanel.getByRole("button", { name: "Request changes", exact: true }).click();
+         const form = reviewPanel.getByRole("form", { name: "Request requirement changes", exact: true });
+         await expect(form.getByRole("button", { name: "Send change request", exact: true })).toBeDisabled();
+         await form.getByRole("textbox", { name: "Requested changes", exact: true }).fill("Also save reports while offline.");
+         await form.getByRole("button", { name: "Cancel change request", exact: true }).click();
+         await reviewPanel.getByRole("button", { name: "Request changes", exact: true }).click();
+         await expect(form.getByRole("textbox", { name: "Requested changes", exact: true })).toHaveValue("Also save reports while offline.");
+         changes = store.note(changes.id, changes.revision, "Retain encrypted report data", "inbox");
+         await expect(reviewPanel.getByRole("button", { name: "Use note with updated requirement", exact: true })).toBeVisible();
+         await expect(form.getByRole("button", { name: "Send change request", exact: true })).toBeDisabled();
+         await reviewPanel.getByRole("button", { name: "Use note with updated requirement", exact: true }).click();
+         await expect(form.getByRole("textbox", { name: "Requested changes", exact: true })).toHaveValue("Also save reports while offline.");
+         await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep my separate review note");
+         await page.setViewportSize({ width: 390, height: 844 });
+         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "The feedback editor fits mobile width");
+         await page.screenshot({ path: `.reqwizit-state/browser-change-request-${approved ? "approved" : "proposed"}.png`, fullPage: true });
+         await page.setViewportSize({ width: 1440, height: 1000 });
+         await form.getByRole("button", { name: "Send change request", exact: true }).click();
+         await expect.poll(() => store.submissions(changes.id).some((s) => s.input.type === "review" && s.input.action === "changes-requested")).toBe(true);
+         assert.deepEqual(store.get(changes.id).requirements, original, "Feedback alone cannot apply a requirement decision");
+         const saved = store.submissions(changes.id).find((s) => s.input.type === "review")!;
+         assert.equal(saved.input.type === "review" ? saved.input.note : "", "Also save reports while offline.");
+         await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+         await expect.poll(() => store.submissions(changes.id).find((s) => s.id === saved.id)?.status).toBe("completed");
+         await reviewPanel.getByRole("button", { name: /^To review/ }).click();
+         if (approved) {
+           assert.deepEqual(store.get(changes.id).requirements, original);
+           await expect(reviewPanel.getByRole("button", { name: "Approve refinement", exact: true })).toBeVisible();
+           await reviewPanel.getByText("Saved change requests", { exact: true }).click();
+           await expect(reviewPanel.getByText(/Requested changes: Also save reports while offline\./)).toBeVisible();
+           await reviewPanel.getByRole("button", { name: "Approve refinement", exact: true }).click();
+           await expect.poll(() => store.get(changes.id).requirements[0]!.statement).toBe("Save reports offline");
+         } else {
+           await expect(reviewPanel.locator(".review-card-heading").filter({ hasText: "Save reports offline" })).toBeVisible();
+           assert.equal(store.get(changes.id).requirements[0]!.status, "proposed");
+         }
+         assert.deepEqual(store.get(changes.id).requirements[1], original[1]);
+         await reviewPanel.getByRole("button", { name: /^Reviewed/ }).click();
+         await expect(reviewPanel.getByText(/Changes requested · no approval or rejection/)).toBeVisible();
+         await page.setViewportSize({ width: 390, height: 844 });
+         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Change request flow fits mobile width");
+         await page.setViewportSize({ width: 1440, height: 1000 });
+         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         await page.getByLabel("Automatically explore queued answers").setChecked(automatic);
+         await page.getByRole("button", { name: "Back to workspace" }).click();
+       }
+       {
+         let narrow = store.create("Narrow blocker browser fixture", "Independent same-feature behaviors", { providerID: "openai", modelID: "fixture" });
+         const seed = store.beginJob(narrow.id, narrow.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+         store.finishJob(seed.id, { summary: "Reports", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Save report drafts", "Keep audit history", "Manage display preferences"].map((statement) => ({ statement, rationale: "Independent behavior", sourceIDs: [narrow.sources[0]!.id], acceptance: [statement], epicID: "inbox" })) });
+         narrow = store.get(narrow.id);
+         const questions = store.beginJob(narrow.id, narrow.revision).job; store.claimJob(questions.id, Date.now() + 60000);
+         store.finishJob(questions.id, { summary: "Reports", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], questions: [{ text: "Should these report drafts work offline?", whyItMatters: "Only the linked report behavior", epicID: "inbox", evidenceIDs: [narrow.requirements[0]!.id], options: [{ label: "Offline drafts", consequence: "Retain drafts offline" }, { label: "Online drafts", consequence: "Require a connection" }] }] });
+         narrow = store.get(narrow.id);
+         await page.reload(); await page.locator(".sidebar").getByRole("button", { name: /Narrow blocker browser fixture/ }).click();
+         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         const automatic = await page.getByLabel("Automatically explore queued answers").isChecked();
+         await page.getByLabel("Automatically explore queued answers").uncheck();
+         await page.getByRole("button", { name: "Back to workspace" }).click();
+         await page.getByRole("tab", { name: /^Design/ }).click();
+         await expect(page.getByRole("complementary", { name: "Targeted answer scope", exact: true })).toBeVisible();
+         const question = page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Should these report drafts work offline?", exact: true }) });
+         await question.getByRole("button", { name: /Choose Offline drafts/ }).click();
+         await question.getByRole("button", { name: /^Save response/ }).click();
+         await expect.poll(() => store.submissions(narrow.id)[0]?.applied).toBe(true);
+         assert.deepEqual(store.submissions(narrow.id)[0]!.answerScope?.requirementIDs, [narrow.requirements[0]!.id]);
+         await page.getByRole("tab", { name: /Review/ }).click();
+         await expect(reviewPanel.locator(".review-readiness").getByRole("button", { name: /^Ready to review/ })).toContainText("2");
+         await expect(reviewPanel.locator('.review-card-heading[aria-expanded="true"]')).toContainText("Keep audit history");
+         await page.screenshot({ path: ".reqwizit-state/browser-narrow-blockers.png", fullPage: true });
+         await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
+         await expect.poll(() => store.get(narrow.id).requirements[1]!.status).toBe("accepted");
+         await expect(reviewPanel.locator('.review-card-heading[aria-expanded="true"]')).toContainText("Manage display preferences");
+         assert.equal(narrowCalls, 0, "Manual processing preferences must not start inference");
+         await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+         await expect.poll(() => !!releaseNarrow).toBe(true);
+         await expect(reviewPanel).toContainText("Your review can be saved and queued while processing finishes");
+         await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
+         await expect.poll(() => store.submissions(narrow.id).filter((s) => s.status === "queued").length).toBe(1);
+         assert.equal(store.get(narrow.id).requirements[2]!.status, "proposed", "Live snapshot still owns specification writes");
+         releaseNarrow!(); releaseNarrow = undefined;
+         await expect.poll(() => store.submissions(narrow.id).filter((s) => s.status === "completed").length).toBe(3);
+         assert.equal(narrowCalls, 3, "One scoped answer and each original review run once, without resubmission");
+         assert.equal(store.get(narrow.id).requirements[2]!.status, "accepted");
+         assert.equal(store.get(narrow.id).requirements[0]!.status, "proposed");
+         assert.equal(store.submissions(narrow.id).some((s) => s.status === "needs-attention"), false);
+         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         await page.getByLabel("Automatically explore queued answers").setChecked(automatic);
+         await page.getByRole("button", { name: "Back to workspace" }).click();
+       }
+       let cleanup = store.create("Cleanup fixture", "Jump and aim", { providerID: "openai", modelID: "fixture" });
      const cleanupSeed = store.beginJob(cleanup.id, cleanup.revision).job; store.claimJob(cleanupSeed.id, Date.now() + 60000);
      store.finishJob(cleanupSeed.id, { summary: "Game", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Jump() sets velocity to 420 for 0.15 seconds", "AimPivot.Update() clamps rotation to 60 degrees", "The player can pause the game"].map((statement) => ({ statement, rationale: "Static implementation", sourceIDs: [cleanup.sources[0]!.id], acceptance: ["The behavior is observable"] })) });
      cleanup = store.get(cleanup.id);
@@ -1635,11 +1788,20 @@ try {
             await page.reload();
             await page.getByRole("tab", { name: /Review/ }).click();
             const reviewPages = reviewPanel.getByRole("navigation", { name: "Review pages", exact: true });
-            await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
+             await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
+             const readinessFilters = reviewPanel.locator(".review-readiness");
+             await expect(readinessFilters.getByRole("button", { name: /^Ready to review/ })).toContainText("500");
+             await readinessFilters.getByRole("button", { name: /^Needs a decision/ }).click();
+             await expect(reviewPanel.locator(".review-card")).toHaveCount(0);
+             await expect(reviewPanel.getByText("No requirements match this readiness filter.", { exact: true })).toBeVisible();
+             await readinessFilters.getByRole("button", { name: /^Ready to review/ }).click();
+             await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
+             await readinessFilters.getByRole("button", { name: /^All / }).click();
              await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).fill("Keep this review draft");
              largeProject.requirements[0]!.statement = "Updated large requirement 0";
              largeProject.revision++;
-             await expect(reviewPanel.getByRole("button", { name: "Use note with updated requirement", exact: true })).toBeVisible();
+              await expect(reviewPanel.getByRole("button", { name: "Use note with updated requirement", exact: true })).toBeVisible();
+              await expect(reviewPanel.getByRole("region", { name: "Changes since you started reviewing", exact: true })).toContainText("Large requirement 0");
              await expect(reviewPanel.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
              await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).pressSequentially(" while stale");
              await reviewPanel.getByRole("button", { name: "Use note with updated requirement", exact: true }).click();
@@ -1923,7 +2085,8 @@ try {
    assert.equal(gapCalls, 3, "Explore reuses all three compatible lenses instead of calling the adapter again");
    assert.deepEqual(store.get(gapProject.id).requirements, gapOriginal.requirements);
    assert.deepEqual(store.get(gapProject.id).sources, gapOriginal.sources);
-   await expect(page.locator(".round-status")).toContainText("Saved gap checks reused");
+    // Completed reuse is an outcome in the queue, not current processing activity.
+    await expect(page.locator(".round-status")).toContainText("Ready when you are");
    await page.locator(".topbar .queue-trigger").click();
    const gapStatus = page.getByRole("region", { name: "Gap exploration backlog", exact: true });
    await expect(gapStatus).toContainText("3 checked"); await expect(gapStatus).toContainText("No model request made");

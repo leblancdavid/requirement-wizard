@@ -1,5 +1,6 @@
 import { requirementEvidenceIDs, requirementEvidenceIssues, reviewFingerprint, type Analysis, type Job, type Project, type Submission } from "./model.js";
-import { decisionAvailability, decisionContextKey } from "./decision-availability.js";
+import { decisionAvailability, decisionContextMatches, narrowDecisionEvidence } from "./decision-availability.js";
+import { z } from "zod";
 
 type ResolutionProposal = NonNullable<Analysis["refinements"]>[number];
 
@@ -63,7 +64,7 @@ function resolutionAreas(project: Project, ids: readonly string[]) {
   return { requirements, areas };
 }
 
-export function resolutionContextKey(project: Project, ids: readonly string[], triggerSourceIDs: readonly string[] = []): string {
+export function legacyResolutionContextKey(project: Project, ids: readonly string[], triggerSourceIDs: readonly string[] = []): string {
   const { requirements, areas } = resolutionAreas(project, ids);
   const superseded = new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
   const triggers = new Set(triggerSourceIDs);
@@ -87,6 +88,27 @@ export function resolutionContextKey(project: Project, ids: readonly string[], t
   ]);
 }
 
+const resolutionKeySchema = z.tuple([z.literal("resolution-evidence-v1"), z.array(z.tuple([z.string(), z.string()])), z.array(z.string()),
+  z.array(z.tuple([z.string(), z.boolean(), z.array(z.string())])), z.array(z.tuple([z.string(), z.string(), z.string().nullable()]))]);
+
+function narrowResolutionKey(project: Project, raw: string, triggerSourceIDs: readonly string[]) {
+  const key = resolutionKeySchema.parse(JSON.parse(raw));
+  const pinned = new Set(triggerSourceIDs);
+  for (let size = -1; size !== pinned.size;) { size = pinned.size; for (const s of project.sources) if (s.supersedes && pinned.has(s.supersedes)) pinned.add(s.id); }
+  const evidence = narrowDecisionEvidence(project, key[1], key[2], key[3].map(([id]) => id), key[4].map(([id]) => id), [], [...pinned]);
+  return JSON.stringify(["resolution-evidence-v2", key[1], evidence.sourceIDs, key[3], key[4]]);
+}
+
+export function resolutionContextKey(project: Project, ids: readonly string[], triggerSourceIDs: readonly string[] = []): string {
+  return narrowResolutionKey(project, legacyResolutionContextKey(project, ids, triggerSourceIDs), triggerSourceIDs);
+}
+
+export function resolutionContextMatches(project: Project, ids: readonly string[], savedKey: string, triggerSourceIDs: readonly string[] = []): boolean {
+  if (savedKey === resolutionContextKey(project, ids, triggerSourceIDs)) return true;
+  try { return narrowResolutionKey(project, savedKey, triggerSourceIDs) === resolutionContextKey(project, ids, triggerSourceIDs); }
+  catch { return false; }
+}
+
 export function resolutionHasWaitingInput(project: Project, proposal: Project["refinements"][number], submissions: Submission[]) {
   if (!proposal.resolution) return false;
   const ids = [proposal.requirementID, proposal.resolution.relatedRequirementID];
@@ -101,11 +123,11 @@ export function refinementStaleReason(project: Project, proposal: Project["refin
   const target = project.requirements.find((r) => r.id === proposal.requirementID);
   if (!target || !project.epics.some((e) => e.id === target.epicID && !e.archived)) return "The requirement or its feature is no longer active.";
   if (reviewFingerprint(target) !== proposal.fingerprint) return "The requirement's wording, status or supporting evidence changed.";
-  if (!proposal.resolution && proposal.decisionBasis && proposal.decisionBasis.contextKey !== decisionContextKey(project, [target.id])) return "Relevant human evidence, clarification or feature dependencies changed since this wording proposal.";
+  if (!proposal.resolution && proposal.decisionBasis && !decisionContextMatches(project, [target.id], proposal.decisionBasis.contextKey)) return "Relevant human evidence, clarification or feature dependencies changed since this wording proposal.";
   if (proposal.resolution) {
     const related = project.requirements.find((r) => r.id === proposal.resolution!.relatedRequirementID);
     if (!related || !proposal.relatedOriginal || reviewFingerprint(related) !== reviewFingerprint(proposal.relatedOriginal)) return "The other requirement's wording, status or supporting evidence changed.";
-    if (!proposal.resolutionContextKey || resolutionContextKey(project, [target.id, related.id], proposal.resolutionTriggerSourceIDs) !== proposal.resolutionContextKey) return "Human evidence, clarification answers or feature/dependency context changed since this comparison.";
+    if (!proposal.resolutionContextKey || !resolutionContextMatches(project, [target.id, related.id], proposal.resolutionContextKey, proposal.resolutionTriggerSourceIDs)) return "Human evidence, clarification answers or feature/dependency context changed since this comparison.";
   }
   return undefined;
 }
@@ -115,11 +137,11 @@ export function resolutionPairEligible(project: Project, ids: [string, string], 
   if (pairQuestions(project, ids).some((q) => ["pending", "deferred", "delegated"].includes(q.status))) return false;
   if (project.refinements.some((p) => p.resolution && p.status === "pending" && !refinementIsStale(project, p)
     && [p.requirementID, p.resolution.relatedRequirementID].some((id) => ids.includes(id)))) return false;
-  const key = (extra: string[] = []) => resolutionContextKey(project, ids, [...new Set([...(options.triggerSourceIDs ?? []), ...extra])]);
+  const current = (key: string, extra: string[] = []) => resolutionContextMatches(project, ids, key, [...new Set([...(options.triggerSourceIDs ?? []), ...extra])]);
   if (project.refinements.some((p) => p.resolution && ids.includes(p.requirementID) && ids.includes(p.resolution.relatedRequirementID)
-    && p.resolutionContextKey === key(p.resolutionTriggerSourceIDs))) return false;
+    && !!p.resolutionContextKey && current(p.resolutionContextKey, p.resolutionTriggerSourceIDs))) return false;
   return !jobs.some((j) => j.status === "completed" && j.context?.refinementPair && j.context.refinementPair.requirementIDs.every((id) => ids.includes(id))
-    && j.context.refinementPair.contextKey === key(j.context.refinementPair.triggerSourceIDs) && j.result?.resolutionCheck?.outcome !== "blocked");
+    && current(j.context.refinementPair.contextKey, j.context.refinementPair.triggerSourceIDs) && j.result?.resolutionCheck?.outcome !== "blocked");
 }
 
 export function pendingRefinementRequirementIDs(project: Project) {

@@ -30,6 +30,35 @@ every technical detail proposed in the planning documents.
 | DEC-021 | Process queued AI follow-up one submission at a time, each with its own focused revision-linked context. Do not combine the queue or include unrelated feature history solely because it shares an area. Retain exact target evidence and explicit guardrails; preserve omitted records and request wider context when needed. | User requested individual processing/contexts after repeated queue-size blockers |
 | DEC-021 | Split generated requirements by stable feature ID, keep original evidence in shared referenced files, and avoid rewriting unchanged outputs. Retain an on-demand combined specification export. | User reported large generated files and confirmed both reading/coding-agent context and disk/Git efficiency as goals after the feature-based export recommendation |
 
+## Narrower Design/Review blockers (DEC-027)
+
+Confirmed direction (2026-10-21): the user requested implementation of narrower blockers
+after the separate change-request action, so independent work need not repeatedly
+invalidate another review solely because it shares a feature.
+
+Implemented approach: target-specific change requests and newly captured explicit answer
+scopes can remain independent, with the same scope enforced at publication. Shared input,
+legacy/general notes/answers/addenda, explicit relationships and dependency guardrails
+remain conservative. Existing saved evidence/checks have read-only compatibility rather
+than reset/replay. Global discovery snapshot locking and queue pause/resume are not
+replaced by parallel feature workers. See [browser behavior](browser-workspace.md#narrower-blockers-and-bounded-answer-follow-up)
+and [compatibility](migrations.md#narrower-decision-blockers-and-scoped-answer-evidence).
+
+## Targeted requirement change requests (DEC-026)
+
+Confirmed direction (2026-10-21): the user approved adding an explicit **Request changes**
+action next, separating requested revisions from approval/rejection notes. Narrower
+feature-level blockers were implemented next under DEC-027; project-wide discovery-lock
+changes remain a separate follow-up.
+
+Implemented approach: save required feedback as a separate durable review intent;
+preserve the current approval/rejection state, propose replacements for approved
+wording, and allow target-only unapproved revisions. Requests are not permission to
+remove requirements/features or modify unrelated records. Old review addenda keep
+their original semantics and are not converted. See [browser workflow](browser-workspace.md#request-changes-without-approving-or-rejecting)
+and [compatibility](migrations.md#targeted-requirement-change-requests) for behavior and
+checks actually run. Live model compatibility for this new intent is not yet qualified.
+
 ## Reviewable implementation planning (DEC-025)
 
 Confirmed direction: discover and explain dependencies before coding, distinguish hard

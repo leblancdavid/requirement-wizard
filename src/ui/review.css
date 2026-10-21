@@ -11,3 +11,8 @@
 .item-processing-error { margin: 1rem; }
 .item-processing-error > button { float: none; font-size: inherit; }
 .item-processing-error p { color: inherit; }
+.review-clarifications, .review-comparison { margin-block: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: .5rem; min-width: 0; overflow-wrap: anywhere; }
+.review-clarifications .question-card { margin-block: .75rem; }
+.review-readiness { margin-bottom: 1rem; }
+.inline-question .question-title > button { display: none; }
+.change-request-form { margin-block: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: .5rem; }

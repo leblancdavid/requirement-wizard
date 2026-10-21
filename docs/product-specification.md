@@ -178,6 +178,16 @@ and allow editing, accepting, or rejecting proposed requirements.
 - Apply clearly requested wider changes from review addenda with linked provenance;
   ask targeted questions when scope is ambiguous. Revised wording returns to review,
   and removed features retain their records/history (DEC-020).
+- Provide a separate, required-feedback **Request changes** action without approval or
+  rejection. Preserve approved wording until a replacement is explicitly approved;
+  unapproved wording may be revised in place and remains awaiting review. Keep request
+  feedback distinct from approval/rejection notes, retain it across interrupted follow-up,
+  and reject stale or out-of-target changes. Existing addenda retain their semantics.
+- Do not block or invalidate independent same-feature decisions solely because a
+  target-bound change request or explicitly scoped queued answer is pending/processed.
+  Enforce scoped AI write boundaries rather than guessing independence; retain shared,
+  dependency, legacy/general-input, stale-evidence and worker-ownership safeguards.
+  Preserve equivalent saved review/check evidence across compatible scope-policy upgrades.
 - When a queued response completes, reconcile related items awaiting human review:
   revise unapproved wording/choices, withdraw never-approved proposals or retire
   obsolete questions when current evidence justifies it. Preserve stable IDs, original
@@ -209,7 +219,7 @@ and allow editing, accepting, or rejecting proposed requirements.
   dismissal changes neither record. Preserve both IDs, original evidence/scenarios and
   history; stale or pending human input blocks approval. Bound/checkpoint pair calls
   independently of compatible completed individual cleanup checks (DEC-022 extension).
-- Ordinary concrete answers and requirement reviews automatically check affected/new/
+- Ordinary unscoped concrete answers and approval/rejection reviews automatically check affected/new/
   changed requirements against relevant active counterparts after successful discovery.
   Include proposed/needs-review records without treating them as human decisions;
   schedule at most three strongest uncached candidate pairs per response and disclose

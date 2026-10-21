@@ -19,7 +19,7 @@ export function resolvedReviewAttempts(project: Project, submissions: Submission
   const activeAreas = new Set(project.epics.filter((e) => !e.archived).map((e) => e.id));
   const successful = new Map<string, { item: Submission; index: number }>();
   submissions.forEach((item, index) => {
-    if (item.projectID !== project.id || item.input.type !== "review" || !item.applied || item.conflict || item.status !== "completed" || !item.appliedSourceID || item.overlapFollowup?.state === "pending") return;
+    if (item.projectID !== project.id || item.input.type !== "review" || item.input.action === "changes-requested" || !item.applied || item.conflict || item.status !== "completed" || !item.appliedSourceID || item.overlapFollowup?.state === "pending") return;
     const input = item.input, target = requirements.get(input.requirementID);
     const source = sources.get(item.appliedSourceID);
     if (!target || target.status !== input.action || !activeAreas.has(target.epicID)

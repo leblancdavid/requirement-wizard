@@ -27,6 +27,145 @@ Verification: type check, all 451 deterministic tests, UI build and full browser
 checks passed on Node 22.23.3. Browser checks include separate answer/local sections,
 live local-checkpoint updates without main credit and mobile progress layout.
 
+## Moving between Design and Review
+
+Design and Review are views of the same evolving specification, not sequential gates.
+Review remains available while Design has open questions. **To review** shows scoped
+readiness counts/filters: **Ready to review**, **Needs a decision**, **Updating**,
+**Changed since review**, and **Needs attention**. The initial expanded card prefers
+ready work on the current page; a selected card stays open as its information changes.
+All items remain accessible with **All**. These labels describe deterministic decision
+availability, not semantic completeness or implementation readiness.
+
+Explicitly linked pending/deferred/delegated clarification questions can be answered
+inside expanded requirement and refinement/resolution cards using the existing Design
+editor, options, advisory help, draft handling and durable answer submission. Design
+links remain available. A queued answer displays its processing state instead of a
+second editor. Approval is disabled while an explicitly linked choice is unresolved;
+reading, notes and rejection remain available under the existing safety rules.
+**Process blocking input** resumes the actual blocking submissions'
+feature scope, even if a linked question belongs to another feature; blockers spanning
+multiple features resume the project queue. Automatic-processing preferences still apply.
+
+An opened Review requirement captures a transient copy of its displayed wording,
+scenarios and evidence basis, even before a note is typed. When relevant information
+changes, the card retains the note, displays previous wording/scenarios or explains a
+context-only change, and lists new relevant supporting evidence. Existing explicit
+**Use note with updated requirement** acknowledgement is required before resubmitting.
+This is a comparison with the current browser review, not a reconstructed historical
+snapshot or an exhaustive semantic evidence diff. Reloading clears these transient drafts
+and comparisons; durable submitted notes/history remain recoverable as before.
+
+Approval/rejection still require current evidence, worker ownership and transactional
+storage checks. No approval is automatically reapplied after an answer. Targeted change
+requests and the narrower scope rules below avoid treating independent input as a
+feature-wide blocker. Independent specification publication during discovery remains
+future work.
+No data migration or inference replay is required; see [the migration ledger](migrations.md#inline-review-clarifications-and-readiness).
+Verification (2026-10-21): type check, all **466 deterministic tests**, UI build,
+full `npm run test:browser`, terminal/spike help smoke checks and diff checks passed
+on Node 22.23.3. Browser coverage includes inline clarification → explicit processing
+→ retained note/context comparison, linked-choice approval blocking without blocking
+rejection, readiness filtering over 500 requirements, previous-wording comparison and
+Project map note recovery after viewing Review without typing. The previously stale
+processing-header test now expects the documented **Ready when you are** idle state;
+completed no-call-reuse evidence remains checked in the queue. No live model calls
+were made. The approximately 531 kB Vite chunk warning remains non-blocking.
+
+## Request changes without approving or rejecting
+
+Expanded active requirements in Review and Project map offer **Request changes** with
+a separate, required **Requested changes** editor. **Send change request** saves that
+exact feedback as its own durable review intent; it never also approves/rejects the
+requirement or submits the separate optional approval/rejection note. Draft feedback
+survives closing/reopening the editor, paging, and explicit acknowledgement of updated
+context within the current workspace. Reload still clears unsent drafts.
+
+The existing automatic-processing preference applies. With automatic processing off,
+use **Explore next gaps** to process the saved request. While running, current worker,
+pending-input and relevant-evidence checks remain enforced. Linked unanswered Design
+questions do not themselves block a request for a revision; they still block approval.
+Stale/conflicted feedback is retained for an explicit new submission, not auto-applied.
+
+Follow-up is target-specific:
+
+- An unapproved requirement can be revised in place, preserving its ID/evidence and
+  remaining unapproved.
+- An approved requirement keeps its existing wording and approval; its replacement is
+  proposed under **To review / Refinements**. Compare **Saved change requests** and
+  explicitly approve the replacement or keep current wording.
+- Ambiguous intent can produce a linked clarification or an explanation of what remains
+  open. The app does not manufacture a design answer or require a cosmetic revision.
+- Requests cannot withdraw/reject requirements, archive features, revise unrelated
+  items, reorganize the project or change global interpretation. Broader changes need
+  their existing explicit decision paths. No automatic pair-check run is added solely
+  for a change request.
+
+History and Processing & queue distinguish **Changes requested · no approval or
+rejection** from actual decisions. A failed follow-up retries without creating a second
+feedback source. Completed requests and original notes survive reopening without model
+replay. Existing approval/rejection addenda retain their earlier semantics; they are not
+silently reclassified. See [upgrade compatibility](migrations.md#targeted-requirement-change-requests).
+
+Verification (2026-10-21): type check, all **479 deterministic tests**, UI build,
+full browser checks, terminal/spike help smoke checks and diff checks passed on
+Node 22.23.3. Browser checks exercise separate Project map feedback drafts, required
+feedback, cancel/reopen retention, updated-context acknowledgement without losing either
+editor's text, unapproved revision, unchanged approved wording until explicit replacement
+approval, saved-request comparison/history and mobile layout. Screenshots:
+`.reqwizit-state/browser-change-request-proposed.png` and
+`.reqwizit-state/browser-change-request-approved.png`. No live model calls were made;
+live generation for this intent is not yet qualified. The existing approximately 536 kB
+Vite chunk warning remains non-blocking.
+
+## Narrower blockers and bounded answer follow-up
+
+Sharing a feature no longer automatically makes **targeted** work a blocker for every
+requirement there:
+
+- **Request changes** affects its target, explicit shared-question/source relationships,
+  and dependent/shared areas, not an independent same-feature sibling.
+- Newly queued answers can carry a server-captured **targeted answer scope** when the
+  question explicitly cites only active requirement IDs in its own non-shared feature
+  (at most eight, including known consumers of earlier answers). Corrections remain
+  targeted only when the prior answer has matching scoped provenance. Direct legacy
+  answer paths and older unscoped responses are not retroactively reclassified.
+- Unlinked/source-only questions, project/shared questions, general notes and legacy
+  approval/rejection addenda remain conservative. Shared clarifications, explicit source
+  ownership, dependencies, target changes and pending pair comparisons still block the
+  affected decisions. No lexical/AI independence guess authorizes a decision.
+
+For scoped answers the exact linked requirements enter mandatory context. Runtime
+schemas/prompts and transactional publication limit follow-up to those records and
+eligible linked questions/replacement proposals. It cannot create unrelated requirements,
+retire questions, change shared/project interpretation or organize other features. New
+clarifications stay in the original feature and link a target. Broader human requests
+remain saved verbatim; follow-up explains that they need **Add information** rather than
+silently applying them. Design, inline Review questions and Processing & queue identify
+targeted answer scope. Deferral/delegation still cannot establish a confirmed preference.
+
+An independent review can be queued while scoped inference runs and apply afterwards
+without another human submission when its own evidence is unchanged. Direct writes still
+wait for every live discovery/scan worker, including another process: jobs still publish
+against a whole-project revision. Failure/manual pause remains a queue-level pause and
+requires explicit resume; it does not authorize automatic inference retries. A failed
+scoped response alone is not an unrelated requirement's decision blocker.
+
+New evidence/check keys are scope-aware. Older review bases, proposals, pair verdicts and
+individual no-change checks retain original provenance and can be reused when equivalent,
+without redoing model calls solely for this workflow change. See [the compatibility
+ledger](migrations.md#narrower-decision-blockers-and-scoped-answer-evidence) for formats,
+legacy snapshot verification and conservative missing-provenance handling. Saved outcomes
+are not upgraded into proof of semantic consistency or project readiness.
+
+Verification (2026-10-21, Node 22.23.3): all **491 deterministic tests**, full browser
+checks and the UI build passed. The browser scenario verifies targeted scope notices,
+independent same-feature readiness, manual processing preferences, a review queued during
+scoped inference, and application afterwards without resubmission. Screenshot:
+`.reqwizit-state/browser-narrow-blockers.png`. Type checking and all **31 decision-
+availability tests** passed again after the final scope-capture optimization. No live
+model calls were made. The approximately 542 kB Vite chunk warning remains non-blocking.
+
 ## Typing in Design and Review
 
 Design question cards and Review requirement/refinement cards now display their own
@@ -35,7 +174,8 @@ follow-up stays in **To review** even if its decision was already applied. Its
 **Resume discovery** action retries follow-up, not the human decision; scope follows
 the selected feature, and the existing queue remains available for diagnostics.
 Unapplied conflicting reviews show the current blocker and **Open blocking clarification
-in Design** directly on the requirement. Answer with **My answer**, process follow-up,
+in Design** directly on the requirement; expanded cards also offer inline clarification
+answers. Answer with **My answer**, process follow-up,
 then review and resubmit the retained decision/note. Deferral/delegation does not settle
 that choice. If the blocker has cleared, the card says so instead of treating a saved
 historical diagnostic as the current state. No decision is automatically reapplied.

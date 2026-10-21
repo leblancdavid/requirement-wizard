@@ -13,7 +13,8 @@ export function reviewUpdateFor(project: Project, recordType: ReviewUpdate["reco
  * verdict. The queue includes a candidate only if its complete context fits. */
 export function reconciliationCandidates(project: Project, item: Submission, submissions: Submission[]): string[] {
   const input = item.input;
-  if (input.type === "review" && !input.note.trim() || input.type === "answer" && input.answer.kind !== "answer") return [];
+  if (item.answerScope) return []; // Exact targets are mandatory; do not add unrelated optional reconciliation candidates.
+  if (input.type === "review" && (input.action === "changes-requested" || !input.note.trim()) || input.type === "answer" && input.answer.kind !== "answer") return [];
   const question = input.type === "answer" ? project.questions.find((q) => q.id === input.questionID) : undefined;
   const requirement = input.type === "review" ? project.requirements.find((r) => r.id === input.requirementID) : undefined;
   const area = input.type === "note" ? input.epicID : question?.epicID ?? requirement?.epicID;
