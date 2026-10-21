@@ -77,6 +77,32 @@ test("activity API returns bounded filtered pages, validates cursors and keeps a
   } finally { await app.close(); store.close(); }
 });
 
+test("archive-review-attempt API authenticates history-only cleanup and rejects stale or cross-project actions", async () => {
+  const store = new ProjectStore(":memory:");
+  let project = store.create("Archive reviews", "Keep original feedback", { providerID: "openai", modelID: "fixture" });
+  const seed = store.beginJob(project.id, project.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+  store.finishJob(seed.id, { summary: "Archive", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [{ statement: "Preserve saved input", rationale: "Original intent", acceptance: ["Input remains available"], sourceIDs: [project.sources[0]!.id] }] });
+  project = store.get(project.id);
+  store.enqueue(project.id, { id: randomUUID(), auto: false, research: false, input: { type: "note", epicID: "project", text: "Pending constraint" } });
+  const r = project.requirements[0]!;
+  const attempt = store.enqueue(project.id, { id: randomUUID(), auto: false, research: false, input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "Keep this exact note" } });
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { assert.fail("Archive must never run inference"); } } });
+  try {
+    const url = `${app.origin}/api/projects/${project.id}/archive-review-attempt`, body = { revision: project.revision, submissionID: attempt.id };
+    const post = (value: unknown, headers: Record<string, string> = { "X-Reqwizit-Token": app.token, Origin: app.origin }) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(value) });
+    assert.equal((await post(body, {})).status, 403);
+    assert.equal((await post(body, { "X-Reqwizit-Token": app.token, Origin: "https://untrusted.example" })).status, 403);
+    assert.equal((await post({ ...body, revision: project.revision - 1 })).status, 409);
+    assert.equal((await post({ ...body, applied: true })).status, 400);
+    const response = await post(body); assert.equal(response.status, 200);
+    const archived = await response.json(); assert.equal(archived.status, "superseded"); assert.equal(archived.input.note, "Keep this exact note");
+    assert.deepEqual(await (await post(body)).json(), archived, "Repeated request keeps the original archive timestamp");
+    const other = store.create("Other", "Other scope", project.model);
+    assert.equal((await fetch(`${app.origin}/api/projects/${other.id}/archive-review-attempt`, { method: "POST", headers: { "Content-Type": "application/json", "X-Reqwizit-Token": app.token, Origin: app.origin }, body: JSON.stringify({ revision: other.revision, submissionID: attempt.id }) })).status, 400);
+    assert.deepEqual(store.get(project.id), project);
+  } finally { await app.close(); store.close(); }
+});
+
 test("execution ownership holds automatic discovery while submissions and advisory help remain available", async (t) => {
   const store = new ProjectStore(":memory:");
   let project = store.create("Concurrent work", "Save work", { providerID: "openai", modelID: "fixture" });

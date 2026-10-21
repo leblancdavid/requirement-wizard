@@ -290,6 +290,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (action === "cancel") { z.object({}).strict().parse(raw); queue.stop(id); json(res, 200, { cancelled: queue.isActive(id) }); return; }
       if (action === "submit") { json(res, 202, queue.submit(id, raw)); return; }
+      if (action === "archive-review-attempt") {
+        const input = z.object({ revision, submissionID: z.string().min(1).max(200) }).strict().parse(raw);
+        json(res, 200, options.store.archiveReviewAttempt(id, input.revision, input.submissionID)); return;
+      }
       if (action === "answer") {
         const input = z.object({ revision, questionID: z.string(), answer: answerSchema }).strict().parse(raw);
         json(res, 200, options.store.answer(id, input.revision, input.questionID, input.answer)); return;

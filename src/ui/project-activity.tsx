@@ -7,8 +7,9 @@ import "./project-activity.css";
 const labels: Record<ActivityType, string> = { decisions: "Decisions", discovery: "Discovery", implementation: "Implementation", problems: "Problems", technical: "Technical" };
 type Request = <T>(path: string, body?: unknown, signal?: AbortSignal) => Promise<T>;
 
-export function ProjectActivityFeed({ projectID, feature, updateToken, request, openFeature, activeFeatureIDs }: {
+export function ProjectActivityFeed({ projectID, feature, updateToken, request, openFeature, activeFeatureIDs, openIssue, openRequirement }: {
   projectID: string; feature: string; updateToken: string; request: Request; openFeature: (id: string) => void; activeFeatureIDs: string[];
+  openIssue?: (id: string) => void; openRequirement?: (id: string) => void;
 }) {
   const [view, setView] = useState<"highlights" | "all">("highlights");
   const [type, setType] = useState("");
@@ -59,11 +60,13 @@ export function ProjectActivityFeed({ projectID, feature, updateToken, request, 
       {!data.entries.length && <div className="empty-card"><h3>No matching activity.</h3><p>Try All activity, another type or feature, or clear your search.</p></div>}
       <div className="activity-entries">{data.entries.map((entry) => <article className={`activity-entry ${entry.type}`} key={entry.id}>
         <span className="badge">{labels[entry.type]}</span><h3>{entry.title}</h3><p>{entry.summary}</p>
+        {entry.changes.filter((change) => change.label === "saved response").map((change) => openIssue && <button key={change.id} type="button" className="secondary" onClick={() => openIssue(change.id)}>View &amp; resolve</button>)}
         {!!entry.features.length && <small>{entry.features.map((f) => f.title).join(" · ")}</small>}
         <LazyDetails summary="View changes & details">{() => <>
           <p><small>{entry.revision === undefined ? "Specification revision not recorded" : `Specification revision ${entry.revision}`}{entry.at ? ` · ${entry.atLabel ?? "Started"} ${new Date(entry.at).toLocaleString()}` : " · Date not recorded"}</small></p>
           <p className="source-excerpt">{entry.reason}</p>
           {entry.features.filter((f) => activeFeatureIDs.includes(f.id)).map((f) => <button key={f.id} className="quiet" onClick={() => openFeature(f.id)}>View current feature: {f.title} →</button>)}
+          {entry.changes.filter((change) => change.label === "requirement").map((change) => openRequirement && <button key={change.id} type="button" className="secondary" onClick={() => openRequirement(change.id)}>View current requirement · {change.id}</button>)}
           {entry.changes.map((change, index) => <LazyDetails key={`${change.id}:${index}`} summary={<>{change.label} · {change.id}</>}>{() => <div className="activity-comparison">{change.before !== undefined && <section><h4>Before</h4><p className="source-excerpt">{change.before}</p></section>}{change.after !== undefined && <section><h4>{change.before === undefined ? "Added / recorded" : "After"}</h4><p className="source-excerpt">{change.after}</p></section>}{change.after === undefined && <p>Removed from this revision.</p>}</div>}</LazyDetails>)}
         </>}</LazyDetails>
       </article>)}</div>

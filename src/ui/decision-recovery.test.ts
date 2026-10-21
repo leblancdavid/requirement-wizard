@@ -6,6 +6,7 @@ import { projectSchema, reviewFingerprint, type Submission } from "../core/model
 import { decisionAvailability } from "../core/decision-availability.js";
 import { ItemProcessingNotice, RetainedReviewNotice } from "./decision-recovery.js";
 import { ReviewQueue, pendingReviews } from "./review.js";
+import { AttentionInbox, attentionGroups, attentionSummary } from "./attention.js";
 
 test("item errors show saved diagnostics and distinguish follow-up retry from decision conflicts", () => {
   const { submission } = fixture();
@@ -120,4 +121,49 @@ test("retained change requests recover feedback without presenting it as approva
   const queue = renderToStaticMarkup(createElement(ReviewQueue, { project, submissions: [submission], epicID: "all", sending: [], disabled: false, submit: async () => false, refine: () => {}, reviewRefinement: async () => false }));
   assert.match(queue, /Request changes/);
   assert.match(queue, /<textarea[^>]*><\/textarea>/, "Change-request feedback must not prefill approval/rejection notes");
+});
+
+test("attention inbox groups stable targets, preserves distinct notes and shows current rather than historical blockers", () => {
+  const { project, submission } = fixture();
+  const repeated = { ...structuredClone(submission), id: "repeat" };
+  const otherProject = { ...structuredClone(submission), id: "foreign", projectID: "another" };
+  const archived: Submission = { ...structuredClone(submission), id: "archived", status: "superseded", archivedAt: "2026-10-21T12:00:00Z" };
+  const items = [submission, repeated, otherProject, archived];
+  const before = structuredClone(items);
+  assert.equal(attentionGroups(project, items).length, 1);
+  assert.deepEqual(attentionGroups(project, items)[0]!.attempts.map((s) => s.id), [submission.id, repeated.id]);
+  assert.match(attentionSummary(project, items, repeated)!, /earlier blocker has cleared/);
+  const html = renderToStaticMarkup(createElement(AttentionInbox, { project, submissions: items, open: () => assert.fail("Explicit action required") }));
+  assert.equal((html.match(/View &amp; resolve/g) ?? []).length, 1);
+  assert.match(html, /2 saved attempts/);
+  assert.ok(!html.includes("Answer the linked clarification in Design"));
+  project.questions[0]!.status = "pending";
+  assert.match(attentionSummary(project, items, repeated)!, /Which behavior should be preserved/);
+  assert.deepEqual(items, before, "Grouping never rewrites or drops human notes");
+});
+
+test("focused recovery opens the exact reviewed requirement beyond 600 items regardless of feature and status filters", () => {
+  const { project, submission } = fixture();
+  const target = project.requirements[0]!;
+  target.status = "accepted";
+  project.requirements = [...Array.from({ length: 650 }, (_, i) => ({ ...target, id: `other-${i}`, statement: `Other reviewed behavior ${i}` })), target];
+  project.questions[0]!.status = "pending";
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project, submissions: [submission], epicID: "unrelated", focusRequirementID: target.id, sending: [], disabled: false,
+    submit: async () => assert.fail("Rendering must not submit"), refine: () => {}, reviewRefinement: async () => false, renderClarification: (q) => createElement("p", {}, `Inline answer: ${q.text}`) }));
+  assert.match(html, /Requested behavior/);
+  assert.match(html, /Observable outcome/);
+  assert.match(html, /Inline answer: Which behavior should be preserved/);
+  assert.ok(!html.includes("Other reviewed behavior"));
+  assert.ok(!html.includes("Review filters"));
+  assert.ok(!html.includes("Item processing error"), "Old failure text is history, not the current blocker");
+  assert.match(html, /Current blocker:/);
+});
+
+test("attention paging bounds large inboxes and never merges different IDs with identical text", () => {
+  const { project, submission } = fixture();
+  const items = Array.from({ length: 600 }, (_, index): Submission => ({ ...submission, id: `attempt-${index}`, input: { ...submission.input, type: "review", requirementID: `requirement-${index}`, requirementText: "Identical wording", fingerprint: "legacy", action: "accepted", note: "" } }));
+  assert.equal(attentionGroups(project, items).length, 600);
+  const html = renderToStaticMarkup(createElement(AttentionInbox, { project, submissions: items, open: () => {} }));
+  assert.match(html, /600 items/);
+  assert.equal((html.match(/View &amp; resolve/g) ?? []).length, 25);
 });

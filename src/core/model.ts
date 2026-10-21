@@ -235,6 +235,8 @@ export type Submission = z.infer<typeof submissionSchema> & {
   applied: boolean; appliedSourceID?: string; conflict?: boolean; submittedAt: string; jobID?: string; diagnostic?: string;
   /** Exact immutable revision that first applied this input; absent on older saved submissions. */
   appliedRevision?: number;
+  /** Explicit archive of an unapplied conflicting review; original diagnostic/input remain intact. */
+  archivedAt?: string;
   response?: string;
   /** Server-captured evidence at submission/reviewed revision; absent on legacy submissions. */
   decisionBasis?: z.infer<typeof decisionBasisSchema>;

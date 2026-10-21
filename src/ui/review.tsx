@@ -12,6 +12,7 @@ import { ReviewUpdateNotice } from "./review-update.js";
 import { reviewUpdateFor } from "../core/review-completion.js";
 import { ClarificationLinks, ItemProcessingNotice, RetainedReviewNotice } from "./decision-recovery.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
+import { AttentionInbox } from "./attention.js";
 
 export function pendingReviews(project: Project, submissions: Submission[]) {
   const waiting = new Set(submissions.filter((s) => s.input.type === "review" && ["queued", "saved", "processing"].includes(s.status)).map((s) => s.input.type === "review" ? s.input.requirementID : ""));
@@ -26,7 +27,7 @@ type ReviewFilter = "pending" | "refinements" | "submitted" | "reviewed";
 type ReviewItem = { id: string; kind: "requirement"; requirement: Project["requirements"][number] }
   | { id: string; kind: "refinement"; refinement: Project["refinements"][number] };
 
-type ReviewDraft = { note: string; changeNote?: string; edited?: boolean; fingerprint: string; contextKey: string; revision: number; original?: Project["requirements"][number]; evidenceIDs?: string[] };
+export type ReviewDraft = { note: string; changeNote?: string; edited?: boolean; fingerprint: string; contextKey: string; revision: number; original?: Project["requirements"][number]; evidenceIDs?: string[] };
 
 function reviewDraft(project: Project, requirement: Project["requirements"][number], note: string): ReviewDraft {
   return { note, fingerprint: reviewFingerprint(requirement), contextKey: decisionContextKey(project, [requirement.id]), revision: project.revision, original: structuredClone(requirement), evidenceIDs: decisionEvidenceSources(project, [requirement.id]).map((s) => s.id) };
@@ -141,7 +142,7 @@ function DuplicateRemoval({ project, submissions, jobs, removeID, keepID, disabl
     : <ActionButton className="secondary" disabled={disabled} onClick={() => setOpen(true)}>Remove as duplicate…</ActionButton>;
 }
 
-export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, renderClarification, processBlocking, visible: isVisible = true, itemErrors = {}, resume }: {
+export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, renderClarification, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, openIssue, draftStore }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
   disabled: boolean; disabledReason?: string; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
@@ -151,11 +152,14 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   processBlocking?: (submissionIDs: string[]) => void;
   visible?: boolean;
   itemErrors?: Record<string, string>; resume?: () => void;
+  focusRequirementID?: string; openIssue?: (submissionID: string) => void;
+  draftStore?: React.MutableRefObject<Record<string, ReviewDraft>>;
 }) {
   const [filter, setFilter] = useState<ReviewFilter>("pending");
   const [readinessFilter, setReadinessFilter] = useState<ReviewReadiness | "all">("all");
   const [expanded, setExpanded] = useState<string | null | undefined>(undefined);
-  const drafts = useRef<Record<string, ReviewDraft>>({});
+  const localDrafts = useRef<Record<string, ReviewDraft>>({});
+  const drafts = draftStore ?? localDrafts;
   const [, refreshDrafts] = useState(0);
   const [message, setMessage] = useState("");
   const [recoveryTarget, setRecoveryTarget] = useState<string>();
@@ -166,7 +170,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
     if (saved) setMessage("Duplicate removed from active requirements. The surviving requirement is unchanged; the removed record and its history remain under Reviewed. No AI call was made.");
     return saved;
   });
-  const scoped = (id: string) => epicID === "all" || project.requirements.find((r) => r.id === id)?.epicID === epicID;
+  const scoped = (id: string) => id === focusRequirementID || epicID === "all" || project.requirements.find((r) => r.id === id)?.epicID === epicID;
   const pending = reviewItems(project, submissions, "pending", epicID);
   // A matching refinement normally hides its original card. Explicit recovery
   // must still open the requirement so its retained review note can be edited.
@@ -183,12 +187,13 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
     return [item.id, reviewReadiness(project, item, submissions, jobs, changed)] as const;
   }));
   const readiness = (item: ReviewItem) => readinessByID.get(item.id) ?? reviewReadiness(project, item, submissions, jobs);
-  const visible = filter === "pending" ? pending.filter((item) => readinessFilter === "all" || readiness(item) === readinessFilter) : filter === "refinements" ? refinements : filter === "reviewed" ? reviewed : [];
-  const history = (filter === "submitted" ? submitted : filter === "reviewed" ? reviews.filter((s) => s.status === "completed" || resolvedAttempts.has(s.id)) : []).slice().reverse();
+  const focused = project.requirements.find((r) => r.id === focusRequirementID);
+  const visible: ReviewItem[] = focusRequirementID ? [...(focused ? [{ id: `requirement:${focused.id}`, kind: "requirement" as const, requirement: focused }] : []), ...project.refinements.filter((p) => p.status === "pending" && (p.requirementID === focusRequirementID || p.resolution?.relatedRequirementID === focusRequirementID)).map((refinement): ReviewItem => ({ id: `refinement:${refinement.id}`, kind: "refinement", refinement }))] : filter === "pending" ? pending.filter((item) => readinessFilter === "all" || readiness(item) === readinessFilter) : filter === "refinements" ? refinements : filter === "reviewed" ? reviewed : [];
+  const history = focusRequirementID ? [] : (filter === "submitted" ? submitted : filter === "reviewed" ? reviews.filter((s) => s.status === "completed" || resolvedAttempts.has(s.id)) : []).slice().reverse();
   const paging = usePagination([...visible.map((item) => item.id), ...history.map((s) => `submission:${s.id}`)], `${project.id}:${epicID}:${filter}:${readinessFilter}`, expanded);
   const pageItems = visible.slice(paging.start, paging.end);
   const pageHistory = history.slice(Math.max(0, paging.start - visible.length), Math.max(0, paging.end - visible.length));
-  const active = expanded === null ? null : pageItems.some((r) => r.id === expanded) ? expanded : ["pending", "refinements"].includes(filter) ? (pageItems.find((item) => readiness(item) === "ready") ?? pageItems[0])?.id : null;
+  const active = expanded === null ? null : pageItems.some((r) => r.id === expanded) ? expanded : focusRequirementID ? pageItems[0]?.id : ["pending", "refinements"].includes(filter) ? (pageItems.find((item) => readiness(item) === "ready") ?? pageItems[0])?.id : null;
   useEffect(() => { if (expanded === undefined && active) setExpanded(active); }, [active, expanded]);
   const related = useMemo(() => relatedRequirements(project, active?.startsWith("requirement:") ? active.slice("requirement:".length) : ""), [project.requirements, active]);
   const list = useRef<HTMLDivElement>(null);
@@ -207,15 +212,17 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
     return <section className="review-clarifications" aria-label="Decisions needed before approval"><h4>{questions.length} {questions.length === 1 ? "decision" : "decisions"} needed before approval</h4><p>Answer here without leaving Review. After processing, check the updated requirement and explicitly approve it. Deferring or delegating does not settle this choice.</p>{questions.map((q) => <React.Fragment key={q.id}>{captureAnswerScope(project, q.id) && <p className="save-notice">This answer's queued follow-up is limited to its {captureAnswerScope(project, q.id)!.requirementIDs.length} linked requirements. Use Add information in Design for broader constraints.</p>}{renderClarification(q)}</React.Fragment>)}</section>;
   };
   return <ActionScope reason={disabledReason}><section aria-label="Requirement review">
-    <div className="review-toolbar">
+    {!focusRequirementID && openIssue && <AttentionInbox project={project} submissions={submissions} jobs={jobs} open={openIssue} />}
+    {!focusRequirementID && <><div className="review-toolbar">
       <p className="view-intro">Review at any time; unrelated open Design questions do not block approval. Answer linked clarifications here or in Design. Refine requirements checks wording and possible duplicates/conflicts. Approved requirements stay unchanged until you approve a replacement or resolution.</p>
       <ActionButton className="secondary" disabled={disabled} onClick={() => refine()}>Refine requirements</ActionButton>
       {saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} disabled={disabled} save={saveDuplicate} />}
     </div>
     <div className="filter-row" aria-label="Review filters">{([ ["pending", "To review", pending.length], ["refinements", "Refinements", refinements.length], ["submitted", "Submitted", submitted.length], ["reviewed", "Reviewed", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { setFilter(key); setExpanded(undefined); }}>{label} <span>{count}</span></button>)}</div>
-    {filter === "pending" && <div className="filter-row review-readiness" aria-label="Review readiness"><button aria-pressed={readinessFilter === "all"} onClick={() => { setReadinessFilter("all"); setExpanded(undefined); }}>All <span>{pending.length}</span></button>{(Object.keys(readinessLabels) as ReviewReadiness[]).map((state) => <button key={state} aria-pressed={readinessFilter === state} onClick={() => { setReadinessFilter(state); setExpanded(undefined); }}>{readinessLabels[state]} <span>{pending.filter((item) => readiness(item) === state).length}</span></button>)}</div>}
+    {filter === "pending" && <div className="filter-row review-readiness" aria-label="Review readiness"><button aria-pressed={readinessFilter === "all"} onClick={() => { setReadinessFilter("all"); setExpanded(undefined); }}>All <span>{pending.length}</span></button>{(Object.keys(readinessLabels) as ReviewReadiness[]).map((state) => <button key={state} aria-pressed={readinessFilter === state} onClick={() => { setReadinessFilter(state); setExpanded(undefined); }}>{readinessLabels[state]} <span>{pending.filter((item) => readiness(item) === state).length}</span></button>)}</div>}</>}
+    {focusRequirementID && !focused && <p role="status">This requirement is no longer available. Its saved attempts remain in history.</p>}
     {message && <p className="save-notice" role="status">{message}</p>}
-    {!visible.length && filter !== "submitted" && <div className="empty-card"><h3>{filter === "pending" ? pending.length ? "No requirements match this readiness filter." : "No requirements waiting for review." : filter === "refinements" ? "No refinements waiting for review." : "No reviewed requirements yet."}</h3><p>{filter === "pending" && pending.length ? "Choose All to see requirements needing decisions or processing." : filter === "refinements" ? "Use Refine requirements to check existing wording. Approved and kept-current decisions appear under Reviewed." : "Check Submitted for AI responses and processing status, or explore the next gaps."}</p></div>}
+    {!focusRequirementID && !visible.length && filter !== "submitted" && <div className="empty-card"><h3>{filter === "pending" ? pending.length ? "No requirements match this readiness filter." : "No requirements waiting for review." : filter === "refinements" ? "No refinements waiting for review." : "No reviewed requirements yet."}</h3><p>{filter === "pending" && pending.length ? "Choose All to see requirements needing decisions or processing." : filter === "refinements" ? "Use Refine requirements to check existing wording. Approved and kept-current decisions appear under Reviewed." : "Check Submitted for AI responses and processing status, or explore the next gaps."}</p></div>}
     <Pagination paging={paging} label="Review" onNavigate={() => setExpanded(undefined)} />
     <div ref={list}>{pageItems.map((item) => {
       if (item.kind === "refinement") {
@@ -295,7 +302,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
         return false;
       };
       return <article className="question-card review-card" key={item.id}>
-        <ItemProcessingNotice submission={latest && !resolvedAttempts.has(latest.id) ? latest : undefined} error={itemErrors[`review:${r.id}`]} resume={resume} disabled={disabled} />
+        <ItemProcessingNotice submission={latest && (!focusRequirementID || !latest.conflict) && !resolvedAttempts.has(latest.id) ? latest : undefined} error={itemErrors[`review:${r.id}`]} resume={resume} disabled={disabled} />
         {latest && !resolvedAttempts.has(latest.id) && <RetainedReviewNotice project={project} submissions={submissions} jobs={jobs} submission={latest} openQuestion={openQuestion} resume={processBlocking ? () => processBlocking(availability.submissionIDs) : resume} disabled={disabled} reviewCurrent={() => {
           if (latest.input.type !== "review") return;
           drafts.current[r.id] ??= reviewDraft(project, r, latest.input.action === "changes-requested" ? "" : latest.input.note);

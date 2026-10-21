@@ -40,6 +40,36 @@ function note(p: Project, epicID: string): Submission {
     input: { type: "note", epicID, text: "New constraint" } };
 }
 
+test("archiving legacy conflicting reviews preserves original evidence across reopen, retry and failed writes", () => {
+  const directory = mkdtempSync(resolve(".reqwizit-state/archive-upgrade-"));
+  const path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = seed(store);
+    const waiting = store.enqueue(p.id, { id: randomUUID(), auto: false, research: false, input: note(p, "project").input });
+    const attempt = store.enqueue(p.id, review(p));
+    assert.equal(attempt.status, "needs-attention");
+    const original = structuredClone(attempt), before = store.get(p.id);
+    assert.throws(() => store.archiveReviewAttempt(p.id, p.revision - 1, attempt.id), /changed|revision/i);
+    assert.deepEqual(store.submissions(p.id).find((s) => s.id === attempt.id), original);
+    assert.throws(() => store.archiveReviewAttempt(p.id, p.revision, waiting.id), /Only an unapplied/);
+    const archived = store.archiveReviewAttempt(p.id, p.revision, attempt.id);
+    assert.equal(archived.status, "superseded");
+    assert.ok(archived.archivedAt);
+    assert.deepEqual({ ...archived, status: original.status, archivedAt: undefined }, { ...original, archivedAt: undefined });
+    assert.deepEqual(store.get(p.id), before, "Archiving does not change the specification or sources");
+    assert.deepEqual(decisionAvailability(before, [before.requirements[0]!.id], store.submissions(p.id)).submissionIDs, [waiting.id], "The real pending input remains a blocker");
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.archiveReviewAttempt(p.id, p.revision, attempt.id), archived, "Retry after reopen is idempotent");
+    const unsafe = structuredClone(original); unsafe.applied = true; store.saveSubmission(unsafe);
+    assert.throws(() => store.archiveReviewAttempt(p.id, p.revision, unsafe.id), /Only an unapplied/);
+    unsafe.applied = false; unsafe.conflict = false; store.saveSubmission(unsafe);
+    assert.throws(() => store.archiveReviewAttempt(p.id, p.revision, unsafe.id), /Only an unapplied/);
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.submissions(p.id).find((s) => s.id === unsafe.id), unsafe, "Rejected archive writes survive repeated startup unchanged");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("decision availability follows transitive dependencies, shared input and explicit cross-feature links, not independent features", () => {
   const store = new ProjectStore(":memory:");
   try {

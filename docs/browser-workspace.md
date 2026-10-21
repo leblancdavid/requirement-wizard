@@ -29,6 +29,55 @@ live local-checkpoint updates without main credit and mobile progress layout.
 
 ## Moving between Design and Review
 
+### Find and resolve processing problems
+
+**Needs attention** in Review and **Processing & queue** is an all-project inbox,
+grouped by stable requirement/question ID (notes remain separate). Its count is
+affected items, not failed attempts. Entries show the current wording and current
+decision blocker; previously saved diagnostics do not establish today's blocker.
+The inbox and attempt history are paginated.
+
+**View & resolve** opens the exact item in a focused dialog, bypassing feature,
+review-status and page filters without changing the underlying view. It shows current
+wording, acceptance scenarios, evidence, linked clarification editors, processing and
+review/change-request actions using the existing Review checks. Related pending
+refinements/resolutions are available in the same focused view. Problem activity entries
+for saved responses offer the same shortcut; requirement changes in activity details
+offer **View current requirement**. Job/execution-level problems retain their existing
+queue/implementation recovery paths rather than inventing a requirement target.
+
+Answer the clarification, use **Process blocking input** when automatic processing is
+off, then review the updated information and explicitly submit a new decision. The
+dialog does not automatically retry inference or reapply an old approval/rejection.
+Review drafts survive closing/reopening the resolver within the current browser
+workspace; reload clears unsent drafts. Escape, Close, or clicking the backdrop returns
+focus to the previous control, including when opened over the queue drawer. Scrolling
+is contained in the dialog body below the fixed header, preserving rounded corners.
+Clicks inside and drags starting inside the dialog do not dismiss it. This is a
+presentation-only change with no persisted-data or migration impact.
+The corner/backdrop follow-up passed type checking, UI build, diff checks and the
+full browser check on Node 22.23.3, including backdrop dismissal, focus/draft
+restoration, inside clicks, inside-to-backdrop drags and body-only scrolling.
+
+Expand **Saved attempts & notes** for original wording, notes, timestamps and historical
+diagnostics. **Archive attempt… → Confirm archive attempt** moves only an unapplied,
+conflicting review to history. It preserves the original input/diagnostic, does not
+answer or retire a question, and cannot archive an applied decision or unfinished
+follow-up. Remaining clarifications stay accessible in Design and the requirement.
+Previously proven resolved attempts still move to history through the existing
+conservative reconciliation rules; notes are not silently discarded.
+
+See [upgrade compatibility](migrations.md#focused-issue-recovery-and-attempt-archiving).
+
+Verification (2026-10-21, Node 22.23.3): type check, all **496 deterministic tests**,
+UI build, full `npm run test:browser` and diff checks passed. New coverage includes
+650-reviewed-item exact targeting, bounded 600-item attention paging, cross-feature
+dialog access, retained notes across close/reopen, original correction history,
+explicit archive/reload, queue-overlay Escape/focus, mobile width and inline answer →
+manual follow-up → explicit updated-context acknowledgement. No live model calls or
+user-data cleanup were performed. The approximately 550 kB Vite chunk warning remains
+non-blocking. Screenshot: `.reqwizit-state/browser-focused-resolver.png`.
+
 Design and Review are views of the same evolving specification, not sequential gates.
 Review remains available while Design has open questions. **To review** shows scoped
 readiness counts/filters: **Ready to review**, **Needs a decision**, **Updating**,

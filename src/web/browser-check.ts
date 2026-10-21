@@ -62,6 +62,7 @@ let failNextScan = false;
 let failAutomaticPair = false;
 let releaseNarrow: (() => void) | undefined, narrowCalls = 0;
 let releaseWordHelp: (() => void) | undefined;
+let resolverCalls = 0;
 let login: LoginStatus = { id: "10000000-0000-4000-8000-000000000001", status: "cancelled" };
 let loginComplete = false, connected = false, blockTest = true;
 let cancelTest: (() => void) | undefined;
@@ -81,6 +82,7 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
   return JSON.stringify({ summary: "Build dependency-safe slices", packages: [{ requirementID: request.requirementID, title: `Planning package ${index + 1}`, reason: "Unlocks a usable workflow", steps: ["Implement the approved outcome"], verification: ["Verify the acceptance scenario"],
     prerequisites: index < 2 ? [{ requirementID: other.id, kind: "hard", reason: "Needs the supporting contract", evidenceIDs: [other.id], confidence: "medium" }] : [], questions: index === 0 ? ["Which shared contract comes first?"] : [] }] });
 } }, adapter: { async analyze(project, options) {
+  if (project.name === "Focused resolver fixture") { resolverCalls++; return analysisSchema.parse({ summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions, questions: [], requirements: [], retireQuestions: [] }); }
   if (project.name === "Staged retrieval fixture") {
     retrievalCalls++;
     const extra = project.requirements[1]!;
@@ -2062,7 +2064,92 @@ try {
               await expect(reviewPanel).toContainText("No reviews awaiting follow-up");
               assert.equal(rounds, roundsBeforeHistoryRecovery, "Resolved review cleanup and reload must not run model calls");
               assert.deepEqual(errors, []);
-   let gapProject = store.create("Gap backlog fixture", "Preserve work across interruptions", { providerID: "openai", modelID: "fixture" });
+    // Focused issue recovery works from the queue and Review without hunting
+    // through the current feature/page. Archive is history-only, never a choice.
+    let resolverProject = store.create("Focused resolver fixture", "Recover a blocked beacon review", { providerID: "openai", modelID: "fixture" });
+    const resolverSeed = store.beginJob(resolverProject.id, resolverProject.revision).job; store.claimJob(resolverSeed.id, Date.now() + 60000);
+    store.finishJob(resolverSeed.id, { summary: "Spawn beacons", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: [{ statement: "Players respawn at their latest beacon", rationale: "Keep the mission playable", acceptance: ["Both players return to their latest shared beacon"], sourceIDs: [resolverProject.sources[0]!.id] }] });
+    resolverProject = store.get(resolverProject.id);
+    resolverProject = store.review(resolverProject.id, resolverProject.revision, resolverProject.requirements[0]!.id, "accepted", "");
+    const resolverQuestionJob = store.beginJob(resolverProject.id, resolverProject.revision).job; store.claimJob(resolverQuestionJob.id, Date.now() + 60000);
+    store.finishJob(resolverQuestionJob.id, { summary: "Spawn beacons", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], questions: [{ text: "Where should players return before reaching a beacon?", whyItMatters: "Do not invent a fallback", epicID: "inbox", evidenceIDs: [resolverProject.requirements[0]!.id], options: [{ label: "Mission entrance", consequence: "Start at the entrance" }, { label: "Another location", consequence: "Specify a fallback" }] }] });
+    resolverProject = store.get(resolverProject.id);
+    const resolverWaiting = store.enqueue(resolverProject.id, { id: crypto.randomUUID(), auto: false, research: false, input: { type: "note", epicID: "project", text: "Preserve the beacon correction" } });
+    const resolverTarget = resolverProject.requirements[0]!;
+    for (const action of ["rejected", "accepted", "accepted", "accepted"] as const) store.enqueue(resolverProject.id, { id: crypto.randomUUID(), auto: false, research: false, input: { type: "review", requirementID: resolverTarget.id, requirementText: resolverTarget.statement, fingerprint: reviewFingerprint(resolverTarget), action, note: action === "rejected" ? "Use spawn beacons, not partner revival." : "" } });
+    store.applyQueued(resolverProject.id, [resolverWaiting.id]);
+    const resolverFinished = store.submissions(resolverProject.id).find((s) => s.id === resolverWaiting.id)!; resolverFinished.status = "completed"; store.saveSubmission(resolverFinished);
+    await page.evaluate((id) => { localStorage.setItem("reqwizit-project", id); }, resolverProject.id);
+    await page.reload(); await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByRole("tab", { name: /^Review/ }).click();
+    await page.getByLabel("Filter by feature", { exact: true }).selectOption("project");
+    const resolverInbox = page.getByRole("region", { name: "Needs attention inbox", exact: true });
+    await expect(resolverInbox).toContainText("Needs attention · 1 item");
+    await expect(resolverInbox).toContainText("4 saved attempts");
+    await resolverInbox.getByRole("button", { name: "View & resolve", exact: true }).click();
+    const resolverDialog = page.getByRole("dialog", { name: "View & resolve", exact: true });
+    await expect(resolverDialog).toContainText("Both players return to their latest shared beacon");
+    await expect(resolverDialog.getByRole("button", { name: "Approve", exact: true })).toHaveAttribute("aria-disabled", "true");
+    await resolverDialog.getByLabel("Anything to add? (optional)").fill("Keep this resolver draft");
+    await resolverDialog.getByRole("heading", { name: "View & resolve", exact: true }).click();
+    await expect(resolverDialog).toBeVisible();
+    const resolverBounds = (await resolverDialog.boundingBox())!;
+    await page.mouse.move(resolverBounds.x + 10, resolverBounds.y + 10);
+    await page.mouse.down(); await page.mouse.move(2, 2); await page.mouse.up();
+    await expect(resolverDialog).toBeVisible();
+    await page.mouse.click(2, 2);
+    await expect(resolverDialog).toHaveCount(0);
+    await expect(resolverInbox.getByRole("button", { name: "View & resolve", exact: true })).toBeFocused();
+    await resolverInbox.getByRole("button", { name: "View & resolve", exact: true }).click();
+    await expect(resolverDialog.getByLabel("Anything to add? (optional)")).toHaveValue("Keep this resolver draft");
+    assert.deepEqual(await resolverDialog.evaluate((dialog) => {
+      const body = dialog.querySelector(".issue-dialog-body")!;
+      return { overflow: getComputedStyle(dialog).overflow, bodyOverflow: getComputedStyle(body).overflowY, scrolls: body.scrollHeight > body.clientHeight, headerVisible: dialog.querySelector("header")!.getBoundingClientRect().top >= dialog.getBoundingClientRect().top };
+    }), { overflow: "hidden", bodyOverflow: "auto", scrolls: true, headerVisible: true }, "Only the dialog body scrolls, inside the rounded shell");
+    await resolverDialog.getByRole("button", { name: "Close ×", exact: true }).click();
+    await expect(page.getByLabel("Filter by feature", { exact: true })).toHaveValue("project");
+    await expect(resolverInbox.getByRole("button", { name: "View & resolve", exact: true })).toBeFocused();
+    await resolverInbox.getByRole("button", { name: "View & resolve", exact: true }).click();
+    await expect(resolverDialog.getByLabel("Anything to add? (optional)")).toHaveValue("Keep this resolver draft");
+    await resolverDialog.getByText("Saved attempts & notes · 4", { exact: true }).click();
+    await expect(resolverDialog).toContainText("Use spawn beacons, not partner revival.");
+    await resolverDialog.getByText("Archive attempt…", { exact: true }).last().click();
+    await resolverDialog.getByRole("button", { name: "Confirm archive attempt", exact: true }).click();
+    await expect(resolverDialog).toContainText("Archived · history only");
+    await expect(resolverDialog.getByRole("button", { name: "Approve", exact: true })).toHaveAttribute("aria-disabled", "true");
+    assert.equal(store.get(resolverProject.id).questions[0]!.status, "pending", "Archiving never answers the clarification");
+    await resolverDialog.getByRole("button", { name: "Close ×", exact: true }).click();
+    await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+    const resolverDrawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+    await resolverDrawer.getByRole("region", { name: "Needs attention inbox", exact: true }).getByRole("button", { name: "View & resolve", exact: true }).click();
+    await expect(resolverDialog).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await resolverDialog.evaluate((dialog) => dialog.scrollWidth > dialog.clientWidth), false, "Resolver fits mobile width");
+    await page.screenshot({ path: ".reqwizit-state/browser-focused-resolver.png", fullPage: true });
+    await page.keyboard.press("Escape"); await expect(resolverDrawer).toBeVisible();
+    await resolverDrawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
+    const resolverAuto = await page.evaluate(() => { const previous = localStorage.getItem("reqwizit-auto"); localStorage.setItem("reqwizit-auto", "false"); return previous; });
+    await page.reload(); await page.getByRole("tab", { name: /^Review/ }).click();
+    await expect(resolverInbox).toContainText("3 saved attempts");
+    assert.equal(store.submissions(resolverProject.id).filter((s) => s.archivedAt).length, 1);
+    assert.equal(resolverCalls, 0, "Viewing, archiving and reload never start inference");
+    await resolverInbox.getByRole("button", { name: "View & resolve", exact: true }).click();
+    await resolverDialog.getByLabel("Anything to add? (optional)").fill("Preserve this note through clarification follow-up");
+    await resolverDialog.getByLabel("Your answer to Where should players return before reaching a beacon?", { exact: true }).fill("Return to the mission entrance.");
+    await resolverDialog.getByRole("button", { name: "Save response →", exact: true }).click();
+    await expect(resolverDialog.getByRole("button", { name: "Process blocking input", exact: true })).toBeVisible();
+    assert.equal(resolverCalls, 0, "Manual processing preferences also apply inside the resolver");
+    await resolverDialog.getByRole("button", { name: "Process blocking input", exact: true }).click();
+    await expect(resolverDialog).toContainText("earlier blocker is no longer active");
+    await expect(resolverDialog.getByLabel("Anything to add? (optional)")).toHaveValue("Preserve this note through clarification follow-up");
+    await expect(resolverDialog.getByRole("button", { name: "Use note with updated requirement", exact: true })).toBeVisible();
+    await resolverDialog.getByRole("button", { name: "Use note with updated requirement", exact: true }).click();
+    await expect(resolverDialog.getByRole("button", { name: "Approve", exact: true })).not.toHaveAttribute("aria-disabled", "true");
+    assert.equal(resolverCalls, 1);
+    await resolverDialog.getByRole("button", { name: "Close ×", exact: true }).click();
+    await page.evaluate((previous) => { if (previous === null) localStorage.removeItem("reqwizit-auto"); else localStorage.setItem("reqwizit-auto", previous); }, resolverAuto);
+    assert.deepEqual(errors, []);
+    let gapProject = store.create("Gap backlog fixture", "Preserve work across interruptions", { providerID: "openai", modelID: "fixture" });
    const gapSeed = store.beginJob(gapProject.id, gapProject.revision).job; store.claimJob(gapSeed.id, Date.now() + 60000);
    store.finishJob(gapSeed.id, { summary: "Recovery workflow", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [],
      organization: [{ type: "upsert", epicID: "new:recovery", title: "Recovery workflow", purpose: "Keep saved work", dependencies: [] }],

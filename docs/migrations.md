@@ -19,6 +19,33 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Focused issue recovery and attempt archiving
+
+SQLite **3 → 3**; no startup sweep, revision/fingerprint change, inference replay,
+assessment invalidation or workspace-artifact migration. Grouping and current-blocker
+display are read-only projections over existing submissions, including legacy attempts.
+Existing conservative completed-review reconciliation remains unchanged.
+
+Explicit archiving transitions a `needs-attention`, unapplied conflicting review to the
+existing `superseded` state, adding only optional ISO `archivedAt` metadata. Older rows
+without this field retain their meaning. Original IDs, human input, notes, timestamps,
+decision basis and diagnostic remain unchanged; project sources, revisions and saved
+activity evidence are not rewritten. The original row retains its evidence, so no
+destructive transformation or separate backup is needed. Old activity entries continue
+to describe their historical failure and can open the current item/history.
+
+The expected-project-revision check, eligibility check and update run in one immediate
+SQLite transaction. Repeating an archive request after a lost response/reopen returns
+the original archived row/timestamp. Stale requests, cross-project IDs, applied reviews,
+nonconflicting failures and pending overlap follow-up reject without changing records.
+Conflicting unapplied attempts are not worker-owned processing tasks; archiving them
+does not release leases, alter queue pauses, clear linked questions, or authorize retry.
+Existing stored-envelope validation continues to reject unsupported future formats.
+
+Upgrade tests use saved attempts without `archivedAt`, preserve exact original fields,
+check rejected writes, repeated startup/idempotent retry and retain genuine pending-input
+blockers. API tests cover token/origin checks, strict bounds and cross-project isolation.
+
 ## Narrower decision blockers and scoped answer evidence
 
 SQLite **3 → 3**; no startup payload sweep, revision rewrite, data reset or inference

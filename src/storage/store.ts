@@ -322,6 +322,20 @@ export class ProjectStore {
     this.db.prepare("INSERT INTO queue_state VALUES (?, ?) ON CONFLICT(project_id) DO UPDATE SET paused = excluded.paused").run(id, Number(paused));
   }
 
+  archiveReviewAttempt(id: string, expectedRevision: number, submissionID: string): Submission {
+    return this.db.transaction(() => {
+      if (this.get(id).revision !== expectedRevision) throw new StaleRevisionError();
+      const item = this.submissions(id).find((s) => s.id === submissionID);
+      if (!item || item.input.type !== "review" || item.applied || !item.conflict || item.overlapFollowup?.state === "pending") throw new Error("Only an unapplied conflicting review attempt can be archived. Applied decisions and unfinished follow-up must be resolved.");
+      if (item.status === "superseded" && item.archivedAt) return item;
+      if (item.status !== "needs-attention") throw new Error("This review attempt changed. Refresh before archiving it.");
+      item.status = "superseded";
+      item.archivedAt = new Date().toISOString();
+      this.saveSubmission(item);
+      return item;
+    }).immediate();
+  }
+
   saveSubmission(item: Submission) {
     if (item.answerScope !== undefined) {
       answerScopeSchema.parse(item.answerScope);

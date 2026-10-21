@@ -8,11 +8,13 @@ import { dimensionLabels } from "../core/epics.js";
 import "./appearance.css";
 import "./review.css";
 import "./action-button.css";
-import { ReviewQueue, reviewItems, reviewProcessingScope } from "./review.js";
+import { ReviewQueue, reviewItems, reviewProcessingScope, type ReviewDraft } from "./review.js";
 import { Pagination, PagedList, usePagination } from "./pagination.js";
 import "./pagination.css";
 import { pendingRefinementRequirementIDs } from "../core/resolution.js";
 import { ProcessingQueue } from "./processing-queue.js";
+import { IssueDialog } from "./issue-dialog.js";
+import { attentionSummary } from "./attention.js";
 import { queueActivities } from "./queue-activity.js";
 import { ImplementationTab } from "./implementation.js";
 import { ProjectProgress } from "./project-progress.js";
@@ -122,6 +124,9 @@ function App() {
   }
   const [questionFilter, setQuestionFilter] = useState<"open" | "answered" | "later" | "submitted">("open");
   const [expandedQuestion, setExpandedQuestion] = useState<string | null>(null);
+  const [issue, setIssue] = useState<{ projectID: string; submissionID?: string; requirementID?: string }>();
+  const issueDrafts = useRef<Record<string, ReviewDraft>>({});
+  const openIssue = (submissionID: string) => { if (project) setIssue({ projectID: project.id, submissionID }); };
   const [savedMessage, setSavedMessage] = useState<{ id: string; text: string } | null>(null);
   const project = data?.project;
   const pendingRefinementIDs = useMemo(() => project ? pendingRefinementRequirementIDs(project) : new Set<string>(), [project]);
@@ -305,7 +310,58 @@ function App() {
     }
   };
 
+  const processBlocking = (ids: string[]) => void act(async () => {
+    if (!project || !data) return;
+    if (connectionChanged) throw new Error("Save your connection and model selection in Settings before processing.");
+    await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, ...reviewProcessingScope(project, data.submissions, ids) });
+  });
+  const renderClarification = (question: Project["questions"][number]) => {
+    if (!project || !data) return null;
+    const submission = [...data.submissions].reverse().find((s) => s.input.type === "answer" && s.input.questionID === question.id && !s.conflict && ["queued", "saved", "processing", "needs-attention"].includes(s.status)
+      && (s.applied ? question.sourceID === s.appliedSourceID : s.input.questionText === question.text && (s.input.sourceID ?? null) === (question.sourceID ?? null)));
+    if (submission) return <section className="save-notice" key={question.id} aria-label={`Updating clarification: ${question.text}`}><h5>{question.text}</h5><p>Answer saved. Process its follow-up, then review the updated requirement here. Your review note is retained.</p><ItemProcessingNotice submission={submission} error={itemErrors[question.id]} resume={() => processBlocking([submission.id])} disabled={busy || connectionChanged} /><ActionButton className="secondary" disabled={busy || connectionChanged} onClick={() => processBlocking([submission.id])}>Process blocking input</ActionButton></section>;
+    const source = project.sources.find((s) => s.id === question.sourceID);
+    return <QuestionCard key={`${project.id}:review:${question.id}:${question.sourceID ?? "new"}`} inline question={question} area={areaTitle(epics.find((e) => e.id === question.epicID))} expanded={true} onToggle={() => {}} onCancel={() => { drafts.current.delete(question.id); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={source?.text} initialKind="answer" number={0} disabled={sending.includes(question.id)} dismissDisabled={true} onSave={(kind, text) => saveAnswer(question, kind, text)} notice={<ItemProcessingNotice error={itemErrors[question.id]} />} />;
+  };
+  const renderReview = (focusRequirementID?: string) => {
+    if (!project || !data) return null;
+    return <ReviewQueue key={`${project.id}:${focusRequirementID ?? "list"}`} draftStore={focusRequirementID ? issueDrafts : undefined} focusRequirementID={focusRequirementID} openIssue={openIssue} visible={!!focusRequirementID || tab === "review"} project={project} submissions={data.submissions} jobs={data.jobs} epicID={focusRequirementID ? "all" : epicID} sending={sending} submit={submit} itemErrors={itemErrors} resume={() => focusRequirementID ? processBlocking(data.submissions.filter((s) => s.input.type === "review" && s.input.requirementID === focusRequirementID && s.status === "needs-attention" && !s.conflict).map((s) => s.id)) : void act(explore)}
+      processBlocking={processBlocking} renderClarification={focusRequirementID || tab === "review" ? renderClarification : undefined}
+      openQuestion={(questionID) => { const q = project.questions.find((q) => q.id === questionID); if (!q) return; setIssue(undefined); setEpicID(q.epicID); setTab("discover"); setQuestionFilter(queuedQuestionIDs.has(questionID) ? "submitted" : q.status === "answered" ? "answered" : q.status === "pending" ? "open" : "later"); setExpandedQuestion(questionID); }}
+      disabled={busy || connectionChanged || needsInitialization} disabledReason={discoveryReason}
+      refine={() => void act(async () => { await api(`projects/${project.id}/analyze`, { revision: project.revision, refinementOnly: true, research: false, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) }); })}
+      reviewRefinement={async (proposalID, accept) => {
+        const key = `refinement:${proposalID}`;
+        setItemErrors((errors) => ({ ...errors, [key]: "" })); setPending(true);
+        try { await mutate("refinement-review", { proposalID, accept }); await load(); return true; }
+        catch (error) { setItemErrors((errors) => ({ ...errors, [key]: error instanceof Error ? error.message : "Could not save refinement decision." })); return false; }
+        finally { setPending(false); }
+      }}
+      refreshRefinement={(proposalID) => void act(async () => { await api(`projects/${project.id}/refresh-refinement`, { revision: project.revision, proposalID }); })}
+      removeDuplicate={async (revision, removeID, keepID, note) => {
+        let saved = false;
+        await act(async () => { await api(`projects/${project.id}/remove-duplicate`, { revision, removeID, keepID, note }); saved = true; });
+        return saved;
+      }} />;
+  };
+  const issueSubmission = issue && issue.projectID === project?.id ? data?.submissions.find((s) => s.id === issue.submissionID) : undefined;
+  const issueRequirementID = issue?.requirementID ?? (issueSubmission?.input.type === "review" ? issueSubmission.input.requirementID : undefined);
+  const issueQuestion = issueSubmission?.input.type === "answer" ? project?.questions.find((q) => issueSubmission.input.type === "answer" && q.id === issueSubmission.input.questionID) : undefined;
+  const issueHistory = data?.submissions.filter((s) => issueRequirementID ? s.input.type === "review" && s.input.requirementID === issueRequirementID : issueQuestion ? s.input.type === "answer" && s.input.questionID === issueQuestion.id : s.id === issueSubmission?.id) ?? [];
+
   return <ActionScope reason={discoveryReason || "Wait for the current save to finish."}><div className="app">
+    {issue && issue.projectID === project?.id && data && <IssueDialog key={project.id} close={() => setIssue(undefined)}>
+      <p>Current saved information · Actions use the same checks as Review. Closing returns you to your previous view.</p>
+      {error && <p role="alert">{error}</p>}
+      {issueRequirementID ? renderReview(issueRequirementID) : issueQuestion ? renderClarification(issueQuestion) : issueSubmission ? <><p>{attentionSummary(project, data.submissions, issueSubmission, data.jobs)}</p><p className="source-excerpt">{issueSubmission.input.type === "note" ? issueSubmission.input.text : "The original item is no longer available. Its response is retained below."}</p>{["needs-attention", "saved", "queued"].includes(issueSubmission.status) && !issueSubmission.conflict && <ActionButton className="secondary" disabled={busy || connectionChanged} onClick={() => processBlocking([issueSubmission.id])}>Retry follow-up</ActionButton>}</> : <p role="status">This saved response is no longer available.</p>}
+      <LazyDetails summary={<>Saved attempts &amp; notes · {issueHistory.length}</>}>{() => <PagedList items={issueHistory.slice().reverse()} itemID={(s) => s.id} label="Saved attempts">{(s) => <article className="queue-item" key={s.id}>
+        <small>{new Date(s.submittedAt).toLocaleString()} · {s.archivedAt ? "Archived · history only" : s.status}</small>
+        {s.input.type === "review" && <p><strong>Wording at this attempt:</strong> {s.input.requirementText}</p>}
+        <p className="source-excerpt">{s.input.type === "review" ? `${s.input.action}${s.applied ? " · applied" : " · not applied"}: ${s.input.note || "No addendum"}` : s.input.type === "answer" ? s.input.answer.text : s.input.text}</p>
+        {s.diagnostic && <details><summary>Previous attempt diagnostic</summary><p>{s.diagnostic}</p></details>}
+        {s.input.type === "review" && !s.applied && s.conflict && s.status === "needs-attention" && s.overlapFollowup?.state !== "pending" && <details><summary>Archive attempt…</summary><p>This only moves this unapplied attempt to history. Its note is preserved. It does not resolve questions, apply a decision or retry follow-up.</p><ActionButton className="secondary" disabled={pending} onClick={() => void act(async () => { await api(`projects/${project.id}/archive-review-attempt`, { revision: project.revision, submissionID: s.id }); })}>Confirm archive attempt</ActionButton></details>}
+      </article>}</PagedList>}</LazyDetails>
+    </IssueDialog>}
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">✦</span><div>Reqwizit</div></div>
       <div className="sidebar-label">YOUR WORKSPACE</div>
@@ -317,7 +373,7 @@ function App() {
     <main>
       {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
       <header className="topbar"><div><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small><HeaderActivity /></div>
-        {!creating && project && data && <ProcessingQueue key={project.id} project={project} active={data.active} progress={data.progress} refinementProgress={data.refinementProgress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(explore, "Starting discovery…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
+        {!creating && project && data && <ProcessingQueue key={project.id} project={project} jobs={data.jobs} openIssue={openIssue} active={data.active} progress={data.progress} refinementProgress={data.refinementProgress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(explore, "Starting discovery…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
         {!showSettings && project && summary && data && !creating && <ProjectProgress key={`progress:${project.id}`} progress={mapProgress!} definition={summary} />}</header>
       {pending && <ActivityFeedback label={actionLabel} />}
       {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
@@ -380,39 +436,8 @@ function App() {
                <ItemProcessingNotice error={itemErrors.note} />
               <details className="add-information"><summary>Add information</summary><form className="note-card" onSubmit={(event) => { event.preventDefault(); const submitted = note; void submit({ type: "note", text: submitted, epicID: epicID === "all" ? "project" : epicID }, "note").then((saved) => { if (saved) setNote((current) => current === submitted ? "" : current); }); }}><label>Add an idea, correction, or constraint<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Something else the project should consider…" maxLength={12000} required /></label><button className="secondary" title={sending.includes("note") ? "Your note is being saved." : !note.trim() ? "Write an idea, correction or constraint first." : undefined} disabled={sending.includes("note") || !note.trim()}>{sending.includes("note") ? "Saving…" : "Add to project →"}</button></form></details>
             </>}
-             <div hidden={tab !== "review"}><ReviewQueue key={project.id} visible={tab === "review"} project={project} submissions={data.submissions} jobs={data.jobs} epicID={epicID} sending={sending} submit={submit} itemErrors={itemErrors} resume={() => void act(explore)}
-               processBlocking={(ids) => void act(async () => {
-                 if (connectionChanged) throw new Error("Save your connection and model selection in Settings before processing.");
-                 // A linked clarification may live outside the selected feature.
-                 // Process its actual scope rather than resuming an empty feature queue.
-                 await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, ...reviewProcessingScope(project, data.submissions, ids) });
-               })}
-               renderClarification={(question) => {
-                 if (tab !== "review") return null;
-                 const submission = [...data.submissions].reverse().find((s) => s.input.type === "answer" && s.input.questionID === question.id && !s.conflict && ["queued", "saved", "processing", "needs-attention"].includes(s.status)
-                   && (s.applied ? question.sourceID === s.appliedSourceID : s.input.questionText === question.text && (s.input.sourceID ?? null) === (question.sourceID ?? null)));
-                 if (submission) return <section className="save-notice" key={question.id} aria-label={`Updating clarification: ${question.text}`}><h5>{question.text}</h5><p>Answer saved. Process its follow-up, then review the updated requirement here. Your review note is retained.</p><ItemProcessingNotice submission={submission} error={itemErrors[question.id]} resume={() => void act(explore)} disabled={busy || connectionChanged} /></section>;
-                 const source = project.sources.find((s) => s.id === question.sourceID);
-                 return <QuestionCard key={`${project.id}:review:${question.id}:${question.sourceID ?? "new"}`} inline question={question} area={areaTitle(epics.find((e) => e.id === question.epicID))} expanded={true} onToggle={() => {}} onCancel={() => { drafts.current.delete(question.id); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={source?.text} initialKind="answer" number={0} disabled={sending.includes(question.id)} dismissDisabled={true} onSave={(kind, text) => saveAnswer(question, kind, text)} notice={<ItemProcessingNotice error={itemErrors[question.id]} />} />;
-               }}
-               openQuestion={(id) => { const q = project.questions.find((q) => q.id === id); if (!q) return; setEpicID(q.epicID); setTab("discover"); setQuestionFilter(queuedQuestionIDs.has(id) ? "submitted" : q.status === "answered" ? "answered" : q.status === "pending" ? "open" : "later"); setExpandedQuestion(id); }}
-               disabled={busy || !!data.active || connectionChanged || needsInitialization} disabledReason={discoveryReason}
-              refine={() => void act(async () => { await api(`projects/${project.id}/analyze`, { revision: project.revision, refinementOnly: true, research: false, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) }); })}
-                reviewRefinement={async (proposalID, accept) => {
-                  const key = `refinement:${proposalID}`;
-                  setItemErrors((errors) => ({ ...errors, [key]: "" }));
-                  setPending(true);
-                  try { await mutate("refinement-review", { proposalID, accept }); await load(); return true; }
-                  catch (error) { setItemErrors((errors) => ({ ...errors, [key]: error instanceof Error ? error.message : "Could not save refinement decision." })); return false; }
-                  finally { setPending(false); }
-               }}
-               refreshRefinement={(proposalID) => void act(async () => { await api(`projects/${project.id}/refresh-refinement`, { revision: project.revision, proposalID }); })}
-               removeDuplicate={async (revision, removeID, keepID, note) => {
-                 let saved = false;
-                 await act(async () => { await api(`projects/${project.id}/remove-duplicate`, { revision, removeID, keepID, note }); saved = true; });
-                 return saved;
-               }} /></div>
-            {tab === "requirements" && <>
+              <div hidden={tab !== "review"}>{renderReview()}</div>
+             {tab === "requirements" && <>
               <p className="view-intro">See what each epic covers and where it stands. Delivery counts current requirements verified on main, including scope awaiting approval; local code and manual records do not count as delivered.</p>
               <details className="project-overview"><summary>Project overview</summary><p>{project.summary || "Your answers will help clarify the project scope."}</p>{project.analysisRevision !== project.revision && <small>New information has been saved since this overview was generated.</small>}</details>
               <button className="secondary" onClick={() => setNewEpic(!newEpic)}>{newEpic ? "Cancel" : "+ Add feature"}</button>
@@ -442,7 +467,7 @@ function App() {
               <LazyDetails className="map-supporting" summary="Manual implementation records">{() => <><p>Retained notes and self-reported progress. These records do not establish verified delivery to main.</p><ImplementationProgress project={project} requirements={requirements} disabled={busy} save={(requirementID, value) => act(() => mutate("implementation", { requirementID, ...value }))} /></>}</LazyDetails>
               {data.workspace && <WorkspaceScan project={project} scanJob={lastScan} disabled={busy || connectionChanged} scan={(resumeJobID) => act(async () => { await api(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); setTab("requirements"); })} />}
             </>}
-            {tab === "history" && <ProjectActivityFeed key={`${project.id}:${epicID}`} projectID={project.id} feature={epicID} updateToken={`${project.revision}:${data.execution.version}:${data.jobs.map((job) => `${job.id}:${job.status}`).join(",")}:${data.helpJobs.map((job) => `${job.id}:${job.status}`).join(",")}:${data.submissions.map((item) => `${item.id}:${item.status}`).join(",")}`} request={api} activeFeatureIDs={epics.map((epic) => epic.id)} openFeature={(feature) => { setEpicID(feature); setTab("requirements"); }} />}
+             {tab === "history" && <ProjectActivityFeed key={`${project.id}:${epicID}`} projectID={project.id} feature={epicID} openIssue={openIssue} openRequirement={(requirementID) => setIssue({ projectID: project.id, requirementID })} updateToken={`${project.revision}:${data.execution.version}:${data.jobs.map((job) => `${job.id}:${job.status}`).join(",")}:${data.helpJobs.map((job) => `${job.id}:${job.status}`).join(",")}:${data.submissions.map((item) => `${item.id}:${item.status}`).join(",")}`} request={api} activeFeatureIDs={epics.map((epic) => epic.id)} openFeature={(feature) => { setEpicID(feature); setTab("requirements"); }} />}
             {tab === "research" && <><div className="research-intro"><label><input type="checkbox" checked={!project.model.connectionID && research} disabled={!!project.model.connectionID} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label><p>{project.model.connectionID ? "Direct ChatGPT discovery runs without web research. Existing sources remain available below." : "Search and page retrieval are limited to relevant uncertainties. Sources inform choices; they do not decide your preferences. The round stops if it exceeds the monitored tool budget."}</p></div>{project.research.filter((item) => epicID === "all" || item.epicID === epicID).map((finding) => <article className="requirement-card" key={finding.id}><span className="badge">{finding.kind === "fetched-page" ? "Retrieved page" : "Search-result evidence"}</span><h3><a href={finding.url} target="_blank" rel="noreferrer">{finding.title} ↗</a></h3><p>{finding.finding}</p><small>{new URL(finding.url).hostname} · {new Date(finding.retrievedAt).toLocaleString()}</small><details><summary>Source excerpt</summary><p className="source-excerpt">{finding.excerpt}</p></details></article>)}{!project.research.length && <div className="empty-card"><h3>No sources collected yet.</h3><p>{project.model.connectionID ? "Web research is not yet available for direct ChatGPT connections." : "Enable research and explore a concrete area. Vague ideas may need clarification before external research is useful."}</p></div>}</>}
           </div>
           {tab !== "discover" && <aside className="insight-column">
