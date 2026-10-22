@@ -9,7 +9,7 @@
 .app-menu-toggle:hover, .app-menu-toggle[aria-expanded=true] { background: color-mix(in srgb, var(--on-accent) 14%, transparent); }
 .app-menu-toggle:focus-visible { outline-color: var(--on-accent); }
 .app-menu-panel { position: absolute; top: calc(100% + 10px); left: 0; z-index: 30; width: 290px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 100px); overflow-y: auto; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: 0 10px 32px var(--shadow); }
-.app-menu-brand { padding: 8px 12px 12px; font-weight: 650; color: var(--accent); }
+.app-menu-brand { display: flex; align-items: center; gap: 8px; padding: 8px 12px 12px; font-weight: 650; color: var(--accent); }
 .app-menu-panel button { width: 100%; display: flex; justify-content: space-between; text-align: left; padding: 11px 12px; border-radius: 6px; overflow-wrap: anywhere; }
 .app-menu-panel button:hover, .app-menu-panel button:focus-visible, .app-menu-panel .project-link.selected { background: var(--selected); color: var(--text); }
 .app-menu-panel button:focus-visible { outline-offset: -3px; }

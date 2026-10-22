@@ -15,6 +15,7 @@ await writeFile(resolve(staging, "package.json"), JSON.stringify({
   author: "Reqwizit contributors", main: "app/desktop/main.js", dependencies: desktop.dependencies,
 }, null, 2) + "\n");
 await cp(resolve(cwd, "dist/web"), resolve(staging, "web"), { recursive: true });
+await cp(resolve(cwd, "assets"), resolve(staging, "assets"), { recursive: true });
 function run(file, args, directory = cwd) {
   const result = spawnSync(process.execPath, [file, ...args], { cwd: directory, stdio: "inherit", env: process.env });
   if (result.error) throw result.error;

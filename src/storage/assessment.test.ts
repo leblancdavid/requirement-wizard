@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { projectSchema, type Project } from "../core/model.js";
-import { requirementTaskContext } from "../core/execution-context.js";
+import { assessmentContextFingerprint, requirementTaskContext } from "../core/execution-context.js";
 import { captureWorkspace } from "./scan.js";
 import { assessmentContext, assessmentCaptureFingerprint, assessmentFootprint, assessmentImpactReason, assertAssessmentCaptureCurrent } from "./assessment.js";
 import { executionConfigSchema } from "../core/execution.js";
@@ -175,6 +175,52 @@ test("reviewed footprints include new/deleted files, prerequisites, shared confi
   const beforeDelete = footprint(); scan.snapshot.files.shift();
   assert.notEqual(footprint().fingerprint, beforeDelete.fingerprint);
   assert.match(assessmentImpactReason(beforeDelete, footprint()), /src\/save\/a.ts/);
+});
+
+test("assessment record tables recover a near-limit context without changing decisions, IDs, fingerprints or file bytes", () => {
+  const p = projectSchema.parse({ id: "p", name: "Record table fixture", revision: 1,
+    summary: "", goals: [], actors: [], assumptions: [], questions: [],
+    model: { providerID: "openai", modelID: "fixture" }, requirements: [requirement],
+    sources: [{ id: "human:1", kind: "initial", text: "Save my records" }] });
+  const scan = { workspaceKey: "fixture", sources: [{ id: "code", kind: "workspace" as const, epicID: "project", text: "Save records implementation\nByte-exact file evidence." }],
+    snapshot: { id: "scan", capturedAt: "now", files: [{ sourceID: "code", path: "src/save.ts", hash: "hash", lines: 2 }], omitted: [], traversalLimited: false, changes: [], affectedRequirementIDs: [] } };
+  let prepared: ReturnType<typeof assessmentContext> | undefined;
+  for (let index = 0; index < 200; index++) {
+    const id = `guardrail-${index}`, sourceID = `confirmation-${index}`;
+    const statement = `Constraint ${index}: retain approved record behavior for capability ${index}.`;
+    p.requirements.push({ ...requirement, id, statement, sourceIDs: [sourceID], acceptance: [`Scenario ${index}: capability ${index} is retained after restart.`] });
+    p.sources.push({ id: sourceID, kind: "confirmation", epicID: "project", requirementID: id,
+      text: `Human approved constraint ${index}; preserve its exact behavior and scenario.`, ...(index % 2 ? { supersedes: "human:1" } : {}) });
+    const original = structuredClone(p), identity = assessmentContextFingerprint(p, "r1");
+    const candidate = assessmentContext(p.requirements[0]!, scan, { project: p });
+    assert.deepEqual(p, original); assert.equal(assessmentContextFingerprint(p, "r1"), identity);
+    if (JSON.parse(candidate.text).recordTables) { prepared = candidate; break; }
+  }
+  assert.ok(prepared, "The third lossless pass must rescue a context that text/ID sharing alone cannot fit");
+  assert.ok(prepared.context.characters <= 48000);
+  const before = structuredClone(p), fingerprint = assessmentContextFingerprint(p, "r1"), wire = JSON.parse(prepared.text);
+  const tables = (value: any): any => {
+    if (Array.isArray(value)) return value.map(tables);
+    if (!value || typeof value !== "object") return value;
+    if (Object.keys(value).length === 1 && value.recordTable) {
+      const { columns, rows, absent = [] } = value.recordTable;
+      return rows.map((row: unknown[], i: number) => Object.fromEntries(columns.flatMap((key: string, j: number) =>
+        absent.some(([r, c]: number[]) => r === i && c === j) ? [] : [[key, tables(row[j])]])));
+    }
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, tables(item)]));
+  };
+  const expand = (value: any, field = ""): any => {
+    if (typeof value === "number" && (field === "id" || field.endsWith("ID") || field.endsWith("IDs") || field === "dependencies") && field !== "sharedTextID") return wire.identifierTable.values[value];
+    if (Array.isArray(value)) return value.map((item) => expand(item, field));
+    if (!value || typeof value !== "object") return value;
+    if (Object.keys(value).length === 1 && value.sharedTextID) return wire.sharedText.values[value.sharedTextID];
+    if (Object.keys(value).length === 1 && value.textParts) return value.textParts.map((part: unknown) => expand(part)).join("");
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, expand(item, key)]));
+  };
+  const expanded = expand(tables(wire)), { evidence, ...records } = requirementTaskContext(p, "r1", [], false).data;
+  for (const [key, value] of Object.entries({ ...records, decisions: evidence })) assert.deepEqual(expanded[key], JSON.parse(JSON.stringify(value)), key);
+  assert.equal(expanded.evidence[0].text, scan.sources[0]!.text);
+  assert.equal(assessmentContextFingerprint(p, "r1"), fingerprint); assert.deepEqual(p, before);
 });
 
 test("assessment boundaries reject unsafe/ambiguous paths and keep excluded code out of scoped model windows", () => {

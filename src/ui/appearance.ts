@@ -75,9 +75,13 @@ export function themeTokens(palette: Palette) {
 }
 export function applyAppearance(value: Appearance) {
   const root = document.documentElement;
-  for (const [key, token] of Object.entries(themeTokens(paletteFor(value)))) root.style.setProperty(key, token);
+  const tokens = themeTokens(paletteFor(value));
+  for (const [key, token] of Object.entries(tokens)) root.style.setProperty(key, token);
   root.style.setProperty("--font-family", fonts[value.font].value);
   root.style.setProperty("--font-size", `${value.size}px`);
   root.dataset.theme = value.theme;
+  if (window.reqwizitDesktop?.titleBarOverlay) {
+    void window.reqwizitDesktop.setTitleBarColors(tokens["--accent"], tokens["--on-accent"]).catch(() => { /* Native controls retain their previous safe colors. */ });
+  }
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", paletteFor(value).background);
 }

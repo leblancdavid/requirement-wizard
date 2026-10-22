@@ -450,8 +450,9 @@ selected consequence, including all retained historical selections. Custom, ambi
 delegated or unresolved responses retain every option. Saved questions and source
 records remain intact. This uses context policy `requirement-isolation-v3`; older policies
 without proven semantic compatibility still need reassessment. Oversized assessment decision context first
-tries discovery's lossless shared-text and identifier tables: repeated approval wording
-and IDs are stored once with explicit expansion instructions. Human evidence is not
+tries discovery's lossless shared-text, identifier and record-structure tables: repeated approval wording,
+IDs and field names are stored once with explicit expansion instructions. Record tables
+preserve order and distinguish absent fields from nulls. Human evidence is not
 summarized, and current file excerpts/handles stay unencoded. Historical workspace
 evidence cannot prove current behavior.
 
@@ -486,9 +487,23 @@ excerpt and retained unknown scope instead of blocking the action. This exercise
 context construction with saved decisions/current capture, not live model responses.
 
 Coding context blockers pause execution before advancing to another requirement.
-Assessment blockers stop that action while preserving completed results. Per-task
-context counts/block diagnostics and assessment session counts are visible in details.
+Assessment context blockers skip only the oversized target and continue the remaining
+requirements, including the separate main phase. The affected phase finishes **blocked**,
+with assessed/selected and blocked counts; a blocked target is not recorded as unknown,
+missing or completed. Older dated findings remain intact. Other errors and cancellation
+still stop the action. Per-task context counts/block diagnostics, original requirement
+IDs and assessment session counts are visible in details. Run **Check progress** again
+to reuse compatible completed checkpoints; **Recheck everything** forces new calls.
 These local context manifests remain separate from portable requirements artifacts.
+
+Context-block isolation verification (2026-10-21): type checking, 557 deterministic
+tests, desktop TypeScript compilation, UI build and the main browser checks passed
+using Node 22.23.3. Fixtures cover lossless table expansion, unchanged task identities,
+multiple skipped targets in local/main phases, preservation of dated evidence and
+incremental reuse after SQLite reopen. Browser coverage includes blocker IDs/counts
+and mobile layout. The separate portable browser check failed on an ambiguous
+`Open shared checkpoint` selector (two matching buttons); the full browser command
+is not passing. No live model calls or reassessment of the reported project ran.
 
 ### Suggested verification commands
 

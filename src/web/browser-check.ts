@@ -1577,7 +1577,8 @@ try {
       blockedState.assessmentStatus = "Workspace assessment blocked: 0/4 requirements assessed. Context blocked before inference.";
       const requirementContext = { policy: "requirement-isolation-v1", requirementID: receipt.id, budget: 48000, characters: 37000, promptCharacters: 29000, historyCharacters: 0, reserveCharacters: 8000 };
       blockedState.assessmentRuns!.push({ ...blockedState.assessmentRuns![0]!, id: "fixture-context-block", operation: "assess", status: "blocked", stage: "Requirement context preflight", diagnostic: "Context blocked before inference; mandatory human decisions were retained.", checks: [],
-        contextBlock: { ...requirementContext, characters: 52000, promptCharacters: 44000 }, contexts: { [receipt.id]: requirementContext }, sessions: { [receipt.id]: ["requirement-window-session"] } });
+         contextBlock: { ...requirementContext, characters: 52000, promptCharacters: 44000 }, contexts: { [receipt.id]: requirementContext,
+           [listing.requirements[1]!.id]: { ...requirementContext, requirementID: listing.requirements[1]!.id, characters: 48930, promptCharacters: 40930 } }, sessions: { [receipt.id]: ["requirement-window-session"] } });
       store.saveExecution(listing.id, blockedState);
        await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
       await expect(listPanel.getByRole("alert", { name: "Assessment outcome" })).toContainText("Context blocked before inference");
@@ -1586,7 +1587,10 @@ try {
       await expect(blockedRun).toContainText("52,000 / 48,000 characters");
       await blockedRun.getByText("Per-requirement contexts and sessions", { exact: true }).click();
       await expect(blockedRun).toContainText("37,000 / 48,000 characters");
-      await expect(blockedRun).toContainText("1 independent evidence-window sessions");
+       await expect(blockedRun).toContainText("1 independent evidence-window sessions");
+       await expect(blockedRun).toContainText("Context blocked ·");
+       await expect(blockedRun).toContainText("48,930 / 48,000 characters");
+       await expect(blockedRun).toContainText(listing.requirements[1]!.id);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Per-requirement context blockers fit mobile width");
        await page.screenshot({ path: ".reqwizit-state/browser-requirement-context.png", fullPage: true });
        // Shared processing feedback uses the real snapshot endpoint with deterministic

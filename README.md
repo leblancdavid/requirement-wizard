@@ -15,6 +15,9 @@ The top-left application menu contains **New project**, **Open project**, **Rece
 workspaces**, and **Settings**, replacing the persistent sidebar. The header follows
 your accent color. Desktop users also get **Quit**, with the same safe shutdown as
 closing the window; regular browsers do not show it.
+The desktop uses a branded Q/checkmark icon. On Windows, a slim draggable title bar
+matches the app accent and integrates native minimize, maximize/restore and close
+controls. See [desktop](docs/desktop.md) for builds and verification limits.
 
 A playable browser workspace is available. AI organizes your idea into epics, asks
 clickable questions, researches relevant uncertainties, and estimates how well each

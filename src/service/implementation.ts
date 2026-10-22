@@ -182,6 +182,7 @@ export class ImplementationService {
     });
     let assessmentRun = operation === "continue" ? undefined : newAssessmentRun(operation === "check" ? "assess" : operation);
     let localSummary = "";
+    let assessmentBlocked = false;
     const save = () => { signal.throwIfAborted(); this.store.saveExecution(id, state, owner); };
     const current = () => {
       signal.throwIfAborted();
@@ -289,14 +290,30 @@ export class ImplementationService {
               state.assessmentStatus = assessmentRun!.stage; save();
               continue;
             }
-            for (const r of requirements) {
+            for (const [index, r] of requirements.entries()) {
               current(); assessmentRun!.currentRequirementID = r.id;
               const previous = reusableSources.get(r.id);
               const reusable = assessmentRun!.impacts[r.id]!.reusable;
-              progress(`${reusable ? "Reusing unchanged assessment" : "Assessing requirement"} ${assessmentRun!.completedIDs.length + 1}/${requirements.length}: ${r.statement}`);
-              const assessed = reusable ? structuredClone(previous!) : await this.assess(project, r.id, target, scope, signal, progress, capture,
-                (sessionID) => { assessmentRun!.sessionID = sessionID; (assessmentRun!.sessions ??= {})[r.id] = [...(assessmentRun!.sessions?.[r.id] ?? []), sessionID]; save(); },
-                (context) => { (assessmentRun!.contexts ??= {})[r.id] = context; save(); });
+              progress(`${reusable ? "Reusing unchanged assessment" : "Assessing requirement"} ${index + 1}/${requirements.length}: ${r.statement}`);
+              let assessed: Assessment;
+              try {
+                assessed = reusable ? structuredClone(previous!) : await this.assess(project, r.id, target, scope, signal, progress, capture,
+                  (sessionID) => { assessmentRun!.sessionID = sessionID; (assessmentRun!.sessions ??= {})[r.id] = [...(assessmentRun!.sessions?.[r.id] ?? []), sessionID]; save(); },
+                  (context) => { (assessmentRun!.contexts ??= {})[r.id] = context; save(); });
+              } catch (error) {
+                // Only a per-requirement size blocker is safe to skip. It is not
+                // an assessment result and must not overwrite dated evidence.
+                if (signal.aborted || !(error instanceof ExecutionContextError)) throw error;
+                current();
+                assessmentBlocked = true;
+                (assessmentRun!.contexts ??= {})[r.id] = error.context;
+                assessmentRun!.contextBlock ??= error.context;
+                assessmentRun!.currentRequirementID = undefined;
+                assessmentRun!.diagnostic = "Some requirements are context blocked; remaining requirements are still checked. See per-requirement contexts in Assessment details.";
+                state.assessmentStatus = `${localSummary}Assessed ${assessmentRun!.completedIDs.length}/${requirements.length}; context blocked on ${r.id}. Continuing remaining requirements.`;
+                progress(error.message);
+                continue;
+              }
               // Exact legacy capture equivalence permits additive enrichment without
               // inventing historical file boundaries or changing original evidence dates.
               if (reusable && !assessed.footprint) assessed.footprint = footprints.get(r.id)!;
@@ -323,13 +340,15 @@ export class ImplementationService {
               save();
             }
             await assertAssessmentCaptureCurrent(directory, capture, signal, true);
-            assessmentRun!.status = "completed"; assessmentRun!.finishedAt = new Date().toISOString(); assessmentRun!.stage = "Completed";
+            const blocked = Object.values(assessmentRun!.contexts ?? {}).filter((context) => context.characters > context.budget).length;
+            assessmentRun!.status = blocked ? "blocked" : "completed"; assessmentRun!.finishedAt = new Date().toISOString(); assessmentRun!.stage = blocked ? "Finished with context blockers" : "Completed";
             const counts = { complete: 0, partial: 0, missing: 0, unknown: 0 };
-            for (const r of requirements) counts[results[r.id]!.status]++;
-            const latest = this.store.get(id), outdated = requirements.filter((r) => !assessmentCurrent(latest, state, r.id, results[r.id])).length;
-            const summary = `Assessed ${requirements.length} approved requirements from specification r${revision} against ${phase === "verify-main" ? "verified main" : "the working folder"} at ${head.slice(0, 8)}: ${counts.complete} complete in code, ${counts.partial} partial, ${counts.missing} missing, ${counts.unknown} unknown. ${assessmentRun!.reused} unchanged assessments reused; ${assessmentRun!.freshIDs!.length} freshly assessed${force ? " (forced)" : ""}. ${outdated ? `${outdated} results need reassessment against current inputs. ` : ""}Omitted scope stays unknown.`;
+            const completed = requirements.filter((r) => assessmentRun!.completedIDs.includes(r.id));
+            for (const r of completed) counts[results[r.id]!.status]++;
+            const latest = this.store.get(id), outdated = completed.filter((r) => !assessmentCurrent(latest, state, r.id, results[r.id])).length;
+            const summary = `Assessed ${completed.length}${blocked ? `/${requirements.length}` : ""} approved requirements from specification r${revision} against ${phase === "verify-main" ? "verified main" : "the working folder"} at ${head.slice(0, 8)}: ${counts.complete} complete in code, ${counts.partial} partial, ${counts.missing} missing, ${counts.unknown} unknown. ${blocked ? `${blocked} context blocked; retained decisions were not truncated. ` : ""}${assessmentRun!.reused} unchanged assessments reused; ${assessmentRun!.freshIDs!.length} freshly assessed${force ? " (forced)" : ""}. ${outdated ? `${outdated} results need reassessment against current inputs. ` : ""}Omitted scope stays unknown.`;
             state.assessmentStatus = `${localSummary}${summary}${phase === "verify-main" ? ` ${requirements.filter((r) => deliveredRequirement(latest, state, r.id)).length} implemented on main.` : ""}`;
-            if (operation === "check" && phase === "assess") localSummary = `Local check completed. ${summary} `;
+            if (operation === "check" && phase === "assess") localSummary = `Local check ${blocked ? "finished with context blockers" : "completed"}. ${summary} `;
             save();
           } finally {
             // Only remove our detached evidence worktree, including after check failures.
@@ -502,7 +521,7 @@ export class ImplementationService {
       } catch { /* A new owner/version takes precedence. */ }
     } finally {
       if (timer) clearInterval(timer);
-      const unsuccessful = signal.aborted || (assessmentRun ? assessmentRun.status !== "completed" : !state.run || ["failed", "blocked", "interrupted", "paused"].includes(state.run.status));
+      const unsuccessful = signal.aborted || assessmentBlocked || (assessmentRun ? assessmentRun.status !== "completed" : !state.run || ["failed", "blocked", "interrupted", "paused"].includes(state.run.status));
       if (unsuccessful && this.store.submissions(id).some((item) => ["queued", "saved"].includes(item.status))) this.store.pauseQueue(id, true);
       this.store.releaseExecution(id, owner); this.store.syncWorkspace(id);
     }

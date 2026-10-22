@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Job, Project } from "../core/model.js";
 import { directoryKey } from "./workspace.js";
 import { assessmentPrompt, checkExecutionContext, executionContextBudget, ExecutionContextError, requirementTaskContext } from "../core/execution-context.js";
-import { shareRepeatedIdentifiers, shareRepeatedText } from "../core/working-set.js";
+import { shareRecordStructure, shareRepeatedIdentifiers, shareRepeatedText } from "../core/working-set.js";
 import { assessmentImpactPolicy, matchesAssessmentPath, reviewedAssessmentPaths, sharedAssessmentFile, type AssessmentFootprint } from "../core/assessment-impact.js";
 import { canonicalJSON } from "../core/assessment-identity.js";
 import type { ExecutionConfig } from "../core/execution.js";
@@ -97,7 +97,8 @@ export function assessmentContext(requirement: Project["requirements"][number], 
   const check = () => checkExecutionContext(assessmentPrompt(serialize()), false, requirement.id);
   // Reuse discovery's lossless encoding before blocking on repeated approval
   // snapshots and provenance IDs. Current file bytes/handles are never encoded.
-  for (const compact of [shareRepeatedText, shareRepeatedIdentifiers]) {
+  for (const compact of [shareRepeatedText, shareRepeatedIdentifiers,
+    (data: unknown) => shareRecordStructure(data, ["decisions", "guardrails", "supportingRequirements"])]) {
     try { check(); break; } catch (error) { if (!(error instanceof ExecutionContextError)) throw error; }
     const candidate = compact(normative).data;
     if (JSON.stringify(candidate).length < JSON.stringify(normative).length) normative = candidate;

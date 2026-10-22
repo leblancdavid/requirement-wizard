@@ -6,17 +6,21 @@ directories:
 files:
   - app/**/*
   - web/**/*
+  - assets/**/*
   - package.json
 asar: true
 asarUnpack:
   - "**/*.node"
 npmRebuild: false
 win:
+  icon: assets/reqwizit.ico
   target:
     - target: nsis
       arch: [x64]
-  signAndEditExecutable: false
+  signExecutable: false
 nsis:
+  installerIcon: assets/reqwizit.ico
+  uninstallerIcon: assets/reqwizit.ico
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

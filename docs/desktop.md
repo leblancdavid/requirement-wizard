@@ -30,6 +30,11 @@ dependencies: a process holding a native SQLite module can block `npm ci`.
 ## Behavior
 
 - One desktop instance per data directory; launching it again focuses its window.
+- Windows uses a draggable 36px app title bar with the Reqwizit mark. Electron's
+  native overlay supplies minimize, maximize/restore and close at the top right,
+  retaining native resizing and Snap Layout support. The bar and controls follow
+  the selected accent/contrast colors. Browser clients do not show this bar; other
+  platforms retain their native frame.
 - Closing the window immediately removes it, cancels discovery, question help,
   provider tests and pending sign-in, waits for owned backend cleanup, then quits.
   There is no tray mode, background work, or quit confirmation. Already-committed
@@ -55,7 +60,9 @@ from those in the user's web browser. Tokens stay in the local provider service,
 outside renderer APIs and project exports.
 
 The renderer is sandboxed, context-isolated, and has no Node integration. Its
-CommonJS preload exposes only directory selection, opening HTTP(S) links, and Quit.
+CommonJS preload exposes directory selection, opening HTTP(S) links, Quit, strictly
+validated title-bar colors and a platform capability flag. It does not expose
+arbitrary window operations or IPC channels.
 IPC checks the owning window, main frame, and local origin. Web permissions and
 webviews are disabled; new windows and external navigation are intercepted.
 
@@ -83,11 +90,51 @@ Legacy OpenCode selections still require a separately installed OpenCode executa
 Direct selections use the existing app-owned provider implementation, with its
 documented live-qualification gaps. Packaging does not qualify direct access.
 
-The current Windows build is unsigned and uses Electron's default application icon.
-Code signing, branded icons, automatic updates, installer upgrade/uninstall testing,
+The Windows build uses a branded Q/checkmark icon and remains unsigned. Executable
+resource editing embeds the icon and metadata; `signExecutable: false` disables
+signing without suppressing icon editing.
+Code signing, automatic updates, installer upgrade/uninstall testing,
 and macOS/Linux distribution remain follow-up release work.
 
+### Icon assets
+
+`src/ui/public/reqwizit.svg` is the SVG master (sage Q with a gold checkmark tail),
+also used by the browser favicon, application menu and desktop title bar.
+`assets/reqwizit.ico` contains 16, 24, 32, 48, 64, 128 and 256px images;
+`assets/reqwizit.png` is a 512px export. Both are staged with the desktop app; the
+ICO is configured for the Windows executable, installer and uninstaller.
+Exports are committed, so normal builds do not need Chromium. To regenerate:
+
+```powershell
+$env:PLAYWRIGHT_BROWSERS_PATH = (Join-Path $PWD '.reqwizit-state/browsers')
+npx playwright install chromium
+npm run build:icons
+```
+
+This is presentation-only: existing appearance preferences are reused without
+project data, schema, assessment/freshness or credential changes. No migration.
+
 ## Verification
+
+Branding/title-bar verification (2026-10-21, Node 22.23.3): type check, 555 tests,
+UI build, main browser check and independently staged/packaged desktop checks
+passed. Desktop checks cover the draggable region/sticky offset, native
+maximize/minimize/restore state, theme-color IPC and malformed-color rejection,
+favicon availability, saved-project continuity, menu access and clean shutdown.
+Windows executable resource extraction confirmed the embedded Q/checkmark icon.
+Playwright page screenshots omit OS-drawn caption buttons; native hover/Snap,
+dragging and double-click behavior still need a manual Windows check.
+The portable-project browser check hit a duplicate `Open shared checkpoint` button
+selector (menu and page). The ordinary staging install was locked by an existing
+app, so these checks used `.reqwizit-state/desktop-brand-check` without stopping it.
+Packaged output is under `dist/installers-brand-check`; installation/upgrade/
+uninstallation remain unverified.
+The initial installer-generation command exceeded its 120-second timeout after
+producing the runnable packaged executable. The longer retry failed in NSIS with
+`failed creating mmap` of the generated `.nsis.7z` archive. The isolated staging
+build reported parent-tree duplicate dependency references and an unexpectedly
+large payload; installer generation is not qualified by this check. The runnable
+packaged executable and its embedded icon passed the checks described above.
 
 ```powershell
 npm run check

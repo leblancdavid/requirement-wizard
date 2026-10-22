@@ -74,6 +74,11 @@ else {
     window = new BrowserWindow({
       title: "Reqwizit", width: 1360, height: 920, minWidth: 800, minHeight: 600,
       show: false, autoHideMenuBar: true,
+      icon: join(app.getAppPath(), "assets", process.platform === "win32" ? "reqwizit.ico" : "reqwizit.png"),
+      ...(process.platform === "win32" ? {
+        titleBarStyle: "hidden" as const,
+        titleBarOverlay: { color: "#315f45", symbolColor: "#ffffff", height: 36 },
+      } : {}),
       webPreferences: {
         preload: fileURLToPath(new URL("./preload.cjs", import.meta.url)),
         nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false,
@@ -96,6 +101,11 @@ else {
     ipcMain.handle("reqwizit:quit", (event) => {
       trusted(event);
       void shutdown();
+    });
+    ipcMain.handle("reqwizit:title-bar-colors", (event, color: unknown, symbolColor: unknown) => {
+      trusted(event);
+      if (typeof color !== "string" || typeof symbolColor !== "string" || !/^#[0-9a-f]{6}$/i.test(color) || !/^#[0-9a-f]{6}$/i.test(symbolColor)) throw new Error("Invalid title bar colors.");
+      if (process.platform === "win32") window!.setTitleBarOverlay({ color, symbolColor, height: 36 });
     });
     window.webContents.setWindowOpenHandler(({ url }) => {
       void external(url).catch(() => {});

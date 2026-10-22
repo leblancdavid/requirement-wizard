@@ -110,8 +110,8 @@ export function shareRepeatedIdentifiers(data: unknown) {
 }
 
 /** Replace repeated record keys with column headers, preserving missing vs null. */
-function shareRecordStructure(data: unknown) {
-  const recordFields = new Set(["sources", "questions", "requirements", "research", "options", "epicMap", "focusedEpics"]);
+export function shareRecordStructure(data: unknown, additionalRecordFields: string[] = []) {
+  const recordFields = new Set(["sources", "questions", "requirements", "research", "options", "epicMap", "focusedEpics", ...additionalRecordFields]);
   let tables = 0, rows = 0;
   const encode = (value: unknown, field = ""): unknown => {
     if (Array.isArray(value)) {

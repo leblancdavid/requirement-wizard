@@ -27,6 +27,48 @@ try {
   assert.equal(await page.evaluate(() => typeof window.reqwizitDesktop?.chooseDirectory), "function");
   assert.equal(await page.evaluate(() => typeof window.reqwizitDesktop?.quit), "function");
   assert.equal(await page.evaluate(() => typeof (window as unknown as { process?: unknown }).process), "undefined");
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/reqwizit.svg");
+  assert.equal((await page.request.get(new URL("/reqwizit.svg", page.url()).href)).status(), 200);
+  if (process.platform === "win32") {
+    await expect(page.locator(".desktop-titlebar")).toBeVisible();
+    assert.equal(await page.evaluate(() => window.reqwizitDesktop!.titleBarOverlay), true);
+    assert.equal(await page.evaluate(() => (navigator as Navigator & { windowControlsOverlay?: { visible: boolean } }).windowControlsOverlay?.visible), true);
+    assert.equal(await page.locator(".desktop-titlebar").evaluate((element) => getComputedStyle(element).getPropertyValue("app-region")), "drag");
+    assert.equal(await page.locator(".topbar").evaluate((element) => getComputedStyle(element).top), "36px");
+    // Keep native resizing/maximize/minimize available with the hidden title bar.
+    assert.deepEqual(await desktop.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]!;
+      return [window.isResizable(), window.isMaximizable(), window.isMinimizable(), window.isClosable()];
+    }), [true, true, true, true]);
+    await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.maximize());
+    await expect.poll(() => desktop!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMaximized())).toBe(true);
+    await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.unmaximize());
+    await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.minimize());
+    await expect.poll(() => desktop!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMinimized())).toBe(true);
+    await desktop.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]!; window.restore(); window.focus(); });
+    // Exercise the real native setter before capturing theme updates at the IPC boundary.
+    await page.evaluate(() => window.reqwizitDesktop!.setTitleBarColors("#176b91", "#ffffff"));
+    await desktop.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]!;
+      const original = window.setTitleBarOverlay.bind(window);
+      window.setTitleBarOverlay = (options) => {
+        (globalThis as unknown as { titleColors: unknown }).titleColors = options;
+        original(options);
+      };
+    });
+    await page.evaluate(async () => {
+      localStorage.setItem("reqwizit-appearance", JSON.stringify({ theme: "forest" }));
+    });
+    await page.reload();
+    await expect.poll(() => desktop!.evaluate(() => (globalThis as unknown as { titleColors: unknown }).titleColors)).toEqual({ color: "#8bc6a0", symbolColor: "#111111", height: 36 });
+    assert.equal(await page.evaluate(async () => {
+      try { await window.reqwizitDesktop!.setTitleBarColors("red", "#ffffff"); return false; } catch { return true; }
+    }), true);
+    await page.evaluate(() => localStorage.removeItem("reqwizit-appearance"));
+    await page.reload();
+  } else {
+    await expect(page.locator(".desktop-titlebar")).toHaveCount(0);
+  }
   // Test IPC with native boundary stubs; do not open a user's browser or folder picker.
   await desktop.evaluate(({ dialog, shell }, directory) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] });
@@ -64,7 +106,7 @@ try {
   const reopened = new ProjectStore(join(directory, "projects.sqlite"));
   assert.equal(reopened.get(project.id).name, project.name);
   reopened.close();
-  console.log("Desktop checks passed: real SQLite continuity/relaunch, isolated renderer, native IPC, web-link restrictions, window-close and menu Quit process exit/backend shutdown, saved project retention. Screenshot: .reqwizit-state/desktop.png");
+  console.log("Desktop checks passed: branded assets, Windows draggable title bar/native window states/theme IPC, real SQLite continuity/relaunch, isolated renderer, native IPC, web-link restrictions, window-close and menu Quit process exit/backend shutdown, saved project retention. Screenshot: .reqwizit-state/desktop.png");
 } finally {
   await desktop?.close();
   await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

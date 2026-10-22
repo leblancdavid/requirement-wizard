@@ -66,7 +66,7 @@ export function AppMenu({ projects, activeID, newProject, openProject, selectPro
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
     </button>
     {open && <nav id="application-menu" className="app-menu-panel" aria-label="Application" ref={panel}>
-      <div className="app-menu-brand">✦ Reqwizit</div>
+      <div className="app-menu-brand"><img src="/reqwizit.svg" width="24" height="24" alt="" /> Reqwizit</div>
       <button onClick={() => choose(newProject)}>New project</button>
       <button onClick={() => choose(openProject)}>Open project</button>
       <button aria-expanded={recentOpen} aria-controls="recent-workspaces" onClick={() => setRecentOpen(!recentOpen)}>Recent workspaces <span aria-hidden="true">{recentOpen ? "▾" : "▸"}</span></button>

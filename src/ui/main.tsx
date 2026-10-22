@@ -43,6 +43,7 @@ import { AttemptCleanup } from "./attempt-cleanup.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { GapContinuation } from "./gap-continuation.js";
 import { AppMenu } from "./app-menu.js";
+import { DesktopTitleBar } from "./desktop-titlebar.js";
 
 type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: (Job & { gapContinuationAvailable?: boolean })[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
@@ -378,6 +379,7 @@ function App() {
   const resolvedAttempts = useMemo(() => project && data ? resolvedReviewAttempts(project, data.submissions) : new Map(), [project, data?.submissions]);
 
   return <ActionScope reason={discoveryReason || "Wait for the current save to finish."}><div className="app">
+    <DesktopTitleBar />
     {issue && issue.projectID === project?.id && data && <IssueDialog key={project.id} close={() => setIssue(undefined)}>
       <p>Current saved information · Actions use the same checks as Review. Closing returns you to your previous view.</p>
       {error && <p role="alert">{error}</p>}

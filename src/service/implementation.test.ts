@@ -683,7 +683,7 @@ test("assessment refuses an empty approved scope instead of reporting a successf
   } finally { store.close(); }
 });
 
-test("an oversized single requirement pauses before inference, preserves human decisions, and never advances to another task", async () => {
+test("oversized coding pauses before inference while assessment retains every blocker and human decision", async () => {
   await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
   const root = await mkdtemp(resolve(".reqwizit-state/tests/context-block-")), store = new ProjectStore(":memory:");
   let calls = 0;
@@ -715,8 +715,67 @@ test("an oversized single requirement pauses before inference, preserves human d
     service.start(p.id, p.revision, "assess"); await until(service, p.id); state = store.execution(p.id);
     assert.equal(state.assessmentRuns!.at(-1)!.status, "blocked"); assert.equal(state.assessmentRuns!.at(-1)!.completedIDs.length, 0);
     assert.ok(state.assessmentRuns!.at(-1)!.contextBlock); assert.equal(calls, 0);
+    assert.equal(Object.values(state.assessmentRuns!.at(-1)!.contexts!).filter((c) => c.characters > c.budget).length, p.requirements.length);
     assert.deepEqual(store.get(p.id).sources.filter((s) => s.kind === "note").map((s) => s.text), humanTexts);
   } finally { await service.close(); store.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("assessment skips multiple oversized targets in both phases, preserves dated evidence and reuses completed checkpoints after reopen", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const root = await mkdtemp(resolve(".reqwizit-state/tests/skip-context-")), database = join(root, "state.sqlite");
+  const workspace = join(root, "repo"); await mkdir(workspace);
+  let store = new ProjectStore(database), service: ImplementationService | undefined;
+  const calls: string[] = [];
+  class MetadataGit extends GitDelivery {
+    override async git(args: string[]) { if (args[0] === "rev-parse") return root; throw new Error(`Unexpected Git operation ${args[0]}`); }
+    override async localPreflight() {}
+    override async preflight() { return workspace; }
+    override async worktree() { return workspace; }
+    override at() { return this; }
+    override async head() { return "base"; }
+    override async verification() { return []; }
+    override async clean() { return true; }
+  }
+  const adapter: ExecutionAdapter = { async perform(request) {
+    calls.push(request.requirementID!);
+    const context = JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"requirement"') + 1));
+    return JSON.stringify({ status: "partial", explanation: "Captured behavior", evidenceIDs: [context.evidence[0].id], scenarios: [{ index: 0, status: "partial", explanation: "Restart remains unverified" }] });
+  } };
+  const open = () => new ImplementationService(store, adapter, (path, config, signal) => new MetadataGit(path, config, signal));
+  try {
+    await writeFile(join(workspace, "README.md"), "Captured capability behavior\n");
+    let p = seed(store, 4);
+    const ids = p.requirements.map((r) => r.id), blockedIDs = ids.slice(1, 3), fittingIDs = [ids[0]!, ids[3]!];
+    p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "large", title: "Large", purpose: "Large decision context", dependencies: [] },
+      ...blockedIDs.map((recordID) => ({ type: "move" as const, recordID, epicID: "large" }))]);
+    store.connectWorkspace(p.id, p.revision, workspace); service = open(); service.configure(p.id, p.revision, config());
+    service.start(p.id, p.revision, "check"); await until(service, p.id);
+    assert.equal(calls.length, 8);
+    const old = store.execution(p.id);
+    for (let i = 0; i < 5; i++) p = store.note(p.id, p.revision, `Constraint ${i}: ${"Exact human constraint ".repeat(500)}`, "large");
+    calls.length = 0;
+    service.start(p.id, p.revision, "check", {}, { force: true }); await until(service, p.id);
+    let state = store.execution(p.id);
+    assert.deepEqual(calls, [...fittingIDs, ...fittingIDs], "Neither blocked target reaches the adapter; fitting targets on both sides continue");
+    for (const run of state.assessmentRuns!.slice(-2)) {
+      assert.equal(run.status, "blocked"); assert.deepEqual(run.completedIDs, fittingIDs);
+      assert.deepEqual(Object.keys(run.contexts!).filter((id) => run.contexts![id]!.characters > run.contexts![id]!.budget), blockedIDs);
+      assert.equal(run.currentRequirementID, undefined); assert.match(run.stage, /context blockers/);
+    }
+    assert.match(state.assessmentStatus!, /Assessed 2\/4/); assert.match(state.assessmentStatus!, /2 context blocked/);
+    for (const id of blockedIDs) {
+      assert.deepEqual(state.workspaceAssessments![id], old.workspaceAssessments![id]);
+      assert.deepEqual(state.mainAssessments![id], old.mainAssessments![id]);
+      assert.equal(assessmentCurrent(p, state, id), false, "Dated findings cannot certify new decisions");
+    }
+    const saved = structuredClone(state);
+    await service.close(); store.close(); store = new ProjectStore(database); service = open();
+    assert.deepEqual(store.execution(p.id), saved, "Block diagnostics and original results survive upgrade/reopen unchanged");
+    calls.length = 0;
+    service.start(p.id, p.revision, "check"); await until(service, p.id); state = store.execution(p.id);
+    assert.deepEqual(calls, [], "Explicit incremental retry does not replay completed fitting targets or infer blocked ones");
+    assert.deepEqual(state.assessmentRuns!.slice(-2).map((run) => run.reused), [2, 2]);
+  } finally { await service?.close(); store.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 test("assessment fetches bounded evidence windows for one target in fresh sessions and never cites indexed-only content", async () => {

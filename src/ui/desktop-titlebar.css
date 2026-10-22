@@ -1,0 +1,12 @@
+.app:has(.desktop-titlebar) { padding-top: 36px; }
+.desktop-titlebar {
+  position: fixed; inset: 0 0 auto; height: 36px; z-index: 50;
+  display: flex; align-items: center; gap: 8px;
+  padding-left: max(12px, env(titlebar-area-x, 0px));
+  width: env(titlebar-area-width, 100%);
+  background: var(--accent); color: var(--on-accent);
+  font-size: 12px; font-weight: 600; user-select: none;
+  app-region: drag; -webkit-app-region: drag;
+}
+.desktop-titlebar img { pointer-events: none; }
+.app:has(.desktop-titlebar) .topbar { top: 36px; }

@@ -19,6 +19,43 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Assessment context packing and isolated blockers
+
+Saved formats remain SQLite schema 3/execution schema 1; no data transformation or
+startup replay is needed. Assessment now also uses the existing lossless record-table
+wire encoding for decisions, guardrails, supporting requirements, questions/options
+and research when text/ID sharing alone exceeds the cap. This changes representation
+only: exact values/order, missing-vs-null fields, expanded IDs and current file bytes
+remain unchanged. The 48,000-character cap, context policy, assessment semantic identity
+and relevant-input fingerprints are unchanged, preserving compatible completed work.
+
+Assessment context-size failures now populate the existing per-requirement `contexts`
+map with their over-budget manifest and retain the first legacy `contextBlock`. Older
+runs without these entries remain readable without inventing per-target diagnostics.
+Each blocker is checkpointed normally; blocked targets never enter `completedIDs` or
+overwrite earlier findings/delivery evidence. Other requirements and the independent
+main phase can continue; affected phases finish blocked. Cancellation/non-context
+failures still stop, retaining prior checkpoints. Coding remains stop-on-blocker.
+Publication/session details remain local and are omitted from portable continuation
+as before. Explicit incremental retry reuses compatible completed results after reopen;
+no schema or concurrency-version migration is required.
+
+Verification (2026-10-21): all 557 deterministic tests passed on Node 22.23.3,
+including existing migration fixtures and the new multi-blocker checkpoint/reopen
+test. An additional 18 context/storage/migration checks passed after strengthening
+the non-mutation assertions. Type checking, desktop compilation, production UI build
+and main browser checks passed. The separate portable browser check remains blocked
+by an ambiguous `Open shared checkpoint` selector. No live inference was performed.
+
+## Desktop branding and integrated Windows title bar (presentation only)
+
+The Q/checkmark assets and native Windows overlay change no persisted formats or
+freshness rules. Existing appearance preferences supply accent/contrast colors
+unchanged; no new settings keys, schema versions or data transformations. Saved
+decisions, IDs, history, assessments and completed evidence remain untouched.
+Staged and packaged desktop checks reopen an existing Node-created store and verify
+saved-project continuity and shutdown without model calls.
+
 ## Application menu and recent workspaces (presentation/local preference only)
 
 No SQLite, portable-state, artifact, assessment, fingerprint or job format changes.
