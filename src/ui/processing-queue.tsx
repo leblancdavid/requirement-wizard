@@ -33,6 +33,10 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const saved = submissions.filter((item) => item.status === "saved");
   const [task = "Preparing discovery…", ...stage] = (progress.at(-1) ?? "Preparing discovery…").split("\n");
   const failed = lastJob && ["failed", "stale", "interrupted"].includes(lastJob.status);
+  const gapOutcome = !active && !refinementProgress && progress.length > 0 && (lastJob?.context?.questionTarget !== undefined
+    || progress.some((message) => message.startsWith("Finding gaps ·") || message.startsWith("Question target reached:")));
+  const outcomeMessage = !active && (refinementProgress || gapOutcome) ? progress.at(-1) : undefined;
+  const jobDiagnostic = !active && failed ? lastJob.diagnostic : undefined;
   const running = activities.filter((item) => item.active);
   const recent = activities.filter((item) => !item.active);
   const working = active || running.length > 0;
@@ -79,13 +83,13 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
     </div>
     {open && <ActionScope><Modal id="processing-queue" className="queue-drawer" titleID="queue-title" title="Processing & queue" close={() => setOpen(false)} closeLabel="Close processing queue" headerClassName="queue-drawer-heading" bodyClassName="queue-panel"
       description={<p role="status">{taskCount} active {taskCount === 1 ? "task" : "tasks"} · Responses: {processing.length} processing · {waiting.length} waiting{attentionCount ? ` · ${attentionCount} need attention` : ""}{paused ? " · Discovery paused" : ""}</p>}>
-        {error && <p role="alert" className="job-error">{error}</p>}
+        {error && error !== outcomeMessage && error !== jobDiagnostic && <p role="alert" className="job-error">{error}</p>}
         <p>All project areas · Discovery, scans, implementation, verification, delivery and question help. Each queued response receives its own follow-up.</p>
         {running.map((item) => <section key={item.id} aria-label={item.title}><h3>{item.title}</h3><span className="badge">{item.status}</span><ActivityFeedback label={item.stage ?? item.title} completed={item.completed} total={item.total} />{item.detail && <p>{item.detail}</p>}{item.stop && <button className="secondary" disabled={stopDisabled} onClick={() => stopActivity(item.stop!)}>Stop {item.title === "Question help" ? "question help" : "implementation"}</button>}</section>)}
         {active && <section aria-label="Current task"><h3>{refinement?.headline ?? task}</h3><ActivityFeedback label={refinement?.label ?? (stage.join(" ") || task)} completed={completed} total={total} />{refinement && <><p>{task}{stage.length ? ` · ${stage.join(" ")}` : ""}</p><p>Progress covers this run only, with up to 20 overlap checks followed by unfinished wording checks. Ineligible work is skipped; further overlaps may remain. Proposed changes still need your approval.</p></>}<button className="secondary" disabled={stopDisabled} onClick={stop}>Stop</button>{!processing.length && !refinement && <p>The active round is exploring existing project information; queued responses join the next round.</p>}</section>}
         {!active && refinement && <section aria-label="Refinement outcome"><h3>{refinement.headline}</h3><p>{refinement.label}</p><p>{progress.at(-1)}</p></section>}
-        {!active && !refinement && progress.length > 0 && (lastJob?.context?.questionTarget !== undefined || progress.some((message) => message.startsWith("Finding gaps ·") || message.startsWith("Question target reached:"))) && <section aria-label="Gap scan outcome"><h3>Gap scan outcome</h3><p>{progress.at(-1)}</p></section>}
-         {!active && failed && <p className="job-error">Last {lastJob.kind === "scan" ? "scan" : "round"} {lastJob.status}: {lastJob.diagnostic}</p>}
+        {gapOutcome && <section aria-label="Gap scan outcome"><h3>Gap scan outcome</h3><p role={jobDiagnostic === outcomeMessage ? "alert" : undefined}>{outcomeMessage}</p></section>}
+         {jobDiagnostic && jobDiagnostic !== outcomeMessage && <p role="alert" className="job-error">Last {lastJob!.kind === "scan" ? "scan" : "round"} {lastJob!.status}: {jobDiagnostic}</p>}
          {!active && lastJob && continueExploration && <GapContinuation key={lastJob.id} job={lastJob} available={continuationAvailable} disabled={disabled} continueExploration={continueExploration} />}
           {!active && lastJob && (lastJob.gapReport || lastJob.epicReviewReport) && <GapExplorationStatus job={lastJob} project={project} />}
         {paused && <p role="status">Discovery is paused. Saved submissions are retained.</p>}

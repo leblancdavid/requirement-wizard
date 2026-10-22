@@ -31,6 +31,7 @@ const connections: Connections = {
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {},
 };
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(_p, { context }) {
+  if (_p.name === "Failed gap outcome browser") return { summary: 42 };
   if (_p.name === "Epic question target browser") {
     const review = context.manifest.epicReview!;
     targetCalls++;
@@ -120,6 +121,36 @@ try {
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("10");
   assert.equal(targetCalls, 4, "Reload retains the target without starting inference");
+  let sizeProject = store.create("Oversized human evidence browser", "Keep shared constraints exact", { providerID: "openai", modelID: "fixture" });
+  for (let i = 0; i < 18; i++) sizeProject = store.note(sizeProject.id, sizeProject.revision,
+    Array.from({ length: 1400 }, (_, n) => `Guardrail-${i}-${n.toString(36)}-${(n * 17 + i).toString(36)}`).join(" ").slice(0, 11000), "project");
+  await page.reload();
+  await (await workspaceMenu(page)).getByRole("button", { name: /Oversized human evidence browser/ }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  await review.click();
+  await expect(review).toBeEnabled();
+  await page.locator(".topbar .queue-trigger").click();
+  await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("Gap exploration blocked: all");
+  await expect(status).toContainText("no packages could be reviewed");
+  await status.getByText("Evidence blockers", { exact: true }).click();
+  await expect(status).toContainText("Largest exact records before lossless encoding");
+  assert.equal(calls, 2); assert.equal(targetCalls, 4, "Size blockers make no model calls");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-size-blocked.png"), fullPage: true });
+  let failedProject = store.create("Failed gap outcome browser", "Exercise one failed gap outcome", { providerID: "openai", modelID: "fixture" });
+  failedProject = store.note(failedProject.id, failedProject.revision, "Clarify order retry behavior", "project");
+  await page.reload();
+  await (await workspaceMenu(page)).getByRole("button", { name: /Failed gap outcome browser/ }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  await review.click(); await expect(review).toBeEnabled();
+  await page.locator(".topbar .queue-trigger").click();
+  const diagnostic = store.jobs(failedProject.id).at(-1)!.diagnostic!;
+  assert.ok(diagnostic);
+  const outcome = page.getByRole("region", { name: "Gap scan outcome", exact: true });
+  await expect(outcome).toContainText(diagnostic);
+  const dialogText = await page.getByRole("dialog", { name: "Processing & queue" }).innerText();
+  assert.equal(dialogText.split(diagnostic).length - 1, 1, "A failed round repeated in progress is shown only once");
+  await expect(page.getByText(/^Last round failed:/)).toHaveCount(0);
   assert.deepEqual(errors, []);
   console.log("Epic review browser check passed: selected epic, blocker/next-package routing, no-call reuse, reload and mobile layout; no model calls.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-epic-review-failure")); throw error; }

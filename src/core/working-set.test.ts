@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import Database from "better-sqlite3";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildContext, ContextBudgetError } from "./context.js";
@@ -11,6 +12,8 @@ import { DiscoveryService } from "../service/discovery.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 import { planGapContext } from "./gap-context.js";
+import { retrievalEvidenceBasis } from "./gap-retrieval.js";
+import { epicReviewContext, planEpicReview } from "./epic-review.js";
 
 const empty = (): Analysis => ({ summary: "Updated interpretation", goals: ["Changed goal"], actors: [], assumptions: [],
   questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [],
@@ -43,8 +46,138 @@ function decodeContext<T>(input: unknown): T {
     }
     return value;
   };
-  return decode(input) as T;
+  const decoded = decode(input) as { reviewSnapshotEncoding?: unknown; sources?: { requirementID?: string; text: unknown }[];
+    requirements?: { id: string; statement: string; acceptance: string[] }[] };
+  if (decoded.reviewSnapshotEncoding) for (const source of decoded.sources ?? []) {
+    const ref = (source.text as { reviewSnapshotReference?: { requirementID: string; decision: string; addendum: string } })?.reviewSnapshotReference;
+    if (!ref) continue;
+    const requirement = decoded.requirements!.find((r) => r.id === ref.requirementID)!;
+    assert.equal(source.requirementID, requirement.id);
+    source.text = `Requirement ${requirement.id}: ${requirement.statement}\nAcceptance scenarios: ${JSON.stringify(requirement.acceptance)}\nHuman decision: ${ref.decision}\nAddendum: ${ref.addendum}`;
+  }
+  return decoded as T;
 }
+
+function snapshotHeavyProject(store: ProjectStore, count: number) {
+  const p = store.create("Project-wide approval context", "Preserve exact project-wide constraints", { providerID: "openai", modelID: "fixture" });
+  for (let i = 0; i < count; i++) {
+    const acceptance = Array.from({ length: 8 }, (_, n) => `Scenario ${i}-${n}: retain the original observable order behavior exactly.`);
+    const r = { id: `requirement-${i}`, epicID: "project", status: "accepted" as const,
+      statement: `Project-wide behavior ${i}: retain the specific order lifecycle and its visible recovery rules.`,
+      rationale: "Generated explanation", acceptance, sourceIDs: [p.sources[0]!.id, `approval-${i}`, `answer-${i}`], reviewNote: "" };
+    p.requirements.push(r);
+    p.sources.push({ id: `approval-${i}`, kind: "confirmation", epicID: "project", requirementID: r.id,
+      text: `Requirement ${r.id}: ${r.statement}\nAcceptance scenarios: ${JSON.stringify(acceptance)}\nHuman decision: accepted\nAddendum: ` },
+      { id: `answer-${i}`, kind: "answer", epicID: "project", questionID: `question-${i}`, text: `Keep the original recovery behavior for order category ${i}, including retained history.` });
+    p.questions.push({ id: `question-${i}`, epicID: "project", status: "answered", sourceID: `answer-${i}`,
+      text: `What recovery behavior should order category ${i} retain?`, whyItMatters: "Recovery matters", evidenceIDs: [p.sources[0]!.id],
+      options: [{ label: `Keep category ${i}`, consequence: `Preserve existing category ${i} behavior` }, { label: `Change category ${i}`, consequence: `Specify category ${i} behavior` }] });
+  }
+  return p;
+}
+
+test("canonical approval snapshots round-trip losslessly with identical evidence identities and exact addenda", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = snapshotHeavyProject(store, 3), r = p.requirements[1]!, approval = p.sources.find((s) => s.id === "approval-1")!;
+    const addendum = "  Keep this human exception exactly.\r\nDo not infer that earlier choices were resolved.  ";
+    approval.text += addendum; approval.reviewAddendum = true; r.reviewNote = addendum;
+    const historical = p.requirements[2]!;
+    p.sources.push({ id: "older-rejection", epicID: "project", kind: "rejection", requirementID: historical.id,
+      text: `Requirement ${historical.id}: ${historical.statement}\nAcceptance scenarios: ${JSON.stringify(historical.acceptance)}\nHuman decision: rejected\nAddendum:  Earlier human rejection remains history.\r\n` });
+    historical.sourceIDs.push("older-rejection");
+    p.sources.push({ id: "unknown-review", epicID: "project", kind: "confirmation", requirementID: r.id, text: "Unrecognized approval prose must remain exact.\r\n" });
+    r.sourceIDs.push("unknown-review");
+    const before = structuredClone(p), task = { isolatedTask: true, gapExploration: true, focusEpicID: "project", recordIDs: [p.requirements[0]!.id], expandMandatory: true };
+    const full = planContext(p, task), compact = planContext(p, { ...task, compactReviewSnapshots: true });
+    const decoded = decodeContext<{ sources: Project["sources"]; requirements: Project["requirements"] }>(compact.data);
+    const original = decodeContext<typeof decoded>(full.data);
+    assert.deepEqual(decoded.sources, original.sources); assert.deepEqual(decoded.requirements, original.requirements);
+    assert.deepEqual(retrievalEvidenceBasis(compact), retrievalEvidenceBasis(full));
+    assert.ok(JSON.stringify(compact.data).includes("reviewSnapshotReference"));
+    assert.equal(decoded.sources.find((s) => s.id === approval.id)!.text, approval.text);
+    assert.equal(decoded.sources.find((s) => s.id === "unknown-review")!.text, p.sources.at(-1)!.text);
+    assert.deepEqual(p, before);
+    const future = structuredClone(compact);
+    (future.data as { reviewSnapshotEncoding: { format: number } }).reviewSnapshotEncoding.format = 99;
+    assert.throws(() => retrievalEvidenceBasis(future), /Unsupported lossless approval/);
+    const missing = structuredClone(compact);
+    (missing.data as { requirements: unknown[] }).requirements = [];
+    assert.throws(() => retrievalEvidenceBasis(missing), /Invalid lossless approval/);
+    // Ambiguous envelopes and historical wording that differs cannot use a reference.
+    approval.text += "\nAddendum: ambiguous second marker";
+    historical.statement += " Changed after that approval.";
+    const changed = planContext(p, { ...task, compactReviewSnapshots: true });
+    assert.equal((changed.data as { sources: { id: string; text: unknown }[] }).sources.find((s) => s.id === approval.id)!.text, approval.text);
+    assert.equal((changed.data as { sources: { id: string; text: unknown }[] }).sources.find((s) => s.id === "approval-2")!.text,
+      p.sources.find((s) => s.id === "approval-2")!.text);
+  } finally { store.close(); }
+});
+
+test("approval-heavy workflow finals recover across repeated reopen without replay or evidence changes", async () => {
+  const root = join(process.cwd(), ".reqwizit-state", "tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "approval-wire-upgrade-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = snapshotHeavyProject(store, 65);
+    store.close();
+    const db = new Database(path);
+    db.transaction(() => {
+      db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(p), p.id);
+      db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(p), p.id, p.revision);
+    })(); db.close(); store = new ProjectStore(path);
+    const original = store.get(p.id); let calls = 0;
+    store.finishJob = () => { throw new Error("Interrupted after the exact final checkpoint"); };
+    const failed = await new DiscoveryService(store, { async analyze(_project, { context }) {
+      calls++; assert.match(JSON.stringify(context.data), /reviewSnapshotReference/);
+      return { summary: "Bounded review", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] };
+    } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "project" });
+    assert.equal(failed.status, "failed", failed.diagnostic); assert.ok(failed.retrievalWork?.final);
+    assert.equal(failed.retrievalWork.attempts, 1); assert.deepEqual(store.get(p.id), original);
+    store.close(); store = new ProjectStore(path);
+    const recovered = await new DiscoveryService(store, { async analyze() { assert.fail("Do not replay completed model output after representation recovery"); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "project" });
+    assert.equal(recovered.status, "completed", recovered.diagnostic); assert.equal(recovered.retrievalWork!.attempts, 1);
+    assert.equal(calls, 1); assert.deepEqual(store.getJob(failed.id), failed);
+    const snapshot = store.get(p.id), jobs = store.jobs(p.id);
+    assert.deepEqual(snapshot.sources, original.sources); assert.deepEqual(snapshot.requirements, original.requirements);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.get(p.id), snapshot); assert.deepEqual(store.jobs(p.id), jobs);
+    }
+    const plan = planEpicReview(snapshot, store.epicReviewHistory(p.id), "project", [], (revision) => store.get(p.id, revision));
+    assert.equal(plan.tasks.find((t) => t.review.packageID === recovered.context!.epicReview!.packageID)!.state, "reviewed");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("distributed project-wide approval history fits without dropping questions, requirements or human sources", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = snapshotHeavyProject(store, 65), before = structuredClone(p);
+    const task = { isolatedTask: true, gapExploration: true, focusEpicID: "project", recordIDs: [p.requirements[0]!.id], expandMandatory: true, deferWorkspaceEvidence: true };
+    let originalCharacters = 0;
+    assert.throws(() => planContext(p, task), (error) => {
+      assert.ok(error instanceof ContextBudgetError); originalCharacters = error.manifest.characters; return true;
+    });
+    const compact = planContext(p, { ...task, compactReviewSnapshots: true });
+    assert.ok(compact.manifest.characters <= 96000);
+    const decoded = decodeContext<{ sources: Project["sources"]; requirements: Project["requirements"]; questions: Project["questions"] }>(compact.data);
+    for (const source of p.sources) assert.equal(decoded.sources.find((s) => s.id === source.id)!.text, source.text);
+    for (const requirement of p.requirements) {
+      const actual = decoded.requirements.find((r) => r.id === requirement.id)!;
+      assert.equal(actual.statement, requirement.statement); assert.deepEqual(actual.acceptance, requirement.acceptance);
+    }
+    for (const question of p.questions) {
+      const actual = decoded.questions.find((q) => q.id === question.id)!;
+      assert.equal(actual.text, question.text); assert.deepEqual(actual.options, question.options); assert.equal(actual.sourceID, question.sourceID);
+    }
+    assert.deepEqual(p, before);
+    const workflow = epicReviewContext(p, { format: 1, packageID: "approval-heavy-fixture", inputKey: "0".repeat(64),
+      epicID: "project", epicIDs: ["project"], kind: "workflow", recordIDs: [p.requirements[0]!.id] });
+    assert.ok(workflow.manifest.characters <= 96000); assert.match(JSON.stringify(workflow.data), /reviewSnapshotReference/);
+    console.log(JSON.stringify({ comparison: "lossless-project-wide-approval-snapshots", requirements: p.requirements.length, originalCharacters, characters: workflow.manifest.characters }));
+  } finally { store.close(); }
+});
 
 function seed(store: ProjectStore): Project {
   const initial = store.create("Large area", "  Keep original idea\n", { providerID: "openai", modelID: "fixture" });

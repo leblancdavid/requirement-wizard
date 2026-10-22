@@ -11,7 +11,7 @@ import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSch
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
 import { planEpicReview, epicReviewContext, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
-import { epicReviewBlockedSchema } from "../core/epic-review-types.js";
+import { epicReviewBlockedSchema, epicReviewDiagnostic } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
 import { prepareScanAnalysis } from "../core/scan.js";
@@ -328,7 +328,7 @@ export class DiscoveryService {
         };
         const block = (reason: string, finish = false): Job => {
           reviewReport.pending--; reviewReport.blocked++;
-          reviewReport.blockers = [{ packageID: review.packageID, epicID: review.epicID, reason }, ...reviewReport.blockers].slice(0, 20);
+          reviewReport.blockers = [{ packageID: review.packageID, epicID: review.epicID, reason: epicReviewDiagnostic(reason) }, ...reviewReport.blockers].slice(0, 20);
           if (finish) {
             controller.signal.throwIfAborted();
             const blocked = this.store.finishEpicReviewBlocked(job.id, reviewReport);
@@ -376,7 +376,10 @@ export class DiscoveryService {
               includedIDs: [...context.manifest.includedIDs], request, sessionID: this.store.getJob(job.id).sessionID });
             checkpoint();
             try { context = epicReviewContext(project, review, request.retrieveEvidence.recordIDs, true); }
-            catch (error) { if (error instanceof ContextBudgetError) return block("The requested exact evidence and human guardrails exceed the context bound; no evidence was truncated."); throw error; }
+            catch (error) {
+              if (error instanceof ContextBudgetError) return block(`The requested exact evidence and human guardrails exceed the context bound; no evidence was truncated. ${error.message.replace("No model call was made", "No additional request was made for the oversized stage; earlier attempts are retained")}`);
+              throw error;
+            }
             continue;
           }
           if (JSON.stringify(raw)?.length > 96000) throw new Error("Epic review output exceeds the 96,000-character saved-output bound.");

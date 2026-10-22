@@ -5,7 +5,7 @@ import { planContext } from "./working-set.js";
 import { gapEvidence } from "./gap-backlog.js";
 import { decisionAvailability } from "./decision-availability.js";
 import { retrievalEvidenceBasis, validateGapFinal } from "./gap-retrieval.js";
-import { epicReviewSchema, type EpicReview, type EpicReviewReport } from "./epic-review-types.js";
+import { epicReviewDiagnostic, epicReviewSchema, type EpicReview, type EpicReviewReport } from "./epic-review-types.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export function epicReviewOutsideArea(context: ContextPack, output: Analysis): string | undefined {
@@ -46,24 +46,43 @@ function groups(project: Project, records: Record[], size: number): Record[][] {
 }
 
 export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false): ContextPack {
-  const context = planContext(project, { focusEpicID: review.epicID, requiredEpicIDs: review.epicIDs,
+  const task = { focusEpicID: review.epicID, requiredEpicIDs: review.epicIDs,
     recordIDs: [...new Set([...review.recordIDs, ...extraIDs])], isolatedTask: true, gapExploration: true,
     supportingRecordIDs: project.questions.filter((q) => q.status !== "retired" && q.evidenceIDs?.some((id) => review.recordIDs.includes(id))).map((q) => q.id),
-    expandMandatory: true });
-  // Do not offer project-wide search. Exact linked records are already closed locally.
-  context.manifest.epicReview = review;
-  context.data = { ...(context.data as object),
-    retiredQuestionGuidance: project.questions.filter((q) => q.status === "retired" && context.manifest.epicIDs?.includes(q.epicID)).slice(-20).map((q) => ({ text: q.text, reason: q.retirementReason })),
-    epicWorkflowReview: {
-    kind: review.kind, recordIDs: review.recordIDs, epicIDs: review.epicIDs,
-    instruction: "Review these detailed records together as a candidate workflow package. Walk through actors, entry conditions, normal steps, state/data changes, permissions, failures/recovery and observable acceptance boundaries in ONE pass. For boundary packages inspect the displayed epic dependency and hand-off contracts. These locally grouped records are not proof of a complete workflow or exhaustive cross-epic coverage. Respect exact human decisions, avoid duplicate questions and distinguish proposals from approved behavior. Other packages/history have not been reviewed. Do not perform generic wording cleanup. Return only consequential evidence-backed gaps, or empty proposals when none are found. Never claim completeness or verified implementation.",
-    evidence: "The app prepared exact linked evidence before this request. Indexed labels are navigation only; do not cite them. No search/paging is available. If necessary, request ONE batch of up to eight displayed unseen IDs through retrieveEvidence. The next response must be final analysis or reviewBlocked with a specific missing-evidence reason; no second navigation is allowed. If the evidence is unavailable or insufficient, return ONLY {reviewBlocked:{reason:string}}, not unsupported proposals. Human constraints may not be truncated.",
-    finalResponseRequired: final,
-  } };
-  context.manifest.characters = JSON.stringify(context.data).length;
-  if (context.manifest.characters > context.manifest.budget) context.manifest.budget = 96000;
-  if (context.manifest.characters > 96000) throw new ContextBudgetError(context.manifest);
-  return context;
+    expandMandatory: true };
+  const prepare = (deferredWorkspace = false, compactReviewSnapshots = false): ContextPack => {
+    const context = planContext(project, { ...task, ...(deferredWorkspace ? { deferWorkspaceEvidence: true } : {}),
+      ...(compactReviewSnapshots ? { compactReviewSnapshots: true } : {}) });
+    // No project-wide search. Deferred links grant navigation, not evidence authority.
+    context.manifest.epicReview = review;
+    context.data = { ...(context.data as object),
+      retiredQuestionGuidance: project.questions.filter((q) => q.status === "retired" && context.manifest.epicIDs?.includes(q.epicID)).slice(-20).map((q) => ({ text: q.text, reason: q.retirementReason })),
+      epicWorkflowReview: {
+        kind: review.kind, recordIDs: review.recordIDs, epicIDs: review.epicIDs,
+        instruction: "Review these detailed records together as a candidate workflow package. Walk through actors, entry conditions, normal steps, state/data changes, permissions, failures/recovery and observable acceptance boundaries in ONE pass. For boundary packages inspect the displayed epic dependency and hand-off contracts. These locally grouped records are not proof of a complete workflow or exhaustive cross-epic coverage. Respect exact human decisions, avoid duplicate questions and distinguish proposals from approved behavior. Other packages/history have not been reviewed. Do not perform generic wording cleanup. Return only consequential evidence-backed gaps, or empty proposals when none are found. Never claim completeness or verified implementation.",
+        evidence: deferredWorkspace
+          ? "Exact requirement wording, acceptance scenarios and mandatory human decisions are loaded. Static workspace file contents may be deferred; their IDs and compact requirement previews are navigation only, not reviewed evidence. Ask about unknown intended behavior using detailed requirements, without claiming unseen code behavior. If exact file facts are necessary, request ONE batch of up to eight displayed unseen IDs through retrieveEvidence. The next response must be final analysis or reviewBlocked with a specific missing-evidence reason. No search/paging or second load is available. Cite only detailed included records; never truncate human constraints or infer preferences from previews."
+          : "The app prepared exact linked evidence before this request. Indexed labels are navigation only; do not cite them. No search/paging is available. If necessary, request ONE batch of up to eight displayed unseen IDs through retrieveEvidence. The next response must be final analysis or reviewBlocked with a specific missing-evidence reason; no second navigation is allowed. If the evidence is unavailable or insufficient, return ONLY {reviewBlocked:{reason:string}}, not unsupported proposals. Human constraints may not be truncated.",
+        finalResponseRequired: final,
+      } };
+    context.manifest.characters = JSON.stringify(context.data).length;
+    context.manifest.sectionCharacters = Object.fromEntries(Object.entries(context.data as object).map(([key, value]) => [key, JSON.stringify(value).length]));
+    if (context.manifest.characters > context.manifest.budget) context.manifest.budget = 96000;
+    if (context.manifest.characters > 96000) throw new ContextBudgetError(context.manifest);
+    return context;
+  };
+  try { return prepare(); }
+  catch (error) {
+    if (!(error instanceof ContextBudgetError) || review.recordIDs.length > (review.kind === "boundary" ? 2 : 1)) throw error;
+    // Split as before first, preserving existing package/check identities. At the
+    // minimum package only, defer static file motivation, never human decisions.
+    // Explicit extraIDs stay pinned, so an oversized exact load still blocks.
+    try { return prepare(true); }
+    catch (deferredError) {
+      if (!(deferredError instanceof ContextBudgetError)) throw deferredError;
+      return prepare(true, true);
+    }
+  }
 }
 
 /** Explicit epic selection or deterministic epic-by-epic order; workflow packages precede boundary passes. */
@@ -103,7 +122,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
         const middle = Math.ceil(records.length / 2);
         add(epicID, epicIDs, kind, records.slice(0, middle)); add(epicID, epicIDs, kind, records.slice(middle)); return;
       }
-      reason = "Exact linked evidence and mandatory human guardrails exceed 96,000 characters even after splitting to the minimum package (one workflow record or a two-sided boundary). Narrow the evidence/dependency scope; nothing was truncated.";
+      reason = `Exact evidence exceeds 96,000 characters after minimum-package splitting, static-file deferral and attempted lossless approval-snapshot encoding. No evidence was truncated. ${error.message}`;
     }
     if (context) {
       const withoutIdentity = { ...context, manifest: { ...context.manifest } };
@@ -174,7 +193,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   const report: EpicReviewReport = { format: 1, total: tasks.length,
     reviewed: tasks.filter((t) => t.state === "reviewed").length, pending: tasks.filter((t) => t.state === "pending").length,
     waiting: tasks.filter((t) => t.state === "waiting").length, blocked: tasks.filter((t) => t.state === "blocked").length,
-    modelCalls: 0, blockers: tasks.filter((t) => t.state === "blocked").slice(0, 20).map((t) => ({ packageID: t.review.packageID, epicID: t.review.epicID, reason: t.reason! })),
+    modelCalls: 0, blockers: tasks.filter((t) => t.state === "blocked").slice(0, 20).map((t) => ({ packageID: t.review.packageID, epicID: t.review.epicID, reason: epicReviewDiagnostic(t.reason!) })),
     explanation: "Revision-linked candidate workflow packages, followed by declared dependency-boundary passes. Reviews are bounded evidence checks, not specification completeness or implementation verification. Unrelated omitted history and all possible cross-epic record pairs are not reviewed. Legacy record/lens checks remain separate." };
   return { task: tasks.find((t) => t.state === "pending"), report, tasks };
 }

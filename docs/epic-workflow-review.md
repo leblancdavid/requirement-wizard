@@ -24,6 +24,45 @@ model-driven evidence search. Live usefulness/cost improvements have not been me
 
 ### Local packages and evidence
 
+2026-10-22 oversized-context recovery: preparation still prefers full exact linked
+evidence and the existing local package splits. If a minimum package (one workflow
+record or a two-sided boundary) still cannot fit, it retries with static workspace
+file motivation deferred. Requirement wording, acceptance scenarios and mandatory
+human decisions stay exact. Deferred file IDs remain navigation handles, not usable
+citations or claims about code; one explicit exact-load batch can retrieve them.
+Explicitly requested records are never deferred, so an oversized requested file
+still blocks. Surrounding omitted requirements have bounded statement/acceptance
+previews and counts in the optional navigation index, never authoritative summaries.
+These previews are derived afresh from current records without model calls or a
+persisted summary field. They cannot justify changes to omitted decisions.
+
+For a minimum package still oversized after file deferral, the builder additionally
+tries lossless approval-snapshot references. A canonical saved approval/rejection
+whose statement/scenarios exactly match a loaded requirement can share those fields
+by reference, retaining its original decision and complete human addendum. Unknown,
+ambiguous or mismatching historical snapshots stay as original strings. The model
+receives explicit expansion instructions; evidence hashing reconstructs the exact
+original string. This is structural compression, not an AI summary or deletion of
+old decisions, and leaves compatible evidence/checkpoint identities unchanged.
+The distributed 65-requirement/65-answered-question fixture drops from an over-budget
+133,387-character working set to a 90,977-character workflow request without dropping
+any human sources, statements, scenarios or question options. The real user's project
+and live model comprehension are not yet qualified by this fixture.
+
+Remaining oversized human evidence is not summarized away. Blockers now retain total
+and section sizes plus the largest exact record IDs/sizes before lossless encoding.
+App-generated diagnostic prose is bounded to the saved report's 1,200-character
+reason limit, with an explicit shortening marker; human evidence is never shortened.
+This corrects an initial diagnostic-overflow regression that mislabeled an internal
+report validation failure as model-output validation. Duplicate identical failure
+text from gap progress and the saved last-job diagnostic is shown once; distinct
+errors remain visible. Type checking, 48 focused tests and the focused epic browser
+check passed for this correction, including 20 oversized reasons and failed-outcome
+deduplication. No live model calls were made.
+An all-blocked run is labelled **Gap exploration blocked**, not a successful empty
+scan. Locally size-blocked packages are reconsidered on the next explicit exploration;
+startup never initiates model calls. This does not refresh whole-area coverage.
+
 - Locally group up to six active requirements and human notes per epic. Unresolved
   questions have separate waiting-only singleton packages; they never displace
   requirements into newly regrouped packages. Shared explicit evidence links are preferred, excluding the ubiquitous
@@ -129,6 +168,31 @@ rejection, corrected retry and older saved-final recovery across repeated reopen
 No live provider calls or browser checks were run for this service/prompt-only fix.
 
 ## Verification and remaining work
+
+Distributed approval fallback verification (2026-10-22): type checking, `npm test`
+(28 pretests / 607 main tests), latest 116 context/retrieval/epic tests, UI build and
+focused epic browser check passed on Windows Node 22.23.3. Exact round-trip and
+evidence-basis equality tests cover addenda, conflicting older decisions, ambiguous
+envelopes, changed requirement wording, unsupported encoding and missing targets.
+A disk-backed oversized approval-history fixture retains its final checkpoint through
+publication failure and repeated reopen, recovers without repeating inference and
+reuses the completed check. No live calls or user database inspection were performed.
+The earlier broader-browser failure below remains unqualified by this follow-up.
+
+Oversized-context recovery verification (2026-10-22): type checking, `npm test`
+(28 pretests / 603 main tests), latest 41/41 epic tests, UI production build and
+focused epic browser checks passed on Windows Node 22.23.3. Tests cover bounded
+file deferral, exact human/requirement preservation, explicit small-file loading,
+oversized explicit-load rejection, unseen-citation rejection, retained old no-call
+reports and completed-check reuse across reopen, and all-blocked no-inference
+outcomes. The focused browser check verifies expanded size diagnostics and mobile
+layout (`.reqwizit-state/browser-epic-size-blocked.png`). Portable and specification
+browser checks passed separately. `npm run test:browser` stopped at the resolution
+approval visibility assertion in `src/web/browser-check.ts:1293`; the complete browser
+suite is not passing. The existing >500 kB bundle warning remains. No live model
+calls or inspection of the user's saved project established that its particular
+blockers are resolved. Oversized shared human constraints still require explicit
+scope resolution; whole-area assessment refresh remains separate follow-on work.
 
 Evidence-blocker correction verification (2026-10-22): type checking, the full
 **584-test** deterministic suite, and the latest **38/38** epic tests passed on

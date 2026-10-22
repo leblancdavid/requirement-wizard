@@ -1,6 +1,6 @@
 import { buildContext, ContextBudgetError, type ContextPack } from "./context.js";
 import type { Project } from "./model.js";
-import { currentDecisionProjection } from "./current-decisions.js";
+import { currentDecisionProjection, reviewSnapshot } from "./current-decisions.js";
 import { gapInstructions, type GapLens } from "./gap-types.js";
 
 export type ContextTask = {
@@ -17,6 +17,8 @@ export type ContextTask = {
   supportingRecordIDs?: string[];
   /** Gap navigation can defer static file motivation, never human constraints. */
   deferWorkspaceEvidence?: boolean;
+  /** Last-resort lossless encoding of canonical approval snapshots against exact loaded requirements. */
+  compactReviewSnapshots?: boolean;
 };
 
 /** Lossless wire representation only; stored records and evidence IDs stay intact. */
@@ -282,7 +284,19 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
     || !!q.sourceID && taskIDs.has(q.sourceID)
     || project.requirements.some((r) => taskRequirementIDs.has(r.id)
       && r.sourceIDs.some((id) => id === q.id || id === q.sourceID))).map((q) => q.id));
+  const snapshotReferences = new Map<string, { requirementID: string; decision: string; addendum: string }>();
+  if (task.compactReviewSnapshots) {
+    const requirements = new Map(project.requirements.map((r) => [r.id, r]));
+    for (const source of project.sources) {
+      if (!source.requirementID) continue;
+      const snapshot = reviewSnapshot(source), requirement = requirements.get(source.requirementID);
+      if (!snapshot || !requirement || snapshot.statement !== requirement.statement
+        || JSON.stringify(snapshot.acceptance) !== JSON.stringify(requirement.acceptance)) continue;
+      snapshotReferences.set(source.id, { requirementID: requirement.id, decision: snapshot.decision, addendum: snapshot.addendum });
+    }
+  }
   const render = (ids: Set<string>, omitTaskExplanations = false, omitBackgroundExplanations = false) => {
+    const references = new Map([...snapshotReferences].filter(([sourceID, ref]) => ids.has(sourceID) && ids.has(ref.requirementID)));
     const omittedConsequences: { questionID: string; optionIndexes: number[] }[] = [];
     const questions = project.questions.filter((q) => ids.has(q.id)).map((q) => {
       // Exact question wording/options and answer links remain. Only generated
@@ -303,7 +317,10 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
     });
     const index = [...project.questions, ...project.requirements].filter((r) => !ids.has(r.id)).slice(-60)
       .map((r) => ({ id: r.id, epicID: r.epicID, status: r.status,
-        label: ("text" in r ? r.text : r.statement).slice(0, 120), labelIsExcerpt: true }));
+        label: ("text" in r ? r.text : r.statement).slice(0, 120), labelIsExcerpt: true,
+        ...("statement" in r ? { acceptanceCount: r.acceptance.length,
+          acceptancePreview: r.acceptance.slice(0, 2).map((scenario) => scenario.slice(0, 100)),
+          navigationOnly: true } : {}) }));
     const omittedQuestionWorkspaceEvidence = questions.flatMap((q) => {
       const evidenceIDs = (q.evidenceIDs ?? []).filter((id) => workspaceIDs.has(id) && !ids.has(id));
       return evidenceIDs.length ? [{ questionID: q.id, evidenceIDs }] : [];
@@ -320,6 +337,10 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       taskRecordIDs: [...taskIDs], partial: true,
       ...(task.deferWorkspaceEvidence ? { deferredGapEvidence: {
         explanation: "Saved workspace source links whose exact records are not in sources are navigation only. Their file contents have NOT been reviewed. Request exact linked IDs through evidenceRetrieval before citing or drawing conclusions from them. Static file motivation may be deferred even for the target requirement/question. All mandatory human constraints remain exact; file observations cannot establish preferences. A bounded completed check does not mean every linked file was read or exploration is complete.",
+      } } : {}),
+      ...(references.size ? { reviewSnapshotEncoding: {
+        format: 1,
+        explanation: "Lossless approval-snapshot encoding: a source text object containing only reviewSnapshotReference stands for the exact original string: 'Requirement ' + requirementID + ': ' + the loaded requirement's statement + '\\nAcceptance scenarios: ' + JSON.stringify(its acceptance array) + '\\nHuman decision: ' + decision + '\\nAddendum: ' + addendum. Resolve the exact loaded requirement after expanding record tables, identifiers and shared text. The app verified the entire canonical snapshot against that requirement before encoding it. Every human addendum and decision remains exact, including whitespace and older conflicting decisions. No approval, summary, preference or supersession is inferred. Other source text is unchanged; cite original IDs only.",
       } } : {}),
       ...(task.gapExploration ? { gapTask: { lens: task.gapLens ?? "behavior", supportingRecordIDs: task.supportingRecordIDs ?? [], instruction: gapInstructions[task.gapLens ?? "behavior"] } } : {}),
       ...(decisions ? { currentDecisions: { format: 1, omittedReviewHistory: [...decisions.omitted].filter(([id, item]) => !ids.has(id) && ids.has(item.requirementID))
@@ -354,7 +375,8 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       epicMap: active.map((e) => ({ id: e.id, title: e.title, dependencies: e.dependencies })),
       focusedEpics: active.filter((e) => selected.has(e.id)).map((e) => ({ id: e.id, title: e.title, ...(task.gapExploration ? { purpose: e.purpose } : {}) })),
       sources: project.sources.filter((s) => ids.has(s.id)).map((source) => decisions?.receipts.has(source.id) && !taskIDs.has(source.id)
-        ? { ...source, text: { approvedReviewReceipt: decisions.receipts.get(source.id)! } } : source), questions,
+        ? { ...source, text: { approvedReviewReceipt: decisions.receipts.get(source.id)! } }
+        : references.has(source.id) ? { ...source, text: { reviewSnapshotReference: references.get(source.id)! } } : source), questions,
       requirements: project.requirements.filter((r) => ids.has(r.id)).map((r) => {
         if (!omitBackgroundExplanations || !backgroundAccepted.has(r.id)) return r;
         const { rationale: _, ...evidence } = r; return evidence;
@@ -390,6 +412,7 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
         retainedReviewNoteSourceIDs: [...decisions!.addenda].filter((id) => ids.has(id)),
         projectedReceiptSourceIDs: [...decisions!.receipts.keys()].filter((id) => ids.has(id) && !taskIDs.has(id)) } } : {}),
       selectionReason: (task.isolatedTask ? (task.gapExploration ? "Bounded gap exploration; " : "Isolated single-submission pass; ") + "exact target evidence, project/dependency guardrails and feature notes retained. Unrelated feature history explicitly omitted." : "Budget-aware task pass; exact human guardrails, task evidence and unconfirmed requirement evidence pinned before optional AI detail.")
+        + (data.reviewSnapshotEncoding ? " Canonical approval snapshots reference exact loaded requirement text/scenarios losslessly; every decision and addendum is retained." : "")
         + (data.omittedQuestionWorkspaceEvidence ? " Historical answered-question workspace motivation is explicitly omitted where not otherwise required." : "")
         + (data.omittedRequirementWorkspaceEvidence ? " Historical workspace motivation for confirmed background requirements is explicitly omitted where not otherwise required." : ""),
       sectionCharacters: Object.fromEntries(Object.entries(data).map(([key, value]) => [key, JSON.stringify(value).length])) } };
@@ -477,7 +500,12 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
         if (result.manifest.characters <= result.manifest.budget) return result;
       }
     }
-    throw new ContextBudgetError(result.manifest);
+    const exact = render(included, true, true);
+    throw new ContextBudgetError(result.manifest, [
+      ...exact.sources.map((r) => ({ id: r.id, kind: `source/${r.kind}`, characters: JSON.stringify(r).length })),
+      ...exact.requirements.map((r) => ({ id: r.id, kind: "requirement", characters: JSON.stringify(r).length })),
+      ...exact.questions.map((r) => ({ id: r.id, kind: "question", characters: JSON.stringify(r).length })),
+    ]);
   }
   // Prefer related proposals and open questions, then recent optional detail.
   if (task.isolatedTask) return result;

@@ -16,6 +16,12 @@ export const epicReviewReportSchema = z.object({
   blockers: z.array(z.object({ packageID: z.string(), epicID: z.string(), reason: z.string().max(1200) }).strict()).max(20),
 }).strict().refine((r) => r.total === r.reviewed + r.pending + r.waiting + r.blocked, "Epic review counts must match.");
 export type EpicReviewReport = z.infer<typeof epicReviewReportSchema>;
+
+/** Bound app-generated diagnostics, never requirement text or human evidence. */
+export function epicReviewDiagnostic(reason: string): string {
+  const maximum = 1200, suffix = " … [diagnostic shortened]";
+  return reason.length <= maximum ? reason : reason.slice(0, maximum - suffix.length) + suffix;
+}
 export const epicReviewBlockedSchema = z.object({ reviewBlocked: z.object({
   reason: z.string().min(1).max(600),
 }).strict() }).strict();

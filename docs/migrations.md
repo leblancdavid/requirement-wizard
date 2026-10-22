@@ -19,6 +19,81 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Oversized workflow context recovery (2026-10-22)
+
+### Distributed approval-history fallback
+
+If splitting and static-file deferral still cannot fit a minimum workflow package,
+the builder additionally tries format-1 `reviewSnapshotEncoding` in the request
+only. Canonical approval/rejection source strings can reference an exact loaded
+requirement's matching statement/scenarios, plus the original decision and exact
+addendum. Canonical parsing checks the entire envelope and acceptance serialization;
+ambiguous/unknown prose and mismatching historical wording remain original strings.
+No human text is summarized, omitted or inferred; original sources are unchanged.
+
+Project/SQLite/portable formats, epic-review/retrieval formats, package membership
+and attempt ceilings stay unchanged. Exact evidence hashing expands snapshot
+references back to byte-identical strings and excludes only the encoding legend,
+so the existing `gap-stage-evidence-v1` identity is preserved. Older fitting contexts
+are tried unchanged first. Compatible stages/finals remain reusable, and publication
+still uses current revisions/leases. An unsupported encoding format or missing target
+fails closed. No startup inference, payload migration, history rewrite or allowance
+reset occurs; a previously local size blocker is reconsidered only on explicit retry.
+
+The synthetic distributed fixture retains all 65 requirements, 65 answered questions
+and all human sources, reducing the minimum review request from a previously blocked
+133,387-character working set to 90,977 characters including workflow instructions.
+This is a deterministic fixture result, not a measurement of the user's database.
+Tests verify exact round-trip, unchanged evidence hashes, addenda/older rejections,
+ambiguous and mismatched history, unsupported encoding rejection, and final-checkpoint
+recovery/repeated reopen without replay. Live provider comprehension and the user's
+actual saved project remain unverified.
+Verification for this fallback: type checking, `npm test` (28 pretests / 607 main
+tests), latest 116 focused context/retrieval/epic tests, UI build, focused epic browser
+check and whitespace check passed on Windows Node 22.23.3. The broader browser
+failure recorded below was not requalified by this backend-only follow-up.
+
+Diagnostic-bound correction: app-generated blocker messages are now explicitly
+shortened (with a visible marker) to the existing 1,200-character report-reason
+limit before validation. This affects diagnostic prose only, never exact evidence,
+fingerprints or stored decisions. The previous overflow failed report publication;
+it did not publish an invalid report or apply proposals. Failed job history remains
+unchanged, and explicit retry rebuilds the report without resetting saved model
+attempts. No schema widening, migration or data reset is needed. Type checking,
+48 focused tests and the epic browser check passed, including 20 overlong blockers
+and one-copy display of a failed diagnostic. The full suite was not rerun at that
+point; the later distributed-approval fallback run above includes this correction.
+
+Source and target remain project/SQLite formats unchanged, epic-review format 1 and
+retrieval-work format 1. There is no persisted summary field or schema migration.
+Compact requirement previews are derived navigation only, excluded from the existing
+exact-evidence basis just like other record-index labels. No saved source, requirement,
+assessment, review, checkpoint, spent allowance or original model output is rewritten.
+
+Existing exact-context planning and splitting are attempted first, preserving the
+package identities and evidence bases of previously usable/successful reviews. Only
+irreducibly oversized packages gain a fallback using the existing deferred-workspace
+evidence representation. Their exact human constraints remain pinned; explicitly
+requested extra records stay exact. Previously local size blockers had no successful
+review or inference checkpoint and can become eligible on explicit retry without
+resetting model attempts. Existing model-produced blockers/attempt exhaustion remain
+subject to exact evidence matching; no blanket blocker reset is introduced.
+
+Startup performs no inference. Explicit retry reconstructs current exact context;
+publication still uses revision/lease checks. Compatible completed reviews and saved
+loads/finals retain the existing recovery path. Oversized human evidence still blocks
+with more detailed diagnostics; it is not silently reclassified or summarized.
+Verification: type checking, `npm test` (28 pretests / 603 main tests), and the
+latest 41/41 epic tests passed on Windows Node 22.23.3. Upgrade coverage includes
+an older local no-call size-blocker report, exact snapshot/job preservation through
+repeated reopen, explicit fallback recovery, and subsequent completed-review reuse.
+The focused epic browser check passed including all-blocked diagnostics/mobile;
+portable and specification browser checks passed separately. The full browser command
+stopped at the resolution approval visibility assertion in `src/web/browser-check.ts`
+(line 1293), so a full browser pass is not claimed. No live model calls or user
+database inspection were performed; applicability to the user's particular large
+shared evidence remains to be checked by an explicit retry.
+
 ## Bounded implementation-planning candidates (2026-10-22)
 
 Source and target remain execution schema 1 / planning format 1, with unchanged

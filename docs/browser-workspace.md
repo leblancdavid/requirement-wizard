@@ -148,6 +148,25 @@ background track. The viewport-sized layout also accounts for the desktop titleb
 Settings and project creation use the same content scroller. No saved-data changes
 or migration are needed.
 
+All content below the header shares a horizontally centered, 1100px maximum-width
+container, including Settings, page navigation, notices and foreground progress
+feedback. Symmetric scrollbar gutters preserve centering relative to the header;
+panel-specific vertical margins and internal text alignment are unchanged. This is
+layout-only, with no saved-data or migration impact.
+The header's workspace tabs are also horizontally centered, including each wrapped
+row on narrow screens; tab order and navigation remain unchanged.
+Header tab-row centering assertions passed at 390, 1000, 1440 and 2666px, along
+with type checking, UI build and diff checking; the broader browser run still
+stopped later at the missing **Approve resolution** button described below.
+
+Centering verification (2026-10-22, Node 22.23.3): new browser assertions passed
+for Settings/navigation, creation/foreground progress at 390, 768, 1440 and 2666px,
+and the active workspace at 390, 1000, 1440 and 2666px. Type check, UI build,
+55 targeted UI tests and the specification browser runner passed. The broader
+browser runner later stopped on a missing **Approve resolution** button; the
+portable runner stopped on a duplicate **Open shared checkpoint** selector. Those
+flows are not claimed as passing for this change. No model calls were used.
+
 Verification (2026-10-21): type check, UI build and browser/portable-browser
 checks passed (browser tests on Node 22.23.3), including all five tabs staying
 fully visible below processing controls after scrolling at 1440px and 390px.
@@ -565,6 +584,25 @@ on Node 22, including alias collision atomicity, identical declaration/reference
 and explicit corrected-response retry. Live model behavior remains unverified.
 
 ## Exploring gaps in large projects
+
+Oversized workflow contexts now try a minimum-package fallback that defers static
+file contents while retaining exact requirements, scenarios and human constraints.
+Omitted requirements have compact navigation previews, not evidence-authoritative
+summaries. The explorer can request exact displayed file IDs within its existing
+one-batch allowance; oversized explicit loads still block. All-blocked runs say
+**Gap exploration blocked**, and expanded blockers include section sizes and largest
+exact record IDs/sizes. Large human sources are never silently truncated or replaced
+with summaries. Restart the updated app and explicitly select **Explore next gaps**
+to reconsider previously local size blockers. See [workflow recovery](epic-workflow-review.md).
+Blocker diagnostics respect the existing saved-report length bound and visibly mark
+shortened diagnostic text. Identical failed-job/progress errors appear once in
+Processing & queue rather than under both the gap outcome and last-round failure.
+Distributed project-wide approval history has an additional lossless fallback:
+canonical approval snapshots can reference the identical exact requirement wording
+and scenarios already loaded, retaining the original decision and entire addendum.
+This reduces duplication without summarizing human decisions or raising the input
+limit. Unknown or mismatching historical prose remains intact. Existing completed
+checks retain their evidence identities; explicitly retry exploration after restart.
 
 **Design → Explore next gaps** is the single action for combined, epic-scoped reviews.
 It prepares exact linked evidence locally, reviews up to six related records across all

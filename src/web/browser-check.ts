@@ -16,7 +16,16 @@ import { assessmentContextFingerprint } from "../core/execution-context.js";
 import { assessmentCurrent, emptyExecution, executionConfigSchema } from "../core/execution.js";
 import { planningConfigFingerprint, planningEdgeID } from "../core/implementation-planning.js";
 import { SnapshotEncoder, parseSnapshotTokens, snapshotHeader } from "./snapshot.js";
-import type { Route, APIResponse } from "@playwright/test";
+import type { Route, APIResponse, Page } from "@playwright/test";
+
+async function assertCenteredContent(page: Page, selector: string) {
+  const main = await page.locator("main").boundingBox();
+  const content = await page.locator(selector).boundingBox();
+  assert.ok(main && content, `${selector} is displayed`);
+  assert.ok(Math.abs(content.x + content.width / 2 - (main.x + main.width / 2)) < 1, `${selector} is horizontally centered below the header`);
+  assert.ok(content.width <= 1100, `${selector} retains the bounded reading width`);
+  assert.equal(await page.locator(".tab-content").evaluate((element) => element.scrollWidth > element.clientWidth), false, "Main content fits without horizontal scrolling");
+}
 
 // Overlays still exercise the production section-token protocol. Fetch a full
 // upstream snapshot before applying fixture data, then encode it for this client.
@@ -282,6 +291,13 @@ try {
   await expect(page).toHaveURL(/#\/settings$/);
   await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
   await expect(page.getByLabel("Project name")).toBeHidden();
+  for (const width of [1440, 2666, 768, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await assertCenteredContent(page, ".workspace-content");
+    await assertCenteredContent(page, "#workspace-settings");
+    await assertCenteredContent(page, ".page-navigation");
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const appearance = page.getByRole("region", { name: "Appearance", exact: true });
   await expect(appearance.locator(".theme-card")).toHaveCount(12);
   for (const { name, palette } of themes) {
@@ -423,8 +439,28 @@ try {
   await page.getByRole("button", { name: "Browse folders", exact: true }).click();
   await expect(page.locator(".folder-browser")).toContainText(workspaceDirectory);
   await page.getByRole("button", { name: "Use this folder", exact: true }).click();
+  let releaseCreate!: () => void;
+  const createGate = new Promise<void>((accept) => { releaseCreate = accept; });
+  const holdCreate = async (route: Route) => {
+    if (route.request().method() === "POST") await createGate;
+    await route.continue();
+  };
+  await page.route("**/api/projects", holdCreate);
   await page.getByRole("button", { name: "Create & explore" }).click();
+  try {
+    await expect(page.locator(".workspace-content > .activity-feedback")).toBeVisible();
+    for (const width of [1440, 2666, 768, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await assertCenteredContent(page, ".workspace-content > .activity-feedback");
+      await assertCenteredContent(page, ".workspace-content > .activity-feedback .activity-bar");
+      await assertCenteredContent(page, ".welcome");
+    }
+  } finally {
+    releaseCreate();
+  }
   await expect(page.getByRole("heading", { name: "Who will use the first release?", exact: true })).toBeVisible();
+  await page.unroute("**/api/projects", holdCreate);
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const headerProgress = page.locator(".topbar .header-progress");
   await expect(headerProgress).toContainText("Overall progress");
   await expect(headerProgress).toContainText("View breakdown");
@@ -888,6 +924,8 @@ try {
   assert.ok(queueBounds && Math.abs(queueBounds.x + queueBounds.width / 2 - (headerBounds.x + headerBounds.width / 2)) < 1, "Queue control is centered in the header");
   for (const width of [1440, 2666, 1000, 390]) {
     await page.setViewportSize({ width, height: 700 });
+    await assertCenteredContent(page, ".workspace-content");
+    await assertCenteredContent(page, ".workspace");
     const processingBounds = await page.locator(".queue-header").boundingBox();
     const progressBounds = await headerProgress.boundingBox();
     assert.ok(processingBounds && progressBounds);
@@ -923,6 +961,17 @@ try {
     await expect(headerStatus).toBeInViewport();
     const workspaceTabs = header.getByRole("tablist", { name: "Workspace", exact: true });
     await expect(workspaceTabs).toBeInViewport();
+    await expect(workspaceTabs).toHaveCSS("justify-content", "center");
+    const tabRows = await workspaceTabs.evaluate((element) => {
+      const rows = new Map<number, { left: number; right: number }>();
+      for (const tab of element.querySelectorAll('[role="tab"]')) {
+        const rect = tab.getBoundingClientRect(), key = Math.round(rect.top);
+        const row = rows.get(key);
+        rows.set(key, { left: Math.min(row?.left ?? rect.left, rect.left), right: Math.max(row?.right ?? rect.right, rect.right) });
+      }
+      return [...rows.values()];
+    });
+    for (const row of tabRows) assert.ok(Math.abs((row.left + row.right) / 2 - width / 2) < 1, "Each header tab row is horizontally centered, including mobile wrapping");
     await expect(workspaceTabs).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     const headerInk = await header.evaluate((element) => getComputedStyle(element).color);
     const surfaceHex = await page.locator("html").evaluate((element) => getComputedStyle(element).getPropertyValue("--surface").trim());

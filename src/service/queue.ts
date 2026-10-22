@@ -261,7 +261,13 @@ export class DiscoveryQueue {
         report("Package evidence blocker saved, not reviewed. Continuing independent eligible packages within the same run limits.");
         continue;
       }
-      if (!job.result) { report("No eligible packages remain in this scope. Review saved blockers or answer waiting questions; this is not proof of completeness."); return; }
+      if (!job.result) {
+        const outcome = job.epicReviewReport;
+        report(outcome && outcome.total > 0 && outcome.blocked === outcome.total
+          ? `Gap exploration blocked: all ${outcome.total} packages are evidence blocked. Expand Evidence blockers for the causes; no gaps found is not the outcome.`
+          : "No eligible packages remain in this scope. Review saved blockers or answer waiting questions; this is not proof of completeness.");
+        return;
+      }
       if (waitingInput()) {
         this.service.store.pauseQueue(id, true);
         report("Gap scan paused for saved responses. Resume discovery to process them before finding more questions."); return;

@@ -87,8 +87,23 @@ function expandedEvidence(input: unknown): Record<string, unknown> {
     return Object.fromEntries(Object.entries(object).map(([key, v]) => [key, expand(v, key)]));
   };
   // Encoding dictionaries describe representation, not additional evidence.
-  const { identifierTable: _ids, sharedText: _text, recordTables: _tables, ...records } = input as Record<string, unknown>;
-  return expand(records) as Record<string, unknown>;
+  const { identifierTable: _ids, sharedText: _text, recordTables: _tables, reviewSnapshotEncoding: _snapshots, ...records } = input as Record<string, unknown>;
+  const expanded = expand(records) as Record<string, unknown>;
+  if (_snapshots) {
+    if ((_snapshots as { format?: unknown }).format !== 1) throw new Error("Unsupported lossless approval snapshot format.");
+    const requirements = expanded.requirements as { id: string; statement: string; acceptance: string[] }[];
+    const sources = expanded.sources as { requirementID?: string; text: unknown }[];
+    if (!Array.isArray(requirements) || !Array.isArray(sources)) throw new Error("Invalid lossless approval snapshot records.");
+    const byID = new Map(requirements.map((r) => [r.id, r]));
+    for (const source of sources) {
+      const text = source.text as { reviewSnapshotReference?: { requirementID: string; decision: string; addendum: string } } | null;
+      if (!text || typeof text !== "object" || Object.keys(text).length !== 1 || !text.reviewSnapshotReference) continue;
+      const ref = text.reviewSnapshotReference, requirement = byID.get(ref.requirementID);
+      if (!requirement || source.requirementID !== ref.requirementID || !["accepted", "rejected"].includes(ref.decision) || typeof ref.addendum !== "string") throw new Error("Invalid lossless approval snapshot reference.");
+      source.text = `Requirement ${ref.requirementID}: ${requirement.statement}\nAcceptance scenarios: ${JSON.stringify(requirement.acceptance)}\nHuman decision: ${ref.decision}\nAddendum: ${ref.addendum}`;
+    }
+  }
+  return expanded;
 }
 
 /** Navigation never grants authority. Keep every other displayed field conservative. */
