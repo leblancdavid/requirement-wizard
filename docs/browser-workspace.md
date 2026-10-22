@@ -1,5 +1,19 @@
 # Browser workspace, epics, and estimated completeness
 
+## Continuous specification and decisions by exception
+
+**Specification** replaces the Review tab. Explicit queued answers, notes and
+targeted change requests can record/update requirements automatically, with an
+expandable Design change summary and **Recorded from your answer** provenance.
+**Current specification** shows active requirements; **Needs your decision** holds
+ambiguous choices, conflicts, cleanup/resolutions and legacy proposals. **History**
+retains earlier review outcomes. Use **Request changes** to correct current wording.
+No separate approval or coding authorization is inferred from automatic updates.
+Existing approvals and saved proposals are not converted on upgrade. The historical
+Review instructions below still describe legacy/manual exception paths; eligible
+answer-derived updates supersede their mandatory second-approval step. See
+[continuous specification](continuous-specification.md) for exact boundaries and limits.
+
 ## Question-help context boundaries
 
 Word explanations use a separate **definition-only** request (`define`), containing

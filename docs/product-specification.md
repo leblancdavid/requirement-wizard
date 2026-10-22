@@ -179,6 +179,16 @@ workflows, requirements, decisions, questions, sources, scenarios, and work pack
 **RW-012 — Reviewable revisions.** Show material changes after an interview round
 and allow editing, accepting, or rejecting proposed requirements.
 
+DEC-030 changes the default to continuous specification: automatically record/revise
+requirements faithfully supported by explicit current answers, notes or targeted
+change requests, including all acceptance scenarios. Keep exact input provenance and
+visible changes/correction; never claim a separate human approval of generated text.
+Use **Specification → Needs your decision** for ambiguity, conflicts, uncertain removal
+and unsupported choices. Legacy proposals, scan baselines, pure AI cleanup and pair
+resolutions retain review. The historical review rules below apply to those paths;
+eligible answer-derived updates no longer require their second-approval step. Coding
+still requires separate explicit authorization. See [continuous specification](continuous-specification.md).
+
 - Record selection of an answer as an explicit decision with its original question.
 - Preserve previous revisions and the rationale for superseded decisions.
 - Revising a decision identifies dependent records for review; do not silently

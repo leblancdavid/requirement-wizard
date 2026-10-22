@@ -12,7 +12,7 @@ export function EpicOverview({ epic, title, implementation, definition, review, 
   const noScope = implementation.status === "No implementation scope";
   const status = noScope ? hasRequirements ? "No active scope" : "Defining" : implementation.percent === 100 ? "Delivered"
     : inProgress || implementation.percent > 0 || (implementation.localAssessment?.partial ?? 0) > 0 || (implementation.localAssessment?.complete ?? 0) > 0 ? "In progress"
-    : review.status === "Review needed" ? "Needs review" : "Approved to build";
+    : review.status === "Review needed" ? "Needs a decision" : "Specification recorded";
   return <article className="epic-overview" aria-label={title}>
     {epic.id === "project" && <span className="eyebrow">PROJECT-WIDE DECISIONS</span>}
     {epic.id === "inbox" && <span className="eyebrow">UNORGANIZED ITEMS</span>}
@@ -24,7 +24,7 @@ export function EpicOverview({ epic, title, implementation, definition, review, 
     </>}
     {implementation.localAssessment && <p>Local code: {implementation.localAssessment.complete} complete · {implementation.localAssessment.partial} partial · {implementation.localAssessment.stale} need reassessment</p>}
     <p className="epic-outstanding">{pendingRequirements} {pendingRequirements === 1 ? "requirement" : "requirements"} awaiting review · {openQuestions} open {openQuestions === 1 ? "question" : "questions"}</p>
-    <div className="button-row"><button className="quiet" onClick={() => navigate("discover")}>Open Design →</button><button className="quiet" onClick={() => navigate("review")}>Open Review →</button><button className="quiet" onClick={() => navigate("implementation")}>Open Implement →</button></div>
+    <div className="button-row"><button className="quiet" onClick={() => navigate("discover")}>Open Design →</button><button className="quiet" onClick={() => navigate("review")}>Open Specification →</button><button className="quiet" onClick={() => navigate("implementation")}>Open Implement →</button></div>
     <LazyDetails className="epic-map-details" summary="View details">{() => <>
       {definition && <p>Definition coverage: {progressLabel(definition)} · {definition.status}. {definition.detail}. This estimates recorded decisions, not questions answered or build completion.</p>}
       {implementation.localAssessment && <p>Local code: {localAssessmentDetail(implementation.localAssessment)}. Local code is separate from delivery to main.</p>}

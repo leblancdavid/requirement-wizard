@@ -70,8 +70,8 @@ export function projectProgress(project: Project, execution: ExecutionEvaluation
   const reviewScore = (items: typeof requirements): ProgressScore => {
     const reviewed = items.filter((r) => ["accepted", "rejected"].includes(r.status) && !refinements.has(r.id)).length;
     return { percent: ratio(reviewed, items.length),
-      status: !items.length ? "No requirements yet" : reviewed === items.length ? "Reviewed" : "Review needed",
-      detail: `${reviewed} / ${items.length} requirements reviewed` };
+      status: !items.length ? "No requirements yet" : reviewed === items.length ? "Decisions recorded" : "Review needed",
+      detail: `${reviewed} / ${items.length} requirements settled` };
   };
   const implementationScore = (items: typeof requirements): ProgressScore => {
     const scope = items.filter((r) => r.status !== "rejected");
@@ -94,8 +94,8 @@ export function projectProgress(project: Project, execution: ExecutionEvaluation
          status: !score.assessed ? "Not assessed" : score.stale ? "Assessment outdated" : "Assessed",
          detail: definitionAssessmentDetail([score], false),
       })) },
-    { id: "review", title: "Requirements review", ...reviewScore(requirements),
-      explanation: "Approved or rejected requirements divided by all identified requirements in active epics. A matching pending refinement keeps that requirement awaiting review. Saved decisions count immediately.",
+    { id: "review", title: "Specification decisions", ...reviewScore(requirements),
+      explanation: "Requirements recorded from explicit answers, explicitly approved, or rejected, divided by identified requirements in active epics. This is decision coverage, not proof of human review of generated wording. A matching pending refinement remains unresolved. Specification changes do not authorize coding.",
       epics: active.map((e) => ({ epicID: e.id, title: e.title, ...reviewScore(requirements.filter((r) => r.epicID === e.id)) })) },
     { id: "implementation", title: "Verified delivery to main", ...implementationScore(requirements),
       explanation: "Current requirements verified as delivered to the configured repository’s main branch divided by all non-rejected requirements in active epics, including those awaiting approval. Local code completeness is shown separately over approved requirements and updates during assessment. Manual progress, code assessments and unmerged PRs earn no delivery credit.",

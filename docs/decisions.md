@@ -30,6 +30,22 @@ every technical detail proposed in the planning documents.
 | DEC-021 | Process queued AI follow-up one submission at a time, each with its own focused revision-linked context. Do not combine the queue or include unrelated feature history solely because it shares an area. Retain exact target evidence and explicit guardrails; preserve omitted records and request wider context when needed. | User requested individual processing/contexts after repeated queue-size blockers |
 | DEC-021 | Split generated requirements by stable feature ID, keep original evidence in shared referenced files, and avoid rewriting unchanged outputs. Retain an on-demand combined specification export. | User reported large generated files and confirmed both reading/coding-agent context and disk/Git efficiency as goals after the feature-based export recommendation |
 
+## Continuous specification (DEC-030)
+
+Confirmed direction (2026-10-22): the user approved replacing routine requirement
+approval with automatic creation/revision from explicit answers, visible changes and
+review by exception. Product decisions belong in questions; faithfully restating an
+answer should not require another approval. Preserve the distinction between explicit
+human approval, answer-derived wording and AI inference. Keep coding authorization
+separate. This supersedes DEC-020's mandatory rereview for eligible answer-derived
+wording, not its preserved review-addendum/removal workflow.
+
+Implemented first slice: bounded current-input `specificationUpdates`, additive
+answer-derived authority, Specification / Needs your decision UI and portable evidence.
+Legacy proposals/approvals, scans, pure cleanup and pair resolutions retain their
+original review semantics. See [continuous specification](continuous-specification.md)
+for boundaries and verification limits.
+
 ## Portable team project state (DEC-029)
 
 Confirmed direction: commit `.reqwizit/` alongside code so a teammate can clone,

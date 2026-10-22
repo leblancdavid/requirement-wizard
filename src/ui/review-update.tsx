@@ -12,3 +12,13 @@ export function ReviewUpdateNotice({ project, recordType, recordID }: { project:
     </details>
   </aside>;
 }
+
+export function SpecificationChanges({ project, inspect }: { project: Project; inspect: () => void }) {
+  const recorded = project.requirements.filter((r) => r.status === "accepted" && r.authority);
+  const revision = Math.max(0, ...recorded.map((r) => r.authority!.atRevision));
+  const recent = recorded.filter((r) => r.authority!.atRevision === revision);
+  if (!recent.length) return null;
+  return <aside className="save-notice" role="status"><strong>Specification updated from your answers · {recent.length} {recent.length === 1 ? "requirement" : "requirements"}</strong>
+    <details><summary>View changes</summary><p>Latest answer-derived update: revision {revision}. Earlier wording and original answers remain in Activity.</p><ul>{recent.map((r) => <li key={r.id}><strong>{r.statement}</strong> — {r.authority!.reason}</li>)}</ul></details>
+    <button className="quiet" onClick={inspect}>Inspect or correct requirements</button></aside>;
+}

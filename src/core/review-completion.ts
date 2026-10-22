@@ -32,7 +32,7 @@ export function reconciliationCandidates(project: Project, item: Submission, sub
   const protectedIDs = new Set(submissions.filter((s) => s.id !== item.id && !s.conflict && ["queued", "saved", "processing", "needs-attention"].includes(s.status))
     .flatMap((s) => s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : []));
   return [...project.questions.filter((q) => q.status === "pending" && !q.sourceID).map((q) => ({ id: q.id, epicID: q.epicID, text: q.text })),
-    ...project.requirements.filter((r) => ["proposed", "needs-review"].includes(r.status)).map((r) => ({ id: r.id, epicID: r.epicID, text: r.statement }))]
+    ...project.requirements.filter((r) => r.status !== "rejected").map((r) => ({ id: r.id, epicID: r.epicID, text: r.statement }))]
     .filter((r) => !protectedIDs.has(r.id) && project.epics.some((e) => e.id === r.epicID && !e.archived) && (area === "project" || areas.has(r.epicID) || linked.has(r.id)))
     .map((r) => ({ id: r.id, score: linked.has(r.id) || text.includes(r.id) ? 2 : wordingSimilarity(text, r.text) }))
     .filter((r) => r.score > 0).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 4).map((r) => r.id);
@@ -81,6 +81,10 @@ export function reconcileCompletedReview(before: Project, project: Project, job:
   };
   const pendingChanges = job.result?.pendingChanges?.changes ?? [];
   for (const requirement of project.requirements) {
+    if (requirement.authority?.atRevision === project.revision + 1) {
+      remember("requirement", requirement.id, "updated", `Recorded automatically from your explicit input: ${requirement.authority.reason} No separate approval of generated wording was claimed.`);
+      continue;
+    }
     const old = before.requirements.find((r) => r.id === requirement.id);
     if (!old) continue;
     const change = pendingChanges.find((c) => c.type !== "revise-question" && c.requirementID === requirement.id);

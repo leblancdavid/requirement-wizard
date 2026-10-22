@@ -118,6 +118,7 @@ export function checkpointEvidenceBasis(checkpoint: { contextKey: string; eviden
 
 /** Reject unseen references before considering a final response recoverable. */
 export function validateGapFinal(project: Project, context: ContextPack, output: Analysis) {
+  if (output.specificationUpdates?.changes.length) throw new Error("Gap exploration cannot activate or revise the specification without current human input.");
   const detailed = new Set(context.manifest.includedIDs);
   if (output.questions.some((q) => project.scans.length && !q.evidenceIDs?.length
     || q.evidenceIDs?.some((id) => !detailed.has(id)))

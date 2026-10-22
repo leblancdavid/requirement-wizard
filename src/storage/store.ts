@@ -1341,7 +1341,7 @@ export class ProjectStore {
               && proposal.requirementID === job.context.refinementTarget.requirementID && refinementIsStale(project, proposal)) proposal.status = "dismissed";
           }
           const aliases = applyRound(project, result, randomUUID, job.researchEvidence, job.context?.refinementPair?.triggerSourceIDs, job.context?.questionTarget !== undefined);
-          applySpecificationUpdates(before, project, result, aliases, job, submissions);
+          applySpecificationUpdates(before, project, result, aliases, job, submissions, randomUUID);
           if (result.resolutionCheck) project.roundChanges.push(`Requirement overlap check (${result.resolutionCheck.outcome}): ${result.resolutionCheck.explanation}`);
           if (omittedConcepts) project.roundChanges.push(`Omitted ${omittedConcepts} malformed concept annotations; question wording was preserved.`);
           if (job.context?.refinementOnly) project.roundChanges.push(`Requirement refinement (bounded working set): ${result.summary}`);

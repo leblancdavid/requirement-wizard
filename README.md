@@ -11,6 +11,14 @@ support is deferred.
 
 ## Project status
 
+**Specification** now replaces routine Review: explicit answers, notes and targeted
+change requests can maintain current requirements without another approval. Design
+shows what changed; **Needs your decision** retains genuine exceptions and existing
+proposals. Original answers, earlier approvals and history are preserved; no coding
+starts automatically. See [continuous specification](docs/continuous-specification.md)
+for the implemented first slice and its limits. Older Review references below describe
+legacy/manual exception workflows.
+
 The top-left application menu contains **New project**, **Open project**, **Recent
 workspaces**, and **Settings**, replacing the persistent sidebar. The header follows
 your accent color. Desktop users also get **Quit**, with the same safe shutdown as

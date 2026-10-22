@@ -15,7 +15,7 @@ export function ChangeRequestForm({ initialText = "", disabled, reason, change, 
     void send(text).then((saved) => { if (saved) close(); }).finally(() => setSaving(false));
   }}>
     <h4>Request changes</h4>
-    <p>This asks for a revision, not approval or rejection. Approved wording stays active until you approve its replacement. Broader removals or feature changes need separate decisions.</p>
+    <p>This asks for a revision, not approval or rejection of generated wording. Clear requests can update the specification automatically; ambiguous changes remain for your decision. This does not approve an AI assumption or start coding. Broader removals or feature changes need separate decisions.</p>
     <label>Requested changes<textarea rows={3} maxLength={12000} value={text} onChange={(event) => { setText(event.target.value); change(event.target.value); }} placeholder="Explain what should be different and the outcome you expect…" required /></label>
     <div className="button-row"><ActionButton className="primary" disabled={disabled || saving || !text.trim()} reason={disabled ? reason : saving ? "Your change request is being saved." : "Describe what should change first."}>{saving ? "Saving request…" : "Send change request"}</ActionButton><button type="button" className="quiet" disabled={saving} onClick={close}>Cancel change request</button></div>
   </form>;

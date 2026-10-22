@@ -148,7 +148,9 @@ export function discoveryPrompt(project: Project, context: ContextPack = buildCo
   const automatic = !!explicitInputSources.length && !context.manifest.refinementOnly && !context.manifest.epicReview && !context.manifest.gapExploration;
   const automaticTargets = project.requirements.filter((r) => r.status !== "rejected" && included.has(r.id) && r.sourceIDs.every((id) => included.has(id))
     && (!targeted || requestTargets.has(r.id)) && !project.refinements.some((p) => p.status === "pending" && (p.requirementID === r.id || p.resolution?.relatedRequirementID === r.id))).map((r) => r.id);
-  const automaticSchema = automatic ? specificationUpdatesSchema.extend({ changes: z.array(z.discriminatedUnion("type", specificationUpdatesSchema.shape.changes.element.options.map((option) => option.extend({ sourceIDs: z.array(z.enum(explicitInputSources as [string, ...string[]])).min(1).max(8) })) as unknown as [z.ZodDiscriminatedUnionOption<"type">, z.ZodDiscriminatedUnionOption<"type">])).max(10) }).optional() : z.undefined().optional();
+  const automaticEvidence = { sourceIDs: z.array(z.enum(explicitInputSources as [string, ...string[]])).min(1).max(8) };
+  const [activate, revise] = specificationUpdatesSchema.shape.changes.element.options;
+  const automaticSchema = automatic ? specificationUpdatesSchema.extend({ changes: z.array(z.discriminatedUnion("type", [activate.extend(automaticEvidence), revise.extend(automaticEvidence)])).max(10) }).optional() : z.undefined().optional();
   const pendingRequirements = project.requirements.filter((r) => (!targeted || requestTargets.has(r.id)) && ["proposed", "needs-review"].includes(r.status) && included.has(r.id) && r.sourceIDs.every((id) => included.has(id)));
   const pendingQuestions = pending.filter((q) => !changeRequests.length && (!scopedAnswers.length || q.epicID !== "project" && !!q.evidenceIDs?.length && q.evidenceIDs.every((id) => requestTargets.has(id))) && !q.sourceID && included.has(q.id) && (q.evidenceIDs ?? []).every((id) => included.has(id))
     && (q.evidenceIDs ?? []).filter((id) => project.requirements.some((r) => r.id === id)).length < 2);

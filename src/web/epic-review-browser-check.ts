@@ -55,7 +55,7 @@ try {
   await page.getByLabel("Filter by feature").selectOption("orders");
   const review = page.getByRole("button", { name: "Explore next gaps →", exact: true });
   await expect(page.getByRole("button", { name: "Review next epic workflow", exact: true })).toHaveCount(0);
-  for (const tab of [/^Review/, /^Project map/, /^Activity/]) {
+  for (const tab of [/^Specification/, /^Project map/, /^Activity/]) {
     await page.getByRole("tab", { name: tab }).click();
     await expect(review).toHaveCount(0);
     await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveCount(0);

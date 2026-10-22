@@ -6,6 +6,14 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/core/specification.ts`: current-input-bound automatic specification activation
+  and revision, exact target/context checks and reviewable exceptions. The store applies
+  optional version-1 update envelopes within existing job/revision transactions;
+  additive requirement authority distinguishes answer-derived text from human approval.
+  Scans/gap/refinement passes cannot authorize updates. Existing content/assessment
+  fingerprints and coding authorization remain separate. See
+  [continuous specification](continuous-specification.md) and [migrations](migrations.md).
+
 - `src/core/model.ts`: project/evidence/proposal schemas and reference rules.
 - `src/core/similarity.ts`: wording identity, project-wide lexical candidate retrieval,
   advisory proposal warnings and read-only requirement comparisons. Discovery adds

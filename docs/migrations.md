@@ -19,6 +19,43 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Continuous specification (DEC-030)
+
+Source and target remain SQLite 3, portable manifest 3 and existing project/feature
+artifact versions. This is an additive forward read path, not a database rewrite:
+requirements may now contain optional `authority` format 1 (`answer-derived`, exact
+source IDs, explanation and publication revision); analysis/job results may contain
+optional `specificationUpdates` format 1. Both envelopes reject unsupported formats.
+Project parsing preserves authority; portable import checks its source links and
+revision rather than manufacturing missing provenance. Markdown exports explicitly
+distinguish answer-derived wording from separate human approval.
+
+Missing envelopes mean legacy behavior. Reopening never adopts old proposals,
+changes old accepted/rejected decisions, or repeats model work. Saved results,
+checkpoints, assessment identities and review/content fingerprints keep their existing
+algorithms. Authority itself is not added to old fingerprints: it describes how
+wording was recorded, not a different behavioral specification. Actual wording/source
+changes use existing freshness rules; valid unchanged assessment/delivery evidence is
+not invalidated solely by this compatible workflow addition. Older binaries are not
+qualified for editing projects containing the new metadata (they may strip unknown
+fields); retain this version or newer when sharing these projects.
+
+New updates, authority and job output commit in the existing publication transaction
+with a live lease and expected revision. Failures roll back the entire publication;
+original inputs remain available for explicit resume. No separate version bump or
+startup migration/calls are required. Human approval sources are never synthesized or
+superseded by automatic updates, and original wording/IDs remain in revision history.
+Refinement and explicit review preserve their original evidence semantics.
+
+Upgrade tests in `src/service/specification.test.ts` use older saved proposals and
+approvals, interrupted input, repeated SQLite reopen, explicit retry and portable
+round-trip preservation. Future authority formats fail closed. Verification results
+are recorded in [continuous specification](continuous-specification.md#compatibility-and-verification):
+type check, all 613 deterministic tests and all eight browser checks passed on Windows
+Node 22.23.3, including repeated reopen/retry and portable preservation. The production
+build, both CLI help commands and diff check passed. Live semantic fidelity remains
+unqualified; no live provider calls or user database rewrites were performed.
+
 ## Evidence-blocked epic outcomes and independent continuation (2026-10-22)
 
 Source and target remain SQLite 3, epic-review/retrieval format 1 and unchanged

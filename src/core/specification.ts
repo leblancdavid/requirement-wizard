@@ -1,9 +1,10 @@
 import { decisionAvailability } from "./decision-availability.js";
 import { requirementEvidenceIDs, type Analysis, type Job, type Project, type Submission } from "./model.js";
+import { proposeRefinements } from "./refinement.js";
 
 /** Apply only explicit, current-batch intent. The model judges semantic fidelity;
  * these structural gates cannot prove that prose faithfully captures an answer. */
-export function applySpecificationUpdates(before: Project, project: Project, result: Analysis, aliases: Map<string, string>, job: Job, submissions: Submission[]) {
+export function applySpecificationUpdates(before: Project, project: Project, result: Analysis, aliases: Map<string, string>, job: Job, submissions: Submission[], newID: () => string) {
   const changes = result.specificationUpdates?.changes ?? [];
   if (!changes.length) return;
   if (!job.context?.submissionIDs?.length || job.context.refinementOnly || job.context.epicReview || job.context.gapExploration) throw new Error("Automatic specification updates require concrete queued human input, not scans, gap checks or refinement passes.");
@@ -37,13 +38,15 @@ export function applySpecificationUpdates(before: Project, project: Project, res
     // Safe exceptions stay visible without failing the user's successfully processed answer.
     const availability = decisionAvailability(project, [id], waiting);
     if (availability.state !== "ready" || project.refinements.some((p) => p.status === "pending" && (p.requirementID === id || p.resolution?.relatedRequirementID === id))) {
-      if (change.type === "revise") throw new Error("An automatic revision has unresolved clarification, pending input or a replacement proposal. Ask a focused question or retain a reviewable replacement instead.");
+      if (change.type === "revise") proposeRefinements(project, [{ requirementID: id, statement: change.statement, rationale: change.rationale, acceptance: change.acceptance,
+        reason: `Automatic update held for a decision: ${change.reason}` }], newID);
       project.roundChanges.push(`Needs your decision: ${target.statement}. ${availability.reason ?? "A replacement proposal is awaiting a decision."}`);
       continue;
     }
     if (change.type === "revise") Object.assign(target, { statement: change.statement, rationale: change.rationale, acceptance: [...change.acceptance] });
     target.sourceIDs = [...new Set([...target.sourceIDs, ...change.sourceIDs])];
     target.status = "accepted";
+    if (target.reviewNote === "Supporting human response changed; review against the current answer.") delete target.reviewNote;
     target.authority = { format: 1, kind: "answer-derived", sourceIDs: [...change.sourceIDs], reason: change.reason, atRevision: project.revision + 1 };
     // Keep old human confirmations as dated evidence. Never manufacture or supersede them.
     project.roundChanges.push(`${created ? "Added" : "Updated"} from your answer: ${target.statement} — ${change.reason}`);
