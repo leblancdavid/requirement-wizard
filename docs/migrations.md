@@ -19,6 +19,17 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Definition assessment clarity (presentation only)
+
+No source/target format change or forward migration is needed. SQLite, portable
+state, workspace artifacts, assessment revisions/checks, evidence and freshness
+rules remain unchanged. The progress view partitions saved findings into current,
+outdated and unassessed areas without rewriting them or invoking inference. Existing
+overall score calculation is preserved; no saved work is invalidated by this display
+change. Tests exercise older revision assessments, mixed freshness, unknown areas,
+missing evidence and read-only rendering. Relevant-input freshness and explicit
+whole-area reassessment actions are not implemented by this change.
+
 ## Portable projects and workspace-folder rename (DEC-029)
 
 Workspace manifest **1/2 → 3**; feature/project/progress JSON remains format **2**.

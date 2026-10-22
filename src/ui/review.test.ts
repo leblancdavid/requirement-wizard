@@ -13,6 +13,33 @@ import type { Job } from "../core/model.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { planGapContext } from "../core/gap-context.js";
 import { ChangeRequestForm } from "./change-request.js";
+import { DefinitionAssessment } from "./definition-assessment.js";
+import { coverage } from "../core/coverage.js";
+
+test("definition inspection exposes outdated category explanations and exact linked evidence, never gap-free unknown areas", () => {
+  const project = fixture();
+  project.revision = 2;
+  project.assessments = [{ epicID: "project", atRevision: 1, confidence: "low", explanation: "Earlier whole-area review", answerVersions: {},
+    checks: [{ dimension: "failures", importance: "critical", status: "unknown", explanation: "Recovery after failed saves is undecided.", evidenceIDs: [project.requirements[0]!.id, "missing-evidence"] }] }];
+  const before = JSON.stringify(project);
+  const html = renderToStaticMarkup(createElement(DefinitionAssessment, { project, area: coverage(project).epics.find((e) => e.epicID === "project")! }));
+  assert.match(html, /previous findings, not confirmed current gaps/);
+  assert.match(html, /Assessed at revision 1; current revision 2/);
+  assert.match(html, /Failure behavior/);
+  assert.match(html, /Recovery after failed saves is undecided/);
+  assert.ok(html.includes(project.requirements[0]!.statement));
+  assert.match(html, /Evidence unavailable/);
+  assert.match(html, /Previously flagged critical area/);
+  const unassessed = renderToStaticMarkup(createElement(DefinitionAssessment, { project, area: coverage(project).epics.find((e) => e.epicID === "inbox")! }));
+  assert.match(unassessed, /gaps are unknown/);
+  assert.doesNotMatch(unassessed, /0 critical gaps/);
+  project.assessments[0]!.atRevision = 2;
+  const current = renderToStaticMarkup(createElement(DefinitionAssessment, { project, area: coverage(project).epics.find((e) => e.epicID === "project")! }));
+  assert.match(current, /Critical area needs clarification/);
+  assert.doesNotMatch(current, /Previously flagged/);
+  project.assessments[0]!.atRevision = 1;
+  assert.equal(JSON.stringify(project), before);
+});
 
 test("gap backlog status distinguishes saved checks, unresolved decisions and no-call reuse without a completeness claim", () => {
   const job: Job = { id: "gap-job", projectID: "project", expectedRevision: 1, model: { providerID: "openai", modelID: "fixture" },

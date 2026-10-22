@@ -3,7 +3,7 @@ import test from "node:test";
 import { projectSchema, reviewFingerprint, type Project } from "./model.js";
 import { emptyExecution, type Assessment, type ExecutionState } from "./execution.js";
 import { requirementFingerprint } from "./implementation.js";
-import { localAssessmentCounts, progressLabel, projectProgress } from "./progress.js";
+import { definitionAssessmentDetail, localAssessmentCounts, progressLabel, projectProgress } from "./progress.js";
 import { coverage } from "./coverage.js";
 
 function fixture() {
@@ -43,12 +43,35 @@ test("saved answers are visible independently of absent or outdated definition c
   const definition = coverage(project);
   const outdated = { ...definition, percent: 40, epics: definition.epics.map((e) => ({ ...e, assessed: true, stale: true })) };
   const old = projectProgress(project, emptyExecution(), outdated);
-  assert.equal(progressLabel(old.stages[0]!), "Needs assessment");
-  assert.equal(progressLabel(old.stages[0]!.epics[0]!), "Needs assessment");
+  assert.equal(progressLabel(old.stages[0]!), "Assessment outdated");
+  assert.equal(progressLabel(old.stages[0]!.epics[0]!), "Assessment outdated");
   assert.equal(old.stages[0]!.percent, 40, "Saved score remains available for the existing overall estimate");
   const current = projectProgress(project, emptyExecution(), { ...outdated, stale: false, epics: outdated.epics.map((e) => ({ ...e, stale: false })) });
   assert.equal(progressLabel(current.stages[0]!), "40%");
   assert.equal(JSON.stringify(project), before, "Presentation never rewrites saved answers or evidence");
+});
+
+test("definition summary separates current gaps, previous flags and unknown areas without rewriting old data", () => {
+  const project = fixture();
+  project.revision = 2;
+  project.epics.push(...["skating", "missions"].map((id) => ({ ...project.epics[0]!, id, title: id })));
+  for (const epicID of ["project", "skating"]) project.assessments.push({ epicID, atRevision: 1, confidence: "low", explanation: "Earlier review", answerVersions: {},
+    checks: ["purpose", "workflows", "rules", "failures", "acceptance"].map((dimension) => ({ dimension: dimension as Project["assessments"][number]["checks"][number]["dimension"], importance: "critical", status: "unknown", explanation: "Needs detail", evidenceIDs: [] })) });
+  const before = JSON.stringify(project);
+  const stage = projectProgress(project, emptyExecution()).stages[0]!;
+  assert.equal(stage.status, "Definition assessment incomplete");
+  assert.match(stage.detail, /0 current · 2 outdated · 1 not assessed/);
+  assert.match(stage.detail, /10 previously flagged critical areas need rechecking/);
+  assert.match(stage.detail, /gaps unknown/);
+  assert.match(stage.detail, /No open questions recorded/);
+  assert.doesNotMatch(stage.detail, /current critical gaps/);
+  assert.doesNotMatch(stage.epics.find((e) => e.epicID === "missions")!.detail, /0 critical gaps/);
+  project.assessments[0]!.atRevision = 2;
+  const detail = definitionAssessmentDetail(coverage(project).epics.filter((e) => e.epicID !== "inbox"));
+  assert.match(detail, /5 current critical gaps/);
+  assert.match(detail, /5 previously flagged critical areas/);
+  project.assessments[0]!.atRevision = 1;
+  assert.equal(JSON.stringify(project), before);
 });
 
 test("stage totals use current active scope, reviewed decisions, and actual main delivery", () => {

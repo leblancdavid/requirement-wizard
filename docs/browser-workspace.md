@@ -15,7 +15,7 @@ well as the existing overall estimate. Its breakdown separates **Questions answe
 questions are excluded, while deferred/delegated questions remain unanswered.
 
 Missing definition assessments show **Not assessed**; outdated assessments show
-**Needs assessment**, without a coverage meter. Small task-sized discovery passes do
+**Assessment outdated**, without a coverage meter. Small task-sized discovery passes do
 not refresh whole-area coverage. These labels do not establish missing decisions.
 The overall estimate retains its existing equal-weight calculation using saved
 definition coverage, review, and main delivery (unassessed coverage counts as zero).
@@ -23,6 +23,25 @@ Local completeness uses current approved-requirement assessments only; unknown,
 unassessed and stale results are distinguished from missing code. Neither local
 code nor manual claims certify delivery to main. This presentation change performs
 no model calls, data upgrades or automatic reassessments.
+
+The definition breakdown separates current critical gaps from previously flagged
+critical areas needing rechecking. Unassessed areas say **gaps unknown**, never zero
+gaps. Counts refer to critical coverage categories, not individual missing requirements
+or unanswered questions; **No open questions recorded** is not a completeness claim.
+Expand **Inspect definition assessment** within an assessed area to read all nine
+categories, their status/importance, saved explanations and exact linked evidence.
+Outdated assessments retain their original revision and are labelled as previous
+findings rather than confirmed current problems. Current unresolved critical categories
+say **Critical area needs clarification**; the UI does not manufacture more specific
+findings than the saved explanation supports. Unavailable evidence is explicit.
+Freshness still compares whole-project revisions: unrelated revisions can make an
+assessment outdated. Relevant-input freshness and dedicated definition-refresh actions
+remain follow-up work; this clarity change does not add inference or alter evidence.
+Verification for the clarity change: type check, all 555 deterministic tests, UI
+build, full browser/portable-browser checks and diff whitespace checks passed.
+Browser coverage includes expanding a definition category and its linked evidence,
+unknown-gap wording and mobile layout. Tests ran under Node 22.23.3; the default
+Node 20 shell could not load the installed Node 22 SQLite binary.
 Verification: type check, all 451 deterministic tests, UI build and full browser
 checks passed on Node 22.23.3. Browser checks include separate answer/local sections,
 live local-checkpoint updates without main credit and mobile progress layout.

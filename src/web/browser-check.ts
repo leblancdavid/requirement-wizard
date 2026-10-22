@@ -347,10 +347,19 @@ try {
   await expect(progressDialog.getByRole("region", { name: "Local implementation", exact: true })).toBeVisible();
   for (const stage of ["Definition coverage", "Requirements review", "Verified delivery to main"]) {
     const row = progressDialog.locator(".progress-stage").filter({ has: page.locator("summary strong", { hasText: stage }) });
-    await row.locator("summary").click();
+    await row.locator(":scope > summary").click();
     await expect(row.locator(".progress-epics")).toBeVisible();
     assert.ok(await row.locator(".progress-epics li").count() > 0);
   }
+  const definitionProgress = progressDialog.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) });
+  await expect(definitionProgress).toContainText("gaps unknown");
+  await expect(definitionProgress).toContainText("No open questions recorded");
+  const assessmentDetails = definitionProgress.locator(".definition-assessment").first();
+  await assessmentDetails.locator(":scope > summary").click();
+  const permissionCheck = assessmentDetails.locator(".definition-check").filter({ has: page.locator("summary", { hasText: "Permissions" }) });
+  await permissionCheck.locator(":scope > summary").click();
+  await expect(permissionCheck).toContainText("Choose who can use the first release.");
+  await expect(permissionCheck.locator(".evidence")).toContainText("Who will use the first release?");
   await page.keyboard.press("Escape");
   await expect(progressDialog).toHaveCount(0);
   await expect(headerProgress).toBeFocused();

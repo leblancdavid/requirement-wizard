@@ -14,3 +14,6 @@
 .progress-epics li { border-top: 1px solid var(--border); padding: 12px 0; }
 .progress-epics li > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
 .local-code-progress { margin-top: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--soft); }
+.definition-assessment { margin-top: 12px; }
+.definition-check { margin: 10px 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; }
+.definition-check p, .definition-assessment > p { margin: 10px 0; overflow-wrap: anywhere; }

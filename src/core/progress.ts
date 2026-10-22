@@ -11,7 +11,24 @@ export type ProgressScore = { percent: number; status: string; detail: string; l
 
 /** Missing or old coverage is not a finding that no definition work was done. */
 export function progressLabel(score: ProgressScore): string {
-  return score.assessmentState === "unassessed" ? "Not assessed" : score.assessmentState === "outdated" ? "Needs assessment" : `${score.percent}%`;
+  return score.assessmentState === "unassessed" ? "Not assessed" : score.assessmentState === "outdated" ? "Assessment outdated" : `${score.percent}%`;
+}
+
+/** Presentation only: old findings remain evidence, not claims about current gaps. */
+export function definitionAssessmentDetail(areas: ReturnType<typeof coverage>["epics"], includeAreaCounts = true): string {
+  const current = areas.filter((a) => a.assessed && !a.stale);
+  const outdated = areas.filter((a) => a.assessed && a.stale);
+  const unassessed = areas.filter((a) => !a.assessed);
+  const gaps = current.reduce((sum, a) => sum + a.criticalGaps, 0);
+  const previous = outdated.reduce((sum, a) => sum + a.criticalGaps, 0);
+  const questions = areas.reduce((sum, a) => sum + a.openQuestions, 0);
+  return [
+    ...(includeAreaCounts ? [`${current.length} current · ${outdated.length} outdated · ${unassessed.length} not assessed`] : []),
+    ...(current.length ? [`${gaps} current critical gaps`] : []),
+    ...(outdated.length ? [`${previous} previously flagged critical areas need rechecking`] : []),
+    ...(unassessed.length ? ["Unassessed areas: gaps unknown"] : []),
+    questions ? `${questions} open questions recorded` : "No open questions recorded",
+  ].join(" · ");
 }
 export type ProgressStage = ProgressScore & {
   id: "definition" | "review" | "implementation"; title: string; explanation: string;
@@ -41,6 +58,10 @@ export function localAssessmentDetail(counts: LocalAssessmentCounts) {
 export function projectProgress(project: Project, execution: ExecutionEvaluation, definition = coverage(project), index = createExecutionIndex(project, execution)) {
   const ratio = (done: number, total: number) => total ? Math.min(done === total ? 100 : 99, Math.round(100 * done / total)) : 0;
   const active = project.epics.filter((epic) => !epic.archived);
+  const definitionAreas = definition.epics.filter((score) => score.epicID !== "inbox" ||
+    project.requirements.some((r) => r.epicID === "inbox" && r.status !== "rejected") ||
+    project.questions.some((q) => q.epicID === "inbox" && q.status !== "retired") || project.research.some((r) => r.epicID === "inbox") ||
+    project.sources.some((s) => s.epicID === "inbox" && s.kind === "note"));
   const requirements = project.requirements.filter((r) => active.some((e) => e.id === r.epicID));
   const questions = project.questions.filter((q) => q.status !== "retired" && active.some((e) => e.id === q.epicID));
   const answered = questions.filter((q) => q.status === "answered").length;
@@ -64,16 +85,14 @@ export function projectProgress(project: Project, execution: ExecutionEvaluation
   const stages: ProgressStage[] = [
     { id: "definition", title: "Definition coverage", percent: definition.percent,
       assessmentState: !definition.epics.some((e) => e.assessed) ? "unassessed" : definition.stale ? "outdated" : "current",
-      status: definition.stale ? "Review needed" : definition.criticalGaps || definition.openQuestions ? "Gaps remaining" : "Assessed",
-      detail: `${definition.openQuestions} open questions · ${definition.criticalGaps} critical gaps`,
-      explanation: "Evidence-backed coverage of identified areas, not the fraction of questions answered. Smaller discovery passes do not update whole-area assessments. Missing or outdated coverage needs assessment, not a conclusion that no work was done. The overall estimate still uses saved coverage, with unassessed areas counted as zero.",
-      epics: definition.epics.filter((score) => score.epicID !== "inbox" || requirements.some((r) => r.epicID === "inbox" && r.status !== "rejected") ||
-        project.questions.some((q) => q.epicID === "inbox" && q.status !== "retired") || project.research.some((r) => r.epicID === "inbox") ||
-        project.sources.some((s) => s.epicID === "inbox" && s.kind === "note")).map((score) => ({
+      status: definition.stale ? "Definition assessment incomplete" : definition.criticalGaps || definition.openQuestions ? "Gaps remaining" : "Assessed",
+      detail: definitionAssessmentDetail(definitionAreas),
+      explanation: "Assesses specification detail, not code or the fraction of questions answered. Critical gaps count unresolved critical categories, not individual missing requirements. Not assessed means no saved whole-area assessment; gaps are unknown. Outdated findings may no longer apply. Any project revision currently makes older assessments outdated, and smaller discovery passes do not refresh them. No open questions recorded does not mean no unresolved decisions. Expand an area to inspect its categories, explanations and evidence. The overall estimate still uses saved coverage, with unassessed areas counted as zero.",
+      epics: definitionAreas.map((score) => ({
          epicID: score.epicID, title: active.find((e) => e.id === score.epicID)?.title ?? score.epicID, percent: score.percent,
          assessmentState: !score.assessed ? "unassessed" : score.stale ? "outdated" : "current",
-        status: !score.assessed ? "Not assessed" : score.stale ? "Review needed" : "Assessed",
-        detail: `${score.openQuestions} open questions · ${score.criticalGaps} critical gaps`,
+         status: !score.assessed ? "Not assessed" : score.stale ? "Assessment outdated" : "Assessed",
+         detail: definitionAssessmentDetail([score], false),
       })) },
     { id: "review", title: "Requirements review", ...reviewScore(requirements),
       explanation: "Approved or rejected requirements divided by all identified requirements in active epics. A matching pending refinement keeps that requirement awaiting review. Saved decisions count immediately.",

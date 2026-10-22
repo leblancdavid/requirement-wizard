@@ -17,8 +17,10 @@ area is defined. The top-right **Overall progress** card expands into definition
 coverage, requirements review and verified main-delivery scores, with epic breakdowns.
 The breakdown separates saved questions answered and local code findings from
 definition coverage and verified delivery to main. Missing/outdated definition
-assessments display **Not assessed** / **Needs assessment**, rather than a misleading
-zero. Local code findings do not earn main-delivery credit.
+assessments display **Not assessed** / **Assessment outdated**, rather than a misleading
+zero. Unassessed areas have unknown gaps; outdated critical flags are separate from
+current gaps. Expand an area's definition assessment in the breakdown for category
+explanations and linked evidence. Local code findings do not earn main-delivery credit.
 Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 **Review next epic workflow** adds an alternative to individual gap checks: related
