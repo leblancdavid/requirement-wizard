@@ -1,3 +1,4 @@
+import { workspaceMenu } from "./menu-check-helpers.js";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -65,7 +66,7 @@ try {
     if (ordinal === 1) current.delivered.arrive();
   });
   const design = page.getByRole("tab", { name: /^Design/ });
-  const selectedProject = () => page.locator(".sidebar .project-link.selected");
+  const selectedProject = async () => (await workspaceMenu(page)).locator(".project-link.selected");
   // Exercise both startup response orders on reload, not a probabilistic repeat loop.
   for (const order of ["snapshot-first", "list-first", "overlapping-poll", "switch-project"] as const) {
     const controlled: Ordering = { list: gate(), snapshot: gate(), delivered: gate(), firstOnly: order === "overlapping-poll", requests: 0 };
@@ -76,7 +77,8 @@ try {
     if (order === "snapshot-first") {
       controlled.snapshot.release(); await expect(design).toBeVisible(); controlled.list.release();
     } else {
-      controlled.list.release(); await expect(selectedProject()).toContainText(retained.name);
+      controlled.list.release(); await expect(await selectedProject()).toContainText(retained.name);
+      await page.keyboard.press("Escape");
       if (order === "list-first") {
         await expect(design).toHaveCount(0); controlled.snapshot.release();
       } else if (order === "overlapping-poll") {
@@ -85,7 +87,7 @@ try {
         await expect(page.getByLabel("Filter by feature").locator('option[value="new-evidence"]')).toHaveText("Newest controlled evidence");
         assert.ok(controlled.requests >= 2); controlled.snapshot.release();
       } else {
-        await page.locator(".sidebar").getByRole("button", { name: first.name, exact: false }).click();
+        await (await workspaceMenu(page)).getByRole("button", { name: first.name, exact: false }).click();
         await expect(page.getByRole("heading", { name: first.name, exact: true })).toBeVisible();
         controlled.snapshot.release();
       }
@@ -94,7 +96,8 @@ try {
     // Let the released response reach React before asserting that stale work lost.
     await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await expect(design).toBeVisible();
-    await expect(selectedProject()).toContainText(order === "switch-project" ? first.name : retained.name);
+    await expect(await selectedProject()).toContainText(order === "switch-project" ? first.name : retained.name);
+    await page.keyboard.press("Escape");
     if (order === "overlapping-poll") await expect(page.getByLabel("Filter by feature").locator('option[value="new-evidence"]')).toHaveText("Newest controlled evidence");
     ordering = null;
   }

@@ -4,6 +4,7 @@ declare global {
     reqwizitDesktop?: {
       chooseDirectory(): Promise<string | null>;
       openExternal(url: string): Promise<void>;
+      quit(): Promise<void>;
     };
   }
 }

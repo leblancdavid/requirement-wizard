@@ -1,3 +1,4 @@
+import { applicationMenu, workspaceMenu } from "./menu-check-helpers.js";
 import assert from "node:assert/strict";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
@@ -6,7 +7,7 @@ import { startApp } from "./server.js";
 import { ProjectStore } from "../storage/store.js";
 import { analysisSchema, reviewFingerprint } from "../core/model.js";
 import type { Connections, LoginStatus } from "../providers/connections.js";
-import { themes } from "../ui/appearance.js";
+import { themes, themeTokens } from "../ui/appearance.js";
 import { planContext } from "../core/working-set.js";
 import { command } from "../service/git-delivery.js";
 import { requirementFingerprint } from "../core/implementation.js";
@@ -206,6 +207,7 @@ try {
   const page = await context.newPage();
   diagnose = browserDiagnostics(page);
   await page.addInitScript(() => {
+    if (localStorage.getItem("reqwizit-recent-workspaces") === null) localStorage.setItem("reqwizit-recent-workspaces", "invalid older preference");
     if (!localStorage.getItem("reqwizit-plan-confirmed:previous-account")) {
       localStorage.setItem("wizard-plan-confirmed:previous-account", "true");
       localStorage.setItem("wizard-auto", "false");
@@ -216,13 +218,49 @@ try {
   await page.context().route("https://auth.openai.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<p>Deterministic sign-in fixture. No provider contacted.</p>" }));
   await page.goto(app.origin);
   await expect(page).toHaveTitle("Reqwizit");
-  await expect(page.locator(".brand")).toContainText("Reqwizit");
+  await expect(page.locator(".sidebar")).toHaveCount(0);
+  const menuToggle = page.getByRole("button", { name: "Application menu", exact: true });
+  await expect(menuToggle).toHaveAttribute("aria-expanded", "false");
+  await menuToggle.focus();
+  await page.keyboard.press("ArrowDown");
+  const appMenu = page.getByRole("navigation", { name: "Application", exact: true });
+  await expect(appMenu.locator(".app-menu-brand")).toContainText("Reqwizit");
+  await expect(appMenu.getByRole("button", { name: "New project", exact: true })).toBeFocused();
+  await expect(appMenu.getByRole("button", { name: "Quit", exact: true })).toHaveCount(0);
+  await page.keyboard.press("End");
+  await expect(appMenu.getByRole("button", { name: "Settings", exact: true })).toBeFocused();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowDown");
+  await expect(appMenu.getByRole("button", { name: "Open project", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(appMenu.getByRole("button", { name: "New project", exact: true })).toBeFocused();
+  await appMenu.getByRole("button", { name: "Recent workspaces", exact: true }).click();
+  await expect(appMenu.getByText("No saved workspaces yet.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(appMenu).toHaveCount(0);
+  await expect(menuToggle).toBeFocused();
+  await applicationMenu(page);
+  await page.getByRole("heading", { name: "Your next idea starts here.", exact: true }).click();
+  await expect(menuToggle).toHaveAttribute("aria-expanded", "false");
+  await applicationMenu(page);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Tab");
+  await expect(menuToggle).toHaveAttribute("aria-expanded", "false");
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await applicationMenu(page);
+    await expect(appMenu).toBeInViewport();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Menu fits the viewport");
+    await page.screenshot({ path: `.reqwizit-state/app-menu-${width}.png` });
+    await page.keyboard.press("Escape");
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
   assert.deepEqual(await page.evaluate(() => ({
     migrated: localStorage.getItem("reqwizit-plan-confirmed:previous-account"),
     current: localStorage.getItem("reqwizit-auto"),
     legacy: localStorage.getItem("wizard-auto"),
   })), { migrated: "true", current: "true", legacy: null });
-  await expect(page.locator(".sidebar").getByRole("button", { name: "Settings", exact: true })).toBeVisible();
+  await expect((await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true })).toBeVisible();
   await expect(page.locator(".topbar .header-progress")).toHaveCount(0);
   const directSettings = await browser.newPage();
   await directSettings.goto(`${app.origin}/#/settings`);
@@ -231,7 +269,7 @@ try {
   await directSettings.getByRole("button", { name: "Back to workspace" }).click();
   await expect(directSettings.getByLabel("Project name")).toBeVisible();
   await directSettings.close();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page).toHaveURL(/#\/settings$/);
   await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeFocused();
   await expect(page.getByLabel("Project name")).toBeHidden();
@@ -242,10 +280,15 @@ try {
     await expect(appearance.getByRole("button", { name: `${name} theme`, exact: true })).toHaveAttribute("aria-pressed", "true");
     const cssRGB = (hex: string) => `rgb(${[1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16)).join(", ")})`;
     await expect(page.locator("body")).toHaveCSS("background-color", cssRGB(palette.background));
+    await expect(page.locator(".topbar")).toHaveCSS("background-color", cssRGB(palette.accent));
+    const onAccent = themeTokens(palette)["--on-accent"];
+    await expect(page.locator(".topbar h1")).toHaveCSS("color", cssRGB(onAccent));
+    await expect(menuToggle).toHaveCSS("color", cssRGB(onAccent));
     await expect(appearance.locator('.theme-card[aria-pressed="false"]').first()).toHaveCSS("background-color", cssRGB(palette.surface));
   }
   await appearance.getByRole("button", { name: "Customize current preset", exact: true }).click();
   await appearance.getByLabel("Accent color", { exact: true }).fill("#dab489");
+  await expect(page.locator(".topbar")).toHaveCSS("background-color", "rgb(218, 180, 137)");
   await appearance.getByLabel("Interface font").selectOption("serif");
   await appearance.getByLabel("Text size", { exact: true }).fill("20");
   await expect(page.locator("html")).toHaveCSS("font-size", "20px");
@@ -376,7 +419,7 @@ try {
   await expect(page.locator(".workspace-status")).toContainText("Saved");
   assert.equal(store.workspace(store.list()[0]!.id)?.path, workspaceDirectory);
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   // Reproduce an existing legacy project after connecting a direct account:
   // the account/model draft must not be mistaken for the saved execution route.
   await page.getByLabel("AI connection", { exact: true }).selectOption("");
@@ -412,7 +455,7 @@ try {
   const answer = card.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true });
    await answer.pressSequentially("My unfinished answer");
    await expect(answer).toHaveValue("My unfinished answer");
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await expect(answer).toBeHidden();
   await page.goBack();
   await expect(answer).toHaveValue("My unfinished answer");
@@ -506,7 +549,7 @@ try {
   await expect(card.locator(".help-exchange").last()).toContainText("cancelled");
   await expect(answer).toHaveValue("My unfinished answer");
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator(".sidebar").getByRole("button", { name: "Settings", exact: true }).tap();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).tap();
   await expect(page.getByRole("region", { name: "Settings", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Back to workspace" }).tap();
   await expect(answer).toHaveValue("My unfinished answer");
@@ -524,7 +567,7 @@ try {
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({ path: ".reqwizit-state/browser-desktop.png", fullPage: true });
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByLabel("Automatically explore queued answers").uncheck();
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /Owner only.*Keeps account/ }).click();
@@ -722,7 +765,7 @@ try {
    await implementationPanel.getByRole("button", { name: "Mark for reassessment", exact: true }).click();
    await expect(implementationPanel.getByText("Manual reassessment requested: External behavior changed", { exact: true })).toBeVisible();
   await page.screenshot({ path: ".reqwizit-state/browser-implementation.png", fullPage: true });
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await appearance.getByRole("button", { name: "Midnight theme", exact: true }).click();
   await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await expect(implementationPanel.locator(".feature-group")).toHaveCSS("background-color", "rgb(28, 41, 60)");
@@ -730,7 +773,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Implementation and all five tabs must fit mobile width");
   await page.screenshot({ path: ".reqwizit-state/browser-implementation-mobile.png", fullPage: true });
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await appearance.getByRole("button", { name: "Sage theme", exact: true }).click();
   await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -753,7 +796,7 @@ try {
   await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Browser sample", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByLabel("Automatically explore queued answers")).not.toBeChecked();
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
@@ -767,7 +810,7 @@ try {
   await expect(card.locator(".word-help").getByRole("tooltip")).toContainText("Earlier project context");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveValue("Owner and office team");
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByLabel("Automatically explore queued answers").check();
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /To answer/ }).click();
@@ -783,10 +826,9 @@ try {
   assert.equal(await headerStatus.getByRole("progressbar").getAttribute("aria-valuenow"), null, "Unknown duration is indeterminate");
   await expect(page.locator(".round-status")).toHaveCount(1);
   const header = page.locator(".topbar");
-  const sidebarBounds = await page.locator(".sidebar").boundingBox();
   const headerBounds = await header.boundingBox();
-  assert.ok(sidebarBounds && headerBounds);
-  assert.ok(Math.abs(headerBounds.x - sidebarBounds.width) < 1, "Header starts at sidebar edge");
+  assert.ok(headerBounds);
+  assert.ok(Math.abs(headerBounds.x) < 1, "Header starts at viewport edge without a sidebar");
   assert.ok(Math.abs(headerBounds.x + headerBounds.width - 1440) < 1, "Header fills available width");
   const queueBounds = await page.locator(".queue-header").boundingBox();
   assert.ok(queueBounds && Math.abs(queueBounds.x + queueBounds.width / 2 - (headerBounds.x + headerBounds.width / 2)) < 1, "Queue control is centered in the header");
@@ -820,7 +862,7 @@ try {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(headerStatus.locator(".activity-spinner")).toHaveCSS("animation-name", "none");
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await expect(headerStatus.getByRole("progressbar")).toBeVisible();
   await page.getByRole("button", { name: "Back to workspace" }).click();
   const details = page.getByRole("textbox", { name: "Your answer to What job details should be saved?", exact: true });
@@ -909,14 +951,14 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: ".reqwizit-state/browser-mobile.png", fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Mobile layout should not overflow horizontally");
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByLabel("ChatGPT model", { exact: true })).toHaveValue("fixture-alt");
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect(page.getByText(/Account disconnected\. Projects retain/)).toBeVisible();
   assert.equal(store.get(store.list()[0]!.id).model.connectionID, "fixture-account");
   await page.getByLabel("AI connection", { exact: true }).selectOption("");
   await page.getByRole("button", { name: "Back to workspace" }).click();
-  await page.getByRole("button", { name: "New project" }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "New project" }).click();
   await page.getByRole("radio", { name: "Existing project", exact: true }).check();
   await page.getByLabel("Local workspace directory", { exact: true }).fill(scanDirectory);
   await expect(page.getByLabel("Project name")).toHaveValue("Detected tracker");
@@ -983,7 +1025,22 @@ try {
    const reviewSeed = store.beginJob(reviewProject.id, reviewProject.revision).job; store.claimJob(reviewSeed.id, Date.now() + 60000);
    store.finishJob(reviewSeed.id, { summary: "Review tracker", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Persist job records", "Send job notifications"].map((statement) => ({ statement, rationale: "Core workflow", sourceIDs: [reviewProject.sources[0]!.id], acceptance: ["Behavior works after restart"] })) });
    await page.reload();
-   await page.locator(".sidebar").getByRole("button", { name: /Review workflow fixture/ }).click();
+   await (await workspaceMenu(page)).getByRole("button", { name: /Review workflow fixture/ }).click();
+   await expect(page.getByRole("navigation", { name: "Application", exact: true })).toHaveCount(0);
+   await expect((await workspaceMenu(page)).locator(".project-link").first()).toHaveText("Review workflow fixture");
+   await page.keyboard.press("Escape");
+   await page.reload();
+   await expect((await workspaceMenu(page)).locator(".project-link").first()).toHaveText("Review workflow fixture");
+   await page.keyboard.press("Escape");
+   for (const width of [800, 390]) {
+     await page.setViewportSize({ width, height: 600 });
+     const menu = await workspaceMenu(page);
+     const bounds = await menu.boundingBox();
+     assert.ok(bounds && bounds.y >= 0 && bounds.y + bounds.height <= 600, "Expanded recent workspaces stays within a short viewport");
+     await expect(menu.getByRole("button", { name: "Settings", exact: true })).toBeInViewport();
+     await page.keyboard.press("Escape");
+   }
+   await page.setViewportSize({ width: 1440, height: 1000 });
    await page.getByRole("tab", { name: /Review/ }).click();
    await expect(page.getByRole("tab", { name: /Review/ })).toContainText("2");
    const reviewPanel = page.getByRole("region", { name: "Requirement review", exact: true });
@@ -1060,7 +1117,7 @@ try {
       store.finishJob(overlapSeed.id, { summary: "Report access", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [], requirements: ["Guests can access private reports", "Guests cannot access private reports"].map((statement) => ({ statement, rationale: "Compare access policy", sourceIDs: [overlapProject.sources[0]!.id], acceptance: [statement] })) });
       const overlapBefore = store.get(overlapProject.id);
       await page.reload();
-      await page.locator(".sidebar").getByRole("button", { name: /Overlap review fixture/ }).click();
+      await (await workspaceMenu(page)).getByRole("button", { name: /Overlap review fixture/ }).click();
       await page.getByRole("tab", { name: /Review/ }).click();
       const overlapPanel = page.getByRole("region", { name: "Requirement review", exact: true });
       const overlapDisclosure = overlapPanel.getByText("Possible overlaps or conflicts (1)", { exact: true });
@@ -1085,10 +1142,10 @@ try {
          const approved = structuredClone(automatic.requirements[0]!);
          failAutomaticPair = kind === "review";
          await page.reload();
-         await page.locator(".sidebar").getByRole("button", { name: new RegExp(automatic.name) }).click();
+         await (await workspaceMenu(page)).getByRole("button", { name: new RegExp(automatic.name) }).click();
          await page.getByLabel("Filter by feature").selectOption("all");
          await page.getByRole("tab", { name: /^Design/ }).click();
-         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
          const autoPreference = page.getByLabel("Automatically explore queued answers");
          const wasAutomatic = await autoPreference.isChecked();
          await autoPreference.check();
@@ -1121,7 +1178,7 @@ try {
           await expect(page.getByRole("dialog")).toContainText("Targeted duplicate/conflict checks: 1 checked");
          await page.getByRole("button", { name: "Close processing queue" }).click();
          await page.getByRole("tab", { name: /^Design/ }).click();
-         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
          await autoPreference.setChecked(wasAutomatic);
          await page.getByRole("button", { name: "Back to workspace" }).click();
        }
@@ -1135,9 +1192,9 @@ try {
         for (const r of resolutionProject.requirements) resolutionProject = store.review(resolutionProject.id, resolutionProject.revision, r.id, "accepted", "Preserve this reviewed scenario");
         const originals = structuredClone(resolutionProject.requirements);
         await page.reload();
-         await page.locator(".sidebar").getByRole("button", { name: new RegExp(resolutionProject.name) }).click();
+         await (await workspaceMenu(page)).getByRole("button", { name: new RegExp(resolutionProject.name) }).click();
          if (ambiguous) {
-           await page.getByRole("button", { name: "Settings", exact: true }).click();
+           await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
            restoreAutomatic = await page.getByLabel("Automatically explore queued answers").isChecked();
            await page.getByLabel("Automatically explore queued answers").uncheck();
            await page.getByRole("button", { name: "Back to workspace" }).click();
@@ -1203,7 +1260,7 @@ try {
         await expect(reviewPanel).toContainText("Resolution approved");
          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Resolution workflow must fit mobile width");
          if (restoreAutomatic !== undefined) {
-           await page.getByRole("button", { name: "Settings", exact: true }).click();
+           await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
            await page.getByLabel("Automatically explore queued answers").setChecked(restoreAutomatic);
            await page.getByRole("button", { name: "Back to workspace" }).click();
          }
@@ -1216,8 +1273,8 @@ try {
          if (approved) changes = store.review(changes.id, changes.revision, changes.requirements[0]!.id, "accepted", "Keep original approval");
          const original = structuredClone(changes.requirements);
          await page.reload();
-         await page.locator(".sidebar").getByRole("button", { name: new RegExp(changes.name) }).click();
-         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         await (await workspaceMenu(page)).getByRole("button", { name: new RegExp(changes.name) }).click();
+         await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
          const automatic = await page.getByLabel("Automatically explore queued answers").isChecked();
          await page.getByLabel("Automatically explore queued answers").uncheck();
          await page.getByRole("button", { name: "Back to workspace" }).click();
@@ -1269,7 +1326,7 @@ try {
          await page.setViewportSize({ width: 390, height: 844 });
          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Change request flow fits mobile width");
          await page.setViewportSize({ width: 1440, height: 1000 });
-         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
          await page.getByLabel("Automatically explore queued answers").setChecked(automatic);
          await page.getByRole("button", { name: "Back to workspace" }).click();
        }
@@ -1281,8 +1338,8 @@ try {
          const questions = store.beginJob(narrow.id, narrow.revision).job; store.claimJob(questions.id, Date.now() + 60000);
          store.finishJob(questions.id, { summary: "Reports", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], questions: [{ text: "Should these report drafts work offline?", whyItMatters: "Only the linked report behavior", epicID: "inbox", evidenceIDs: [narrow.requirements[0]!.id], options: [{ label: "Offline drafts", consequence: "Retain drafts offline" }, { label: "Online drafts", consequence: "Require a connection" }] }] });
          narrow = store.get(narrow.id);
-         await page.reload(); await page.locator(".sidebar").getByRole("button", { name: /Narrow blocker browser fixture/ }).click();
-         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Narrow blocker browser fixture/ }).click();
+         await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
          const automatic = await page.getByLabel("Automatically explore queued answers").isChecked();
          await page.getByLabel("Automatically explore queued answers").uncheck();
          await page.getByRole("button", { name: "Back to workspace" }).click();
@@ -1313,7 +1370,7 @@ try {
          assert.equal(store.get(narrow.id).requirements[2]!.status, "accepted");
          assert.equal(store.get(narrow.id).requirements[0]!.status, "proposed");
          assert.equal(store.submissions(narrow.id).some((s) => s.status === "needs-attention"), false);
-         await page.getByRole("button", { name: "Settings", exact: true }).click();
+         await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
          await page.getByLabel("Automatically explore queued answers").setChecked(automatic);
          await page.getByRole("button", { name: "Back to workspace" }).click();
        }
@@ -1323,7 +1380,7 @@ try {
      cleanup = store.get(cleanup.id);
      for (const r of cleanup.requirements.slice(0, 2)) cleanup = store.review(cleanup.id, cleanup.revision, r.id, "accepted", "");
      await page.reload();
-     await page.locator(".sidebar").getByRole("button", { name: /Cleanup fixture/ }).click();
+     await (await workspaceMenu(page)).getByRole("button", { name: /Cleanup fixture/ }).click();
      await page.getByRole("tab", { name: /Review/ }).click();
      await reviewPanel.getByRole("button", { name: "Refine requirements", exact: true }).click();
      await expect(page.locator(".queue-trigger")).toContainText("0 of 3 checks completed");
@@ -1421,7 +1478,7 @@ try {
          listingState.assessments[r.id] = { status, fingerprint: index === 1 ? "previous requirement wording" : requirementFingerprint(r), contextFingerprint: assessmentContextFingerprint(listing, r.id), specificationRevision: listing.revision, explanation: "Deterministic browser evidence", evidenceIDs: [], scenarios: [], files: [], omissions: 0, verified: false, scope: "workspace", head: "fixture-head", capturedAt: new Date().toISOString() };
       }
       store.saveExecution(listing.id, listingState);
-      await page.reload(); await page.locator(".sidebar").getByRole("button", { name: /Implementation list fixture/ }).click();
+      await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Implementation list fixture/ }).click();
        await page.getByRole("tab", { name: /Implement/ }).click();
        const listPanel = page.locator(".implementation-tab"), search = listPanel.getByRole("searchbox", { name: "Search epics and requirements", exact: true });
        const expectImplementationRows = async (count: number) => {
@@ -2223,7 +2280,7 @@ try {
    gapProject = store.get(gapProject.id);
    gapProject = store.review(gapProject.id, gapProject.revision, gapProject.requirements[0]!.id, "accepted", "");
    const gapOriginal = structuredClone(gapProject);
-   await page.reload(); await page.locator(".sidebar").getByRole("button", { name: /Gap backlog fixture/ }).click();
+   await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Gap backlog fixture/ }).click();
    await page.getByRole("tab", { name: /^Design/ }).click();
    await page.getByLabel("Filter by feature").selectOption(gapProject.requirements[0]!.epicID);
    for (let i = 0; i < 4; i++) {
@@ -2259,7 +2316,7 @@ try {
       requirements: ["Keep saved edits", "Restore saved drafts"].map((statement) => ({ epicID: "new:stages", statement, rationale: "Human idea", acceptance: ["Work remains available"], sourceIDs: [retrievalProject.sources[0]!.id] })) });
     retrievalProject = store.get(retrievalProject.id);
     const retrievalOriginal = structuredClone(retrievalProject);
-    await page.reload(); await page.locator(".sidebar").getByRole("button", { name: /Staged retrieval fixture/ }).click();
+    await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Staged retrieval fixture/ }).click();
     await page.getByRole("tab", { name: /^Design/ }).click();
     await page.getByLabel("Filter by feature").selectOption(retrievalProject.requirements[0]!.epicID);
     await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();

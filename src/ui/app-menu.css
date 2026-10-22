@@ -1,0 +1,22 @@
+/* The header is full-width; only the content beneath it is width-constrained. */
+.topbar { background: var(--accent); color: var(--on-accent); }
+.app-header-leading { display: flex; align-items: flex-start; align-self: start; gap: 16px; }
+.app-header-title { min-width: 0; flex: 1; }
+.app-header-title > small { color: var(--on-accent); }
+.topbar .header-activity, .topbar .progress-trigger, .topbar .queue-header-action { color: var(--text); }
+.app-menu { position: relative; flex: 0 0 auto; }
+.app-menu-toggle { width: 44px; height: 44px; border: 1px solid currentColor; border-radius: 8px; display: grid; place-items: center; color: var(--on-accent); }
+.app-menu-toggle:hover, .app-menu-toggle[aria-expanded=true] { background: color-mix(in srgb, var(--on-accent) 14%, transparent); }
+.app-menu-toggle:focus-visible { outline-color: var(--on-accent); }
+.app-menu-panel { position: absolute; top: calc(100% + 10px); left: 0; z-index: 30; width: 290px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 100px); overflow-y: auto; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: 0 10px 32px var(--shadow); }
+.app-menu-brand { padding: 8px 12px 12px; font-weight: 650; color: var(--accent); }
+.app-menu-panel button { width: 100%; display: flex; justify-content: space-between; text-align: left; padding: 11px 12px; border-radius: 6px; overflow-wrap: anywhere; }
+.app-menu-panel button:hover, .app-menu-panel button:focus-visible, .app-menu-panel .project-link.selected { background: var(--selected); color: var(--text); }
+.app-menu-panel button:focus-visible { outline-offset: -3px; }
+.app-menu-panel .project-link { color: var(--text); margin: 0; font-size: .9rem; }
+.recent-workspaces { margin: 0 4px 6px 12px; border-left: 2px solid var(--border); padding-left: 6px; max-height: 40dvh; overflow-y: auto; }
+.recent-workspaces p { padding: 8px; margin: 0; font-size: .9rem; }
+.app-menu-panel hr { border: 0; border-top: 1px solid var(--border); margin: 8px 4px; }
+@media (max-width: 540px) {
+  .app-header-leading { gap: 10px; }
+}

@@ -35,6 +35,9 @@ dependencies: a process holding a native SQLite module can block `npm ci`.
   There is no tray mode, background work, or quit confirmation. Already-committed
   answers, revisions and files are retained. Unsubmitted editor text is not a saved
   answer. Interrupted queues require explicit resume after restart.
+- **Application menu → Quit** uses that same shutdown path, with no confirmation.
+  The top-left menu also contains New project, Open project, Recent workspaces and
+  Settings instead of a persistent left sidebar. Quit is desktop-only.
 - **Browse folders** uses the native directory picker in both project creation and
   project Settings. Browser clients keep their existing folder browser.
 - ChatGPT authorization and external web links open in the system browser. The
@@ -52,7 +55,7 @@ from those in the user's web browser. Tokens stay in the local provider service,
 outside renderer APIs and project exports.
 
 The renderer is sandboxed, context-isolated, and has no Node integration. Its
-CommonJS preload exposes only directory selection and opening HTTP(S) links.
+CommonJS preload exposes only directory selection, opening HTTP(S) links, and Quit.
 IPC checks the owning window, main frame, and local origin. Web permissions and
 webviews are disabled; new windows and external navigation are intercepted.
 
@@ -97,6 +100,21 @@ $env:REQWIZIT_DESKTOP_EXECUTABLE = (Resolve-Path "dist/installers/win-unpacked/R
 npx tsx src/desktop/desktop-check.ts
 Remove-Item Env:REQWIZIT_DESKTOP_EXECUTABLE
 ```
+
+The source smoke runner also accepts `REQWIZIT_DESKTOP_APP_DIRECTORY` to launch an
+independently staged app instead of `dist/desktop-app` (not used for packaged-executable
+checks). This allows verification without replacing dependencies locked by an existing
+desktop process. It still uses an isolated temporary data directory.
+
+Application-menu verification (2026-10-21, Node 22.23.3): UI build and desktop TypeScript
+compilation passed. The normal `npm run test:desktop` staging install was blocked by
+an existing process locking `dist/desktop-app/node_modules/better-sqlite3/prebuilds/win32-x64.node`.
+No unrelated process was stopped. Freshly compiled code/UI and the same locked dependency
+graph were staged independently under the approved OpenCode temporary directory; the
+desktop smoke runner passed using `REQWIZIT_DESKTOP_APP_DIRECTORY`. Both window-close
+and menu Quit exited the owned backend, and the saved project remained readable after
+Quit. Renderer isolation, native link/directory IPC and relaunch continuity also passed.
+Installer generation/installed-app upgrade checks were not repeated for this UI change.
 
 Verified on Windows, October 16, 2026:
 

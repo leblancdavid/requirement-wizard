@@ -1,3 +1,4 @@
+import { applicationMenu } from "./menu-check-helpers.js";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -19,7 +20,7 @@ const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();
   await page.goto(app.origin);
-  await page.getByRole("button", { name: "Open Reqwizit project", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Open project", exact: true }).click();
   const form = page.getByRole("form", { name: "Open Reqwizit project" });
   await form.getByLabel("Local workspace directory").fill(directory);
   await form.getByRole("button", { name: "Open saved project", exact: true }).click();
@@ -28,7 +29,7 @@ try {
   assert.equal(store.queuePaused(project.id), true); assert.equal(calls, 0);
   await page.reload();
   await expect(page.getByRole("heading", { name: "Shared project fixture", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("button", { name: "Open shared checkpoint", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open shared checkpoint", exact: true }).click();
   assert.equal(calls, 0);

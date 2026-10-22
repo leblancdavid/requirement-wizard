@@ -11,6 +11,11 @@ support is deferred.
 
 ## Project status
 
+The top-left application menu contains **New project**, **Open project**, **Recent
+workspaces**, and **Settings**, replacing the persistent sidebar. The header follows
+your accent color. Desktop users also get **Quit**, with the same safe shutdown as
+closing the window; regular browsers do not show it.
+
 A playable browser workspace is available. AI organizes your idea into epics, asks
 clickable questions, researches relevant uncertainties, and estimates how well each
 area is defined. The top-right **Overall progress** card expands into definition

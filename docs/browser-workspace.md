@@ -1,5 +1,34 @@
 # Browser workspace, epics, and estimated completeness
 
+## Application menu and header
+
+The top-left **Application menu** replaces the persistent project sidebar. It offers
+**New project**, **Open project** (the existing portable-project opening flow),
+**Recent workspaces**, and **Settings**. Recent workspaces lists all saved local
+projects, including those without a connected folder. Recently selected projects
+come first; projects not yet selected retain their existing newest-created order.
+The selection history is a bounded browser-local preference, separate from project
+state, and survives reload. Older installations need no project migration.
+
+The menu supports Tab, arrow keys, Home/End, Escape and outside-click dismissal.
+Choosing an action closes it; Escape returns focus to the menu button. The header
+fills the viewport width and uses the selected accent color with automatically
+contrasting title/menu text. Processing and progress controls retain their surface
+colors and their existing behavior. Settings' back link is below the header.
+
+Desktop users also get **Quit**, using the same safe shutdown as closing the window,
+without a confirmation or tray mode. It is hidden in regular browsers, which cannot
+reliably close user-opened tabs. Saved data is retained; unsubmitted text is not saved.
+
+Verification (2026-10-21, Node 22.23.3): type check, all 555 deterministic tests,
+UI build, browser/portable-browser checks, and the reliability, focused retrieval,
+saved-evidence navigation, retrieval-pilot and epic-review browser runners passed.
+Menu coverage includes keyboard/outside/Tab dismissal, focus restoration, mobile
+layout, malformed older preferences, recent selection/reload, all 12 accent themes
+and custom accent color. Desktop Quit/window-close smoke checks passed against an
+independently staged build; see [desktop verification](desktop.md#verification).
+No live inference was used. The existing Vite chunk-size warning remains non-blocking.
+
 ## Understanding project progress
 
 The processing header describes current work, queued responses, pauses and responses

@@ -1,3 +1,4 @@
+import { applicationMenu, workspaceMenu } from "./menu-check-helpers.js";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -55,9 +56,9 @@ try {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(() => { localStorage.setItem("reqwizit-research", "false"); localStorage.setItem("reqwizit-auto", "false"); });
   await page.goto(app.origin);
-  await page.locator(".sidebar").getByRole("button", { name: p.name, exact: false }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: false }).click();
   const pilot = page.getByRole("checkbox", { name: "Use prefix-preserving auxiliary merge for manual Explore next gaps", exact: true });
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await expect(pilot).not.toBeChecked(); await expect(page.getByRole("region", { name: "Saved-evidence retrieval pilot" })).toContainText("Default off");
   await pilot.check(); await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await page.getByRole("tab", { name: /^Design/ }).click(); await page.getByLabel("Filter by feature").selectOption("admission");
@@ -75,7 +76,7 @@ try {
   await page.screenshot({ path: ".reqwizit-state/browser-retrieval-pilot-interrupted.png", fullPage: true });
   await page.getByRole("button", { name: "Close processing queue" }).click();
   await page.reload(); assert.equal(calls, 1);
-  await page.getByRole("button", { name: "Settings", exact: true }).click(); await expect(pilot).not.toBeChecked();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click(); await expect(pilot).not.toBeChecked();
   await pilot.check(); await pilot.uncheck(); // Explicit switching back is distinct from reloading.
   await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await page.getByRole("tab", { name: /^Design/ }).click(); await page.getByLabel("Filter by feature").selectOption("admission");
@@ -93,10 +94,10 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
   await page.screenshot({ path: ".reqwizit-state/browser-retrieval-pilot-mobile.png", fullPage: true });
   await page.getByRole("button", { name: "Close processing queue" }).click(); await page.setViewportSize({ width: 1280, height: 960 });
-  await page.getByRole("button", { name: "Settings", exact: true }).click(); await pilot.check();
-  await page.locator(".sidebar").getByRole("button", { name: other.name, exact: false }).click();
-  await page.locator(".sidebar").getByRole("button", { name: p.name, exact: false }).click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click(); await expect(pilot).not.toBeChecked();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click(); await pilot.check();
+  await (await workspaceMenu(page)).getByRole("button", { name: other.name, exact: false }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: false }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click(); await expect(pilot).not.toBeChecked();
   assert.equal(calls, 3); assert.deepEqual(errors, []);
   console.log("Browser retrieval pilot passed: default off, explicit opt-in, policy/limits/omissions, interruption/reload, switch-back receipt reuse, exact citations, preserved records, mobile and project-reset behavior. No live inference.");
 } catch (error) {

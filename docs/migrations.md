@@ -19,6 +19,20 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Application menu and recent workspaces (presentation/local preference only)
+
+No SQLite, portable-state, artifact, assessment, fingerprint or job format changes.
+All existing saved projects remain available in the new menu, without repeating
+model calls or changing revisions. The additive `reqwizit-recent-workspaces`
+localStorage key stores up to 100 distinct project IDs in selection order; absent,
+malformed or non-array values start empty, and non-string entries are ignored.
+Untracked projects retain the existing newest-created order. Unknown IDs are never
+rendered as projects. This preference is not exported or used as decision evidence;
+it needs no transactional data migration. Failed preference writes retain in-session
+ordering and cannot overwrite project data. Existing appearance settings are reused
+unchanged for the accent-colored header. Browser checks exercise malformed old
+preferences, initial saved-project access, selection order and reload.
+
 ## Definition assessment clarity (presentation only)
 
 No source/target format change or forward migration is needed. SQLite, portable

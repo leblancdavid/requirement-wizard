@@ -1,3 +1,4 @@
+import { workspaceMenu } from "./menu-check-helpers.js";
 import assert from "node:assert/strict";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { mkdir } from "node:fs/promises";
@@ -120,7 +121,7 @@ try {
   await page.addInitScript(() => { localStorage.setItem("reqwizit-research", "false"); localStorage.setItem("reqwizit-auto", "false"); });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
-  await page.locator(".sidebar").getByRole("button", { name: /Bounded saved search/ }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: /Bounded saved search/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("editing");
   await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
@@ -159,7 +160,7 @@ try {
   await expect(status).toContainText("Saved-evidence search: 1 handles"); assert.equal(calls, 3);
   await page.getByRole("button", { name: "Close processing queue" }).click();
   await page.setViewportSize({ width: 1280, height: 960 });
-  await page.locator(".sidebar").getByRole("button", { name: /Bounded continuation/ }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: /Bounded continuation/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("editing");
   await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
@@ -219,7 +220,7 @@ try {
   assert.deepEqual(store.getJob(exhausted.id), exhausted);
   assert.deepEqual(store.get(paging.id).sources, paging.sources);
   assert.deepEqual(store.get(paging.id).requirements, paging.requirements);
-  await page.locator(".sidebar").getByRole("button", { name: /Exhausted check scheduling/ }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: /Exhausted check scheduling/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("inbox");
   await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();

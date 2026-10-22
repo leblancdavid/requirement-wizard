@@ -42,6 +42,7 @@ import { ItemProcessingNotice } from "./decision-recovery.js";
 import { AttemptCleanup } from "./attempt-cleanup.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { GapContinuation } from "./gap-continuation.js";
+import { AppMenu } from "./app-menu.js";
 
 type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: (Job & { gapContinuationAvailable?: boolean })[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
@@ -397,21 +398,17 @@ function App() {
         {s.input.type === "review" && !resolvedAttempts.has(s.id) && !s.applied && s.conflict && s.status === "needs-attention" && s.overlapFollowup?.state !== "pending" && <details><summary>Archive attempt…</summary><p>This only moves this unapplied attempt to history. Its note is preserved. It does not resolve questions, apply a decision or retry follow-up.</p><ActionButton className="secondary" disabled={pending} onClick={() => void act(async () => { await api(`projects/${project.id}/archive-review-attempt`, { revision: project.revision, submissionID: s.id }); })}>Confirm archive attempt</ActionButton></details>}
       </article>}</PagedList>}</LazyDetails>
     </IssueDialog>}
-    <aside className="sidebar">
-      <div className="brand"><span className="brand-mark">✦</span><div>Reqwizit</div></div>
-      <div className="sidebar-label">YOUR WORKSPACE</div>
-      <button className="new-project" onClick={() => { setOpening(false); setCreating(true); navigate("workspace"); }}>＋ New project</button>
-      <button className="new-project" onClick={() => { setOpening(true); setCreating(true); setInitializeFolder(false); setCreateDirectory(false); navigate("workspace"); }}>Open Reqwizit project</button>
-      <nav aria-label="Projects">{projects.map((item) => <button key={item.id} className={`project-link ${id === item.id && !showSettings ? "selected" : ""}`} onClick={() => { setID(item.id); setCreating(false); navigate("workspace"); }}><span>◇</span>{item.name}</button>)}</nav>
-      <div className="sidebar-tools"><button className={`settings-toggle ${showSettings ? "selected" : ""}`} aria-label="Settings" title="Settings" aria-current={showSettings ? "page" : undefined} onClick={() => navigate("settings")}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.2-1.7 1-2.2-.6L2.5 10l1.6 1.6v1.8L2.5 15 5 19.4l2.2-.6 1.7 1 .6 2.2h5l.6-2.2 1.7-1 2.2.6 2.5-4.4-1.6-1.6v-1.8l1.6-1.6L19 5.6l-2.2.6-1.7-1L14.5 3Z" /><circle cx="12" cy="12.5" r="3" /></svg></button></div>
-      <div className="sidebar-bottom"><span className="connection-dot" /> Local-first workspace<p>Project files are saved on this device.<br />Discovery sends context to ChatGPT.</p></div>
-    </aside>
     <main>
-      {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
-      <header className="topbar"><div><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? opening ? "Open Reqwizit project" : "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small><HeaderActivity /></div>
+      <header className="topbar"><div className="app-header-leading"><AppMenu projects={projects} activeID={id}
+        newProject={() => { setOpening(false); setCreating(true); navigate("workspace"); }}
+        openProject={() => { setOpening(true); setCreating(true); setInitializeFolder(false); setCreateDirectory(false); navigate("workspace"); }}
+        selectProject={(projectID) => { setID(projectID); setCreating(false); navigate("workspace"); }}
+        settings={() => navigate("settings")} reportError={setError} />
+        <div className="app-header-title"><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? opening ? "Open Reqwizit project" : "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small><HeaderActivity /></div></div>
         {!creating && project && data && <ProcessingQueue key={project.id} project={project} jobs={data.jobs} openIssue={openIssue} active={data.active} progress={data.progress} refinementProgress={data.refinementProgress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(explore, "Starting discovery…")} continuationAvailable={!!lastJob?.gapContinuationAvailable} continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
         {!showSettings && project && summary && data && !creating && <ProjectProgress key={`progress:${project.id}`} progress={mapProgress!} definition={summary} project={project} />}</header>
       {pending && <ActivityFeedback label={actionLabel} />}
+      {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
       {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
       {showSettings && <section id="workspace-settings" className="settings-panel" aria-label="Settings">
         <AppearanceSettings />

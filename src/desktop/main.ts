@@ -93,6 +93,10 @@ else {
       if (typeof url !== "string" || url.length > 12000) throw new Error("Invalid web link.");
       await external(url);
     });
+    ipcMain.handle("reqwizit:quit", (event) => {
+      trusted(event);
+      void shutdown();
+    });
     window.webContents.setWindowOpenHandler(({ url }) => {
       void external(url).catch(() => {});
       return { action: "deny" };

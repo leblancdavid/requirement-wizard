@@ -1,3 +1,4 @@
+import { workspaceMenu } from "./menu-check-helpers.js";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -45,7 +46,7 @@ try {
   await page.addInitScript(() => { localStorage.setItem("reqwizit-research", "false"); localStorage.setItem("reqwizit-auto", "false"); });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
-  await page.locator(".sidebar").getByRole("button", { name: /Focused retrieval/ }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: /Focused retrieval/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption(project.requirements[0]!.epicID);
   await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
