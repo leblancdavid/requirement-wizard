@@ -9,7 +9,6 @@
 .queue-trigger .queue-chevron { margin-left: auto; flex-shrink: 0; }
 .topbar .queue-trigger { position: relative; padding-bottom: 15px; }
 .queue-trigger > .activity-bar { position: absolute; bottom: 4px; left: 12px; width: calc(100% - 24px); }
-.queue-drawer { --modal-width: 560px; }
 .queue-drawer .queue-panel { margin: 0; border: 0; border-radius: 0; background: transparent; }
 .queue-drawer .queue-panel > section, .queue-drawer .queue-panel > details, .queue-actions { margin-top: 22px; }
 .queue-drawer h3 { font-size: 15px; }

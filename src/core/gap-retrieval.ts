@@ -7,6 +7,7 @@ import type { Analysis } from "./model.js";
 import { ContextBudgetError } from "./context.js";
 import { planContext } from "./working-set.js";
 import { searchEvidenceSchema, savedEvidenceSearchSchema, savedEvidencePolicySchema } from "./gap-navigation.js";
+import { guardrailVerdictSchema } from "./epic-review-types.js";
 
 export const retrievalRequestSchema = z.object({ retrieveEvidence: z.object({ format: z.literal(1),
   recordIDs: z.array(z.string().min(1).max(200)).min(1).max(8), reason: z.string().min(1).max(600),
@@ -20,7 +21,26 @@ export const retrievalAllowanceSchema = z.object({ format: z.literal(1), attempt
   continuation: continuationReceiptSchema.optional(), hasFinal: z.boolean() }).strict()
   .refine((work) => work.continuation ? work.attempts >= 3 : work.attempts <= 3, "Unsupported retrieval allowance.");
 export type RetrievalAllowance = z.infer<typeof retrievalAllowanceSchema>;
+export const epicStagesSchema = z.object({
+  format: z.literal(1), planKey: z.string().regex(/^[a-f0-9]{64}$/), batches: z.number().int().min(1).max(16),
+  phase: z.enum(["discover", "validate", "complete"]), nextBatch: z.number().int().min(0).max(16),
+  candidates: analysisSchema,
+  receipts: z.array(z.object({ phase: z.enum(["discover", "validate"]), batch: z.number().int().min(0).max(15),
+    evidenceKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
+    response: z.union([analysisSchema, guardrailVerdictSchema]),
+  }).strict()).max(32),
+}).strict().superRefine((work, ctx) => {
+  const done = work.phase === "discover" ? work.nextBatch : work.phase === "validate" ? work.batches + work.nextBatch : work.batches * 2;
+  if (work.nextBatch >= work.batches && work.phase !== "complete" || work.phase === "complete" && work.nextBatch !== work.batches
+    || work.receipts.length !== done || JSON.stringify(work.candidates).length > 12000
+    || work.receipts.some((r, i) => JSON.stringify(r.response).length > 12000 || r.batch !== i % work.batches || r.phase !== (i < work.batches ? "discover" : "validate")
+      || (r.phase === "validate") !== ("guardrailVerdict" in r.response))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid staged epic checkpoint sequence or draft bound." });
+  }
+});
+export type EpicStages = z.infer<typeof epicStagesSchema>;
 export const retrievalWorkSchema = z.object({ format: z.literal(1),
+  epicStages: epicStagesSchema.optional(),
   continuation: continuationReceiptSchema.optional(),
   requestedPolicy: savedEvidencePolicySchema.optional(),
   research: z.boolean(),
@@ -45,6 +65,9 @@ export const retrievalWorkSchema = z.object({ format: z.literal(1),
   final: z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), output: analysisSchema,
     revision: z.number().int().positive().optional(), evidenceBasis: evidenceBasisSchema.optional() }).strict().optional(),
 }).strict().superRefine((work, ctx) => {
+  if (work.epicStages && (work.stages.length || work.continuation || work.research || work.final && work.epicStages.phase !== "complete")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Staged epic work cannot mix navigation, research or premature publication." });
+  }
   if (!work.continuation && (work.attempts > 3 || work.stages.length > 2 || (work.reuse?.stages ?? 0) > 2)
     || work.continuation && (work.attempts < 3 || work.continuation.fromStage > work.stages.length)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Extended retrieval requires a valid explicit continuation receipt." });

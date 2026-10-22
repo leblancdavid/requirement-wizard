@@ -48,7 +48,10 @@ This is the single Design-only discovery action: related
 records are reviewed together across behavior, recovery and acceptance, with exact
 linked evidence prepared locally and no model-driven search/paging. Select a feature
 or work epic by epic; dependency-boundary packages follow. Existing saved checks are
-preserved separately. See [epic workflow review](docs/epic-workflow-review.md) for
+preserved separately. Oversized shared decisions can use checkpointed exact batches:
+draft gaps publish only after every batch checks them. Long packages pause after six
+requests per package attempt; Explore next gaps resumes saved stages without replay.
+See [epic workflow review](docs/epic-workflow-review.md) for
 bounded packages, blockers, recovery and verification limits.
 Gap discovery can request additional exact saved evidence in up to three bounded stages,
 retaining human constraints and checkpointing completed calls for explicit retry. Navigation

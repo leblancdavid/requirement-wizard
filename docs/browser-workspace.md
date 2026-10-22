@@ -9,6 +9,12 @@ available through a status announcement and hover tooltip; multiple actions list
 their labels in the tooltip. Detailed progress bars elsewhere are unchanged.
 This is presentation-only; saved data and migration formats are unchanged.
 
+All workspace modals use 60% of the viewport width and height rather than separate
+narrow dialog limits.
+Phones (540px and below) retain full-screen dialogs. Dialog bodies scroll while
+their headings and close controls remain visible. This presentation-only change
+does not affect saved data or require a migration.
+
 ## Continuous specification and decisions by exception
 
 **Specification** replaces the Review tab. Explicit queued answers, notes and
@@ -585,6 +591,38 @@ and explicit corrected-response retry. Live model behavior remains unverified.
 
 ## Exploring gaps in large projects
 
+When shared project/dependency decisions exceed the normal package target, new work
+can now use **staged decision review**. Exact guardrails are split into bounded
+batches; drafts are checked against every batch before any questions/requirements
+publish. Processing & queue shows drafting/checking progress, saved stage counts and
+total attempts. Actual staged contexts remain below 72k characters, including drafts.
+An indivisible oversized evidence chain still blocks explicitly; nothing is silently
+summarized or deleted.
+
+A package pauses after six requests in one invocation, with a failed/paused job
+diagnostic (not a completed review or an evidence blocker). Click **Explore next gaps**
+again to resume its saved stages; restart/reload never starts model calls or repeats
+completed stages. This can require more model calls than the old single-request
+path. The six-request bound is per package invocation, not per entire queue action;
+existing ten-package/fifteen-minute queue limits remain. Staged review does not
+support research or extra file loads; indispensable missing facts block, and enabled
+research is explicitly rejected. Compatible saved reviews keep their old policy.
+
+New workflow exploration proactively targets **72,000 characters** for its full
+context package, including workflow instructions, within the existing 96,000-character
+ceiling. It applies safe compression before splitting, including lossless sharing
+of repeated phrases, and defers static file motivation when necessary. The remaining
+24k is headroom for evidence growth/explicit loads, not a promise every file fits.
+Runtime/schema overhead and provider token limits are separate.
+
+**Epic workflow review** in Processing & queue shows context use, headroom and the
+available evidence allowance (or largest prepared package/above-target counts for a
+no-call report). Indivisible mandatory human constraints can exceed the soft target:
+the reduced buffer is explicit, not hidden by dropping decisions or increasing the
+hard cap. Compatible saved reviews, stages and spent attempts keep their original
+context policy and are not repeated just to optimize their representation. No
+automatic refill or startup model calls are introduced.
+
 Oversized workflow contexts now try a minimum-package fallback that defers static
 file contents while retaining exact requirements, scenarios and human constraints.
 Omitted requirements have compact navigation previews, not evidence-authoritative
@@ -603,6 +641,10 @@ and scenarios already loaded, retaining the original decision and entire addendu
 This reduces duplication without summarizing human decisions or raising the input
 limit. Unknown or mismatching historical prose remains intact. Existing completed
 checks retain their evidence identities; explicitly retry exploration after restart.
+For packages still just over the bound, a final fallback compacts repeated
+app-authored instructions/encoding explanations and explicitly omits a long generated
+advisory summary. It does not shorten human input or raise the limit. The full
+workflow envelope, not just its evidence working set, must fit before inference.
 
 **Design → Explore next gaps** is the single action for combined, epic-scoped reviews.
 It prepares exact linked evidence locally, reviews up to six related records across all

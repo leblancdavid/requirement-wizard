@@ -1,5 +1,6 @@
 import { workspaceMenu } from "./menu-check-helpers.js";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { startApp } from "./server.js";
@@ -25,12 +26,19 @@ project = store.get(project.id);
 const before = structuredClone(project), errors: string[] = [];
 let calls = 0;
 let targetCalls = 0;
+let stagedCalls = 0;
 const connections: Connections = {
   async accounts() { return []; }, async models() { return [{ id: "fixture", name: "Fixture" }]; },
   async beginLogin() { throw new Error("No live sign-in"); }, loginStatus() { throw new Error("No live sign-in"); }, cancelLogin() {},
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {},
 };
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(_p, { context }) {
+  if (_p.name === "Staged decision browser") {
+    stagedCalls++;
+    assert.ok(context.manifest.characters <= 72000);
+    const stage = (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview;
+    return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+  }
   if (_p.name === "Failed gap outcome browser") return { summary: 42 };
   if (_p.name === "Epic question target browser") {
     const review = context.manifest.epicReview!;
@@ -72,6 +80,7 @@ try {
   await page.locator(".topbar .queue-trigger").click();
   const status = page.getByRole("region", { name: "Epic workflow review progress", exact: true });
   await expect(status).toContainText("1 reviewed"); await expect(status).toContainText("1 evidence blocked");
+  await expect(status.getByLabel("Workflow context budget", { exact: true })).toContainText("Preferred context target: 72,000");
   await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("No eligible packages remain");
   await status.getByText("Evidence blockers", { exact: true }).click();
   await expect(status).toContainText("Missing the external order recovery contract.");
@@ -122,8 +131,12 @@ try {
   await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("10");
   assert.equal(targetCalls, 4, "Reload retains the target without starting inference");
   let sizeProject = store.create("Oversized human evidence browser", "Keep shared constraints exact", { providerID: "openai", modelID: "fixture" });
-  for (let i = 0; i < 18; i++) sizeProject = store.note(sizeProject.id, sizeProject.revision,
+  for (let i = 0; i < 10; i++) sizeProject = store.note(sizeProject.id, sizeProject.revision,
     Array.from({ length: 1400 }, (_, n) => `Guardrail-${i}-${n.toString(36)}-${(n * 17 + i).toString(36)}`).join(" ").slice(0, 11000), "project");
+  const indivisible = store.beginJob(sizeProject.id, sizeProject.revision).job; store.claimJob(indivisible.id, Date.now() + 60000);
+  store.finishJob(indivisible.id, { ...empty(), requirements: [{ epicID: "project", statement: "One indivisible evidence chain", rationale: "Every linked decision is needed together",
+    sourceIDs: sizeProject.sources.filter((s) => s.kind === "note").map((s) => s.id), acceptance: ["All linked decisions must be loaded together"] }] });
+  sizeProject = store.get(sizeProject.id); sizeProject = store.review(sizeProject.id, sizeProject.revision, sizeProject.requirements[0]!.id, "accepted", "");
   await page.reload();
   await (await workspaceMenu(page)).getByRole("button", { name: /Oversized human evidence browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
@@ -137,6 +150,31 @@ try {
   assert.equal(calls, 2); assert.equal(targetCalls, 4, "Size blockers make no model calls");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-size-blocked.png"), fullPage: true });
+  let stagedProject = store.create("Staged decision browser", "Keep all exact decisions", { providerID: "openai", modelID: "fixture" });
+  stagedProject = store.organize(stagedProject.id, stagedProject.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Review recovery", dependencies: [] }]);
+  for (let i = 0; i < 30; i++) stagedProject = store.note(stagedProject.id, stagedProject.revision,
+    Array.from({ length: 64 }, (_, n) => createHash("sha256").update(`browser-global-${i}-${n}`).digest("hex")).join(""), "project");
+  const stagedSeed = store.beginJob(stagedProject.id, stagedProject.revision).job; store.claimJob(stagedSeed.id, Date.now() + 60000);
+  store.finishJob(stagedSeed.id, { ...empty(), requirements: [{ epicID: "orders", statement: "Retain failed order receipts", rationale: "Original idea", sourceIDs: [stagedProject.sources[0]!.id], acceptance: ["A failed attempt remains visible"] }] });
+  stagedProject = store.get(stagedProject.id);
+  await page.reload();
+  await (await workspaceMenu(page)).getByRole("button", { name: /Staged decision browser/ }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  await page.getByLabel("Filter by feature").selectOption("orders");
+  await review.click(); await expect(review).toBeEnabled();
+  await expect.poll(() => stagedCalls).toBe(6);
+  assert.deepEqual(store.get(stagedProject.id), stagedProject, "Paused drafts must not publish");
+  await page.locator(".topbar .queue-trigger").click();
+  await expect(status.getByLabel("Staged decision review", { exact: true })).toContainText("6 / 8 stages saved");
+  await expect(status).toContainText("Drafts stay unpublished");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-staged-mobile.png"), fullPage: true });
+  await page.reload(); assert.equal(stagedCalls, 6, "Reload never starts paid work");
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  await page.getByLabel("Filter by feature").selectOption("orders");
+  await review.click(); await expect(review).toBeEnabled();
+  await expect.poll(() => stagedCalls).toBe(8);
+  assert.ok(store.jobs(stagedProject.id).some((job) => job.result && job.retrievalWork?.epicStages?.phase === "complete"));
   let failedProject = store.create("Failed gap outcome browser", "Exercise one failed gap outcome", { providerID: "openai", modelID: "fixture" });
   failedProject = store.note(failedProject.id, failedProject.revision, "Clarify order retry behavior", "project");
   await page.reload();
@@ -152,6 +190,6 @@ try {
   assert.equal(dialogText.split(diagnostic).length - 1, 1, "A failed round repeated in progress is shown only once");
   await expect(page.getByText(/^Last round failed:/)).toHaveCount(0);
   assert.deepEqual(errors, []);
-  console.log("Epic review browser check passed: selected epic, blocker/next-package routing, no-call reuse, reload and mobile layout; no model calls.");
+  console.log("Epic review browser check passed: selected epic, blocker/next-package routing, staged pause/resume, no-call reuse, reload and mobile layout; no live model calls.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-epic-review-failure")); throw error; }
 finally { await browser?.close(); await app.close(); store.close(); }

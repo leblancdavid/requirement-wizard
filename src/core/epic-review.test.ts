@@ -6,7 +6,8 @@ import Database from "better-sqlite3";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { DiscoveryQueue } from "../service/queue.js";
-import { epicReviewContext, planEpicReview, validateEpicReviewFinal } from "./epic-review.js";
+import { epicReviewContext, epicReviewBatches, planEpicReview, validateEpicReviewFinal } from "./epic-review.js";
+import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, validateEpicStages } from "./epic-stages.js";
 import { ContextBudgetError } from "./context.js";
 import { validateRetrieval } from "./gap-retrieval.js";
 import { epicReviewDiagnostic, epicReviewReportSchema } from "./epic-review-types.js";
@@ -19,6 +20,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GapExplorationStatus } from "../ui/gap-status.js";
 import { decisionAvailability } from "./decision-availability.js";
+import { createHash } from "node:crypto";
+import { gapEvidence } from "./gap-backlog.js";
+import { retrievalContextKey, retrievalEvidenceBasis } from "./gap-retrieval.js";
+import type { EpicReview } from "./epic-review-types.js";
 
 const empty = (): Analysis => ({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 function seed(store: ProjectStore, count = 8) {
@@ -39,6 +44,415 @@ function seed(store: ProjectStore, count = 8) {
   return p;
 }
 
+const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+function sharedHeavy(store: ProjectStore) {
+  let p = seed(store, 1);
+  for (let i = 0; i < 30; i++) p = store.note(p.id, p.revision,
+    `Exact global decision ${i}\r\n` + Array.from({ length: 64 }, (_, n) => digest(`global-${i}-${n}`)).join(""), "project");
+  return p;
+}
+
+test("guardrail verdicts only remove exact drafts; duplicate/out-of-range indexes and oversized pools reject", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1), task = planEpicReview(p, [], "orders").task!;
+    const draft = mergeEpicDraft(p, task.context!, emptyEpicDraft(), { ...empty(), questions: [{ text: "Which receipt is visible?",
+      whyItMatters: "Recovery", evidenceIDs: [task.review.recordIDs[0]!], options: [{ label: "Old", consequence: "Keep" }, { label: "New", consequence: "Replace" }] }] }, 0);
+    assert.throws(() => applyGuardrailVerdict(draft, { guardrailVerdict: { keepQuestions: [0, 0], keepRequirements: [] } }), /duplicate/);
+    assert.throws(() => applyGuardrailVerdict(draft, { guardrailVerdict: { keepQuestions: [1], keepRequirements: [] } }), /unavailable/);
+    assert.deepEqual(applyGuardrailVerdict(draft, { guardrailVerdict: { keepQuestions: [0], keepRequirements: [] } }), draft);
+    assert.equal(applyGuardrailVerdict(draft, { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } }).questions.length, 0);
+    assert.throws(() => mergeEpicDraft(p, task.context!, draft, { ...empty(), requirements: [{ statement: "x".repeat(12000), rationale: "Bounded output",
+      sourceIDs: [p.sources[0]!.id], acceptance: ["Do not truncate the draft"] }] }, 1), /12,000-character/);
+    assert.equal(draft.questions.length, 1); assert.equal(draft.requirements.length, 0);
+  } finally { store.close(); }
+});
+
+test("oversized shared decisions become exact bounded stages, with no missing roots or source mutation", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = sharedHeavy(store), original = p.requirements.find((r) => r.epicID === "orders")!;
+    p.requirements.push({ ...original, id: "related-recovery", statement: "Show recoverable attempts" }, { ...original, id: "related-receipt", statement: "Keep original receipts" });
+    const before = structuredClone(p), plan = planEpicReview(p, [], "orders");
+    const task = plan.tasks.find((t) => t.review.kind === "workflow")!;
+    assert.equal(task.state, "pending"); assert.equal(task.review.contextPolicy, "staged-guardrails-v1");
+    assert.equal(task.review.recordIDs.length, 3, "Shared guardrails must not fragment a related target group");
+    assert.ok(task.review.guardrailBatches!.length > 1);
+    const batches = epicReviewBatches(p, task.review);
+    const included = new Set(batches.flatMap((c) => c.manifest.includedIDs));
+    for (const s of p.sources.filter((s) => s.epicID === "project")) assert.ok(included.has(s.id), `Every mandatory decision is scheduled: ${s.id}`);
+    for (const c of batches) { assert.ok(c.manifest.characters <= 54000); assert.ok(task.review.recordIDs.every((id) => c.manifest.includedIDs.includes(id))); }
+    assert.deepEqual(p, before);
+  } finally { store.close(); }
+});
+
+test("staged drafts remain unpublished across the six-request pause, resume without replay, and are checked against later decisions", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "epic-stages-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = sharedHeavy(store), target = p.requirements.find((r) => r.epicID === "orders")!;
+    const calls: string[] = [];
+    const adapter = { async analyze(_p: Project, { context }: import("../service/discovery.js").DiscoveryOptions) {
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number; draft: Analysis } }).stagedGuardrailReview;
+      assert.ok(stage); assert.ok(context.manifest.characters <= 72000);
+      const label = `${stage.phase}-${stage.batch}`; assert.ok(!calls.includes(label), "Completed model calls must not repeat"); calls.push(label);
+      if (stage.phase === "validate") return { guardrailVerdict: { keepQuestions: stage.batch === 2 ? [] : stage.draft.questions.map((_, i) => i), keepRequirements: [] } };
+      return { ...empty(), questions: stage.batch === 1 ? [{ text: "Should a failed submission retain its receipt?", whyItMatters: "Recovery",
+        evidenceIDs: [target.id], options: [{ label: "Keep", consequence: "Retain it" }, { label: "Discard", consequence: "Remove it" }] }] : [] };
+    } };
+    let job = await new DiscoveryService(store, adapter).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(job.status, "failed", job.diagnostic); assert.match(job.diagnostic!, /paused after six requests/);
+    assert.equal(job.retrievalWork!.epicStages!.receipts.length, 6);
+    assert.deepEqual(store.get(p.id), p); assert.equal(job.result, undefined);
+    const saved = structuredClone(job);
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.getJob(saved.id), saved);
+    const future = structuredClone(saved);
+    (future.retrievalWork!.epicStages as unknown as { format: number }).format = 99;
+    store.close(); const raw = new Database(path);
+    raw.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(future), saved.id); raw.close();
+    store = new ProjectStore(path); assert.throws(() => store.getJob(saved.id)); store.close();
+    const retained = new Database(path);
+    assert.equal((retained.prepare("SELECT payload FROM jobs WHERE id = ?").get(saved.id) as { payload: string }).payload, JSON.stringify(future));
+    retained.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(saved), saved.id); retained.close();
+    store = new ProjectStore(path);
+    const plan = planEpicReview(p, store.epicReviewHistory(p.id), "orders");
+    assert.equal(plan.task!.prior!.id, saved.id);
+    job = await new DiscoveryService(store, adapter).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.equal(job.retrievalWork!.epicStages!.phase, "complete");
+    assert.equal(job.result!.questions.length, 0, "Later batch veto must remove the draft before publication");
+    assert.equal(calls.length, job.retrievalWork!.epicStages!.batches * 2);
+    assert.deepEqual(store.getJob(saved.id), saved, "Upgrade/retry must not overwrite prior response history");
+    const current = store.get(p.id);
+    assert.equal(current.questions.length, p.questions.length);
+    assert.equal(planEpicReview(current, store.epicReviewHistory(p.id), "orders").tasks.find((t) => t.review.packageID === job.context!.epicReview!.packageID)!.state, "reviewed");
+    const html = renderToStaticMarkup(createElement(GapExplorationStatus, { job, project: current }));
+    assert.match(html, /all batches checked/);
+    const corrupted = structuredClone(job.retrievalWork!.epicStages!); corrupted.receipts[0]!.evidenceKey = "0".repeat(64);
+    assert.throws(() => validateEpicStages(p, job.context!.epicReview!, corrupted), /receipt evidence/);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const failure of ["cancelled", "stale"] as const) test(`staged ${failure} response cannot checkpoint drafts or publish`, async () => {
+  const store = new ProjectStore(":memory:"); const controller = new AbortController();
+  try {
+    const p = sharedHeavy(store);
+    const service = new DiscoveryService(store, { async analyze() {
+      if (failure === "cancelled") controller.abort();
+      else store.note(p.id, p.revision, "A new exact global constraint", "project");
+      return empty();
+    } });
+    const job = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", signal: controller.signal });
+    assert.equal(job.status, failure, job.diagnostic);
+    assert.equal(job.retrievalWork!.attempts, 1); assert.equal(job.retrievalWork!.epicStages!.receipts.length, 0);
+    assert.equal(job.result, undefined);
+    assert.deepEqual(store.get(p.id).requirements, p.requirements);
+    if (failure === "cancelled") assert.deepEqual(store.get(p.id), p);
+    else assert.notEqual(planEpicReview(store.get(p.id), store.epicReviewHistory(p.id), "orders").task!.review.inputKey, job.context!.epicReview!.inputKey);
+  } finally { store.close(); }
+});
+
+test("malformed staged responses retain spent attempts and never publish partial drafts", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = sharedHeavy(store); let calls = 0;
+    const service = new DiscoveryService(store, { async analyze() { calls++; return { guardrailVerdict: { keepQuestions: [99], keepRequirements: [] } }; } });
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const job = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+      assert.equal(job.status, "failed"); assert.equal(job.retrievalWork!.attempts, attempt);
+      assert.equal(job.retrievalWork!.epicStages!.receipts.length, 0);
+      assert.deepEqual(store.get(p.id), p);
+    }
+    const task = planEpicReview(p, store.epicReviewHistory(p.id), "orders").tasks.find((t) => t.review.kind === "workflow")!;
+    assert.equal(task.state, "blocked"); assert.equal(calls, 3);
+  } finally { store.close(); }
+});
+
+test("staged publication resumes a saved final without calls and storage rejects unchecked drafts", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = sharedHeavy(store), target = p.requirements.find((r) => r.epicID === "orders")!;
+    let calls = 0;
+    const service = new DiscoveryService(store, { async analyze(_p, { context }) {
+      calls++;
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number; draft: Analysis } }).stagedGuardrailReview;
+      if (stage.phase === "validate") return { guardrailVerdict: { keepQuestions: stage.draft.questions.map((_, i) => i), keepRequirements: [] } };
+      return { ...empty(), questions: stage.batch === 1 ? [{ text: "Which recovery receipt should be visible?", whyItMatters: "Observable recovery",
+        evidenceIDs: [target.id], options: [{ label: "Original", consequence: "Retain original" }, { label: "New", consequence: "New receipt" }] }] : [] };
+    } });
+    const partial = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.match(partial.diagnostic!, /paused/);
+    const forged = store.beginJob(p.id, p.revision).job; store.claimJob(forged.id, Date.now() + 60000);
+    store.checkpointRetrieval(forged.id, partial.retrievalWork!, partial.context!);
+    assert.throws(() => store.finishJob(forged.id, partial.retrievalWork!.epicStages!.candidates), /Partial staged/);
+    store.failJob(forged.id, "cancelled", "Test-only unchecked publication attempt");
+    const finish = store.finishJob.bind(store);
+    store.finishJob = () => { throw new Error("Simulated publication failure after saved staged final"); };
+    const failed = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(failed.status, "failed"); assert.equal(failed.retrievalWork!.epicStages!.phase, "complete");
+    assert.ok(failed.retrievalWork!.final); assert.deepEqual(store.get(p.id), p);
+    const spent = calls;
+    store.finishJob = finish;
+    const recovered = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(recovered.status, "completed", recovered.diagnostic); assert.equal(calls, spent);
+    assert.equal(recovered.result!.questions.length, 1);
+    assert.equal(store.get(p.id).questions.length, p.questions.length + 1);
+    assert.deepEqual(store.get(p.id).sources, p.sources);
+    assert.deepEqual(store.getJob(failed.id), failed);
+  } finally { store.close(); }
+});
+
+test("staged partition retains distributed requirements, confirmations, answered questions and human answers", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = sharedHeavy(store);
+    for (let i = 0; i < 20; i++) {
+      p.questions.push({ id: `q-global-${i}`, epicID: "project", text: `Which global decision ${i} applies?`, whyItMatters: "Exact context",
+        status: "answered", sourceID: `a-global-${i}`, evidenceIDs: [p.sources[0]!.id],
+        options: [{ label: "Retain", consequence: "Retain the evidence" }, { label: "Remove", consequence: "Remove the evidence" }] });
+      p.sources.push({ id: `a-global-${i}`, epicID: "project", kind: "answer", questionID: `q-global-${i}`, text: `Retain ${i}\r\nDo not infer permission to delete.` });
+      p.requirements.push({ id: `r-global-${i}`, epicID: "project", status: "accepted", statement: `Exact global behavior ${i}: ${digest(i)}`,
+        rationale: "Original decision", sourceIDs: [`a-global-${i}`, `c-global-${i}`], acceptance: [`Recovery ${i} retains the exact receipt`] });
+      p.sources.push({ id: `c-global-${i}`, epicID: "project", kind: "confirmation", requirementID: `r-global-${i}`, text: `Human approval ${i}: retain this exact wording and evidence.` });
+    }
+    const before = structuredClone(p), task = planEpicReview(p, [], "orders").tasks.find((t) => t.review.kind === "workflow")!;
+    assert.equal(task.state, "pending");
+    const contexts = epicReviewBatches(p, task.review), ids = new Set(contexts.flatMap((c) => c.manifest.includedIDs));
+    for (let i = 0; i < 20; i++) for (const prefix of ["q", "a", "r", "c"]) assert.ok(ids.has(`${prefix}-global-${i}`));
+    for (const c of contexts) {
+      const prompt = discoveryPrompt(p, c, false);
+      assert.match(prompt, /STAGED|one exact decision batch|one exact guardrail batch/i);
+      assert.ok(c.manifest.characters <= 54000);
+    }
+    assert.deepEqual(p, before);
+  } finally { store.close(); }
+});
+/** Reproduce pre-headroom identities independently, without rewriting saved evidence. */
+function legacyContext(p: Project, recordIDs: string[], epicID = "orders", epicIDs = [epicID], kind: EpicReview["kind"] = "workflow") {
+  recordIDs = recordIDs.slice().sort();
+  const records = [...p.requirements, ...p.questions, ...p.sources].filter((r) => recordIDs.includes(r.id));
+  const evidence = gapEvidence(p);
+  const semantic = digest({ version: "epic-workflow-v1", kind, epicIDs,
+    evidence: records.map((r) => [r.id, evidence(kind === "workflow" ? { ...r, epicID } : r).inputKey]).sort(),
+    epics: p.epics.filter((e) => epicIDs.includes(e.id)).map((e) => ({ id: e.id, purpose: e.purpose, dependencies: e.dependencies })),
+    research: p.research.filter((r) => epicIDs.includes(r.epicID)) });
+  const review: EpicReview = { format: 1, epicID, epicIDs, kind, recordIDs, inputKey: semantic, packageID: digest({ kind, epicIDs, recordIDs }) };
+  const context = epicReviewContext(p, review);
+  review.inputKey = digest({ semantic, exact: retrievalEvidenceBasis(context).key });
+  return context;
+}
+
+function saveLegacyFinal(store: ProjectStore, p: Project, context: ReturnType<typeof legacyContext>, completed = true) {
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.checkpointRetrieval(job.id, { format: 1, research: false, stages: [], attempts: 1,
+    final: { contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context), revision: p.revision, output: empty() } }, context.manifest);
+  if (completed) return store.finishJob(job.id, empty());
+  store.failJob(job.id, "failed", "Interrupted after legacy final checkpoint");
+  return store.getJob(job.id);
+}
+
+function behaviorHeavy(p: Project, characters = 12000) {
+  for (const [index, r] of p.requirements.filter((r) => r.epicID === "orders").entries()) {
+    r.statement = Array.from({ length: Math.ceil(characters / 64) }, (_, n) => createHash("sha256").update(`behavior-${index}-${n}`).digest("hex")).join("").slice(0, characters);
+  }
+  return p;
+}
+
+test("fresh workflow packages target 72k after early optimization and reserve actual evidence headroom", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = behaviorHeavy(seed(store, 6)), before = structuredClone(p);
+    const ids = p.requirements.filter((r) => r.epicID === "orders").map((r) => r.id);
+    const legacy = legacyContext(p, ids);
+    assert.ok(legacy.manifest.characters > 72000 && legacy.manifest.characters < 96000);
+    const plan = planEpicReview(p, [], "orders"), workflows = plan.tasks.filter((t) => t.review.kind === "workflow");
+    assert.equal(workflows.length, 2);
+    assert.deepEqual(new Set(workflows.flatMap((t) => t.review.recordIDs)), new Set(ids));
+    for (const t of workflows) {
+      assert.equal(t.review.contextPolicy, "headroom-v1");
+      const b = t.context!.manifest.epicContextBudget!;
+      assert.equal(b.characters, JSON.stringify(t.context!.data).length);
+      assert.ok(b.characters <= 72000); assert.ok(b.headroom >= 24000);
+      assert.equal(b.evidenceReserve, 24000); assert.equal(b.aboveTarget, false);
+    }
+    assert.equal(plan.report.contextBudget!.aboveTarget, 0);
+    const mock = { id: "budget", projectID: p.id, expectedRevision: p.revision, status: "running" as const,
+      model: p.model, leaseUntil: null, context: workflows[0]!.context!.manifest, epicReviewReport: plan.report };
+    const html = renderToStaticMarkup(createElement(GapExplorationStatus, { job: mock, project: p }));
+    assert.match(html, /Workflow context budget/); assert.match(html, /headroom/); assert.match(html, /24,000/);
+    const emptyScope = renderToStaticMarkup(createElement(GapExplorationStatus, { job: { ...mock, context: undefined,
+      epicReviewReport: { ...plan.report, total: 0, reviewed: 0, pending: 0, waiting: 0, blocked: 0, blockers: [],
+        contextBudget: { target: 72000, hardLimit: 96000, largestPackage: 0, aboveTarget: 0 } } }, project: p }));
+    assert.match(emptyScope, /No packages in this scope/); assert.doesNotMatch(emptyScope, /No context packages fit/);
+    const reduced = renderToStaticMarkup(createElement(GapExplorationStatus, { job: { ...mock, context: { ...mock.context, characters: 95000,
+      epicContextBudget: { format: 1, target: 72000, hardLimit: 96000, characters: 95000, headroom: 1000, evidenceReserve: 1000, aboveTarget: true } } }, project: p }));
+    assert.match(reduced, /Reduced buffer/); assert.match(reduced, /1,000 headroom/);
+    assert.deepEqual(p, before);
+  } finally { store.close(); }
+});
+
+test("optimization chooses the smaller measured representation instead of adding snapshot encoding overhead", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let p = seed(store, 1); const target = p.requirements.find((r) => r.epicID === "orders")!;
+    p = store.review(p.id, p.revision, target.id, "accepted", "");
+    const task = planEpicReview(p, [], "orders").tasks.find((t) => t.review.kind === "workflow")!;
+    assert.equal(task.review.contextPolicy, "headroom-v1");
+    assert.ok(!JSON.stringify(task.context!.data).includes("reviewSnapshotEncoding"));
+    const approval = p.sources.find((s) => s.kind === "confirmation")!;
+    assert.ok(JSON.stringify(task.context!.data).includes(JSON.stringify(approval.text)));
+    assert.ok(task.context!.manifest.epicContextBudget!.headroom >= 24000);
+  } finally { store.close(); }
+});
+
+test("growing answers and explicit file loads use the buffer without dropping human evidence or raising the hard cap", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = behaviorHeavy(seed(store, 6));
+    p.sources.push({ id: "new-human-note", kind: "note", epicID: "orders", text: "Human recovery exception: " + "x".repeat(4000) });
+    p.sources.push({ id: "new-answer", kind: "answer", epicID: "orders", questionID: "new-question", text: "Keep rejected attempts until the owner explicitly removes them.\r\n" });
+    p.questions.push({ id: "new-question", epicID: "orders", status: "answered", sourceID: "new-answer", text: "How long should rejected attempts remain?", whyItMatters: "Retention boundary",
+      evidenceIDs: [p.sources[0]!.id], options: [{ label: "Keep", consequence: "Retain attempts" }, { label: "Remove", consequence: "Discard attempts" }] });
+    p.sources.push({ id: "deferred-file", kind: "workspace", epicID: "orders", text: Array.from({ length: 600 }, (_, i) => digest(`file-${i}`)).join("") });
+    p.requirements.filter((r) => r.epicID === "orders").forEach((r) => r.sourceIDs.push("deferred-file", "new-answer"));
+    const before = structuredClone(p), plan = planEpicReview(p, [], "orders");
+    const task = plan.tasks.find((t) => t.review.kind === "workflow")!;
+    assert.ok(task.context!.manifest.characters <= 72000);
+    assert.ok(task.context!.manifest.includedIDs.includes("new-human-note"));
+    assert.ok(task.context!.manifest.includedIDs.includes("new-answer")); assert.ok(task.context!.manifest.includedIDs.includes("new-question"));
+    assert.ok(!task.context!.manifest.includedIDs.includes("deferred-file"));
+    const loaded = epicReviewContext(p, task.review, ["deferred-file"], true);
+    assert.ok(loaded.manifest.characters <= 96000);
+    assert.ok(loaded.manifest.includedIDs.includes("new-human-note")); assert.ok(loaded.manifest.includedIDs.includes("deferred-file"));
+    assert.equal(loaded.manifest.epicContextBudget!.headroom, 96000 - loaded.manifest.characters);
+    assert.deepEqual(p, before);
+    p.sources.find((s) => s.id === "deferred-file")!.text += Array.from({ length: 1600 }, (_, i) => digest(`extra-${i}`)).join("");
+    assert.throws(() => epicReviewContext(p, task.review, ["deferred-file"], true), ContextBudgetError);
+  } finally { store.close(); }
+});
+
+test("compatible legacy completed packages remain intact instead of being split for the new target", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 6), ids = p.requirements.filter((r) => r.epicID === "orders").map((r) => r.id);
+    const context = legacyContext(p, ids), completed = saveLegacyFinal(store, p, context);
+    const snapshot = store.get(p.id), plan = planEpicReview(snapshot, store.epicReviewHistory(p.id), "orders");
+    const task = plan.tasks.find((t) => t.review.packageID === context.manifest.epicReview!.packageID)!;
+    assert.equal(task.state, "reviewed"); assert.equal(task.review.contextPolicy, undefined);
+    assert.equal(task.review.inputKey, context.manifest.epicReview!.inputKey);
+    assert.deepEqual(store.getJob(completed.id), completed);
+    const changed = store.note(p.id, snapshot.revision, "New human constraint: retain failed submission receipts.", "orders");
+    const reopened = planEpicReview(changed, store.epicReviewHistory(p.id), "orders");
+    const current = reopened.tasks.filter((t) => t.review.kind === "workflow" && t.review.recordIDs.some((id) => ids.includes(id)));
+    assert.ok(current.length > 0);
+    assert.ok(current.every((t) => t.state === "pending" && t.review.contextPolicy === "headroom-v1"));
+    assert.ok(current.every((t) => t.review.inputKey !== context.manifest.epicReview!.inputKey));
+    assert.deepEqual(store.getJob(completed.id), completed);
+  } finally { store.close(); }
+});
+
+test("legacy unpublished finals recover without model replay after the policy changes", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1), target = p.requirements.find((r) => r.epicID === "orders")!;
+    const context = legacyContext(p, [target.id]), failed = saveLegacyFinal(store, p, context, false);
+    const recovered = await new DiscoveryService(store, { async analyze() { assert.fail("Recover the exact legacy final, not a newly optimized model call"); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(recovered.status, "completed", recovered.diagnostic);
+    assert.equal(recovered.context!.epicReview!.contextPolicy, undefined);
+    assert.equal(recovered.retrievalWork!.attempts, 1);
+    assert.deepEqual(store.getJob(failed.id), failed);
+  } finally { store.close(); }
+});
+
+test("compatible legacy split children are not recombined by early file optimization", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 2), targets = p.requirements.filter((r) => r.epicID === "orders");
+    // A saved legacy child is valid even though today's early deferral could
+    // prepare the parent as one package. Its successful call must survive.
+    const old = legacyContext(p, [targets[0]!.id]);
+    const job = saveLegacyFinal(store, p, old), snapshot = store.get(p.id);
+    const plan = planEpicReview(snapshot, store.epicReviewHistory(p.id), "orders");
+    assert.equal(plan.tasks.find((t) => t.review.packageID === old.manifest.epicReview!.packageID)!.state, "reviewed");
+    assert.ok(plan.tasks.filter((t) => t.review.kind === "workflow" && t.state === "pending").every((t) => !t.review.recordIDs.includes(targets[0]!.id)));
+    assert.deepEqual(store.getJob(job.id), job);
+  } finally { store.close(); }
+});
+
+test("legacy boundary children with overlapping counterpart records retain both completed checks", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let p = seed(store, 4);
+    const billing = p.requirements.find((r) => r.epicID === "billing")!;
+    const orders = p.requirements.filter((r) => r.epicID === "orders").sort((a, b) => a.id.localeCompare(b.id));
+    const saved = [];
+    for (const order of orders.slice(0, 2)) {
+      saved.push(saveLegacyFinal(store, p, legacyContext(p, [billing.id, order.id], "billing", ["billing", "orders"], "boundary")));
+      p = store.get(p.id);
+    }
+    const plan = planEpicReview(p, store.epicReviewHistory(p.id), "orders");
+    for (const j of saved) assert.equal(plan.tasks.find((t) => t.review.packageID === j.context!.epicReview!.packageID)!.state, "reviewed");
+    for (const task of plan.tasks.filter((t) => t.review.kind === "boundary")) {
+      assert.equal(new Set(task.review.recordIDs.map((id) => p.requirements.find((r) => r.id === id)!.epicID)).size, 2);
+    }
+    assert.equal(new Set(plan.tasks.map((t) => t.review.packageID)).size, plan.tasks.length);
+    assert.deepEqual(new Set(plan.tasks.filter((t) => t.review.kind === "boundary").flatMap((t) => t.review.recordIDs)), new Set([billing.id, ...orders.map((r) => r.id)]));
+  } finally { store.close(); }
+});
+
+test("legacy above-target completion and spent attempts survive policy upgrade, retry and repeated reopen", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "headroom-upgrade-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = behaviorHeavy(seed(store, 6));
+    p.epics.find((e) => e.id === "billing")!.dependencies = [];
+    // Curate the older binary's exact saved snapshot; no model calls create it.
+    store.close(); const db = new Database(path);
+    db.transaction(() => {
+      db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(p), p.id);
+      db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(p), p.id, p.revision);
+    })(); db.close(); store = new ProjectStore(path);
+    const old = legacyContext(p, p.requirements.filter((r) => r.epicID === "orders").map((r) => r.id));
+    assert.ok(old.manifest.characters > 72000 && old.manifest.characters <= 96000);
+    const completed = saveLegacyFinal(store, p, old);
+    const snapshot = store.get(p.id), billing = snapshot.requirements.find((r) => r.epicID === "billing")!;
+    const exhaustedContext = legacyContext(snapshot, [billing.id], "billing");
+    const exhaustedJob = store.beginJob(p.id, snapshot.revision).job; store.claimJob(exhaustedJob.id, Date.now() + 60000);
+    store.checkpointRetrieval(exhaustedJob.id, { format: 1, research: false, stages: [], attempts: 3 }, exhaustedContext.manifest);
+    store.failJob(exhaustedJob.id, "failed", "Three legacy attempts already spent");
+    const exhausted = store.getJob(exhaustedJob.id);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.get(p.id), snapshot);
+      const plan = planEpicReview(snapshot, store.epicReviewHistory(p.id), undefined, [], (revision) => store.get(p.id, revision));
+      assert.equal(plan.task, undefined);
+      assert.equal(plan.tasks.find((t) => t.review.packageID === old.manifest.epicReview!.packageID)!.state, "reviewed");
+      assert.equal(plan.tasks.find((t) => t.review.packageID === exhaustedContext.manifest.epicReview!.packageID)!.state, "blocked");
+      const idle = await new DiscoveryService(store, { async analyze() { assert.fail("An optimization upgrade must not repeat completed or exhausted model calls"); } })
+        .analyze(p.id, snapshot.revision, { gapMode: "epic" });
+      assert.equal(idle.status, "completed"); assert.equal(idle.epicReviewReport!.modelCalls, 0);
+      assert.equal(idle.epicReviewReport!.contextBudget!.aboveTarget, 1);
+      assert.deepEqual(store.getJob(completed.id), completed); assert.deepEqual(store.getJob(exhausted.id), exhausted);
+    }
+    for (const field of ["contextPolicy", "epicContextBudget"] as const) {
+      const future = structuredClone(completed);
+      if (field === "contextPolicy") (future.context!.epicReview as unknown as { contextPolicy: string }).contextPolicy = "headroom-v99";
+      else (future.context as unknown as { epicContextBudget: unknown }).epicContextBudget = { format: 99 };
+      store.close(); const raw = new Database(path);
+      raw.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(future), completed.id); raw.close();
+      store = new ProjectStore(path); assert.throws(() => store.getJob(completed.id)); store.close();
+      const check = new Database(path);
+      assert.equal((check.prepare("SELECT payload FROM jobs WHERE id = ?").get(completed.id) as { payload: string }).payload, JSON.stringify(future));
+      check.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(completed), completed.id); check.close();
+      store = new ProjectStore(path);
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("epic packages combine lenses, bound related records, and schedule dependency boundaries after workflows", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -52,7 +466,7 @@ test("epic packages combine lenses, bound related records, and schedule dependen
     assert.ok(focused.tasks.some((t) => t.review.kind === "boundary"));
     assert.equal(focused.task!.context!.manifest.gapExploration, undefined);
     const wire = JSON.stringify(focused.task!.context!.data);
-    assert.match(wire, /failures\/recovery/); assert.match(wire, /acceptance boundaries in ONE pass/);
+    assert.match(wire, /failures\/recovery/); assert.match(wire, /acceptance boundaries together/);
     assert.deepEqual(p, before);
   } finally { store.close(); }
 });
@@ -415,7 +829,7 @@ test("changes to additionally loaded evidence reopen only its review instead of 
   } finally { store.close(); }
 });
 
-test("oversized exact packages split locally, retain an explicit irreducible blocker and preserve human text", () => {
+test("file-heavy packages compact before splitting, retain an explicit irreducible blocker and preserve human text", () => {
   const store = new ProjectStore(":memory:");
   try {
     const p = seed(store, 2);
@@ -425,8 +839,8 @@ test("oversized exact packages split locally, retain an explicit irreducible blo
       p.requirements[i]!.sourceIDs.push(`file-${i}`);
     }
     const before = structuredClone(p), plan = planEpicReview(p, [], "orders");
-    assert.ok(plan.tasks.filter((t) => t.review.kind === "workflow").length > 1);
-    p.sources.push({ id: "huge-human", epicID: "orders", kind: "note", text: "Human constraint ".repeat(12000) });
+    assert.equal(plan.tasks.filter((t) => t.review.kind === "workflow").length, 1, "Defer file motivation before fragmenting related behavior");
+    p.sources.push({ id: "huge-human", epicID: "orders", kind: "note", text: Array.from({ length: 2200 }, (_, i) => digest(`human-${i}`)).join("") });
     const blocked = planEpicReview(p, [], "orders");
     assert.ok(blocked.report.blocked > 0); assert.ok(blocked.tasks.filter((t) => t.state === "blocked").every((t) => !t.context));
     assert.match(blocked.report.blockers[0]!.reason, /Largest sections.*Largest exact records/);
@@ -446,7 +860,7 @@ test("irreducible file-heavy reviews use compact navigation while keeping exact 
     target.sourceIDs.push("oversized-file", "small-file");
     const before = structuredClone(p), plan = planEpicReview(p, [], "orders");
     const task = plan.tasks.find((t) => t.review.kind === "workflow" && t.review.recordIDs.includes(target.id))!;
-    assert.equal(task.state, "pending"); assert.equal(task.review.recordIDs.length, 1);
+    assert.equal(task.state, "pending"); assert.ok(task.review.recordIDs.length <= 6);
     const context = task.context!;
     assert.ok(context.manifest.characters <= 96000);
     for (const id of [target.id, "human-rule", p.sources[0]!.id]) assert.ok(context.manifest.includedIDs.includes(id));
@@ -473,8 +887,13 @@ test("all size-blocked packages stop without inference and show an actionable fa
   const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
   try {
     let p = seed(store, 2);
-    for (let i = 0; i < 18; i++) p = store.note(p.id, p.revision,
+    for (let i = 0; i < 10; i++) p = store.note(p.id, p.revision,
       Array.from({ length: 1400 }, (_, n) => `Guardrail-${i}-${n.toString(36)}-${(n * 17 + i).toString(36)}`).join(" ").slice(0, 11000), "project");
+    const linked = store.beginJob(p.id, p.revision).job; store.claimJob(linked.id, Date.now() + 60000);
+    store.finishJob(linked.id, { ...empty(), requirements: [{ statement: "This indivisible rule requires all linked decisions together", rationale: "Exact provenance chain",
+      epicID: "project", sourceIDs: p.sources.filter((s) => s.kind === "note").map((s) => s.id), acceptance: ["All linked evidence remains indivisible"] }] });
+    p = store.get(p.id); const rule = p.requirements.find((r) => r.epicID === "project")!;
+    p = store.review(p.id, p.revision, rule.id, "accepted", "");
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Locally blocked evidence must not call the model"); } }));
     queue.resume(p.id, { gapMode: "epic", questionTarget: 5 });
     for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -492,7 +911,7 @@ test("oversized app-generated blocker diagnostics fit the saved report schema wi
   const store = new ProjectStore(":memory:");
   try {
     const p = seed(store, 24);
-    p.sources.push({ id: `long-human-record-${"identifier-".repeat(160)}`, epicID: "orders", kind: "note", text: "Exact human constraint ".repeat(14000) });
+    p.sources.push({ id: `long-human-record-${"identifier-".repeat(160)}`, epicID: "orders", kind: "note", text: Array.from({ length: 2200 }, (_, i) => digest(`exact-human-${i}`)).join("") });
     const before = structuredClone(p), plan = planEpicReview(p, [], "orders");
     assert.equal(plan.report.blockers.length, 20);
     assert.ok(plan.tasks.some((t) => (t.reason?.length ?? 0) > 1200), "Exercise the previous app-generated report overflow");

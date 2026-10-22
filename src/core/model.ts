@@ -280,6 +280,7 @@ export type Job = {
   diagnostic?: string; sessionID?: string; result?: Analysis; telemetry?: Telemetry;
   context?: { revision: number; focusEpicID: string | null; characters: number; budget: number; includedIDs: string[]; omittedIDs: string[]; epicIDs?: string[]; version?: string; sectionCharacters?: Record<string, number>;
     partial?: boolean; taskRecordIDs?: string[]; indexedIDs?: string[]; selectionReason?: string;
+    epicContextBudget?: import("./epic-review-types.js").EpicContextBudget;
     isolatedTask?: boolean;
     gapExploration?: { targetRecordID: string; check?: z.infer<typeof gapCheckSchema> };
     gapRetrieval?: boolean;

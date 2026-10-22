@@ -998,6 +998,11 @@ try {
     await headerStatus.click();
     const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
     await expect(drawer).toBeVisible();
+    const modalBounds = (await drawer.boundingBox())!;
+    assert.ok(modalBounds.x >= 0 && modalBounds.x + modalBounds.width <= width, "Wide modals stay within the viewport");
+    assert.ok(Math.abs(modalBounds.width - (width <= 540 ? width : width * 0.6)) < 1, "Modals use 60% of the viewport width, or full-screen on phones");
+    const viewportHeight = page.viewportSize()!.height;
+    assert.ok(Math.abs(modalBounds.height - (width <= 540 ? viewportHeight : viewportHeight * 0.6)) < 1, "Modals use 60% of the viewport height, or full-screen on phones");
     await expect(drawer.getByRole("progressbar")).toBeVisible();
     await expect(drawer.getByRole("button", { name: "Stop", exact: true })).toBeInViewport();
     await expect(drawer.getByRole("button", { name: "Close processing queue" })).toBeFocused();

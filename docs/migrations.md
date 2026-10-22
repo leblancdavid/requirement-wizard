@@ -21,6 +21,137 @@ freshness rules. Record the plan here **with the code change**, before release:
 
 ## Oversized workflow context recovery (2026-10-22)
 
+### Staged shared-decision review
+
+Source formats: no-policy epic-review format 1 and `headroom-v1` with retrieval-work
+format 1. Additive target format: epic-review format 1 with explicit
+`contextPolicy: staged-guardrails-v1` and `guardrailBatches` (1–16 arrays of exact
+record IDs); retrieval-work format 1 with optional **format-1 `epicStages`** containing
+the complete exact-plan hash, batch count, phase/cursor, drafts, ordered successful
+response receipts and per-stage spent attempts. Reports optionally add
+`stagedProgress`. No SQLite schema, project format or concurrency revision changes.
+
+Only new/changed above-target work adopts the staged policy. Reconstruct matching
+saved profiles and preserve compatible completed/partial/exhausted work first,
+including legacy splits. Never relabel an earlier single-context review as a staged
+check or reset an attempted stage. No existing payload is rewritten, so no data
+reset, migration inference, backup rewrite or SQL transaction is required at startup.
+Unknown future policy/checkpoint formats reject reads without overwriting evidence;
+downgrade compatibility for staged jobs is not promised.
+
+The stage plan binds all exact batch bases, not just the currently displayed batch.
+Every successful response stays in the checkpoint history; draft selection is
+reconstructed locally and checked independently in `finishJob` before atomic
+publication. Attempts are persisted before inference and reset for the next stage
+only alongside the completed receipt. Interrupted/malformed/cancelled responses
+do not earn a receipt. Six-request package pauses and final-publication failures
+resume explicitly; completed responses do not replay. A genuinely changed guardrail
+invalidates the affected plan; dated previous output remains stored and is not
+manufactured into current evidence. Ordinary expected-revision/live-lease guards
+still apply. Publication scope explicitly records the union of separately reviewed
+exact evidence; it is not an expanded single-request context.
+
+Stage base contexts cap at 54k and actual requests at 72k, reserving a 12k draft pool
+plus instruction headroom. No human text/provenance is sliced. An indivisible exact
+closure or excessive batch count still blocks; semantic model judgments and arbitrary
+cross-batch relationships are not claimed as fully verified. Research is unsupported
+and explicitly rejected rather than silently disabled. More model calls are possible:
+up to sixteen discovery plus sixteen validation stages, three attempts per stage,
+six requests per package invocation, with no startup inference or automatic refill.
+
+Upgrade/recovery tests cover repeated SQLite reopen, future checkpoint rejection
+without writes, complete legacy-policy reuse, preserved spent attempts, six-request
+pause/resume, late veto before publication, unpublished-final recovery, direct storage
+rejection of unchecked drafts, changed evidence and cancellation. Verification
+results are recorded in the workflow review document.
+
+Implemented verification: type checking, 28 pretests / 626 main tests, UI build,
+focused staged/epic browser, and separate portable/specification browser checks passed
+on Windows Node 22.23.3. The full browser command still fails its existing resolution
+approval assertion at `src/web/browser-check.ts:1347`. No user data or live model calls
+were used. New staged clone/pull continuation remains separately unqualified; existing
+portable tests do not prove that flow. No completed saved work was deliberately
+invalidated to apply this optimization.
+
+### Proactive headroom policy and saved-work preservation
+
+New epic contexts add optional `epicReview.contextPolicy: headroom-v1` and optional
+format-1 `epicContextBudget` diagnostics. New reports may add an optional
+`contextBudget` summary. Project/SQLite/portable schemas, epic-review format 1,
+retrieval-work format 1 and optimistic revisions remain unchanged. Legacy absence
+means the original reconstructible policy, not a retroactively invented headroom
+policy. Read validation rejects unknown future policies/budget formats without
+overwriting their payloads. Downgrade support for the new policy is not claimed.
+
+The 72k target includes the app's context envelope; 96k stays the hard ceiling.
+Optimization runs before splitting, with generated-metadata compaction and bounded
+exact phrase sharing using the existing lossless shared-text wire representation.
+Expanded phrase evidence has the same existing evidence basis. Policy text or
+actually loaded evidence may change for new work; its new profile and resulting
+exact basis remain explicit, not relabelled as a legacy call.
+
+Before applying new grouping/encoding, reconstruct saved profiles at current exact
+evidence and compare package identities, extra loaded records and final/checkpoint
+bases. Preserve matching parent packages, previously split children and overlapping
+boundary children. Completed outputs and exhausted allowances are retained even
+when they exceed the new soft target. Genuinely changed inputs reopen normally;
+unrelated edits do not reset completed calls. Cached candidates are local planning
+only, not new persisted provenance. No existing source, job, report, snapshot or
+assessment is rewritten, so no payload migration or backup transaction is needed.
+
+New writes retain ordinary leases/revision guards. Publication failure after a final
+checkpoint can recover under the saved profile without inference. Startup remains
+paused. Mandatory evidence that cannot fit 72k is explicitly above target; an
+irreducible 95,197-character fixture demonstrates that guaranteed headroom for all
+shared human constraints remains a staged-review/scoping limitation, not a passing
+optimization claim.
+
+Upgrade tests curate older schema-1 snapshots and no-policy jobs, exercise repeated
+reopen, above-target completion reuse, spent-attempt retention, overlapping boundary
+children, unpublished-final recovery and future-format rejection without writes.
+Growth tests retain new answers/notes and explicit file loads; unsupported oversized
+loads still fail before the additional inference. Type checking, `npm test` (28
+pretests / 618 main tests), latest 127 context/retrieval/epic tests, UI build and
+focused epic browser checks passed on Windows Node 22.23.3. Portable and specification
+browser checks passed separately. The broader browser command stopped at the existing
+resolution-approval visibility assertion (`src/web/browser-check.ts:1347`), so a full
+browser pass is not claimed. No live model calls or user database inspection were
+performed. The genuine above-target mandatory-evidence case remains an explicitly
+documented limitation, not a forced migration or reason to reset data.
+
+### Near-cap generated-instruction fallback
+
+After the existing exact, deferred-file and lossless snapshot attempts, an oversized
+minimum epic package can compact only app-authored policy/encoding explanations.
+The combined workflow instruction replaces the redundant legacy single-lens prompt;
+known policy fields use concise equivalent rules. A long generated advisory summary
+may be replaced with an explicit omission notice. Requirement/scenario text, question
+wording/options, human sources/addenda, provenance and mandatory scope remain exact.
+This is not recursive shortening of arbitrary `text`/`explanation` fields and does
+not raise the 96,000-character limit. The complete workflow envelope is checked too.
+
+Project/SQLite/portable schemas, stage/checkpoint formats and source payloads remain
+unchanged. Earlier context forms are tried first, so previously fitting contexts and
+their saved identities still reuse without model calls. The shorter policies are
+part of the existing conservative exact-evidence basis for newly enabled contexts;
+older successful evidence is not relabelled or migrated. Locally size-blocked work
+can be reconsidered on explicit retry; spent attempts, jobs and original snapshots
+remain intact. Startup never starts inference. Final-checkpoint publication failure
+and repeated reopen retain the new representation and recover without replay.
+
+Near-limit fixtures cover both an otherwise fitting 95,808-character working set
+that overflows when the workflow envelope is added, and a 97,093-character working
+set already over the hard cap. Instruction compaction produces complete requests
+of 94,218 and 95,503 characters respectively, while a larger
+80-requirement fixture remains explicitly blocked without data loss. Actual user
+project fit and live model behavior remain unverified.
+Verification: type checking, `npm test` (28 pretests / 608 main tests), latest 117
+focused context/retrieval/epic tests and a final near-cap regression passed on Windows
+Node 22.23.3. Recovery coverage now exercises the new instruction fallback across
+final-checkpoint publication failure and repeated reopening without replay.
+UI production build and focused epic browser checks also passed (the existing
+>500 kB bundle warning remains). No live model calls were made.
+
 ### Distributed approval-history fallback
 
 If splitting and static-file deferral still cannot fit a minimum workflow package,

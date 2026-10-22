@@ -21,8 +21,10 @@ import { planIncrementalResolution } from "../core/incremental-resolution.js";
 import { answerScopeSchema, decisionBasisSchema, overlapFollowupSchema, pendingChangesSchema, requirementEvidenceIDs, reviewActionSchema, type AnswerScope } from "../core/model.js";
 import { answerScopeMatches, captureAnswerScope, validateScopedAnswerResult } from "../core/input-scope.js";
 import { gapCheckSchema, gapReportSchema, type GapReport } from "../core/gap-types.js";
-import { epicReviewSchema, epicReviewReportSchema, type EpicReviewReport } from "../core/epic-review-types.js";
-import { retrievalAllowanceSchema, retrievalWorkSchema, type RetrievalWork } from "../core/gap-retrieval.js";
+import { epicContextBudgetSchema, epicReviewSchema, epicReviewReportSchema, type EpicReviewReport } from "../core/epic-review-types.js";
+import { retrievalAllowanceSchema, retrievalWorkSchema, retrievalEvidenceBasis, retrievalContextKey, type RetrievalWork } from "../core/gap-retrieval.js";
+import { validateEpicStages, epicStagePublicationContext } from "../core/epic-stages.js";
+import { epicReviewBatches } from "../core/epic-review.js";
 import type { GapHistory } from "../core/gap-backlog.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
@@ -45,8 +47,10 @@ function readStoredJob(payload: string): Job {
   if (job.context?.gapExploration?.check !== undefined) gapCheckSchema.parse(job.context.gapExploration.check);
   if (job.gapReport !== undefined) gapReportSchema.parse(job.gapReport);
   if (job.context?.epicReview !== undefined) epicReviewSchema.parse(job.context.epicReview);
+  if (job.context?.epicContextBudget !== undefined) epicContextBudgetSchema.parse(job.context.epicContextBudget);
   if (job.epicReviewReport !== undefined) epicReviewReportSchema.parse(job.epicReviewReport);
   if (job.retrievalWork !== undefined) retrievalWorkSchema.parse(job.retrievalWork);
+  if (job.retrievalWork?.epicStages && job.context?.epicReview?.contextPolicy !== "staged-guardrails-v1") throw new Error("Staged checkpoints require their saved staged context policy; original work was not overwritten.");
   if (job.context?.decisionProjection !== undefined) z.object({ format: z.literal(1), omittedReviewSourceIDs: z.array(z.string()), retainedReviewNoteSourceIDs: z.array(z.string()), projectedReceiptSourceIDs: z.array(z.string()).optional() }).strict().parse(job.context.decisionProjection);
   return job;
 }
@@ -1212,6 +1216,17 @@ export class ProjectStore {
             for (const record of [...result.questions, ...result.requirements]) record.epicID ??= job.context.focusEpicID ?? "project";
           }
           if (job.context?.epicReview) {
+            if (job.context.epicReview.contextPolicy === "staged-guardrails-v1") {
+              const staged = job.retrievalWork?.epicStages;
+              if (!staged || staged.phase !== "complete" || !job.retrievalWork?.final) throw new Error("Partial staged decision review cannot publish proposals.");
+              const batches = epicReviewBatches(project, job.context.epicReview);
+              const verified = validateEpicStages(project, job.context.epicReview, staged, batches);
+              const publication = epicStagePublicationContext(batches, staged);
+              if (JSON.stringify(result) !== JSON.stringify(verified) || JSON.stringify(job.retrievalWork.final.output) !== JSON.stringify(verified)
+                || JSON.stringify(job.context.includedIDs) !== JSON.stringify(publication.manifest.includedIDs)
+                || job.retrievalWork.final.contextKey !== retrievalContextKey(publication)
+                || job.retrievalWork.final.evidenceBasis?.key !== retrievalEvidenceBasis(publication).key) throw new Error("Staged publication does not match its checked drafts and exact batch scope.");
+            } else if (job.retrievalWork?.epicStages) throw new Error("Staged checkpoints require their original staged context policy.");
             if (result.refinements?.length || result.pendingChanges?.changes.length || result.reviewChanges?.length
               || result.organization?.length || result.assessments?.length || result.resolutionCheck) throw new Error("Epic workflow reviews propose gaps only; cleanup, wider changes and whole-area assessments are not authorized.");
             if (result.questions.some((q) => !q.evidenceIDs?.length)) throw new Error("Epic review questions require exact detailed evidence IDs.");

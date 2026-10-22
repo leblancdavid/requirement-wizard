@@ -22,7 +22,105 @@ This replaces neither old saved checks nor human review. It is a separate discov
 intended to avoid three independent lens reviews of every requirement and repeated
 model-driven evidence search. Live usefulness/cost improvements have not been measured.
 
+### Staged shared-decision review (2026-10-22)
+
+Oversized **new/changed** packages can now use `staged-guardrails-v1`. After normal
+headroom preparation, try staging the intact workflow/dependency group before
+splitting its targets. Partition the original mandatory non-file record seeds into
+at most sixteen deterministic batches. Every batch retains the exact target, initial
+idea, linked question/answer/provenance closure and its assigned exact guardrails.
+Other guardrails are explicitly deferred to other batches, not summarized, dropped,
+treated as unknown preferences or declared reviewed. Static file motivation is
+deferred; a missing indispensable file fact blocks rather than being guessed.
+
+Each base batch must fit **54,000 characters**. A bounded draft pool (12,000 characters,
+at most five questions/ten requirements) and staged instructions must fit within
+**72,000 characters** for every actual request; the underlying 96k ceiling is unchanged.
+An indivisible target/evidence chain above the staged base allowance, or a partition
+requiring more than sixteen batches, still blocks explicitly. This is a conservative
+reserved-buffer policy, not a promise that arbitrary evidence graphs can be split.
+
+There are two passes: discover drafts against every batch, then validate the complete
+draft pool against **every** batch. A validation response may select only unchanged
+draft indexes to keep, never invent or rewrite proposals. A later batch can veto an
+already-answered, duplicate or conflicting proposal before publication. Discovery
+citations must reference exact evidence in that discovery request. Drafts/earlier
+model output are not human decisions or evidence. The model's semantic checks are
+not deterministic proof that all conflicts or possible cross-batch gaps were found.
+This remains bounded discovery, not an exhaustive multi-record completeness audit.
+
+No proposals publish until both passes finish. Saved format-1 `retrievalWork.epicStages`
+retains the exact plan basis, phase/cursor, validated successful responses, per-stage
+spent attempts and current drafts. Replay/validate those transitions locally before
+resuming and independently at storage publication. Publication's citation authority
+is explicitly the union of completed exact batches, **not** a claim all those records
+were in one request. Storage rejects incomplete or tampered publication scopes.
+
+Each stage has three attempts across retries; up to six requests run per package
+invocation. A longer package pauses with a saved diagnostic and no published drafts;
+the current job is recorded as failed/paused, **not** evidence blocked or reviewed.
+Choose **Explore next gaps** again to resume. Startup/reload never starts calls.
+The existing queue can visit up to ten packages/fifteen minutes per action; six is
+not a global click-wide allowance. Sixteen batches imply at most 32 successful stages
+and 96 cumulative attempts per package. Reports distinguish current-stage attempts
+from cumulative attempts and show partial drafting/checking progress. Research,
+search/paging and extra evidence-load requests are unsupported in this policy;
+an explicit research selection is rejected, not silently switched off.
+
+Compatible legacy/headroom reviews, partial calls, exhausted attempts, split children
+and completed results keep their original policy. Previously local size-blocked work
+with no inference may now stage without resetting spent model work. See
+[migration ledger](migrations.md#staged-shared-decision-review).
+
+### Proactive headroom policy (2026-10-22)
+
+New work uses `contextPolicy: headroom-v1`: aim for **72,000 characters including
+the workflow context envelope**, retaining at least 24,000 characters below the
+existing 96,000-character application-context ceiling. This is a character budget,
+not a provider token limit or a measurement of additional runtime/schema overhead.
+The preferred threshold is soft: indivisible mandatory human evidence can still
+use the hard allowance, with an explicit reduced-buffer warning. It is never dropped
+or summarized to force a 72k result. Guaranteed headroom for such large shared
+guardrails previously needed staged/explicitly scoped decision review. The staged
+policy above now handles divisible shared evidence; old saved headroom contexts
+still retain their original reconstruction and explicit exceptions.
+
+Before splitting new groups, prepare compact policies and canonical approval
+references, reclaim generated help/background explanations under the existing
+conservative rules, and share exact repeated text/IDs/record structure. A bounded
+literal phrase pass additionally shares repeated substrings inside distinct prose
+(250k scanned characters, 4,096 candidate phrases, at most 64 selected phrases).
+The existing shared-text wire form is reused, preserving punctuation, whitespace,
+Unicode, citations and expanded evidence identities. Accept encodings only when
+they reduce the measured context; compare plain/snapshot and whole-field/phrase
+representations and keep the smaller result rather than assuming an encoding helps.
+Human-only packages skip pointless repeated file-deferral work. Small index previews
+are navigation, never authority.
+Prefer exact linked files when the complete context meets 72k; otherwise defer static
+motivation, never human constraints or explicitly loaded records. Split above-target
+new packages when possible, retaining both sides of boundaries. Additional exact loads
+can use the remaining hard allowance; they cannot silently truncate evidence.
+
+Compatibility takes precedence over regrouping: reconstruct saved legacy or headroom
+policies and their exact evidence first. Keep compatible completed packages, partial
+stages/finals and exhausted blockers, including historical split children and
+overlapping boundary counterparts. Only genuinely new/changed work takes the new
+policy. Startup never starts inference and optimization never resets spent attempts.
+Saved reports and source payloads are not rewritten.
+
+**Processing & queue → Epic workflow review** now shows prepared context sizes,
+available headroom, the preferred target and reduced-buffer exceptions. The evidence
+buffer is character capacity, not a grant of additional requests. Saved no-call
+reports show the largest prepared package and count above target. Figures describe
+the saved input scope, not live completeness or a guarantee that every requested file
+will fit. A deliberately irreducible synthetic global-decision fixture still needs
+95,197 characters / 803 headroom and is labelled above target, not falsely improved.
+
 ### Local packages and evidence
+
+The dated fallback notes below describe the retained no-policy/legacy reconstruction
+path. New work uses the proactive policy above; compatible saved work keeps its own
+policy rather than being replayed to change representation.
 
 2026-10-22 oversized-context recovery: preparation still prefers full exact linked
 evidence and the existing local package splits. If a minimum package (one workflow
@@ -48,6 +146,15 @@ The distributed 65-requirement/65-answered-question fixture drops from an over-b
 133,387-character working set to a 90,977-character workflow request without dropping
 any human sources, statements, scenarios or question options. The real user's project
 and live model comprehension are not yet qualified by this fixture.
+
+Near-cap packages have one final local fallback: compact repeated app-generated
+scope/encoding explanations and use the combined workflow prompt instead of also
+repeating a legacy single-lens instruction. A long generated advisory summary may
+be explicitly omitted. Only known app-owned policy fields are changed; every human
+source, requirement/scenario and question/answer remains exact. Citation, scope,
+single-load and output restrictions are retained. The final workflow envelope must
+fit the same 96,000-character cap; genuinely oversized evidence still blocks. Old
+fitting contexts are tried unchanged first, preserving reusable completed work.
 
 Remaining oversized human evidence is not summarized away. Blockers now retain total
 and section sizes plus the largest exact record IDs/sizes before lossless encoding.
@@ -168,6 +275,52 @@ rejection, corrected retry and older saved-final recovery across repeated reopen
 No live provider calls or browser checks were run for this service/prompt-only fix.
 
 ## Verification and remaining work
+
+Staged shared-decision verification (2026-10-22): type checking, `npm test` (28
+pretests / 626 main tests), UI build and the focused epic browser check passed on
+Windows Node 22.23.3. The new tests cover intact grouped targets with distributed
+oversized shared decisions; exact requirements/confirmations/answered questions and
+answers across batches; six-request pause/repeated SQLite reopen; retained attempts;
+late batch veto and exact-index selection; unpublished-final recovery without calls;
+storage rejection of partial drafts; future state rejection without overwrites;
+cancellation/staleness; and the remaining indivisible-chain blocker. The browser
+fixture exercises staged progress, paused unpublished drafts, mobile layout, reload
+without inference and explicit resume without repeated completed calls. Portable
+and specification browser checks passed separately. The full browser command still
+stops at the existing `src/web/browser-check.ts:1347` **Approve resolution** assertion;
+the bundle-size warning remains. No live provider calls or user-project inspection
+were performed. Staged clone/pull continuation has not been separately qualified;
+the general portable tests passed, but are not evidence of that new end-to-end flow.
+Semantic usefulness and missed multi-batch relationships remain live-verification
+gaps, not completeness claims. With research enabled, disable **Allow targeted
+research in future rounds** before retrying this exact-decision-only staged policy.
+
+Proactive headroom verification (2026-10-22): type checking, `npm test` (28 pretests /
+618 main tests), latest 127 context/retrieval/epic tests, UI production build and
+focused epic browser checks passed on Windows Node 22.23.3. Tests cover proactive
+splitting before the hard ceiling, exact phrase round-trip/evidence identity, choosing
+smaller encodings, new human input/file-load growth, explicit reduced-buffer cases,
+legacy parents/split/overlapping boundary children, completed/unpublished-final reuse,
+spent attempts across reopen and future-format rejection without overwrites. The
+browser check includes target/headroom presentation, reload/no-call reuse and mobile.
+Portable and specification browser checks passed separately. `npm run test:browser`
+still stops at the previously observed **Approve resolution** visibility assertion
+in `src/web/browser-check.ts:1347`; a full browser pass is not claimed. The existing
+>500 kB bundle warning remains. No live model calls or user database inspection were
+performed; indivisible large global context is still an explicit reduced-buffer
+exception, not a guarantee of 24k headroom.
+
+Near-cap generated-instruction fallback verification (2026-10-22): type checking,
+`npm test` (28 pretests / 608 main tests), latest 117 context/retrieval/epic tests and
+the final near-cap regression passed on Windows Node 22.23.3. A 97,093-character
+working set becomes a complete 95,503-character workflow request; a second fixture
+covers overflow introduced by the workflow envelope itself. Every human source,
+requirement/scenario and question/option is checked unchanged. A larger context
+still blocks; the hard cap is not increased. Disk-backed checkpoint recovery uses
+the new fallback and preserves completed calls across repeated reopen. The user's
+actual project and live inference remain unverified.
+UI production build and the focused epic browser check passed, with the existing
+>500 kB bundle warning. No live model calls were made.
 
 Distributed approval fallback verification (2026-10-22): type checking, `npm test`
 (28 pretests / 607 main tests), latest 116 context/retrieval/epic tests, UI build and

@@ -40,6 +40,18 @@ implemented under `src/`. See [decisions.md](decisions.md),
   replay; compatible legacy completed checks remain reusable. See [migrations.md](migrations.md).
 - `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`, `working-set.ts`: organization, material
   change review, deterministic coverage, and bounded working sets.
+- `src/core/epic-review.ts`: workflow/dependency packages with a proactive 72k context
+  target and unchanged 96k ceiling. The optional `headroom-v1` job policy applies early
+  lossless compression before splitting; exact mandatory evidence can exceed the soft
+  target only with explicit diagnostics. Reconstruct saved policies and compatible
+  parent/split/boundary packages before regrouping, preserving completed calls and
+  spent attempts. See [workflow review](epic-workflow-review.md) and
+  [upgrade compatibility](migrations.md#proactive-headroom-policy-and-saved-work-preservation).
+- `src/core/epic-stages.ts`: exact shared-guardrail batches for above-target new work,
+  draft discovery followed by every-batch validation, replayable response receipts
+  and independently guarded publication. Staged requests cap at 72k; publication
+  references the explicit union of separately completed batches, not a fictitious
+  single loaded context. Compatible older jobs retain their own policy.
 - `src/core/question-help-context.ts`: dedicated advisory question context with exact
   linked evidence and human guardrails; one 48k input bound reserves the request and
   trims only counted historical exchanges, without discovery expansion.

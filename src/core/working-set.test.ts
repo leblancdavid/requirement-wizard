@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildContext, ContextBudgetError } from "./context.js";
-import { planContext } from "./working-set.js";
+import { planContext, shareRepeatedText } from "./working-set.js";
 import { analysisSchema, reviewFingerprint, type Analysis, type Project } from "./model.js";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
@@ -14,6 +14,8 @@ import { discoveryPrompt } from "../runtime/discovery.js";
 import { planGapContext } from "./gap-context.js";
 import { retrievalEvidenceBasis } from "./gap-retrieval.js";
 import { epicReviewContext, planEpicReview } from "./epic-review.js";
+import { createHash } from "node:crypto";
+import { gapEvidence } from "./gap-backlog.js";
 
 const empty = (): Analysis => ({ summary: "Updated interpretation", goals: ["Changed goal"], actors: [], assumptions: [],
   questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [],
@@ -76,6 +78,20 @@ function snapshotHeavyProject(store: ProjectStore, count: number) {
   return p;
 }
 
+test("bounded repeated-phrase sharing reduces distinct human prose without changing exact text or evidence identity", () => {
+  const clause = "Preserve every original decision, including its exact punctuation and provenance, while keeping recovery behavior observable to the owner.";
+  const sources = Array.from({ length: 80 }, (_, i) => ({ id: `human-${i}`, kind: "note", epicID: "project",
+    text: `Exception ${i}:\r\n${clause} This exception applies to area ${i}; keep 🛼 and spacing exactly.  ` }));
+  const data = { sources, requirements: [], questions: [] };
+  const plain = shareRepeatedText(data, true), shared = shareRepeatedText(data, true, true);
+  assert.ok(JSON.stringify(shared.data).length < JSON.stringify(data).length * 0.8);
+  assert.ok(JSON.stringify(shared.data).length < JSON.stringify(plain.data).length);
+  assert.deepEqual(decodeContext<{ sources: typeof sources }>(shared.data).sources, sources);
+  const manifest = { revision: 1, focusEpicID: "project", characters: 0, budget: 96000, includedIDs: sources.map((s) => s.id), omittedIDs: [], epicIDs: ["project"] };
+  assert.deepEqual(retrievalEvidenceBasis({ data, manifest }), retrievalEvidenceBasis({ data: shared.data, manifest }));
+  assert.deepEqual(shareRepeatedText(data, true, true), shared, "Encoding is deterministic and does not mutate input");
+});
+
 test("canonical approval snapshots round-trip losslessly with identical evidence identities and exact addenda", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -114,12 +130,12 @@ test("canonical approval snapshots round-trip losslessly with identical evidence
   } finally { store.close(); }
 });
 
-test("approval-heavy workflow finals recover across repeated reopen without replay or evidence changes", async () => {
+test("near-cap workflow finals recover across repeated reopen without replay or evidence changes", async () => {
   const root = join(process.cwd(), ".reqwizit-state", "tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "approval-wire-upgrade-")), path = join(directory, "projects.sqlite");
   let store = new ProjectStore(path);
   try {
-    const p = snapshotHeavyProject(store, 65);
+    const p = snapshotHeavyProject(store, 71);
     store.close();
     const db = new Database(path);
     db.transaction(() => {
@@ -127,12 +143,29 @@ test("approval-heavy workflow finals recover across repeated reopen without repl
       db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(p), p.id, p.revision);
     })(); db.close(); store = new ProjectStore(path);
     const original = store.get(p.id); let calls = 0;
+    // Curate an older no-policy pending package. Fresh above-target work now
+    // stages; an upgrade must still finish this compatible saved legacy call.
+    const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    const record = original.requirements[0]!, recordIDs = [record.id], epicIDs = ["project"], kind = "workflow" as const;
+    const semantic = hash({ version: "epic-workflow-v1", kind, epicIDs,
+      evidence: [[record.id, gapEvidence(original)({ ...record, epicID: "project" }).inputKey]],
+      epics: original.epics.filter((e) => epicIDs.includes(e.id)).map((e) => ({ id: e.id, purpose: e.purpose, dependencies: e.dependencies })),
+      research: original.research.filter((r) => epicIDs.includes(r.epicID)) });
+    const review = { format: 1 as const, epicID: "project", epicIDs, kind, recordIDs,
+      packageID: hash({ kind, epicIDs, recordIDs }), inputKey: semantic };
+    const legacy = epicReviewContext(original, review);
+    review.inputKey = hash({ semantic, exact: retrievalEvidenceBasis(legacy).key });
+    const old = store.beginJob(p.id, p.revision).job; store.claimJob(old.id, Date.now() + 60000);
+    store.checkpointRetrieval(old.id, { format: 1, research: false, stages: [], attempts: 0 }, legacy.manifest);
+    store.failJob(old.id, "failed", "Older binary paused before the near-cap request");
+    assert.equal(planEpicReview(original, store.epicReviewHistory(p.id), "project").tasks.find((t) => t.review.packageID === review.packageID)?.prior?.id, old.id, "Curated legacy input must match the exact reconstructed policy");
     store.finishJob = () => { throw new Error("Interrupted after the exact final checkpoint"); };
     const failed = await new DiscoveryService(store, { async analyze(_project, { context }) {
       calls++; assert.match(JSON.stringify(context.data), /reviewSnapshotReference/);
+      assert.ok(context.manifest.characters <= 96000);
       return { summary: "Bounded review", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] };
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "project" });
-    assert.equal(failed.status, "failed", failed.diagnostic); assert.ok(failed.retrievalWork?.final);
+    assert.equal(failed.status, "failed", failed.diagnostic); assert.ok(failed.retrievalWork?.final, failed.diagnostic);
     assert.equal(failed.retrievalWork.attempts, 1); assert.deepEqual(store.get(p.id), original);
     store.close(); store = new ProjectStore(path);
     const recovered = await new DiscoveryService(store, { async analyze() { assert.fail("Do not replay completed model output after representation recovery"); } })
@@ -176,6 +209,66 @@ test("distributed project-wide approval history fits without dropping questions,
       epicID: "project", epicIDs: ["project"], kind: "workflow", recordIDs: [p.requirements[0]!.id] });
     assert.ok(workflow.manifest.characters <= 96000); assert.match(JSON.stringify(workflow.data), /reviewSnapshotReference/);
     console.log(JSON.stringify({ comparison: "lossless-project-wide-approval-snapshots", requirements: p.requirements.length, originalCharacters, characters: workflow.manifest.characters }));
+  } finally { store.close(); }
+});
+
+test("near-limit workflow contexts compact only generated instructions and include the final envelope in the cap", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    for (const count of [70, 71]) {
+      const p = snapshotHeavyProject(store, count), before = structuredClone(p);
+      const task = { isolatedTask: true, gapExploration: true, focusEpicID: "project", recordIDs: [p.requirements[0]!.id],
+        expandMandatory: true, deferWorkspaceEvidence: true, compactReviewSnapshots: true };
+      let priorCharacters = 0;
+      try { priorCharacters = planContext(p, task).manifest.characters; }
+      catch (error) { assert.ok(error instanceof ContextBudgetError); priorCharacters = error.manifest.characters; }
+      const context = epicReviewContext(p, { format: 1, packageID: `near-limit-${count}`, inputKey: "0".repeat(64),
+        epicID: "project", epicIDs: ["project"], kind: "workflow", recordIDs: task.recordIDs });
+      assert.match(context.manifest.selectionReason ?? "", /Repeated app-owned workflow policies/);
+      assert.equal(context.manifest.characters, JSON.stringify(context.data).length);
+      assert.ok(context.manifest.characters <= 96000);
+      const decoded = decodeContext<{ sources: Project["sources"]; requirements: Project["requirements"]; questions: Project["questions"];
+        gapTask?: unknown; limitations: string; epicWorkflowReview: { instruction: string; evidence: string } }>(context.data);
+      assert.equal(decoded.gapTask, undefined, "The combined epic instructions replace the redundant legacy lens instructions");
+      assert.match(decoded.limitations, /no organization, whole-area assessments/);
+      assert.match(decoded.epicWorkflowReview.evidence, /ONE retrieveEvidence batch.*eight/);
+      assert.match(decoded.epicWorkflowReview.evidence, /No search\/paging, second load/);
+      assert.match(decoded.epicWorkflowReview.instruction, /Preserve human decisions/);
+      for (const source of p.sources) assert.equal(decoded.sources.find((s) => s.id === source.id)!.text, source.text);
+      for (const r of p.requirements) {
+        const actual = decoded.requirements.find((item) => item.id === r.id)!;
+        assert.equal(actual.statement, r.statement); assert.deepEqual(actual.acceptance, r.acceptance);
+      }
+      for (const q of p.questions) {
+        const actual = decoded.questions.find((item) => item.id === q.id)!;
+        assert.equal(actual.text, q.text); assert.deepEqual(actual.options, q.options); assert.equal(actual.sourceID, q.sourceID);
+      }
+      assert.deepEqual(p, before);
+      console.log(JSON.stringify({ comparison: "near-cap-workflow-instructions", count, priorCharacters, finalCharacters: context.manifest.characters }));
+    }
+    const oversized = snapshotHeavyProject(store, 80), retained = structuredClone(oversized);
+    assert.throws(() => epicReviewContext(oversized, { format: 1, packageID: "still-too-large", inputKey: "0".repeat(64),
+      epicID: "project", epicIDs: ["project"], kind: "workflow", recordIDs: [oversized.requirements[0]!.id] }), ContextBudgetError);
+    assert.deepEqual(oversized, retained, "Instruction compaction must not raise the cap or drop evidence to force a fit");
+  } finally { store.close(); }
+});
+
+test("headroom policy explicitly reports indivisible mandatory context above the soft target", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = snapshotHeavyProject(store, 71), before = structuredClone(p);
+    const context = epicReviewContext(p, { format: 1, contextPolicy: "headroom-v1", packageID: "mandatory-floor", inputKey: "0".repeat(64),
+      epicID: "project", epicIDs: ["project"], kind: "workflow", recordIDs: [p.requirements[0]!.id] });
+    const b = context.manifest.epicContextBudget!;
+    assert.ok(b.characters > 72000 && b.characters <= 96000);
+    assert.equal(b.aboveTarget, true); assert.ok(b.headroom < 24000);
+    assert.equal(b.evidenceReserve, b.headroom);
+    const decoded = decodeContext<{ sources: Project["sources"]; requirements: Project["requirements"]; questions: Project["questions"] }>(context.data);
+    for (const source of p.sources) assert.equal(decoded.sources.find((s) => s.id === source.id)!.text, source.text);
+    for (const r of p.requirements) assert.deepEqual(decoded.requirements.find((item) => item.id === r.id)!.acceptance, r.acceptance);
+    assert.equal(decoded.questions.length, p.questions.length);
+    assert.deepEqual(p, before);
+    console.log(JSON.stringify({ comparison: "mandatory-context-floor-not-forced-under-target", characters: b.characters, headroom: b.headroom }));
   } finally { store.close(); }
 });
 

@@ -10,8 +10,9 @@ import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenc
 import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch, type SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
-import { planEpicReview, epicReviewContext, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
-import { epicReviewBlockedSchema, epicReviewDiagnostic } from "../core/epic-review-types.js";
+import { planEpicReview, epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
+import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages } from "../core/epic-stages.js";
+import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
 import { prepareScanAnalysis } from "../core/scan.js";
@@ -287,7 +288,7 @@ export class DiscoveryService {
       context.manifest.reviewChangeSourceIDs = batchReviews
         .filter((item) => item.input.type === "review" && item.input.action !== "changes-requested" && !!item.input.note.trim())
         .map((item) => item.appliedSourceID!);
-      if (context.manifest.partial) options.onProgress?.(`Using a smaller task working set (${context.manifest.characters.toLocaleString("en-US")} characters); exact human guardrails retained. Whole-area assessments are deferred.`);
+      if (context.manifest.partial) options.onProgress?.(`Using a smaller task working set (${context.manifest.characters.toLocaleString("en-US")} characters); ${context.manifest.epicReview?.contextPolicy === "staged-guardrails-v1" ? "exact target and one decision batch retained; other mandatory decisions are checked separately before publication" : "exact human guardrails retained"}. Whole-area assessments are deferred.`);
       if (context.manifest.version === "tasks-v7") options.onProgress?.("Omitted generated background rationales and unselected historical option explanations to fit the hard context bound. Exact human input, requirement wording/scenarios and selected-option consequences are retained.");
       if (context.manifest.budget > 48000) options.onProgress?.(`Mandatory evidence requires ${context.manifest.characters.toLocaleString("en-US")} characters; using the bounded 96,000-character fallback after task planning. Exact human evidence is retained; no optional detail was added.`);
       if (context.manifest.compaction) options.onProgress?.(`Context overhead reduced from ${context.manifest.compaction.originalCharacters.toLocaleString("en-US")} to ${context.manifest.characters.toLocaleString("en-US")} characters; exact decisions and evidence retained.`);
@@ -323,6 +324,8 @@ export class DiscoveryService {
         const checkpoint = () => {
           context.manifest.questionTarget = options.questionTarget;
           reviewReport.modelCalls = work.attempts;
+          if (work.epicStages) reviewReport.stagedProgress = { phase: work.epicStages.phase, completed: work.epicStages.receipts.length,
+            batches: work.epicStages.batches, totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts) };
           this.store.checkpointRetrieval(job.id, work, context.manifest);
           this.store.attachEpicReviewReport(job.id, reviewReport);
         };
@@ -338,7 +341,52 @@ export class DiscoveryService {
           this.store.attachEpicReviewReport(job.id, reviewReport);
           throw new Error(`Epic workflow review needs evidence: ${reason} No proposals applied. Saved stages retained; this unchanged package is blocked, not reviewed.`);
         };
+        if (review.contextPolicy === "staged-guardrails-v1") {
+          if (adapterOptions.research) throw new Error("Staged decision review does not support research. Retry with research disabled; no provider or mode was silently changed.");
+          const batches = epicReviewBatches(project, review);
+          const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
+            phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
+          validateEpicStages(project, review, staged, batches);
+          if (work.stages.length || work.continuation) throw new Error("Staged decision review cannot reuse ordinary navigation work.");
+          let callsThisRun = 0;
+          while (staged.phase !== "complete") {
+            controller.signal.throwIfAborted();
+            context = epicStageContext(batches[staged.nextBatch]!, staged);
+            checkpoint();
+            if (work.attempts >= 3) return block("Three attempts spent on this exact decision stage. Earlier completed stages remain saved; unchanged work will not retry automatically.");
+            if (callsThisRun >= 6) throw new Error("Staged review paused after six requests in this package attempt. No drafts published. Explore next gaps to resume saved stages; completed calls will not repeat.");
+            report(`Staged decision review: ${staged.phase === "discover" ? "drafting" : "checking drafts"}, batch ${staged.nextBatch + 1} of ${staged.batches}. ${staged.receipts.length} stages saved; no proposals publish before every batch is checked.`);
+            work.attempts++; callsThisRun++; checkpoint();
+            const raw = await this.adapter.analyze(project, { ...adapterOptions, context });
+            controller.signal.throwIfAborted();
+            if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
+            if (JSON.stringify(raw)?.length > 12000) return block("Staged response exceeds the 12,000-character draft allowance; no proposals were published or truncated.");
+            if (raw && typeof raw === "object" && "reviewBlocked" in raw) return block(epicReviewBlockedSchema.parse(raw).reviewBlocked.reason, true);
+            const phase = staged.phase, batch = staged.nextBatch;
+            const response = phase === "discover" ? parseDiscoveryAnalysis(raw).result : raw;
+            staged.candidates = phase === "discover"
+              ? mergeEpicDraft(project, batches[batch]!, staged.candidates, response as import("../core/model.js").Analysis, batch)
+              : applyGuardrailVerdict(staged.candidates, response);
+            staged.receipts.push({ phase, batch, attempts: work.attempts, evidenceKey: retrievalEvidenceBasis(batches[batch]!).key,
+              response: phase === "discover" ? response as import("../core/model.js").Analysis : guardrailVerdictSchema.parse(response) });
+            work.attempts = 0;
+            staged.nextBatch++;
+            if (staged.nextBatch === staged.batches) {
+              if (phase === "discover") { staged.phase = "validate"; staged.nextBatch = 0; }
+              else staged.phase = "complete";
+            }
+            checkpoint();
+          }
+          validateEpicStages(project, review, staged, batches);
+          context = epicStagePublicationContext(batches, staged);
+          validateEpicReviewFinal(project, context, staged.candidates);
+          work.final = { contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context), revision: project.revision, output: staged.candidates };
+          checkpoint();
+          return this.store.finishJob(job.id, staged.candidates);
+        }
         report(`Reviewing ${review.kind === "boundary" ? "dependency boundary" : "workflow package"} in ${project.epics.find((e) => e.id === review.epicID)?.title ?? review.epicID}: ${review.recordIDs.length} records together; exact linked evidence prepared locally. No search/paging calls.`);
+        const budget = context.manifest.epicContextBudget;
+        if (budget) report(`Context ${budget.characters.toLocaleString("en-US")} / ${budget.hardLimit.toLocaleString("en-US")} characters; ${budget.headroom.toLocaleString("en-US")} headroom. ${budget.aboveTarget ? "Mandatory exact evidence exceeds the 72,000-character target; reduced buffer is explicit." : "Workflow context meets the 72,000-character target; 24,000 characters remain available for evidence growth."}`);
         // Only one batched exact load is supported; final analysis capacity is reserved.
         if (work.stages.length > 1 || work.continuation) throw new Error("Unsupported epic-review retrieval state; original evidence retained.");
         if (work.stages[0]) {
