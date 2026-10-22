@@ -19,6 +19,119 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Bounded implementation-planning candidates (2026-10-22)
+
+Source and target remain execution schema 1 / planning format 1, with unchanged
+SQLite/project/portable formats, freshness checks and config fingerprints. Planning
+no longer repeats an unbounded full-project behavior index in each request. Exact
+mandatory target evidence and existing dependency guardrails are unchanged. Optional
+exact candidates fit within the existing context budget; omitted scope is explicit
+and saved as an ordinary unresolved package question. Approval already requires
+human resolution notes for questions. Dependencies on omitted behavior are rejected.
+This is bounded candidate analysis, not a claim of exhaustive prerequisite discovery.
+
+No saved plans, approvals, assessments, original model evidence or execution sessions
+are rewritten. Old approved plans remain current under their original checks.
+Explicit retry of a failed/interrupted plan reuses compatible completed packages
+unchanged and applies the bounded builder only to unfinished targets. Failed attempts
+remain in planning history. Startup does not repeat inference; existing revision,
+binding, cancellation, lease and CAS checks still govern publication. No migration
+or schema bump is necessary. Mandatory-only overflow remains a blocker and now
+reports section sizes rather than suggesting that splitting always solves it.
+
+Verification: type checking, focused planning tests and full `npm test` passed
+(28 pretests and 600 main tests) using Node 22.23.3 for SQLite tests. Coverage includes
+exact candidate retention, mandatory overflow without inference, persisted omission
+questions, rejection of unseen prerequisites, compatible package retry/reopen and
+portable partial-plan continuation. `git diff --check` passed. No live model calls
+or user database edits were performed. The reported 633,285-character saved prompt
+has not been reproduced; excessive mandatory evidence may still block that project.
+
+## Larger mandatory-only allowance for saved follow-up (2026-10-22)
+
+Source and target remain SQLite 3, unchanged project/portable formats and existing
+context manifests. A single saved response can now use a final 144,000-character
+mandatory-evidence allowance after the previous 48,000/96,000 planning/compaction
+passes. Both queue preflight and service planning opt in. Optional reconciliation
+candidates remain bounded by the old allowance, and expanded packages do not receive
+optional related-record hints. Advisory/help, gap exploration, general discovery and
+ordinary focused checks do not opt in. This supersedes the previous change's retained
+96,000-character cap for this specific workflow, not its evidence-preservation rules.
+
+No persisted records, fingerprints, semantic assessments or completed checks are
+rewritten or invalidated. Older needs-attention submissions retain their applied input
+and retry explicitly using the new planner; reopening does not call a model. Existing
+lease, expected-revision, cancellation and publication checks are unchanged. Over-limit
+input still saves a preflight blocker without inference. Failed/provider jobs retain
+their original evidence; the allowance is not a guarantee of model capacity.
+
+Verification on Node 22.23.3: type check, 75 focused tests and full `npm test` passed
+(28 pretests, 598 main tests). The new disk-backed upgrade test preserves a legacy
+96,000-character blocker across reopen, then verifies one explicit saved-response
+retry, exact human sources/question options, no optional refill and no duplicate input.
+Existing queue tests now exercise retained blockers above 144,000 characters. A
+read-only check of all four actual blocked submissions at revision 1935 reproduced
+their previous sizes and confirmed preflight succeeds at 118,706, 103,292, 115,617 and
+102,472 characters against the new cap. No project data was edited or inference run.
+
+UI build passed. The browser suite passed its updated oversized-response/addendum
+blocker/reload/retry flow, then failed later at `src/web/browser-check.ts:1293`, waiting
+for a requirement heading in a collapsed epic. That unrelated browser flow, and later
+scripts skipped by the chained command, are not reported as passing.
+
+## Background approval projection for saved follow-up (2026-10-22)
+
+Source and target remain SQLite 3, existing project/portable formats and context
+manifest decisionProjection format 1. Isolated follow-up now uses the same verified
+current-decision projection as gap exploration, only for background records. Target
+requirements and explicitly requested evidence keep their original approval history.
+Exact current wording/scenarios, human addenda and ambiguous provenance are retained.
+No sources, links, revisions, assessments, fingerprints or completed jobs are rewritten;
+there is no schema migration or startup inference. Old needs-attention submissions
+use the updated planner on explicit retry, preserving their already-applied responses.
+The mandatory input cap and existing revision/lease/publication checks are unchanged.
+Oversized human evidence can still block, without manufacturing a current decision.
+
+Verification: type check, 102 focused context/retrieval/specification/approval tests,
+and full `npm test` passed (28 pretests, 597 main tests) using the existing Node
+22.23.3 installation. The new regression covers oversized superseded background
+approvals, repeated planning, unchanged original records, protected target/supporting
+history and blocking for human addenda, unknown prose, branched or mismatched evidence.
+Existing queue restart/retry tests also passed. The initial default-Node-20 test
+attempt was blocked by the installed SQLite native module's Node-22 ABI; no modules
+were rebuilt. No live provider calls or user database edits were performed. The
+reported project's exact context has not been reproduced against its saved data.
+
+## Local completion of plain approvals (2026-10-22)
+
+Source and target remain SQLite 3 and the existing project, submission and portable
+formats. No startup rewrite, schema bump or fingerprint change is needed. A newly
+submitted approval with a whitespace-only/empty note runs the existing transactional
+review checks and records the original input, confirmation source and applied revision,
+then completes without a model job. Automatic AI processing may remain paused.
+Notes, rejection and change requests retain their existing follow-up behavior.
+
+Older queued approvals still pass current safety checks before application. Older
+applied `saved` plain approvals without a job or overlap receipt can complete locally
+on explicit resume, including recovery after interruption between application and
+completion. Application is not repeated. Reopening alone does not convert saved work
+or run inference; completed results, failed model-job evidence and interrupted overlap
+receipts remain unchanged and use their existing explicit retry/continuation paths.
+Original evidence, history, semantic assessments and completed checks are retained.
+
+Upgrade/recovery coverage is in `src/service/local-approval.test.ts`: queued and
+already-applied legacy submissions, repeated reopen, request replay, active-worker
+exclusion and retained failed-job retry. No user database reset or model call is required.
+
+Verification (Windows, Node 22.23.3): all 101 focused approval/change-request/recovery,
+decision-availability and context tests passed; type checking passed. The broader
+`npm test` run passed its 28 pretests and 594/595 main tests before the final scoped
+approval test was added. Its remaining failure is the static Review UI expectation
+at `src/core/refinement.test.ts:383` (`Approve resolution` is absent in collapsed
+epic markup); that test does not use the changed discovery queue. UI work already
+in progress was left untouched. No live-provider or real-project latency benchmark
+was run; these checks establish avoided model calls, not a fixed timing guarantee.
+
 ## Continuous specification (DEC-030)
 
 Source and target remain SQLite 3, portable manifest 3 and existing project/feature

@@ -260,6 +260,7 @@ export class DiscoveryService {
         requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
         recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
         isolatedTask: options.refinementOnly || options.isolatedTask,
+        submissionFollowup: options.isolatedTask && options.submissionIDs?.length === 1,
         budget: 48000, expandMandatory: true });
       if (continuationSource?.gapReport) context.gapReport = structuredClone(continuationSource.gapReport);
       context.manifest.submissionIDs = options.submissionIDs;
@@ -273,7 +274,7 @@ export class DiscoveryService {
       }
       if (pair) context.manifest.refinementPair = { requirementIDs: pair, contextKey: resolutionContextKey(project, pair, triggerSourceIDs),
         ...(options.includeUnapproved ? { includeUnapproved: true } : {}), ...(triggerSourceIDs.length ? { triggerSourceIDs } : {}) };
-      if (!options.helpRequest && !options.refinementOnly && !epicPlan) addRelatedRecordHints(project, context);
+      if (!options.helpRequest && !options.refinementOnly && !epicPlan && context.manifest.budget <= 96000) addRelatedRecordHints(project, context);
       if (refinementTarget) context.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
       // Detailed context can include historical reviews. Only the job's current
       // submission batch authorizes review follow-up, matching publication checks.

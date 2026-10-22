@@ -179,13 +179,13 @@ test("execution ownership holds automatic discovery while submissions and adviso
     const current = store.get(project.id), reviewed = current.requirements[0]!;
     assert.equal((await post("submit", { id: randomUUID(), auto: true, research: false, input: { type: "review", requirementID: reviewed.id, requirementText: reviewed.statement, fingerprint: reviewFingerprint(reviewed), action: "accepted", note: "", reviewedRevision: current.revision } })).status, 202);
     await until(() => store.submissions(project.id).at(-1)!.status === "completed");
-    assert.equal(calls, 3); assert.equal(store.get(project.id).requirements[0]!.status, "accepted");
+    assert.equal(calls, 2, "Plain approval completes without AI follow-up"); assert.equal(store.get(project.id).requirements[0]!.status, "accepted");
     store.pauseQueue(project.id, true);
     store.claimExecution(project.id, "fixture-repository", "worker");
     assert.equal((await post("submit", { id: randomUUID(), input: { type: "note", text: "Keep manually paused", epicID: "project" }, auto: true, research: false })).status, 202);
     store.releaseExecution(project.id, "worker");
     await new Promise((accept) => setTimeout(accept, 650));
-    assert.equal(calls, 3); assert.equal(store.submissions(project.id).at(-1)!.status, "queued");
+    assert.equal(calls, 2); assert.equal(store.submissions(project.id).at(-1)!.status, "queued");
     assert.equal((await post("analyze", { revision: store.get(project.id).revision })).status, 202);
     await until(() => store.submissions(project.id).at(-1)!.status === "completed");
     const beforeManual = calls;

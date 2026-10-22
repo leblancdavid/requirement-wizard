@@ -1,5 +1,14 @@
 # Browser workspace, epics, and estimated completeness
 
+## Header activity feedback
+
+Foreground actions (including requirement review and saving answers) use a compact
+spinner in a permanently reserved slot beside the header title. Activity starts and
+finishes without adding a row or resizing the header. The action label remains
+available through a status announcement and hover tooltip; multiple actions list
+their labels in the tooltip. Detailed progress bars elsewhere are unchanged.
+This is presentation-only; saved data and migration formats are unchanged.
+
 ## Continuous specification and decisions by exception
 
 **Specification** replaces the Review tab. Explicit queued answers, notes and
@@ -13,6 +22,54 @@ Existing approvals and saved proposals are not converted on upgrade. The histori
 Review instructions below still describe legacy/manual exception paths; eligible
 answer-derived updates supersede their mandatory second-approval step. See
 [continuous specification](continuous-specification.md) for exact boundaries and limits.
+
+## Epic-first specification and implementation browsing
+
+Specification and Implement show collapsed epic lists before their supporting
+review/build controls. Expand an epic to inspect its requirements. Epic pagination
+counts epics, not requirements; each expanded epic has its own independent
+requirement pagination (10, 25 or 50 per page, initially 25). Hidden requirement
+details are not constructed. Explicit requirement recovery opens the containing epic
+and the correct requirement page; ordinary background updates do not open epics.
+
+Both tabs provide case-insensitive, all-words search across epic IDs/names/purpose,
+requirement IDs/wording/rationale and acceptance scenarios. Specification also
+searches refinement wording and retained review feedback in the applicable views.
+Search combines with existing feature, status and readiness filters, omits epics
+without matches and resets pagination when the query or filters change. Review
+drafts remain available when paging, collapsing an epic or changing search.
+Implementation epic actions retain their full approved epic scope regardless of
+the displayed search/status matches; the action includes an explicit scope note.
+
+This is a browser-only projection change: SQLite, portable/project artifacts,
+assessment fingerprints, evidence and saved jobs are unchanged. No forward data
+migration or repeat model calls are needed.
+
+The deterministic `specification-browser-check.ts` covers both tabs with 30 epics,
+independent inner/outer pagination, search by ID/scenario/epic, empty results,
+review draft retention, filters and mobile width. No live provider calls are used.
+That check passed on 2026-10-22 using Node 22.23.3, along with the targeted UI
+tests, full `npm test`, type check and UI build. The broader browser suite is tracked separately;
+this focused check is not a claim that every legacy browser flow passed.
+
+## Saved-response context blockers
+
+Saved-response follow-up now applies the existing current-decision projection to
+background guardrails: verified superseded plain approvals can be omitted, and
+verified app-generated current cleanup/resolution receipts can expose their exact
+approved decision without embedded old snapshots. Target and explicitly requested
+supporting evidence retain original history. Human addenda, unknown review prose
+and ambiguous supersession remain exact; genuinely oversized input still blocks.
+Stored sources and decisions are unchanged. After restarting the updated app, use
+the retained response's retry action rather than submitting it again. Retry replans
+locally before any model call; this does not guarantee every oversized project fits.
+
+If a single saved-response follow-up still exceeds 96,000 characters after the
+existing compaction passes, it can now use a final **144,000-character mandatory-only
+allowance**. Required human evidence remains intact; optional reconciliation candidates
+and related-record hints cannot consume this additional space. Normal discovery,
+gap exploration and help retain their existing limits. Larger evidence still blocks
+before inference, and the allowance does not certify any provider's context capacity.
 
 ## Question-help context boundaries
 

@@ -36,7 +36,6 @@ export function ActivityFeedback({ label, completed, total }: { label: string; c
 
 export function HeaderActivity() {
   const { activities } = useContext(ActivityContext);
-  if (!activities.length) return null;
-  const label = activities.length > 1 ? `${activities.length} actions in progress` : activities[0]!.label;
-  return <div className="header-activity" aria-label="Workspace activity"><ActivityFeedback label={label} />{activities.length > 1 && <small>{activities.map((item) => item.label).join(" · ")}</small>}</div>;
+  const label = activities.length > 1 ? `${activities.length} actions in progress: ${activities.map((item) => item.label).join(" · ")}` : activities[0]?.label ?? "";
+  return <span className="header-activity" role="status" aria-label="Workspace activity" title={label || undefined}>{activities.length > 0 && <Spinner />}<span className="header-activity-label">{label}</span></span>;
 }

@@ -379,7 +379,7 @@ test("resolution proposal preserves both approved originals until atomic consoli
     const proposal = p.refinements[0]!;
     assert.deepEqual(proposal.relatedOriginal, originals[1]);
     assert.deepEqual([...pendingRefinementRequirementIDs(p)].sort(), originals.map((r) => r.id).sort());
-    const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false, refine: () => {}, submit: async () => true, reviewRefinement: async () => true }));
+    const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false, focusItemID: `refinement:${proposal.id}`, refine: () => {}, submit: async () => true, reviewRefinement: async () => true }));
     assert.match(html, /Approve resolution/); assert.match(html, /Keep both unchanged/); assert.match(html, /reject the redundant/);
     assert.equal(reviewItems(p, [], "refinements", "project").length, 1, "resolution is visible from either feature");
     p = store.reviewRefinement(p.id, p.revision, proposal.id, true);

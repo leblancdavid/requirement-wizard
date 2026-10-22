@@ -159,7 +159,7 @@ test("queued reviews allow no addendum, are idempotent, and reject changed requi
   } finally { store.close(); }
 });
 
-test("failed review follow-up resumes without duplicating approval and retains its AI response", async () => {
+test("failed review-note follow-up resumes without duplicating approval and retains its AI response", async () => {
   const store = new ProjectStore(":memory:");
   let calls = 0;
   const service = new DiscoveryService(store, { async analyze(project, options) {
@@ -175,7 +175,7 @@ test("failed review follow-up resumes without duplicating approval and retains i
   };
   try {
     const project = complete(store, store.create("Review retry", "Track jobs", selection)); const r = project.requirements[0]!;
-    queue.submit(project.id, { id: crypto.randomUUID(), auto: true, research: false, input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "" } });
+    queue.submit(project.id, { id: crypto.randomUUID(), auto: true, research: false, input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "Keep this behavior when processing future corrections." } });
     await idle(project.id);
     assert.equal(store.get(project.id).requirements[0]!.status, "accepted");
     assert.equal(store.submissions(project.id)[0]!.applied, true);

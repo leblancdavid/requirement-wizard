@@ -9,6 +9,7 @@ import { ActionButton, ActionScope } from "./action-button.js";
 import { discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 import { planningCurrent, planningEdgeID, reviewedPlanningConfig } from "../core/implementation-planning.js";
 import { Pagination, PagedList, usePagination } from "./pagination.js";
+import { EpicRequirements, matchesRequirementSearch } from "./epic-requirements.js";
 
 export const ImplementationTab = React.memo(ImplementationView);
 function ImplementationView({ project, state, evaluation, executionIndex, active, disabled, discoveryActive = false, connected, workspaceID, epicID, action, inspectRepository }: {
@@ -64,7 +65,6 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
     setStarting(true);
     try { await action("execution-start", { operation, ...scope }); } finally { setStarting(false); }
   };
-  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const scoped = plan.filter((p) => epicID === "all" || p.requirement.epicID === epicID);
   const groups = [...new Set(scoped.map((p) => p.requirement.epicID))].map((id, order) => {
     const epic = project.epics.find((e) => e.id === id)!;
@@ -78,17 +78,11 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
         || filter === "complete" && !stale && assessment?.status === "complete"
         || filter === "assessed" && assessedIDs.has(p.requirement.id) || filter === "unknown" && !stale && assessment?.status === "unknown"
         || filter === "stale" && stale || filter === "blocked" && (!!p.blockers.length || run?.units.some((u) => u.items.some((i) => i.requirementID === p.requirement.id && ["blocked", "failed", "interrupted"].includes(i.status))));
-      const text = [epic.id, epic.title, epic.purpose, p.requirement.id, p.requirement.statement, p.requirement.rationale, ...p.requirement.acceptance].join(" ").toLowerCase();
-      return statusMatches && terms.every((term) => text.includes(term));
+      return statusMatches && matchesRequirementSearch(search, [epic.id, epic.title, epic.purpose, p.requirement.id, p.requirement.statement, p.requirement.rationale, ...p.requirement.acceptance]);
     });
     return { epic, members, visible, order };
   }).filter((group) => group.visible.length);
-  const paging = usePagination(groups.flatMap((group) => group.visible.map((p) => p.requirement.id)), `${project.id}:${epicID}:${filter}:${search}`);
-  const pageIDs = new Set(groups.flatMap((group) => group.visible.map((p) => p.requirement.id)).slice(paging.start, paging.end));
-  const pageGroups = groups.map((group) => ({ ...group, visible: group.visible.filter((p) => pageIDs.has(p.requirement.id)) })).filter((group) => group.visible.length);
-  return <ActionScope reason={assessmentReason || (resumable ? "Archive the current run to change its frozen settings. Saved sessions and delivery evidence are retained." : "Wait for the current implementation request to finish.")}><div className="implementation-tab">
-    {starting && <ActivityFeedback label="Starting implementation task…" />}
-    {active && assessmentRun?.status !== "running" && run?.status !== "running" && <ActivityFeedback label="Preparing implementation…" />}
+  const controls = <>
     <section className="requirement-card implementation-actions" aria-label="Implementation actions">
       <h3>Check, plan and build</h3><p>Check existing code, review a plan, then implement approved requirements in dependency order. Implementation counts as delivered when verified work reaches main.</p>
       <div className="button-row">
@@ -131,16 +125,21 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
        <LazyDetails summary="Execution & delivery details">{() => <>{run.units.map((unit) => <div key={unit.id}><p><strong>{unit.branch}</strong> · {unit.delivery.replaceAll("-", " ")}</p><p className="source-excerpt">Worktree: {unit.directory || "Preparing…"}</p>{unit.pr && <a href={unit.pr} target="_blank" rel="noreferrer">Open GitHub PR ↗</a>}
          {unit.items.map((item) => <div key={item.requirementID}><p>{item.requirementID} · {item.status}{item.commit ? ` · ${item.commit.slice(0, 8)}` : ""}</p>{item.sessionID && <small>OpenCode session: {item.sessionID}</small>}{(item.contextBlock ?? item.context) && <p>Requirement context: {(item.contextBlock ?? item.context)!.characters.toLocaleString()} / {(item.contextBlock ?? item.context)!.budget.toLocaleString()} characters · {(item.contextBlock ?? item.context)!.historyCharacters.toLocaleString()} saved-session characters{item.contextBlock ? " · Blocked before inference" : ""}</p>}{item.response && <p>{item.response}</p>}{item.diagnostic && <p>{item.diagnostic}</p>}{item.checks.map((check, index) => <LazyDetails key={index} summary={<>{check.command} · exit {check.exitCode}</>}>{() => <pre>{check.output}</pre>}</LazyDetails>)}</div>)}</div>)}<LazyDetails summary="Recent progress">{() => <ol>{run.progress.map((entry, index) => <li key={index}>{entry}</li>)}</ol>}</LazyDetails></>}</LazyDetails></section>}
     <ExecutionSettings key={`${project.id}:${workspaceID}:${JSON.stringify(state.config)}`} project={project} config={state.config} detected={repository} detecting={detecting} detect={() => void detectRepository()} disabled={active || disabled || resumable} save={(config) => action("execution-config", { config, version: state.version })} />
+    </>;
+  return <ActionScope reason={assessmentReason || (resumable ? "Archive the current run to change its frozen settings. Saved sessions and delivery evidence are retained." : "Wait for the current implementation request to finish.")}><div className="implementation-tab">
+    {starting && <ActivityFeedback label="Starting implementation task…" />}
+    {active && assessmentRun?.status !== "running" && run?.status !== "running" && <ActivityFeedback label="Preparing implementation…" />}
     <label className="implementation-search">Search epics and requirements<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Epic, requirement, ID, or acceptance scenario…" maxLength={500} /></label>
     <div className="filter-row" aria-label="Implementation filters">{[["remaining", "Not delivered"], ["ready", "Ready"], ["assessed", "Assessed"], ["complete", "Complete in code"], ["partial", "Partial"], ["missing", "Missing"], ["unknown", "Unknown"], ["unassessed", "Not assessed"], ["stale", "Needs reassessment"], ["blocked", "Blocked"], ["delivered", "Implemented"], ["all", "All approved"]].map(([key, label]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => setFilter(key!)}>{label}</button>)}</div>
     {!!eligibleRequirements(project).length && !error && <p className="view-intro" role="status" aria-label="Implementation results">Showing {groups.reduce((total, group) => total + group.visible.length, 0)} of {scoped.length} requirements in {groups.length} {groups.length === 1 ? "epic" : "epics"}.</p>}
     {!eligibleRequirements(project).length && <div className="empty-card"><h3>No approved requirements to implement yet.</h3><p>Approve requirements in Review, then return here to assess and implement them.</p></div>}
     {!!eligibleRequirements(project).length && !groups.length && !error && <div className="empty-card"><h3>No requirements match these filters.</h3><p>Try another search, status, or feature.</p><button className="secondary" onClick={() => { setSearch(""); setFilter("all"); }}>Clear search and status filter</button></div>}
-    <Pagination paging={paging} label="Implementation" />
-    {pageGroups.map(({ epic, members, visible, order }) => {
+    <EpicRequirements groups={groups.map(({ epic, members, visible }) => {
       const local = localCounts.get(epic.id)!;
-      return <LazyDetails className="feature-group" key={epic.id} summary={<><strong>{order + 1}. {epic.title}</strong><span>{visible.length} shown · {localAssessmentDetail(local)}<br />{members.filter((p) => p.delivered).length} / {members.length} verified on main · {members.filter((p) => !p.delivered && !p.blockers.length).length} ready</span></>}>{() => <><p>{epic.purpose}</p>{epic.dependencies.length > 0 && <p>After: {epic.dependencies.map((dependency) => project.epics.find((e) => e.id === dependency)?.title ?? dependency).join(", ")}</p>}<div className="button-row"><ActionButton className="secondary" title="Implement all remaining approved requirements in this epic" disabled={!ready || starting || resumable || members.every((p) => p.delivered)} reason={deliveryReason || error || (resumable ? "Continue or archive the current run before selecting another scope." : members.every((p) => p.delivered) ? "All approved requirements in this feature are already delivered to main." : "Starting implementation…")} onClick={() => void start("continue", { epicID: epic.id })}>Implement epic</ActionButton></div>
-        {visible.map(({ requirement: r, blockers, delivered }) => {
+      return { id: epic.id, title: epic.title, items: visible,
+        summary: <> · {localAssessmentDetail(local)}<br />{members.filter((p) => p.delivered).length} / {members.length} verified on main · {members.filter((p) => !p.delivered && !p.blockers.length).length} ready</>,
+        introduction: <><p>{epic.purpose}</p>{epic.dependencies.length > 0 && <p>After: {epic.dependencies.map((dependency) => project.epics.find((e) => e.id === dependency)?.title ?? dependency).join(", ")}</p>}<div className="button-row"><ActionButton className="secondary" title="Implement all remaining approved requirements in this epic, regardless of search or status filters" disabled={!ready || starting || resumable || members.every((p) => p.delivered)} reason={deliveryReason || error || (resumable ? "Continue or archive the current run before selecting another scope." : members.every((p) => p.delivered) ? "All approved requirements in this feature are already delivered to main." : "Starting implementation…")} onClick={() => void start("continue", { epicID: epic.id })}>Implement epic</ActionButton><small>Scope: all remaining approved requirements in this epic, regardless of search or status filters.</small></div></> };
+    })} scope={`${project.id}:${epicID}:${filter}:${search}`} label="Implementation" itemID={(item) => item.requirement.id}>{({ requirement: r, blockers, delivered }) => {
           const assessment = state.assessments[r.id], stale = !!assessment && !assessedIDs.has(r.id);
           const unit = [...(run?.units ?? []), ...state.history.flatMap((h) => h.units)].find((u) => u.items.some((i) => i.requirementID === r.id));
           const item = unit?.items.find((i) => i.requirementID === r.id);
@@ -152,9 +151,8 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
               <MarkForAssessment disabled={!canAssess} disabledReason={assessmentReason} reason={reassessmentDrafts[r.id] ?? ""} setReason={(reason) => setReassessmentDrafts((current) => ({ ...current, [r.id]: reason }))} mark={(reason) => action("execution-mark-assessment", { revision: project.revision, requirementID: r.id, reason, version: state.version })} />
               {state.assessmentRequests?.[r.id] && (!assessment || assessment.requestToken !== state.assessmentRequests[r.id]!.token) && <p role="status">Manual reassessment requested: {state.assessmentRequests[r.id]!.reason}</p>}
                {state.delivered[r.id] && <p>Delivery evidence: main {state.delivered[r.id]!.main.slice(0, 8)} · {new Date(state.delivered[r.id]!.at).toLocaleString()}{!delivered && " · Needs review against the current requirement/repository"}</p>}</article>}</LazyDetails>;
-         })}</>}</LazyDetails>;
-    })}
-    {paging.pages > 1 && <Pagination paging={paging} label="Implementation bottom" />}
+    }}</EpicRequirements>
+    {controls}
     {!!state.history.length && <LazyDetails className="project-overview" summary={<>Previous implementation runs · {state.history.length}</>}>{() => <PagedList items={state.history} itemID={(h) => h.id} label="Previous implementation runs">{(history) => <LazyDetails summary={<>r{history.revision} · {history.status} · {history.units.length} delivery units · {history.createdAt}</>}>{() => history.units.map((unit) => <div key={unit.id}><p>{unit.branch} · {unit.delivery}</p><p className="source-excerpt">{unit.directory}</p>{unit.pr && <a href={unit.pr} target="_blank" rel="noreferrer">Open GitHub PR ↗</a>}{unit.items.map((item) => <p key={item.requirementID}>{item.requirementID} · {item.status} · {item.commit ?? "No commit"}<br />Session: {item.sessionID ?? "Not started"}</p>)}</div>)}</LazyDetails>}</PagedList>}</LazyDetails>}
     {!!state.deliveryHistory?.length && <LazyDetails className="project-overview" summary={<>Previous main-delivery evidence · {state.deliveryHistory.length}</>}>{() => <PagedList items={state.deliveryHistory!.map((delivery, index) => ({ delivery, id: `${index}:${delivery.requirementID}:${delivery.at}` }))} itemID={(item) => item.id} label="Previous delivery evidence">{({ delivery }) => <p>{delivery.requirementID} · {delivery.repository} · main {delivery.main.slice(0, 8)} · {new Date(delivery.at).toLocaleString()}</p>}</PagedList>}</LazyDetails>}
   </div></ActionScope>;

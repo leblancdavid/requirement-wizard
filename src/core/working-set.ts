@@ -9,6 +9,8 @@ export type ContextTask = {
   expandMandatory?: boolean;
   /** One queued submission: detailed target/evidence plus explicit guardrails. */
   isolatedTask?: boolean;
+  /** Explicit saved-response retry may use a larger mandatory-only input cap. */
+  submissionFollowup?: boolean;
   /** Bounded general gap exploration, not follow-up on a human submission. */
   gapExploration?: boolean;
   gapLens?: GapLens;
@@ -142,7 +144,7 @@ export function shareRecordStructure(data: unknown, additionalRecordFields: stri
 /** Plan locally before inference. Exact human guardrails are never summarized away. */
 export function planContext(project: Project, task: ContextTask = {}): ContextPack {
   const budget = task.budget ?? 48000;
-  const decisions = task.gapExploration ? currentDecisionProjection(project) : undefined;
+  const decisions = task.gapExploration || task.isolatedTask ? currentDecisionProjection(project) : undefined;
   const superseded = new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
   const questionAreas = new Map(project.questions.map((q) => [q.id, q.epicID]));
   const requirementAreas = new Map(project.requirements.map((r) => [r.id, r.epicID]));
@@ -207,6 +209,15 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
     }
   }
   for (const source of project.sources) if (directlyLinked.has(source.id) && source.requirementID) taskRequirementIDs.add(source.requirementID);
+  // Follow-up may need to interpret a correction against the target's original
+  // approval history. Project only background decisions, never its task evidence.
+  if (decisions && !task.gapExploration) {
+    const protectedIDs = new Set([...taskIDs, ...directlyLinked, ...task.supportingRecordIDs ?? []]);
+    const protectedRequirements = new Set([...taskRequirementIDs, ...project.requirements.filter((r) => protectedIDs.has(r.id)).map((r) => r.id),
+      ...project.sources.filter((s) => protectedIDs.has(s.id) && s.requirementID).map((s) => s.requirementID!)]);
+    for (const [id, item] of decisions.omitted) if (protectedIDs.has(id) || protectedRequirements.has(item.requirementID)) decisions.omitted.delete(id);
+    for (const [id, item] of decisions.receipts) if (protectedIDs.has(id) || protectedRequirements.has(item.requirementID)) decisions.receipts.delete(id);
+  }
   const confirmations = new Map(project.sources.filter((s) => s.kind === "confirmation" && !superseded.has(s.id)).map((s) => [s.id, s]));
   const backgroundAccepted = new Set(project.requirements.filter((r) => r.status === "accepted" && !taskRequirementIDs.has(r.id)
     && r.sourceIDs.some((id) => {
@@ -310,8 +321,8 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       ...(task.deferWorkspaceEvidence ? { deferredGapEvidence: {
         explanation: "Saved workspace source links whose exact records are not in sources are navigation only. Their file contents have NOT been reviewed. Request exact linked IDs through evidenceRetrieval before citing or drawing conclusions from them. Static file motivation may be deferred even for the target requirement/question. All mandatory human constraints remain exact; file observations cannot establish preferences. A bounded completed check does not mean every linked file was read or exploration is complete.",
       } } : {}),
-      ...(task.gapExploration ? { gapTask: { lens: task.gapLens ?? "behavior", supportingRecordIDs: task.supportingRecordIDs ?? [], instruction: gapInstructions[task.gapLens ?? "behavior"] },
-        currentDecisions: { format: 1, omittedReviewHistory: [...decisions!.omitted].filter(([id, item]) => !ids.has(id) && ids.has(item.requirementID))
+      ...(task.gapExploration ? { gapTask: { lens: task.gapLens ?? "behavior", supportingRecordIDs: task.supportingRecordIDs ?? [], instruction: gapInstructions[task.gapLens ?? "behavior"] } } : {}),
+      ...(decisions ? { currentDecisions: { format: 1, omittedReviewHistory: [...decisions.omitted].filter(([id, item]) => !ids.has(id) && ids.has(item.requirementID))
           .map(([sourceID, item]) => ({ sourceID, ...item })),
           explanation: "Current-decision projection: exact current requirements and scenarios remain authoritative. Source text objects containing approvedReviewReceipt are structured current approval facts verified against an exact app-generated receipt and its saved accepted proposal. They preserve the original source/proposal IDs, approved wording/scenarios and reason, but intentionally omit the generated receipt's embedded OLD snapshots. Cite these sources only for the displayed approved decision, never unseen history. Only canonical plain review snapshots or verified app-generated receipts with an explicit unambiguous supersession chain to a matching current human decision can be omitted. Older human addenda and unknown review prose remain exact, including superseded notes; their presence does not prove they are still current or resolved. Preserve them and ask when intent conflicts. Omitted historical IDs remain stored, but their text was not reviewed here and cannot be cited, refined or treated as current constraints. Requirement source links are unchanged; current approval does not verify implementation. This is not a summary of human decisions." } } : {}),
       ...(task.isolatedTask ? { submissionScope: {
@@ -456,6 +467,15 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
       result.manifest.budget = 96000;
       result.manifest.selectionReason += " Expanded mandatory-evidence budget from 48,000 to 96,000 characters after lossless compaction; optional detail not added.";
       if (result.manifest.characters <= result.manifest.budget) return result;
+      // Project-wide responses legitimately retain many cross-cutting decisions.
+      // This is a bounded application allowance, not a model-context guarantee.
+      // Only saved single-submission work can use it, after every existing pass;
+      // do not refill navigation or optional evidence with the recovered space.
+      if (task.submissionFollowup && task.isolatedTask && !task.gapExploration) {
+        result.manifest.budget = 144000;
+        result.manifest.selectionReason += " Expanded single saved-response mandatory-evidence allowance to 144,000 characters after the 96,000-character fallback was exhausted; no optional records added.";
+        if (result.manifest.characters <= result.manifest.budget) return result;
+      }
     }
     throw new ContextBudgetError(result.manifest);
   }

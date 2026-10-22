@@ -13,6 +13,8 @@ import type { DeliveryUnit, ExecutionConfig } from "../core/execution.js";
 import Database from "better-sqlite3";
 import { legacyAssessmentSkillDocument } from "../storage/fixtures/assessment-skill-v1.js";
 import { planningConfigFingerprint, planningCurrent, planningEdgeID, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanningOutput } from "../core/implementation-planning.js";
+import { implementationPlanningContext } from "./planning-context.js";
+import { checkExecutionContext } from "../core/execution-context.js";
 
 function seed(store: ProjectStore, count = 2) {
   let p = store.create("Implementation fixture", "Save and reopen work", { providerID: "openai", modelID: "fixture" });
@@ -27,6 +29,78 @@ const config = (strategy: ExecutionConfig["strategy"] = "requirement-pr") => exe
 function planningOutput(ids: string[]): ImplementationPlanningOutput {
   return { summary: "Build usable slices", packages: ids.map((requirementID) => ({ requirementID, title: `Package ${requirementID}`, reason: "Unlocks the next workflow", steps: ["Implement the approved behavior"], verification: ["Verify persistence after restart"], prerequisites: [], questions: [] })) };
 }
+
+test("planning bounds optional exact candidates, retains mandatory evidence, and exposes unreviewed dependencies", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1), state = emptyExecution(); state.config = config();
+    p.epics.push({ id: "feature", title: "Feature", purpose: "Bounded planning", dependencies: [], archived: false });
+    const target = p.requirements[0]!; target.epicID = "feature";
+    for (let i = 0; i < 180; i++) p.requirements.push({ ...structuredClone(target), id: `candidate-${i}`, statement: `Capability ${i} ${"exact candidate behavior ".repeat(80)}` });
+    const before = JSON.stringify(p);
+    const result = implementationPlanningContext(p, state, target.id);
+    assert.doesNotThrow(() => checkExecutionContext(result.prompt, false, target.id, 0, true));
+    assert.match(result.reviewQuestion!, /Dependency coverage is incomplete/);
+    const data = JSON.parse(result.prompt.slice(result.prompt.indexOf("\n") + 1));
+    assert.deepEqual(data.target.requirement, target);
+    assert.ok(data.target.evidence.some((s: { text: string }) => s.text === p.sources[0]!.text));
+    assert.ok(data.behaviorIndex.length > 0 && data.behaviorIndex.length < 180);
+    for (const candidate of data.behaviorIndex) {
+      const original = p.requirements.find((r) => r.id === candidate.id)!;
+      assert.equal(candidate.statement, original.statement); assert.deepEqual(candidate.acceptance, original.acceptance);
+      assert.ok(result.evidenceIDs.includes(candidate.id));
+    }
+    assert.equal(result.evidenceIDs.includes("candidate-179"), false, "Unreviewed behavior cannot be cited");
+    assert.deepEqual(implementationPlanningContext(p, state, target.id), result, "Selection is deterministic");
+    assert.equal(JSON.stringify(p), before, "No original evidence is rewritten");
+    p.requirements = [target];
+    assert.equal(implementationPlanningContext(p, state, target.id).reviewQuestion, undefined);
+    target.statement = "mandatory human behavior ".repeat(3000);
+    assert.throws(() => implementationPlanningContext(p, state, target.id), /Mandatory planning context alone.*Section characters/);
+  } finally { store.close(); }
+});
+
+test("bounded planning persists app-owned review questions and rejects dependencies on omitted behavior", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const root = await mkdtemp(resolve(".reqwizit-state/tests/bounded-planning-"));
+  const store = new ProjectStore(":memory:");
+  let calls = 0;
+  const adapter: ExecutionAdapter = { async perform(request) {
+    calls++;
+    const data = JSON.parse(request.prompt.slice(request.prompt.indexOf("\n") + 1));
+    assert.ok(data.dependencyScope.omittedRequirements > 0);
+    const output = planningOutput([request.requirementID!]);
+    if (calls > 1) {
+      // An otherwise valid citation to the target must not authorize an edge to
+      // unseen behavior merely because its ID exists in the project.
+      const omitted = p.requirements.find((r) => r.id !== request.requirementID && !data.evidenceIDs.includes(r.id))!;
+      output.packages[0]!.prerequisites.push({ requirementID: omitted.id, kind: "hard", reason: "Invented dependency", evidenceIDs: [request.requirementID!], confidence: "high" });
+    }
+    return JSON.stringify(output);
+  } };
+  const fakeGit = () => ({ async localPreflight() {}, async git() { return root; } }) as unknown as GitDelivery;
+  const service = new ImplementationService(store, adapter, fakeGit);
+  const p = seed(store, 1);
+  try {
+    store.connectWorkspace(p.id, p.revision, root);
+    p.epics.push({ id: "feature", title: "Feature", purpose: "Bounded planning", dependencies: [], archived: false });
+    p.requirements[0]!.epicID = "feature";
+    for (let i = 0; i < 45; i++) p.requirements.push({ ...structuredClone(p.requirements[0]!), id: `candidate-${i}`, statement: `Capability ${i} ${"exact behavior ".repeat(150)}` });
+    const get = store.get.bind(store); store.get = (id) => id === p.id ? structuredClone(p) : get(id);
+    service.configure(p.id, p.revision, config());
+    service.start(p.id, p.revision, "plan"); await until(service, p.id);
+    const saved = store.execution(p.id);
+    assert.equal(calls, 2);
+    assert.equal(saved.planning!.output!.packages.length, 1);
+    assert.match(saved.planning!.output!.packages[0]!.questions[0]!, /Dependency coverage is incomplete/);
+    assert.match(saved.planning!.diagnostic!, /behavior omitted/);
+    const completed = structuredClone(saved.planning!.output!.packages[0]);
+    service.start(p.id, p.revision, "plan"); await until(service, p.id);
+    assert.equal(calls, 3, "Retry skips the compatible completed bounded package");
+    assert.deepEqual(store.execution(p.id).planning!.output!.packages[0], completed);
+    assert.deepEqual(store.execution(p.id).config!.dependencies, {});
+  } finally { await service.close(); store.close(); await rm(root, { recursive: true, force: true }); }
+});
 
 test("planning validates complete coverage and evidence, separates preferred order, and rejects hard cycles atomically", () => {
   const store = new ProjectStore(":memory:");

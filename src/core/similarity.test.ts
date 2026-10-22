@@ -158,7 +158,7 @@ test("review compares existing records across features/statuses without model ca
   const before = structuredClone(p);
   assert.deepEqual(relatedRequirements(p, "old").map((r) => r.id), ["opposite"]);
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "inbox", sending: [], disabled: false,
-    submit: async () => true, refine: () => {}, reviewRefinement: async () => true }));
+    focusItemID: "requirement:old", submit: async () => true, refine: () => {}, reviewRefinement: async () => true }));
   assert.match(html, /Possible overlaps or conflicts/);
   assert.match(html, /Guests cannot access private reports/);
   assert.match(html, /Rejected/);

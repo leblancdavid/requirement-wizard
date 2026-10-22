@@ -285,12 +285,11 @@ test("queued answers run one at a time in isolated contexts, including manually 
   } finally { await queue.close(); store.close(); }
 });
 
-test("twelve saved reviews use twelve independent contexts instead of carrying their feature's entire history", async () => {
+test("twelve saved plain approvals finish locally despite oversized feature history", async () => {
   const store = new ProjectStore(":memory:");
   let queue: DiscoveryQueue | undefined;
   try {
     let project = seed(store);
-    const historyAnswerIDs = new Set<string>();
     for (let group = 0; group < 3; group++) {
       const job = store.beginJob(project.id, project.revision).job; store.claimJob(job.id, Date.now() + 60000);
       store.finishJob(job.id, { ...empty(),
@@ -303,7 +302,6 @@ test("twelve saved reviews use twelve independent contexts instead of carrying t
       for (const [j, q] of project.questions.slice(-4).entries()) {
         const i = group * 4 + j;
         project = store.answer(project.id, project.revision, q.id, { kind: "answer", text: `Exact historical answer ${i}\r\n${String.fromCharCode(65 + i).repeat(11000)}` });
-        historyAnswerIDs.add(project.questions.find((item) => item.id === q.id)!.sourceID!);
       }
     }
     const submitted = project.requirements.map((r) => store.enqueue(project.id, { id: crypto.randomUUID(), auto: false, research: false,
@@ -311,39 +309,13 @@ test("twelve saved reviews use twelve independent contexts instead of carrying t
     store.applyQueued(project.id);
     project = store.get(project.id);
     assert.throws(() => planContext(project, { recordIDs: [project.requirements[0]!.id], focusEpicID: "inbox", expandMandatory: true }), ContextBudgetError);
-    let calls = 0, pairChecks = 0, lastRevision = project.revision - 1;
-    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
-      const manifest = options.context.manifest;
-      if (manifest.refinementPair) {
-        pairChecks++;
-        assert.equal(manifest.isolatedTask, true);
-        const decoded = decodeContext<{ requirements: Project["requirements"]; sources: Project["sources"] }>(options.context.data);
-        assert.deepEqual(new Set(decoded.requirements.map((r) => r.id)), new Set(manifest.refinementPair.requirementIDs));
-        assert.ok(!decoded.sources.some((s) => historyAnswerIDs.has(s.id)), "pair checks must not pull unrelated feature answers into context");
-        return { ...empty(), resolutionCheck: { format: 1, outcome: "distinct", explanation: "Each effect has its own behavior/scenario" } };
-      }
-      assert.deepEqual(manifest.submissionIDs, [submitted[calls]!.id]);
-      calls++;
-      assert.equal(manifest.isolatedTask, true); assert.equal(manifest.partial, true);
-      assert.ok(manifest.characters < 48000); assert.ok(snapshot.revision > lastRevision); lastRevision = snapshot.revision;
-      const item = store.submissions(project.id).find((s) => s.id === manifest.submissionIDs![0])!;
-      assert.equal(item.input.type, "review");
-      if (item.input.type !== "review") throw new Error("Expected review");
-      const requirementID = item.input.requirementID;
-      const decoded = decodeContext<{ requirements: Project["requirements"]; sources: Project["sources"]; submissionScope: unknown }>(options.context.data);
-      assert.ok(decoded.submissionScope);
-      assert.deepEqual(decoded.requirements, snapshot.requirements.filter((r) => r.id === requirementID));
-      assert.ok(decoded.sources.some((s) => s.id === item.appliedSourceID));
-      assert.ok(!decoded.sources.some((s) => historyAnswerIDs.has(s.id)));
-      assert.equal(store.submissions(project.id).filter((s) => s.status === "processing").length, 1);
-      return { ...empty(), reviewResponses: [{ sourceID: item.appliedSourceID!, text: "Approval recorded; no addendum to apply." }] };
-    } }));
+    const jobs = store.jobs(project.id);
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Plain approvals must not prepare model context or call AI"); } }));
     queue.resume(project.id); await idle(queue, project.id);
-    assert.equal(calls, 12);
-    assert.ok(store.submissions(project.id).every((s) => s.status === "completed" && !!s.response));
-    assert.equal(store.jobs(project.id).filter((j) => j.context?.isolatedTask && !j.context.refinementPair).length, 12);
-    assert.ok(pairChecks > 0 && pairChecks <= 36, "each response adds at most three focused pair checks");
-    assert.deepEqual(store.get(project.id).sources, project.sources);
+    assert.equal(submitted.length, 12);
+    assert.ok(store.submissions(project.id).every((s) => s.status === "completed" && !s.jobID && !s.response));
+    assert.deepEqual(store.jobs(project.id), jobs);
+    assert.deepEqual(store.get(project.id), project, "Local completion preserves already-applied decisions and evidence");
   } finally { await queue?.close(); store.close(); }
 });
 
@@ -882,7 +854,7 @@ test("queue preflight isolates oversized responses, persists blockers, and resum
         options: [{ label: "A", consequence: "First" }, { label: "B", consequence: "Second" }] }] });
     project = store.get(project.id);
     const largeQuestion = project.questions[0]!, smallQuestion = project.questions.at(-1)!;
-    for (let i = 0; i < 8; i++) project = store.note(project.id, project.revision, String.fromCharCode(97 + i).repeat(12000), "inbox");
+    for (let i = 0; i < 13; i++) project = store.note(project.id, project.revision, String.fromCharCode(97 + i).repeat(12000), "inbox");
     const notes = project.sources.filter((s) => s.kind === "note");
     const large = store.enqueue(project.id, { id: crypto.randomUUID(), auto: false, research: false,
       input: { type: "answer", questionID: largeQuestion.id, questionText: largeQuestion.text, sourceID: largeQuestion.sourceID,
@@ -906,7 +878,7 @@ test("queue preflight isolates oversized responses, persists blockers, and resum
     assert.equal(blocked.status, "needs-attention");
     assert.ok(blocked.applied && blocked.contextBlock);
     assert.ok(blocked.contextBlock.characters > blocked.contextBlock.budget);
-    assert.equal(blocked.contextBlock.budget, 96000);
+    assert.equal(blocked.contextBlock.budget, 144000);
     assert.ok(blocked.contextBlock.sectionCharacters!.sources! > 0);
     assert.equal(blocked.jobID, undefined);
     assert.match(blocked.diagnostic!, /before a batch was started/);
@@ -962,6 +934,116 @@ test("gap file retrieval does not fan out to requirements sharing its documentar
     const followUp = planContext(project, { ...options, gapExploration: false });
     assert.ok(followUp.manifest.includedIDs.includes("file-requirement-1"), "submission follow-up keeps its existing source-trigger policy");
     assert.deepEqual(project, before);
+  } finally { store.close(); }
+});
+
+test("legacy context-blocked response reopens unchanged and retries once with the mandatory-only saved-response allowance", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reqwizit-followup-budget-"));
+  const path = join(dir, "projects.sqlite");
+  let store = new ProjectStore(path);
+  let queue: DiscoveryQueue | undefined;
+  try {
+    let project = seed(store);
+    for (let i = 0; i < 9; i++) project = store.note(project.id, project.revision, String.fromCharCode(65 + i).repeat(12000), "project");
+    const question = project.questions[0]!;
+    const submission = store.enqueue(project.id, { id: crypto.randomUUID(), auto: false, research: false,
+      input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: question.sourceID,
+        answer: { kind: "answer", text: "  Saved cross-cutting response\r\n" } } });
+    store.applyQueued(project.id);
+    project = store.get(project.id);
+    const saved = store.submissions(project.id).find((s) => s.id === submission.id)!;
+    const task = { recordIDs: [saved.appliedSourceID!, question.id], requiredEpicIDs: [question.epicID], isolatedTask: true, expandMandatory: true };
+    assert.throws(() => planContext(project, task), (e: unknown) => {
+      assert.ok(e instanceof ContextBudgetError);
+      saved.status = "needs-attention";
+      const { revision, characters, budget, epicIDs, sectionCharacters } = e.manifest;
+      saved.contextBlock = { revision, characters, budget, epicIDs, sectionCharacters };
+      saved.diagnostic = e.message;
+      assert.equal(budget, 96000);
+      return true;
+    });
+    store.saveSubmission(saved);
+    for (const variant of [{ advisory: true }, { gapExploration: true }, { isolatedTask: false }, { budget: 48001 }]) {
+      assert.throws(() => planContext(project, { ...task, submissionFollowup: true, ...variant }), ContextBudgetError);
+    }
+    const expected = planContext(project, { ...task, submissionFollowup: true });
+    assert.equal(expected.manifest.budget, 144000);
+    assert.ok(expected.manifest.characters > 96000 && expected.manifest.characters <= 144000);
+    assert.equal(expected.manifest.characters, JSON.stringify(expected.data).length);
+    store.close();
+    store = new ProjectStore(path);
+    assert.deepEqual(store.get(project.id), project);
+    assert.deepEqual(store.submissions(project.id).find((s) => s.id === saved.id), saved);
+    let calls = 0;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, options) {
+      calls++;
+      assert.equal(options.context.manifest.budget, 144000);
+      assert.equal(options.context.manifest.characters, expected.manifest.characters);
+      assert.deepEqual(options.context.manifest.includedIDs, expected.manifest.includedIDs);
+      const data = decodeContext<{ sources: Project["sources"]; questions: Project["questions"]; relatedRecordHints?: unknown }>(options.context.data);
+      assert.equal(data.relatedRecordHints, undefined, "larger allowance cannot refill optional hints");
+      for (const source of project.sources.filter((s) => s.kind === "note" || s.id === saved.appliedSourceID)) {
+        assert.deepEqual(data.sources.find((s) => s.id === source.id), source);
+      }
+      const detailed = data.questions.find((q) => q.id === question.id)!;
+      assert.equal(detailed.text, question.text);
+      assert.deepEqual(detailed.options, question.options);
+      assert.deepEqual(snapshot, project);
+      return empty();
+    } }));
+    assert.equal(calls, 0, "reopen does not replay model work");
+    queue.resume(project.id); await idle(queue, project.id);
+    assert.equal(calls, 1);
+    const completed = store.submissions(project.id).find((s) => s.id === saved.id)!;
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.contextBlock, undefined);
+    assert.equal(completed.appliedSourceID, saved.appliedSourceID);
+    assert.deepEqual(store.get(project.id).sources, project.sources, "retry never reapplies the human input");
+    await queue.close(); queue = undefined;
+    store.close(); store = new ProjectStore(path);
+    assert.equal(store.submissions(project.id).find((s) => s.id === saved.id)!.status, "completed");
+  } finally { await queue?.close(); store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("isolated follow-up projects verified background approvals but never target history or human addenda", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    const requirementID = "shared-decision";
+    const snapshot = (statement: string, addendum = "") => `Requirement ${requirementID}: ${statement}\nAcceptance scenarios: ["Exact scenario"]\nHuman decision: accepted\nAddendum: ${addendum}`;
+    const old = { id: "old-approval", epicID: "project", kind: "confirmation" as const, requirementID,
+      text: snapshot("Historical wording " + "x".repeat(120000)) };
+    const current = { id: "current-approval", epicID: "project", kind: "confirmation" as const, requirementID,
+      supersedes: old.id, text: snapshot("Current shared behavior") };
+    project.sources.push(old, current);
+    project.requirements.push({ id: requirementID, epicID: "project", status: "accepted", statement: "Current shared behavior",
+      acceptance: ["Exact scenario"], rationale: "Shared guardrail", reviewNote: "", sourceIDs: [old.id, current.id] });
+    const task = { focusEpicID: "inbox", recordIDs: [project.questions[0]!.id, project.questions[0]!.sourceID!], isolatedTask: true, expandMandatory: true };
+    const before = structuredClone(project);
+    const pack = planContext(project, task);
+    assert.ok(pack.manifest.characters < 48000);
+    assert.ok(pack.manifest.omittedIDs.includes(old.id));
+    assert.deepEqual(pack.manifest.decisionProjection?.omittedReviewSourceIDs, [old.id]);
+    const data = decodeContext<{ sources: Project["sources"]; requirements: Project["requirements"]; currentDecisions: unknown }>(pack.data);
+    assert.ok(data.currentDecisions);
+    assert.deepEqual(data.sources.find((s) => s.id === current.id), current);
+    assert.deepEqual(data.requirements.find((r) => r.id === requirementID), project.requirements[0]);
+    assert.ok(!JSON.stringify(pack.data).includes(old.text));
+    assert.deepEqual(planContext(project, task), pack, "repeated planning of saved evidence is deterministic");
+    for (const recordID of [requirementID, old.id, current.id]) {
+      assert.throws(() => planContext(project, { ...task, recordIDs: [recordID] }), ContextBudgetError, "target approval history stays exact");
+      assert.throws(() => planContext(project, { ...task, supportingRecordIDs: [recordID] }), ContextBudgetError, "explicit supporting evidence stays exact");
+    }
+    for (const variant of ["addendum", "unknown", "branch", "mismatch"] as const) {
+      const candidate = structuredClone(project);
+      const previous = candidate.sources.find((s) => s.id === old.id)!;
+      if (variant === "addendum") previous.text = snapshot("Historical wording " + "x".repeat(120000), "Never discard this human constraint");
+      if (variant === "unknown") previous.text = "Unknown review prose " + "y".repeat(120000);
+      if (variant === "branch") candidate.sources.push({ ...current, id: "branched-approval" });
+      if (variant === "mismatch") candidate.requirements[0]!.statement = "Unapproved different wording";
+      assert.throws(() => planContext(candidate, task), ContextBudgetError, variant);
+    }
+    assert.deepEqual(project, before, "stored history, source links and revision are never rewritten");
   } finally { store.close(); }
 });
 

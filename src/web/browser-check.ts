@@ -209,6 +209,11 @@ try {
   browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, hasTouch: true });
   const page = await context.newPage();
+  const expandReviewEpics = async () => {
+    const review = page.getByRole("region", { name: "Requirement review", exact: true });
+    await expect(review.locator(".epic-requirements")).toBeVisible();
+    for (const summary of await review.locator(".feature-group:not([open]) > summary").all()) await summary.click();
+  };
   diagnose = browserDiagnostics(page);
   await page.addInitScript(() => {
     if (localStorage.getItem("reqwizit-recent-workspaces") === null) localStorage.setItem("reqwizit-recent-workspaces", "invalid older preference");
@@ -353,13 +358,36 @@ try {
   await appearance.getByRole("button", { name: "Reset appearance", exact: true }).click();
   const connectionPanel = page.getByRole("region", { name: "AI connections", exact: true });
   await expect(connectionPanel.getByRole("button", { name: "Continue with ChatGPT" })).toBeEnabled();
+  const headerSizes = new Map<number, { header: unknown; title: unknown; slot: unknown }>();
+  const headerGeometry = async () => {
+    const box = (selector: string) => page.locator(selector).evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height };
+    });
+    return { header: await box(".topbar"), title: await box(".app-header-title"), slot: await box(".header-activity") };
+  };
+  for (const width of [390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    headerSizes.set(width, await headerGeometry());
+  }
   const firstPopup = page.waitForEvent("popup");
   await connectionPanel.getByRole("button", { name: "Continue with ChatGPT" }).click();
   const cancelledPopup = await firstPopup;
   await expect(connectionPanel.getByText("Waiting for ChatGPT sign-in…", { exact: true })).toBeVisible();
-  await expect(page.locator(".header-activity").getByRole("progressbar")).toBeVisible();
+  await expect(page.locator(".header-activity .activity-spinner")).toBeVisible();
+  await expect(page.locator(".header-activity")).toHaveAttribute("title", /sign-in/i);
+  await expect(page.locator(".header-activity").getByRole("progressbar")).toHaveCount(0);
+  for (const width of [390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    assert.deepEqual(await headerGeometry(), headerSizes.get(width), `Header stays fixed during activity at ${width}px`);
+  }
   await expect(connectionPanel.getByRole("progressbar", { name: "Account authorization progress" })).toBeVisible();
   await connectionPanel.getByRole("button", { name: "Cancel sign-in" }).click();
+  await expect(page.locator(".header-activity .activity-spinner")).toHaveCount(0);
+  for (const width of [390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    assert.deepEqual(await headerGeometry(), headerSizes.get(width), `Header stays fixed after activity at ${width}px`);
+  }
   await cancelledPopup.close();
   const secondPopup = page.waitForEvent("popup");
   await connectionPanel.getByRole("button", { name: "Continue with ChatGPT" }).click();
@@ -638,6 +666,7 @@ try {
   await expect.poll(() => store.submissions(safetyProjectID).filter((s) => s.input.type === "answer" && s.status === "completed").length).toBe(1);
   await page.getByRole("tab", { name: /^Specification/ }).click();
   const recoveryReview = page.getByRole("region", { name: "Requirement review", exact: true });
+  await expandReviewEpics();
   await expect(recoveryReview.getByRole("region", { name: "Item processing error" })).toContainText("Something needs attention");
   await expect(recoveryReview.getByLabel("Anything to add? (optional)")).toHaveValue("Saving jobs is essential.");
   await recoveryReview.getByRole("button", { name: /^Submitted/ }).click();
@@ -1124,6 +1153,7 @@ try {
    await page.getByRole("tab", { name: /Specification/ }).click();
    await expect(page.getByRole("tab", { name: /Specification/ })).toContainText("2");
    const reviewPanel = page.getByRole("region", { name: "Requirement review", exact: true });
+   await expandReviewEpics();
    const addendum = reviewPanel.getByLabel("Anything to add? (optional)");
     await addendum.pressSequentially("Also export jobs");
     await page.getByRole("tab", { name: "Design" }).click();
@@ -1142,10 +1172,12 @@ try {
     await reviewPanel.getByRole("button", { name: "Reject", exact: true }).click({ force: true });
     assert.equal(store.submissions(reviewProject.id).length, 1, "A paused rejection cannot create a confusing failed attempt");
    await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
+   await expandReviewEpics();
    await expect(reviewPanel).toContainText("Also export jobs");
    await page.reload();
    await page.getByRole("tab", { name: /Specification/ }).click();
    await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
+   await expandReviewEpics();
    await expect(reviewPanel).toContainText("Also export jobs");
     reviewReleases.shift()!();
     await expect.poll(() => store.submissions(reviewProject.id)[0]!.status).toBe("completed");
@@ -1165,16 +1197,19 @@ try {
    await expect(reviewPanel).toContainText("Export jobs as CSV");
    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Review must fit mobile width");
     await page.screenshot({ path: ".reqwizit-state/browser-review.png", fullPage: true });
-    // Oversized follow-up must preserve an approval and show a durable preflight
+    // Oversized follow-up must preserve an approval with an addendum (plain
+    // approvals complete locally) and show a durable preflight
     // blocker instead of starting another predictably failing discovery batch.
     reviewProject = store.get(reviewProject.id);
-    for (let i = 0; i < 8; i++) reviewProject = store.note(reviewProject.id, reviewProject.revision, String.fromCharCode(97 + i).repeat(12000), "project");
+    for (let i = 0; i < 13; i++) reviewProject = store.note(reviewProject.id, reviewProject.revision, String.fromCharCode(97 + i).repeat(12000), "project");
     const reviewJobs = store.jobs(reviewProject.id).length;
     await page.reload();
     await page.getByRole("tab", { name: /Specification/ }).click();
     await reviewPanel.getByRole("button", { name: /Needs your decision/ }).click();
-    await expect(reviewPanel).toContainText("Export jobs as CSV");
-    await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
+    await expandReviewEpics();
+     await expect(reviewPanel).toContainText("Export jobs as CSV");
+     await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).fill("Keep the CSV export available while offline.");
+     await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
     await expect.poll(() => store.submissions(reviewProject.id).some((s) => s.contextBlock && s.status === "needs-attention")).toBe(true);
     assert.equal(store.get(reviewProject.id).requirements.find((r) => r.statement === "Export jobs as CSV")!.status, "accepted");
     assert.equal(store.jobs(reviewProject.id).length, reviewJobs);
@@ -1200,7 +1235,8 @@ try {
       await page.reload();
       await (await workspaceMenu(page)).getByRole("button", { name: /Overlap review fixture/ }).click();
       await page.getByRole("tab", { name: /Specification/ }).click();
-      const overlapPanel = page.getByRole("region", { name: "Requirement review", exact: true });
+       const overlapPanel = page.getByRole("region", { name: "Requirement review", exact: true });
+       await expandReviewEpics();
       const overlapDisclosure = overlapPanel.getByText("Possible overlaps or conflicts (1)", { exact: true });
       await overlapDisclosure.click();
       await expect(overlapPanel.getByRole("heading", { name: "Guests cannot access private reports", exact: true })).toBeVisible();
@@ -1208,8 +1244,9 @@ try {
       assert.deepEqual(store.get(overlapProject.id), overlapBefore, "comparison must not change decisions or evidence");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Overlap comparison must fit mobile width");
       await page.reload();
-      await page.getByRole("tab", { name: /Specification/ }).click();
-      await expect(overlapPanel.getByText("Possible overlaps or conflicts (1)", { exact: true })).toBeVisible();
+       await page.getByRole("tab", { name: /Specification/ }).click();
+       await expandReviewEpics();
+       await expect(overlapPanel.getByText("Possible overlaps or conflicts (1)", { exact: true })).toBeVisible();
       assert.deepEqual(store.get(overlapProject.id), overlapBefore);
        for (const kind of ["answer", "review"] as const) {
          let automatic = store.create(`Automatic ${kind} fixture`, "Keep reviewed report access rules", { providerID: "openai", modelID: "fixture" });
@@ -1841,21 +1878,23 @@ try {
             observer.observe({ type: "longtask" });
             (window as typeof window & { refreshPerformance: { durations: number[]; observer: PerformanceObserver } }).refreshPerformance = { durations, observer };
           });
-         const switchStart = await page.evaluate(() => performance.now());
-         await page.getByRole("tab", { name: /Implement/ }).click();
-          await expect(listPanel.locator(".feature-group")).toHaveCount(1);
+          const switchStart = await page.evaluate(() => performance.now());
+          await page.getByRole("tab", { name: /Implement/ }).click();
+           await expect(listPanel.locator(".feature-group")).toHaveCount(10);
          await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
          assert.ok(await listPanel.locator("*").count() < 500, "Collapsed 500-requirement workspace must stay bounded");
           const switchMilliseconds = await page.evaluate(() => performance.now()) - switchStart;
-          const implementationPages = listPanel.getByRole("navigation", { name: "Implementation pages", exact: true });
-          await expect(implementationPages).toContainText("1–25 of 500");
-          await implementationPages.getByRole("button", { name: "Next", exact: true }).click();
-          await expect(implementationPages).toContainText("26–50 of 500");
-          await listPanel.locator(".feature-group > summary").first().click();
+           const implementationPages = listPanel.getByRole("navigation", { name: "Implementation epics pages", exact: true });
+           await expect(implementationPages).toContainText("1–10 of 10");
+           await listPanel.locator(".feature-group > summary").first().click();
+           const epicRequirementPages = listPanel.getByRole("navigation", { name: "Implementation Large feature 0 requirements pages", exact: true });
+           await expect(epicRequirementPages).toContainText("1–25 of 50");
+           await epicRequirementPages.getByRole("button", { name: "Next", exact: true }).click();
+           await expect(epicRequirementPages).toContainText("26–50 of 50");
           await expect(listPanel.locator(".requirement-detail")).toHaveCount(25);
           await expect(listPanel.locator(".requirement-detail").first()).toContainText("Large requirement 25");
-          await implementationPages.getByRole("button", { name: "Next", exact: true }).click();
-          await expect(listPanel.locator(".feature-group > summary").first()).toContainText("Large feature 1");
+           await listPanel.locator(".feature-group > summary").nth(1).click();
+           await expect(listPanel.getByRole("navigation", { name: "Implementation Large feature 1 requirements pages", exact: true })).toContainText("1–25 of 50");
           await search.fill("Large requirement 499");
           await expect(implementationPages).toContainText("1–1 of 1");
           await expect(listPanel.locator(".feature-group > summary").first()).toContainText("Large feature 9");
@@ -1909,9 +1948,9 @@ try {
             state.observer.disconnect(); return state.durations;
           });
           console.log(`Processing refresh check: first body ${largeRefreshes[0]!.bytes} bytes; progress-only body ${largeRefreshes.at(-1)!.bytes} bytes; observed ${refreshPerformance.length} browser long tasks (max ${Math.round(Math.max(0, ...refreshPerformance))} ms) across large-project interactions. Not a cross-machine benchmark.`);
-         await page.getByRole("tab", { name: /Design/ }).click();
-         await page.getByRole("tab", { name: /Implement/ }).click();
-          await expect(listPanel.locator(".feature-group")).toHaveCount(1);
+          await page.getByRole("tab", { name: /Design/ }).click();
+          await page.getByRole("tab", { name: /Implement/ }).click();
+           await expect(listPanel.locator(".feature-group")).toHaveCount(10);
          await expect(listPanel.locator(".requirement-detail")).toHaveCount(0);
           console.log(`Large-project check: 500 requirements, ${Math.round(switchMilliseconds)} ms Playwright-observed initial tab switch; collapsed DOM below 500 elements.`);
           await page.getByRole("tab", { name: "Project map", exact: true }).click();
@@ -1948,14 +1987,17 @@ try {
             largeProject.revision++;
             await page.reload();
             await page.getByRole("tab", { name: /Specification/ }).click();
-            const reviewPages = reviewPanel.getByRole("navigation", { name: "Review pages", exact: true });
+             await expect(reviewPanel.locator(".review-card")).toHaveCount(0);
+             await reviewPanel.locator(".feature-group > summary").first().click();
+             const reviewPages = reviewPanel.getByRole("navigation", { name: "Specification Large feature 0 requirements pages", exact: true });
              await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
              const readinessFilters = reviewPanel.locator(".review-readiness");
              await expect(readinessFilters.getByRole("button", { name: /^Ready to review/ })).toContainText("500");
              await readinessFilters.getByRole("button", { name: /^Needs a decision/ }).click();
              await expect(reviewPanel.locator(".review-card")).toHaveCount(0);
              await expect(reviewPanel.getByText("No requirements match this readiness filter.", { exact: true })).toBeVisible();
-             await readinessFilters.getByRole("button", { name: /^Ready to review/ }).click();
+              await readinessFilters.getByRole("button", { name: /^Ready to review/ }).click();
+              await reviewPanel.locator(".feature-group > summary").first().click();
              await expect(reviewPanel.locator(".review-card")).toHaveCount(25);
              await readinessFilters.getByRole("button", { name: /^All / }).click();
              await reviewPanel.getByRole("textbox", { name: /Anything to add/ }).fill("Keep this review draft");
@@ -1980,9 +2022,8 @@ try {
               await page.unroute(updatedSubmitRoute);
               await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep this review draft while stale");
             await reviewPages.getByRole("button", { name: "Next", exact: true }).click();
-            await expect(reviewPages).toContainText("26–50 of 500");
+             await expect(reviewPages).toContainText("26–50 of 50");
              await reviewPages.getByRole("button", { name: "Previous", exact: true }).click();
-             await reviewPanel.locator('.review-card-heading[aria-expanded="false"]').filter({ hasText: "Updated large requirement 0" }).click();
               await expect(reviewPanel.getByRole("textbox", { name: /Anything to add/ })).toHaveValue("Keep this review draft while stale");
             await reviewPages.getByRole("combobox").selectOption("10");
             await expect(reviewPanel.locator(".review-card")).toHaveCount(10);

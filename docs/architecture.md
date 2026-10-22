@@ -63,6 +63,12 @@ implemented under `src/`. See [decisions.md](decisions.md),
   Browser Review and Project map pause unsafe decision buttons before submission,
   retaining readable records/notes. This is not per-record concurrent publication:
   active discovery snapshots still exclude decisions project-wide.
+- `src/service/queue.ts`: plain approvals with no substantive note complete locally
+  after the existing transactional review checks, without discovery/context preparation
+  or model inference. The existing Approve UI is unchanged. Paused AI processing does
+  not hold an otherwise safe plain approval; live discovery/execution still does.
+  Review notes, rejections, change requests and existing model-job/overlap recovery
+  retain their follow-up paths. See [migrations](migrations.md#local-completion-of-plain-approvals-2026-10-22).
 - `src/core/input-scope.ts`: conservative server-side answer-scope capture, immutable
   source/receipt checks and target-bounded follow-up validation. Queue tasks include
   scoped requirements as mandatory evidence; generic/legacy input stays feature-wide.
@@ -530,6 +536,22 @@ old snapshots are explicitly not detailed evidence. All human addenda and unknow
 prose remain exact, including superseded notes, without claiming they are still current
 or resolved. Original sources and requirement links are never rewritten. The manifest's
 `decisionProjection` lists omissions, retained notes and projected receipts.
+
+Isolated saved-submission follow-up also uses this projection for background
+guardrails, avoiding obsolete approval snapshots in every retry. The target
+requirements, directly linked evidence and explicitly requested supporting records
+retain their original approval history; their receipts are not projected. Human
+addenda and ambiguous history remain exact, even when they still block the input
+budget. This is a read-only input projection, not a change to stored decisions.
+
+Single saved-submission follow-up has a final 144,000-character mandatory-only
+allowance after exhausting the existing 48,000/96,000 planning and compaction
+passes. Queue preflight and service planning both opt in; advisory help, general
+discovery, gap exploration and ordinary focused checks retain their existing bounds.
+Optional reconciliation candidates cannot use the larger allowance, and related-record
+hints are not added to expanded packages. No optional records or navigation are
+refilled. This is an application input cap, not a guarantee of a provider's model
+context capacity. Evidence above the final cap still blocks before inference.
 
 The durable backlog ledger is existing SQLite jobs, not a second source of project truth.
 `gapExploration.check` records format 1, `gap-evidence-v1`, lens and an input hash. Hashes

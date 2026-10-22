@@ -105,9 +105,33 @@ export class DiscoveryQueue {
   }
   submit(id: string, raw: unknown): Submission {
     const item = this.service.store.enqueue(id, raw);
-    if (this.service.requiresInitialization(id)) this.service.store.pauseQueue(id, true);
+    const initializing = this.service.requiresInitialization(id);
+    if (initializing) this.service.store.pauseQueue(id, true);
+    // Plain approval records a human decision, not a request for interpretation.
+    // Apply only this response, even when automatic AI follow-up is paused.
+    if (!this.closing && !initializing && this.isLocalApproval(item) && item.status === "queued"
+      && !this.isActive(id) && !this.service.store.executionActive(id) && !this.service.store.executionExpired(id)) {
+      const applied = this.service.store.applyQueued(id, [item.id]).find((s) => s.id === item.id);
+      if (applied && this.completeLocalApproval(applied)) return applied;
+      return this.service.store.submissions(id).find((s) => s.id === item.id)!;
+    }
     if (!this.isActive(id) && !this.service.store.queuePaused(id)) this.start(id);
     return item;
+  }
+
+  private isLocalApproval(item: Submission) {
+    return item.input.type === "review" && item.input.action === "accepted" && !item.input.note.trim();
+  }
+
+  private completeLocalApproval(item: Submission): boolean {
+    // Do not replace existing model results, failures or interrupted pair receipts.
+    if (!this.isLocalApproval(item) || !item.applied || item.status !== "saved" || item.conflict
+      || item.jobID || item.overlapFollowup) return false;
+    item.status = "completed";
+    delete item.contextBlock;
+    delete item.diagnostic;
+    this.service.store.saveSubmission(item);
+    return true;
   }
 
   resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number } = {}) {
@@ -323,6 +347,7 @@ export class DiscoveryQueue {
         const submissionIDs = scope ? this.service.store.submissions(id).filter((s) => submissionEpic(before, s) === scope).map((s) => s.id) : undefined;
         const applied = this.service.store.applyQueued(id, submissionIDs);
         const current = this.service.store.get(id);
+        let localApprovals = 0;
         const saved = applied.filter((item) => {
           if (item.overlapFollowup?.state === "pending") return true;
           const input = item.input;
@@ -331,12 +356,20 @@ export class DiscoveryQueue {
             item.status = "needs-attention"; item.conflict = true; item.diagnostic = "A newer review superseded this decision. Its original input is retained; submit against the current requirement.";
             this.service.store.saveSubmission(item); return false;
           }
+          if (this.completeLocalApproval(item)) { localApprovals++; return false; }
           if (input.type !== "answer" || current.questions.some((q) => q.id === input.questionID && q.sourceID === item.appliedSourceID && q.status !== "retired")) return true;
           delete item.contextBlock;
           item.status = "needs-attention"; item.conflict = true;
           item.diagnostic = "This saved response was superseded by a newer answer. The newer answer is authoritative; this submission is retained for reference.";
           this.service.store.saveSubmission(item); return false;
         });
+        if (localApprovals) report(`Saved ${localApprovals} approval${localApprovals === 1 ? "" : "s"} after local safety checks; no AI follow-up needed.`);
+        if (localApprovals && !saved.length && manual?.questionTarget === undefined) {
+          const remaining = this.service.store.submissions(id);
+          if (scope && remaining.some((s) => ["queued", "saved"].includes(s.status) || s.status === "needs-attention" && !s.conflict)
+            || remaining.some((s) => s.status === "needs-attention" && s.contextBlock)) this.service.store.pauseQueue(id, true);
+          break;
+        }
         if (!explicit && !continuing && !saved.some((s) => s.auto)) break;
         if (!explicit && !saved.length) break;
         const pendingFollowup = saved.find((s) => s.overlapFollowup?.state === "pending");
@@ -356,7 +389,8 @@ export class DiscoveryQueue {
           const pair = resolutionTask?.requirementIDs;
           const planned = { focusEpicID,
           ...(pair ? { refinementOnly: true, refinementPair: pair, includeUnapproved: project.requirements.some((r) => pair.includes(r.id) && r.status !== "accepted"), resolutionTriggerSourceIDs: resolutionTask?.triggerSourceIDs } : {}),
-          isolatedTask: items.length === 1,
+           isolatedTask: items.length === 1,
+           submissionFollowup: items.length === 1,
           requiredEpicIDs: [...new Set([...project.requirements.filter((r) => pair?.includes(r.id)).map((r) => r.epicID), ...items.map((item) => {
             const epicID = submissionEpic(project, item);
             if (!epicID) throw new Error("A submitted question is no longer available. Review the retained response.");
@@ -367,7 +401,7 @@ export class DiscoveryQueue {
           if (!pair) for (const candidate of items.flatMap((item) => reconciliationCandidates(project, item, this.service.store.submissions(id)))) {
             if (planned.recordIDs.includes(candidate)) continue;
             const recordIDs = [...planned.recordIDs, candidate];
-            try { planContext(project, { ...planned, recordIDs, expandMandatory: true }); planned.recordIDs = recordIDs; }
+            try { planContext(project, { ...planned, recordIDs, submissionFollowup: false, expandMandatory: true }); planned.recordIDs = recordIDs; }
             catch (error) { if (!(error instanceof ContextBudgetError)) throw error; } // Optional candidates cannot block the original response.
           }
           return planned;

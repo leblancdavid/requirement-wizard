@@ -25,11 +25,11 @@ test("item errors show saved diagnostics and distinguish follow-up retry from de
   assert.match(renderToStaticMarkup(createElement(ItemProcessingNotice, { error: "Request failed; draft retained" })), /Request failed; draft retained/);
 });
 
-test("default Review card contains failed review diagnostic, clarification navigation and retained note", () => {
+test("focused Review card contains failed review diagnostic, clarification navigation and retained note", () => {
   const { project, submission } = fixture();
   project.questions[0]!.status = "pending";
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project, submissions: [submission], epicID: "all", sending: [], disabled: false,
-    submit: async () => { assert.fail("Rendering must not submit"); }, refine: () => {}, reviewRefinement: async () => false, openQuestion: () => {} }));
+    focusItemID: `requirement:${project.requirements[0]!.id}`, submit: async () => { assert.fail("Rendering must not submit"); }, refine: () => {}, reviewRefinement: async () => false, openQuestion: () => {} }));
   assert.match(html, /Item processing error/);
   assert.match(html, /Open blocking clarification in Design/);
   assert.match(html, /Keep my exact note/);
@@ -119,7 +119,7 @@ test("retained change requests recover feedback without presenting it as approva
   assert.match(html, /change request has not been applied/);
   assert.match(html, /Review current requirement with saved feedback/);
   assert.ok(!html.includes("saved decision has not been applied"));
-  const queue = renderToStaticMarkup(createElement(ReviewQueue, { project, submissions: [submission], epicID: "all", sending: [], disabled: false, submit: async () => false, refine: () => {}, reviewRefinement: async () => false }));
+  const queue = renderToStaticMarkup(createElement(ReviewQueue, { project, submissions: [submission], epicID: "all", sending: [], disabled: false, focusItemID: `requirement:${project.requirements[0]!.id}`, submit: async () => false, refine: () => {}, reviewRefinement: async () => false }));
   assert.match(queue, /Request changes/);
   assert.match(queue, /<textarea[^>]*><\/textarea>/, "Change-request feedback must not prefill approval/rejection notes");
 });

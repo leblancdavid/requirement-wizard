@@ -7,7 +7,8 @@ import { relatedRequirements } from "../core/similarity.js";
 import { ActionButton, ActionScope } from "./action-button.js";
 import { refinementIsStale, refinementStaleReason } from "../core/resolution.js";
 import { SubmissionOverlapStatus } from "./submission-overlap.js";
-import { Pagination, PagedList, usePagination } from "./pagination.js";
+import { PagedList } from "./pagination.js";
+import { EpicRequirements, matchesRequirementSearch } from "./epic-requirements.js";
 import { ReviewUpdateNotice } from "./review-update.js";
 import { reviewUpdateFor } from "../core/review-completion.js";
 import { ClarificationLinks, ItemProcessingNotice, RetainedReviewNotice } from "./decision-recovery.js";
@@ -143,7 +144,7 @@ function DuplicateRemoval({ project, submissions, jobs, removeID, keepID, disabl
     : <ActionButton className="secondary" disabled={disabled} onClick={() => setOpen(true)}>Remove as duplicate…</ActionButton>;
 }
 
-export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, renderClarification, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, openIssue, draftStore }: {
+export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, renderClarification, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, focusItemID, openIssue, draftStore }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
   disabled: boolean; disabledReason?: string; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
@@ -153,13 +154,14 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   processBlocking?: (submissionIDs: string[]) => void;
   visible?: boolean;
   itemErrors?: Record<string, string>; resume?: () => void;
-  focusRequirementID?: string; openIssue?: (submissionID: string) => void;
+  focusRequirementID?: string; focusItemID?: string; openIssue?: (submissionID: string) => void;
   draftStore?: React.MutableRefObject<Record<string, ReviewDraft>>;
 }) {
   const [filter, setFilter] = useState<ReviewFilter>(() => reviewItems(project, submissions, "pending").length ? "pending" : "current");
   const filterChosen = useRef(false);
   const [readinessFilter, setReadinessFilter] = useState<ReviewReadiness | "all">("all");
-  const [expanded, setExpanded] = useState<string | null | undefined>(undefined);
+  const [expanded, setExpanded] = useState<string | null | undefined>(focusItemID);
+  const [search, setSearch] = useState("");
   const localDrafts = useRef<Record<string, ReviewDraft>>({});
   const drafts = draftStore ?? localDrafts;
   const [, refreshDrafts] = useState(0);
@@ -194,20 +196,31 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   const focused = project.requirements.find((r) => r.id === focusRequirementID);
   const visible: ReviewItem[] = focusRequirementID ? [...(focused ? [{ id: `requirement:${focused.id}`, kind: "requirement" as const, requirement: focused }] : []), ...project.refinements.filter((p) => p.status === "pending" && (p.requirementID === focusRequirementID || p.resolution?.relatedRequirementID === focusRequirementID)).map((refinement): ReviewItem => ({ id: `refinement:${refinement.id}`, kind: "refinement", refinement }))] : filter === "current" ? current : filter === "pending" ? pending.filter((item) => readinessFilter === "all" || readiness(item) === readinessFilter) : filter === "refinements" ? refinements : filter === "reviewed" ? reviewed : [];
   const history = focusRequirementID ? [] : (filter === "submitted" ? submitted : filter === "reviewed" ? reviews.filter((s) => s.status === "completed" || resolvedAttempts.has(s.id)) : []).slice().reverse();
-  const paging = usePagination([...visible.map((item) => item.id), ...history.map((s) => `submission:${s.id}`)], `${project.id}:${epicID}:${filter}:${readinessFilter}`, expanded);
-  const pageItems = visible.slice(paging.start, paging.end);
-  const pageHistory = history.slice(Math.max(0, paging.start - visible.length), Math.max(0, paging.end - visible.length));
-  const active = expanded === null ? null : pageItems.some((r) => r.id === expanded) ? expanded : focusRequirementID ? pageItems[0]?.id : ["pending", "refinements"].includes(filter) ? (pageItems.find((item) => readiness(item) === "ready") ?? pageItems[0])?.id : null;
-  useEffect(() => { if (expanded === undefined && active) setExpanded(active); }, [active, expanded]);
+  const active = expanded === null ? null : visible.some((r) => r.id === expanded) ? expanded : focusRequirementID ? visible[0]?.id : ["pending", "refinements"].includes(filter) ? (visible.find((item) => readiness(item) === "ready") ?? visible[0])?.id : null;
+  type Entry = { id: string; epicID: string; fields: string[]; item?: ReviewItem; submission?: Submission };
+  const entries: Entry[] = [...visible.map((item): Entry => {
+    const r = item.kind === "requirement" ? item.requirement : item.refinement.original;
+    const p = item.kind === "refinement" ? item.refinement : undefined;
+    return { id: item.id, epicID: p ? project.requirements.find((target) => target.id === p.requirementID)?.epicID ?? r.epicID : r.epicID, fields: [r.id, r.statement, r.rationale, ...r.acceptance, ...(p ? [p.requirementID, p.statement, p.rationale, ...p.acceptance] : [])], item };
+  }), ...history.flatMap((submission): Entry[] => {
+    if (submission.input.type !== "review") return [];
+    const input = submission.input;
+    const r = project.requirements.find((r) => r.id === input.requirementID);
+    return [{ id: `submission:${submission.id}`, epicID: r?.epicID ?? "", fields: [input.requirementID, input.requirementText, input.note, ...(r ? [r.statement, r.rationale, ...r.acceptance] : [])], submission }];
+  })];
+  const groups = [...project.epics, { id: "", title: "Earlier requirements", purpose: "" }].map((epic) => ({
+    id: epic.id, title: epic.title, items: entries.filter((entry) => entry.epicID === epic.id && (focusRequirementID || matchesRequirementSearch(search, [epic.id, epic.title, epic.purpose, ...entry.fields]))),
+  })).filter((group) => group.items.length);
   const related = useMemo(() => relatedRequirements(project, active?.startsWith("requirement:") ? active.slice("requirement:".length) : ""), [project.requirements, active]);
   const list = useRef<HTMLDivElement>(null);
   const focusNext = useRef(false);
   useEffect(() => {
     if (focusNext.current) { list.current?.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')?.focus(); focusNext.current = false; }
-  }, [active, expanded, project.revision, message, paging.page]);
+  }, [active, expanded, project.revision, message]);
   const advance = (id: string) => {
-    const index = visible.findIndex((item) => item.id === id);
-    setExpanded((visible[index + 1] ?? visible.find((item) => item.id !== id))?.id);
+    const matching = groups.flatMap((group) => group.items).flatMap((entry) => entry.item ? [entry.item] : []);
+    const index = matching.findIndex((item) => item.id === id);
+    setExpanded((matching[index + 1] ?? matching.find((item) => item.id !== id))?.id);
     focusNext.current = true;
   };
   const clarifications = (ids: string[]) => {
@@ -215,21 +228,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
     if (!questions.length || !renderClarification) return null;
     return <section className="review-clarifications" aria-label="Decisions needed before approval"><h4>{questions.length} {questions.length === 1 ? "decision" : "decisions"} needed before approval</h4><p>Answer here or in Design. Explicit answers can update the specification automatically; ambiguous choices remain here. Deferring or delegating does not settle this choice.</p>{questions.map((q) => <React.Fragment key={q.id}>{captureAnswerScope(project, q.id) && <p className="save-notice">This answer's queued follow-up is limited to its {captureAnswerScope(project, q.id)!.requirementIDs.length} linked requirements. Use Add information in Design for broader constraints.</p>}{renderClarification(q)}</React.Fragment>)}</section>;
   };
-  return <ActionScope reason={disabledReason}><section aria-label="Requirement review">
-    {disabled && disabledReason && <p className="save-notice" role="status"><strong>Decisions temporarily paused.</strong> {disabledReason} You can keep reading and writing notes. A paused click will not queue a decision; review the result and choose again when available.</p>}
-    {!focusRequirementID && openIssue && <AttentionInbox project={project} submissions={submissions} jobs={jobs} open={openIssue} />}
-    {!focusRequirementID && <><div className="review-toolbar">
-      <p className="view-intro">Your answers maintain the specification. Clear decisions are recorded automatically; unsupported choices, conflicts and existing proposals stay under Needs your decision. Inspect or correct any requirement. Refine requirements checks wording and possible duplicates/conflicts. Specification updates never start coding.</p>
-      <ActionButton className="secondary" disabled={disabled} onClick={() => refine()}>Refine requirements</ActionButton>
-      {saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} disabled={disabled} save={saveDuplicate} />}
-    </div>
-    <div className="filter-row" aria-label="Review filters">{([ ["current", "Current specification", current.length], ["pending", "Needs your decision", pending.length], ["refinements", "Refinements", refinements.length], ["submitted", "Submitted", submitted.length], ["reviewed", "History", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { filterChosen.current = true; setFilter(key); setExpanded(undefined); }}>{label} <span>{count}</span></button>)}</div>
-    {filter === "pending" && <div className="filter-row review-readiness" aria-label="Review readiness"><button aria-pressed={readinessFilter === "all"} onClick={() => { setReadinessFilter("all"); setExpanded(undefined); }}>All <span>{pending.length}</span></button>{(Object.keys(readinessLabels) as ReviewReadiness[]).map((state) => <button key={state} aria-pressed={readinessFilter === state} onClick={() => { setReadinessFilter(state); setExpanded(undefined); }}>{readinessLabels[state]} <span>{pending.filter((item) => readiness(item) === state).length}</span></button>)}</div>}</>}
-    {focusRequirementID && !focused && <p role="status">This requirement is no longer available. Its saved attempts remain in history.</p>}
-    {message && <p className="save-notice" role="status">{message}</p>}
-    {!focusRequirementID && !visible.length && filter !== "submitted" && <div className="empty-card"><h3>{filter === "current" ? "No current specification requirements yet." : filter === "pending" ? pending.length ? "No requirements match this readiness filter." : "No requirements waiting for review." : filter === "refinements" ? "No refinements waiting for review." : "No reviewed requirements yet."}</h3><p>{filter === "pending" && pending.length ? "Choose All to see requirements needing decisions or processing." : filter === "refinements" ? "Use Refine requirements to check existing wording. Earlier decisions remain in History." : "Keep answering in Design. Clear answers update the specification without a second approval."}</p></div>}
-    <Pagination paging={paging} label="Review" onNavigate={() => setExpanded(undefined)} />
-    <div ref={list}>{pageItems.map((item) => {
+  const renderItem = (item: ReviewItem) => {
       if (item.kind === "refinement") {
         const p = item.refinement;
         const target = project.requirements.find((r) => r.id === p.requirementID);
@@ -336,16 +335,15 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
           {changed && <p className="save-notice" role="alert"><strong>Updated since you started reviewing.</strong> This requirement or its supporting information changed. Your note is retained. Check the changes above before choosing a decision below.</p>}
            <div className="button-row">{!(r.status === "accepted" && r.authority) && <ActionButton className="primary" disabled={blocked || decisionPaused || approvalNeedsDecision} reason={decisionPaused ? pauseReason : approvalNeedsDecision ? "Answer the linked clarification here or in Design, process its follow-up, then review this requirement again." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton>}<ActionButton className="secondary" disabled={blocked || decisionPaused} reason={decisionPaused ? pauseReason : "This review is being saved or is already waiting for processing."} onClick={() => void save("rejected")}>Reject</ActionButton>
           {r.status !== "rejected" && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={r.id} disabled={disabled || blocked} save={saveDuplicate} />}
-           </div>
-          {r.status !== "rejected" && <ActionButton className="secondary" disabled={blocked || decisionPaused} reason={pauseReason} onClick={() => setChangeTarget(r.id)}>Request changes</ActionButton>}
+           {r.status !== "rejected" && <ActionButton className="secondary" disabled={blocked || decisionPaused} reason={pauseReason} onClick={() => setChangeTarget(r.id)}>Request changes</ActionButton>}
+            </div>
           {changeTarget === r.id && r.status !== "rejected" && <ChangeRequestForm initialText={draft?.changeNote ?? (latest?.conflict && latest.input.type === "review" && latest.input.action === "changes-requested" ? latest.input.note : "")} disabled={blocked || decisionPaused} reason={pauseReason || "This requirement already has a response being saved or processed."} change={(text) => {
             drafts.current[r.id] = { ...(drafts.current[r.id] ?? reviewDraft(project, r, "")), changeNote: text };
           }} send={(text) => save("changes-requested", text)} close={() => setChangeTarget(undefined)} />}
         </div>}
       </article>;
-    })}</div>
-    {filter === "submitted" && !submitted.length && <p className="empty-card">No reviews awaiting follow-up.</p>}
-    {pageHistory.map((s) => {
+  };
+  const renderSubmission = (s: Submission) => {
       if (s.input.type !== "review") return null;
       const resolved = resolvedAttempts.get(s.id);
       if (resolved) return <article className="requirement-card" key={s.id}><span className="badge superseded">Resolved · history only</span><h3>{s.input.requirementText}</h3><RetainedReviewNotice project={project} submissions={submissions} submission={s} reviewCurrent={() => { if (s.input.type !== "review") return; setFilter("reviewed"); setExpanded(`requirement:${s.input.requirementID}`); }} /><details><summary>Previous attempt &amp; note (saved history)</summary><p>{s.input.action} · not applied</p><p className="source-excerpt">{s.input.note || "No addendum"}</p><p>{s.diagnostic}</p><p>Original attempt: {s.id} · Later saved decision: {resolved.submissionID}</p></details></article>;
@@ -363,7 +361,26 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
         setExpanded(`requirement:${target.id}`);
         setMessage(input.action === "changes-requested" ? "Saved feedback restored without replacing an existing draft. Review the current requirement before sending your change request again." : "Saved note restored without replacing any existing draft. Review the current requirement before approving or rejecting again.");
       }} /><SubmissionOverlapStatus submission={s} /></article>;
-    })}
-    {paging.pages > 1 && <Pagination paging={paging} label="Review bottom" onNavigate={() => setExpanded(undefined)} />}
+  };
+  return <ActionScope reason={disabledReason}><section aria-label="Requirement review">
+    {disabled && disabledReason && <p className="save-notice" role="status"><strong>Decisions temporarily paused.</strong> {disabledReason} You can keep reading and writing notes. A paused click will not queue a decision; review the result and choose again when available.</p>}
+    {!focusRequirementID && openIssue && <AttentionInbox project={project} submissions={submissions} jobs={jobs} open={openIssue} />}
+    {!focusRequirementID && <>
+      <div className="filter-row" aria-label="Review filters">{([ ["current", "Current specification", current.length], ["pending", "Needs your decision", pending.length], ["refinements", "Refinements", refinements.length], ["submitted", "Submitted", submitted.length], ["reviewed", "History", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { filterChosen.current = true; setFilter(key); setExpanded(undefined); }}>{label} <span>{count}</span></button>)}</div>
+      {filter === "pending" && <div className="filter-row review-readiness" aria-label="Review readiness"><button aria-pressed={readinessFilter === "all"} onClick={() => { setReadinessFilter("all"); setExpanded(undefined); }}>All <span>{pending.length}</span></button>{(Object.keys(readinessLabels) as ReviewReadiness[]).map((state) => <button key={state} aria-pressed={readinessFilter === state} onClick={() => { setReadinessFilter(state); setExpanded(undefined); }}>{readinessLabels[state]} <span>{pending.filter((item) => readiness(item) === state).length}</span></button>)}</div>}
+      <label className="requirement-search">Search epics and requirements<input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setExpanded(undefined); }} placeholder="Epic, requirement, ID, or acceptance scenario…" maxLength={500} /></label>
+    </>}
+    {focusRequirementID && !focused && <p role="status">This requirement is no longer available. Its saved attempts remain in history.</p>}
+    {message && <p className="save-notice" role="status">{message}</p>}
+    {!focusRequirementID && !visible.length && !history.length && filter !== "submitted" && <div className="empty-card"><h3>{filter === "current" ? "No current specification requirements yet." : filter === "pending" ? pending.length ? "No requirements match this readiness filter." : "No requirements waiting for review." : filter === "refinements" ? "No refinements waiting for review." : "No reviewed requirements yet."}</h3><p>{filter === "pending" && pending.length ? "Choose All to see requirements needing decisions or processing." : filter === "refinements" ? "Use Refine requirements to check existing wording. Earlier decisions remain in History." : "Keep answering in Design. Clear answers update the specification without a second approval."}</p></div>}
+    {!focusRequirementID && <p role="status" aria-label="Specification results">Showing {groups.reduce((total, group) => total + group.items.length, 0)} results in {groups.length} {groups.length === 1 ? "epic" : "epics"}.</p>}
+    {!!search.trim() && !groups.length && <p className="empty-card">No requirements match this search and the selected filters. <button type="button" className="secondary" onClick={() => setSearch("")}>Clear search</button></p>}
+    {filter === "submitted" && !submitted.length && <p className="empty-card">No reviews awaiting follow-up.</p>}
+    <div ref={list}><EpicRequirements groups={groups} scope={`${project.id}:${epicID}:${filter}:${readinessFilter}:${search}`} label="Specification" itemID={(entry) => entry.id} target={expanded || focusRequirementID ? active : undefined}>{(entry) => entry.item ? renderItem(entry.item) : entry.submission ? renderSubmission(entry.submission) : null}</EpicRequirements></div>
+    {!focusRequirementID && <div className="review-toolbar">
+      <p className="view-intro">Your answers maintain the specification. Clear decisions are recorded automatically; unsupported choices, conflicts and existing proposals stay under Needs your decision. Inspect or correct any requirement. Refine requirements checks wording and possible duplicates/conflicts. Specification updates never start coding.</p>
+      <ActionButton className="secondary" disabled={disabled} onClick={() => refine()}>Refine requirements</ActionButton>
+      {saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} disabled={disabled} save={saveDuplicate} />}
+    </div>}
   </section></ActionScope>;
 }

@@ -15,6 +15,33 @@ import { planGapContext } from "../core/gap-context.js";
 import { ChangeRequestForm } from "./change-request.js";
 import { DefinitionAssessment } from "./definition-assessment.js";
 import { coverage } from "../core/coverage.js";
+import { EpicRequirements, matchesRequirementSearch } from "./epic-requirements.js";
+
+test("epic browsing paginates epics independently and explicit targets open the correct requirement page", () => {
+  const groups = Array.from({ length: 30 }, (_, epic) => ({ id: `epic-${epic}`, title: `Epic ${epic}`,
+    items: Array.from({ length: 60 }, (_, row) => ({ id: `r-${epic}-${row}` })) }));
+  const props = { groups, scope: "fixture", label: "Specification", itemID: (item: { id: string }) => item.id,
+    children: (item: { id: string }) => createElement("article", null, item.id) };
+  const closed = renderToStaticMarkup(createElement(EpicRequirements<{ id: string }>, props));
+  assert.match(closed, /1–25 of 30/);
+  assert.equal((closed.match(/class="feature-group"/g) ?? []).length, 25);
+  assert.doesNotMatch(closed, /<article/);
+  const opened = renderToStaticMarkup(createElement(EpicRequirements<{ id: string }>, { ...props, target: "r-29-59" }));
+  assert.match(opened, /26–30 of 30/);
+  assert.match(opened, /51–60 of 60/);
+  assert.match(opened, /Specification Epic 29 requirements pages/);
+  assert.equal((opened.match(/<article/g) ?? []).length, 10);
+  assert.match(opened, /r-29-59/);
+  assert.doesNotMatch(opened, /<article>r-29-49/);
+});
+
+test("requirement search ignores case and whitespace and matches all words across evidence fields", () => {
+  const fields = ["EPIC-access", "Account access", "REQ-42", "Save encrypted reports", "Local privacy", "Works offline"];
+  assert.ok(matchesRequirementSearch("  REQ-42 OFFLINE  ", fields));
+  assert.ok(matchesRequirementSearch("ACCESS privacy", fields));
+  assert.ok(matchesRequirementSearch("", fields));
+  assert.equal(matchesRequirementSearch("reports online", fields), false);
+});
 
 test("definition inspection exposes outdated category explanations and exact linked evidence, never gap-free unknown areas", () => {
   const project = fixture();
@@ -157,31 +184,32 @@ test("Review uses Refine as the single duplicate/conflict workflow without runni
   assert.deepEqual(p, before);
 });
 
-test("requirement review places duplicate removal after Reject in the same button row", () => {
+test("requirement review places duplicate removal and Request changes after Reject in the same button row", () => {
   const p = fixture();
   p.refinements = [];
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
-    refine: () => {}, submit: async () => true, reviewRefinement: async () => true, removeDuplicate: async () => true }));
-  assert.match(html, /<div class="button-row"><button[^>]*>Approve<\/button><button[^>]*>Reject<\/button><button[^>]*>Remove as duplicate…<\/button><\/div>/);
+    focusItemID: "requirement:aim", refine: () => {}, submit: async () => true, reviewRefinement: async () => true, removeDuplicate: async () => true }));
+  assert.match(html, /<div class="button-row"><button[^>]*>Approve<\/button><button[^>]*>Reject<\/button><button[^>]*>Remove as duplicate…<\/button><button[^>]*>Request changes<\/button><\/div>/);
 });
 
 test("refinement review places duplicate removal next to the keep action in the same button row", () => {
   const p = fixture();
   p.requirements = p.requirements.filter((r) => r.id !== "pause");
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
-    refine: () => {}, submit: async () => true, reviewRefinement: async () => true, removeDuplicate: async () => true }));
+    focusItemID: "refinement:cleanup-jump", refine: () => {}, submit: async () => true, reviewRefinement: async () => true, removeDuplicate: async () => true }));
   assert.match(html, /<div class="button-row"><button[^>]*>Approve refinement<\/button><button[^>]*>Keep current wording<\/button><button[^>]*>Remove as duplicate…<\/button><\/div>/);
 });
 
-test("Review bounds a 500-item pending list without limiting its counts or mutating evidence", () => {
+test("Review initially collapses a 500-item pending list without limiting its counts or mutating evidence", () => {
   const p = fixture();
   p.refinements = [];
   p.requirements = Array.from({ length: 500 }, (_, index) => ({ ...p.requirements[1]!, id: `pending-${index}`, statement: `Pending behavior ${index}` }));
   const before = structuredClone(p);
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
     refine: () => assert.fail("Paging must not invoke a model"), submit: async () => true, reviewRefinement: async () => true }));
-  assert.equal((html.match(/class="question-card review-card"/g) ?? []).length, 25);
-  assert.match(html, /1–25 of 500/);
+  assert.equal((html.match(/class="question-card review-card"/g) ?? []).length, 0);
+  assert.match(html, /500 requirements/);
+  assert.match(html, /Specification epics pages/);
   assert.ok(!html.includes("Pending behavior 25<"));
   assert.deepEqual(p, before);
 });
@@ -220,7 +248,7 @@ test("outdated proposals expose explicit dismissal, targeted refresh and human d
   p.requirements[1]!.status = "accepted";
   const before = structuredClone(p);
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
-    refine: () => assert.fail("No model calls on render"), refreshRefinement: () => assert.fail("No refresh on render"),
+    focusItemID: "refinement:cleanup-jump", refine: () => assert.fail("No model calls on render"), refreshRefinement: () => assert.fail("No refresh on render"),
     removeDuplicate: async () => assert.fail("No decisions on render"), submit: async () => true, reviewRefinement: async () => true }));
   assert.match(html, /Dismiss outdated proposal/);
   assert.match(html, /Refresh this requirement/);
@@ -242,7 +270,7 @@ test("review and duplicate removal explain pending evidence without invoking dec
     input: { type: "note", epicID: "project", text: "A changed shared choice" } };
   const before = structuredClone(p);
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [waiting], epicID: "all", sending: [], disabled: false,
-    refine: () => assert.fail("No model calls"), submit: async () => assert.fail("No submission on render"), reviewRefinement: async () => assert.fail("No approval on render") }));
+    focusItemID: "refinement:cleanup-jump", refine: () => assert.fail("No model calls"), submit: async () => assert.fail("No submission on render"), reviewRefinement: async () => assert.fail("No approval on render") }));
   assert.match(html, /Process the pending human input/);
   assert.match(html, /aria-disabled="true"[^>]*>Approve refinement/);
   const form = renderToStaticMarkup(createElement(DuplicateRemovalForm, { project: p, submissions: [waiting], removeID: "aim", keepID: "jump", disabled: false,
@@ -250,7 +278,7 @@ test("review and duplicate removal explain pending evidence without invoking dec
   assert.match(form, /pending human input/);
   assert.match(form, /aria-disabled="true"[^>]*>Confirm removal as duplicate/);
   p.refinements = [];
-  const ordinary = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [waiting], epicID: "all", sending: [], disabled: false,
+  const ordinary = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [waiting], epicID: "all", sending: [], disabled: false, focusItemID: "requirement:aim",
     refine: () => {}, submit: async () => true, reviewRefinement: async () => true }));
   assert.match(ordinary, /Related processing needs attention/);
   assert.match(ordinary, /aria-disabled="true"[^>]*>Approve<\/button>/);
@@ -299,7 +327,7 @@ test("review readiness distinguishes linked decisions, pending processing and st
   assert.equal(p.questions[0]!.status, "pending");
 });
 
-test("Review shows readiness counts and inline questions, prefers a ready card, and remains read-only on render", () => {
+test("Review shows readiness counts while collapsed and inline questions when explicitly focused, without submitting", () => {
   const p = fixture(); p.refinements = [];
   p.questions.push({ id: "linked", text: "Which aim behavior?", whyItMatters: "Required choice", options: [], epicID: "inbox", status: "deferred", evidenceIDs: ["aim"] });
   const before = structuredClone(p);
@@ -307,9 +335,9 @@ test("Review shows readiness counts and inline questions, prefers a ready card, 
   const html = renderToStaticMarkup(createElement(ReviewQueue, props));
   assert.match(html, /Ready to review <span>1<\/span>/);
   assert.match(html, /Needs a decision <span>1<\/span>/);
-  assert.match(html, /aria-expanded="true"[^>]*>.*?Behavior pause/);
+  assert.doesNotMatch(html, /aria-expanded="true"/);
   p.requirements = p.requirements.filter((r) => r.id !== "pause");
-  const inline = renderToStaticMarkup(createElement(ReviewQueue, { ...props, renderClarification: (q) => createElement("p", null, `Inline: ${q.text}`) }));
+  const inline = renderToStaticMarkup(createElement(ReviewQueue, { ...props, focusItemID: "requirement:aim", renderClarification: (q) => createElement("p", null, `Inline: ${q.text}`) }));
   assert.match(inline, /Decisions needed before approval/);
   assert.match(inline, /Inline: Which aim behavior\?/);
   assert.match(inline, /aria-disabled="true"[^>]*>Approve<\/button>/);

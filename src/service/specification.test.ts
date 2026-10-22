@@ -268,16 +268,18 @@ for (const outside of [false, true]) test(`scoped answer ${outside ? "rejects an
 });
 
 test("a plain approval cannot authorize an automatic rewrite", async () => {
-  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined; let calls = 0;
   try {
     const p = seed(store), r = p.requirements[0]!;
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot) { const source = snapshot.sources.at(-1)!;
+      calls++;
       return { ...empty(), reviewResponses: [{ sourceID: source.id, text: "Approval saved" }],
         specificationUpdates: { format: 1, changes: [{ ...wording, type: "revise", requirementID: r.id, sourceIDs: [source.id], reason: "Plain approval is not a new choice" }] } };
     } }));
     queue.submit(p.id, { id: randomUUID(), auto: true, research: false, input: { type: "review", requirementID: r.id, requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "accepted", note: "", reviewedRevision: p.revision } });
     await idle(queue, p.id); const updated = store.get(p.id);
-    assert.equal(store.submissions(p.id)[0]!.status, "needs-attention"); assert.equal(updated.requirements[0]!.status, "accepted", "The real human approval is retained");
+    assert.equal(calls, 0, "A plain approval does not require model interpretation");
+    assert.equal(store.submissions(p.id)[0]!.status, "completed"); assert.equal(updated.requirements[0]!.status, "accepted", "The real human approval is retained");
     assert.equal(updated.requirements[0]!.statement, r.statement); assert.equal(updated.requirements[0]!.authority, undefined);
   } finally { await queue?.close(); store.close(); }
 });

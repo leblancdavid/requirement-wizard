@@ -78,9 +78,17 @@ new code, fetch main, run checks, modify source or establish branch availability
   approved outcome; multi-requirement packages and independently executable subpackages
   remain future work.
 - Each target uses a fresh read-only planning session and bundled planning skill. Exact
-  target/human evidence and dependency guardrails are retained; the cross-requirement
-  index includes exact approved behavior and acceptance scenarios. Other targets' human
-  histories are explicitly omitted. Oversized mandatory context blocks before inference.
+  target/human evidence and dependency guardrails are retained. Optional dependency
+  candidates are ranked deterministically by shared behavior words and feature, then
+  included with full approved statements/scenarios only while the complete request fits
+  the 48,000-character budget (including schema, skill and runtime reserve). Oversized
+  candidates do not prevent smaller ones from fitting. Ranking is not proof of dependency
+  coverage: omitted candidates are counted explicitly, cannot be cited or proposed as
+  prerequisites, and cause an app-owned unresolved question requiring human resolution
+  before approval. This remains one request per target, not exhaustive dependency analysis.
+  Other targets' human histories are explicitly omitted. Oversized mandatory context
+  still blocks before inference, with section sizes; splitting a target may not reduce
+  shared evidence or guardrails. No mandatory evidence is truncated.
   Each request consumes provider allowance; the UI explains the per-requirement calls.
 - Package checkpoints and session IDs persist after each successful response. Explicit
   retry skips completed packages only when specification revision, workspace binding and

@@ -15,6 +15,7 @@ import { assessmentPrompt, assessmentContextFingerprint, checkExecutionContext, 
 import { assessmentSkill } from "../core/execution-skills.js";
 import { assessmentCompatibility } from "../core/assessment-identity.js";
 import { planningConfigFingerprint, planningCurrent, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanning } from "../core/implementation-planning.js";
+import { implementationPlanningContext } from "./planning-context.js";
 
 const codeResult = z.object({ outcome: z.enum(["complete", "blocked"]), summary: z.string().min(1).max(12000) }).strict();
 type Scope = { requirementID?: string; epicID?: string };
@@ -139,21 +140,29 @@ export class ImplementationService {
         signal.throwIfAborted();
         if (this.store.get(id).revision !== revision || this.store.workspace(id)?.bindingID !== binding.bindingID) throw new Error("Specification or workspace changed during planning. Prepare a new plan.");
       };
-      // One fresh, bounded request per target. The exact cross-requirement behavior
-      // index supports dependency reasoning; unrelated human history is not evidence.
+      // One fresh bounded request per target; optional exact dependency candidates
+      // cannot displace mandatory evidence. Omitted scope requires human review.
       for (const r of requirements) {
         current();
         if (plan.output?.packages.some((p) => p.requirementID === r.id)) continue;
-        const context = requirementTaskContext(project, r.id, state.config!.dependencies[r.id] ?? [], false, state.config!.dependencies);
-        const index = requirements.map((r) => ({ id: r.id, epicID: r.epicID, statement: r.statement, acceptance: r.acceptance }));
-        const allowedIDs = [...new Set([...requirements.map((r) => r.id), ...context.data.evidence.map((s) => s.id), ...context.data.questions.map((q) => q.id), ...context.data.research.map((r) => r.id), ...project.epics.map((e) => e.id)])];
-        const assessment = { current: assessmentCurrent(project, state, r.id), evidence: state.assessments[r.id] };
-        const prompt = `Propose exactly ONE work package for approved target ${r.id}, using the behavior index to identify prerequisites among approved requirements. Include supporting technical steps and verification tied to acceptance scenarios. Do not add scope. Hard dependencies require concrete necessity; preferences only guide order. Existing epic and configured prerequisites remain guardrails. Shared foundations belong in the earliest supporting requirement; expose inseparable or ambiguous scope as questions. Assessments are historical and dated, not proof of current code or execution-branch availability. No new source capture was performed. Suggest Check implementation when availability is uncertain. Cite only supplied evidenceIDs. Unrelated omitted human history cannot justify proposals.\n${JSON.stringify({ project: { name: project.name, summary: project.summary, goals: project.goals, actors: project.actors, assumptions: project.assumptions, epics: project.epics }, target: context.data, behaviorIndex: index, evidenceIDs: allowedIDs, existingDependencies: state.config!.dependencies, assessment })}`;
+        const { prompt, evidenceIDs: allowedIDs, requirementIDs, reviewQuestion } = implementationPlanningContext(project, state, r.id);
         checkExecutionContext(prompt, false, r.id, 0, true);
         const result = await this.adapter.perform({ directory: binding.path, config: state.config!, prompt, coding: false, planning: true, signal, requirementID: r.id,
           onSession: (sessionID) => { plan.sessionID = sessionID; plan.sessions!.push(sessionID); save(); }, onProgress: () => {} });
         current();
         const output = validateImplementationPlanning(JSON.parse(result), project, allowedIDs, [r.id]);
+        if (output.packages.some((p) => p.prerequisites.some((d) => !requirementIDs.has(d.requirementID)))) throw new Error("Planning prerequisite references behavior omitted from the supplied context.");
+        // App-owned limitation cannot be suppressed by a model returning no questions.
+        // Keep within the existing format's twelve-question bound.
+        if (reviewQuestion) {
+          const questions = output.packages[0]!.questions;
+          if (questions.length === 12) {
+            const combined = `${questions[11]}\n${reviewQuestion}`;
+            if (combined.length > 2000) throw new Error("Planning returned too many unresolved questions to retain the dependency-scope review warning. Retry explicitly; no questions were truncated.");
+            questions[11] = combined;
+          }
+          else questions.push(reviewQuestion);
+        }
         plan.output ??= { summary: "Dependency proposals and requirement-linked work packages. Review prerequisites and order before coding.", packages: [] };
         plan.output.packages.push(...output.packages);
         try { save(true); } catch (error) { plan.output.packages.pop(); throw error; }

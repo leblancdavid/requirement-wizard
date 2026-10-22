@@ -12,9 +12,11 @@
 }
 .app-header-leading { display: flex; align-items: center; gap: 12px; }
 .app-header-title { min-width: 0; flex: 1; }
+.app-header-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.app-header-title-row h1 { min-width: 0; }
 .topbar .app-header-title h1 { font-size: 1.429rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-header-title > small { display: block; color: var(--on-accent); opacity: .85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
-.topbar .header-activity, .topbar button.queue-trigger, .topbar button.progress-trigger, .topbar button.queue-header-action { background: color-mix(in srgb, var(--on-accent) 8%, var(--accent)); color: var(--on-accent); border-color: color-mix(in srgb, var(--on-accent) 28%, var(--accent)); }
+.topbar button.queue-trigger, .topbar button.progress-trigger, .topbar button.queue-header-action { background: color-mix(in srgb, var(--on-accent) 8%, var(--accent)); color: var(--on-accent); border-color: color-mix(in srgb, var(--on-accent) 28%, var(--accent)); }
 .topbar button.queue-trigger:hover, .topbar button.progress-trigger:hover, .topbar button.queue-header-action:hover:not(:disabled) { background: color-mix(in srgb, var(--on-accent) 14%, var(--accent)); border-color: color-mix(in srgb, var(--on-accent) 45%, var(--accent)); }
 .topbar .status-copy strong, .topbar .status-copy small, .topbar .header-progress small, .topbar .header-activity .activity-label, .topbar .activity-spinner { color: var(--on-accent); }
 .topbar .queue-trigger .connection-dot, .topbar .meter > span, .topbar .activity-bar > span { background: var(--on-accent); }
