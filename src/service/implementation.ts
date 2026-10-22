@@ -535,8 +535,12 @@ export class ImplementationService {
     const inspected = new Set<string>();
     const boundary = assessmentFootprint(project, id, git.config, scan);
     const impactPaths = boundary.broad ? undefined : new Set(boundary.files.map((file) => file.path));
+    const state = this.store.execution(project.id);
+    const previous = (scope === "main" ? state.mainAssessments : state.workspaceAssessments)?.[id]
+      ?? (state.assessments[id]?.scope === scope ? state.assessments[id] : undefined);
+    const gitHints = await git.assessmentHints(id, previous?.head);
     for (let pass = 0; pass < 3; pass++) {
-      const { text, sourceIDs, availableEvidenceIDs, deferredEvidenceIDs, context } = assessmentContext(r, scan, { project, dependencyIDs: git.config.dependencies[id], dependencyGraph: git.config.dependencies, requestEvidenceIDs: requested, impactPaths });
+      const { text, sourceIDs, availableEvidenceIDs, deferredEvidenceIDs, context } = assessmentContext(r, scan, { project, dependencyIDs: git.config.dependencies[id], dependencyGraph: git.config.dependencies, requestEvidenceIDs: requested, impactPaths, gitHints });
       for (const sourceID of sourceIDs.values()) inspected.add(sourceID);
       onContext(context); progress(`Assessing acceptance (${pass + 1}/3 evidence windows): ${r.statement}`);
       const prompt = assessmentPrompt(text);

@@ -60,7 +60,8 @@ export function assessmentImpactReason(previous: AssessmentFootprint | undefined
 
 /** One requirement, exact normative evidence, and a bounded window of relevant current files. */
 export function assessmentContext(requirement: Project["requirements"][number], scan: AssessmentCapture,
-  options: { project?: Project; dependencyIDs?: string[]; dependencyGraph?: Record<string, string[]>; requestEvidenceIDs?: string[]; impactPaths?: Set<string> } = {}) {
+  options: { project?: Project; dependencyIDs?: string[]; dependencyGraph?: Record<string, string[]>; requestEvidenceIDs?: string[]; impactPaths?: Set<string>;
+    gitHints?: { linkedPaths: Set<string>; changedPaths: Set<string> } } = {}) {
   const reasons: Record<string, number> = {};
   for (const item of scan.snapshot.omitted) {
     const reason = item.reason.replace(/\d+/g, "#"); reasons[reason] = (reasons[reason] ?? 0) + 1;
@@ -73,7 +74,10 @@ export function assessmentContext(requirement: Project["requirements"][number], 
     const file = scan.snapshot.files.find((f) => f.sourceID === source.id);
     const text = source.text.toLowerCase(), path = file?.path.toLowerCase() ?? "";
     const linked = targetEvidence.has(source.id) || !!file && !!task?.referencedWorkspacePaths.has(file.path);
-    const score = (linked ? 1000 : 0) + words.reduce((total, word) => total + (path.includes(word) ? 10 : 0) + (text.includes(word) ? 1 : 0), 0);
+    const historyLinked = !!file && !!options.gitHints?.linkedPaths.has(file.path);
+    const changed = !!file && !!options.gitHints?.changedPaths.has(file.path);
+    const score = (linked ? 1000 : 0) + (historyLinked ? 200 : 0) + (changed ? 100 : 0)
+      + words.reduce((total, word) => total + (path.includes(word) ? 10 : 0) + (text.includes(word) ? 1 : 0), 0);
     return { id: `file:${index + 1}`, source, file, score, index };
   }).filter((entry) => !options.impactPaths || !!entry.file && options.impactPaths.has(entry.file.path)).sort((a, b) => b.score - a.score || a.index - b.index);
   const requested = new Set(options.requestEvidenceIDs ?? []);

@@ -19,6 +19,24 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Git-assisted assessment navigation
+
+SQLite schema 3/execution schema 1 and portable formats are unchanged. Fresh assessment
+windows now prioritize current captured files using exact feature IDs from bounded Git
+history and net changes since the existing scope-specific assessment `head`. These are
+ephemeral navigation hints only, not new evidence or reuse boundaries. No saved records,
+timestamps, provenance, assessment identities/fingerprints or concurrency counters change.
+Existing compatible results are reused before consulting history; no startup migration,
+data reset or repeated model call is required. Missing old commits/history fall back
+without manufacturing a baseline. Cancellation and current-source validation remain intact.
+No new caches are persisted, so reopen/retry reconstructs hints from current Git state.
+
+Verification (2026-10-21): type checking, 32 targeted storage/implementation tests and
+all 559 deterministic tests passed on Node 22.23.3, including real Git history,
+exact IDs, revert/net changes, dirty/untracked
+files, missing commits, cancellation, reviewed boundaries, and existing SQLite reopen,
+legacy enrichment, reuse and delivery checks. No live inference or speed benchmark run.
+
 ## Assessment context packing and isolated blockers
 
 Saved formats remain SQLite schema 3/execution schema 1; no data transformation or

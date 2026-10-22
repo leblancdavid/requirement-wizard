@@ -251,6 +251,16 @@ impact/search boundaries, not inferred from citations or keyword similarity.
 - A new HEAD alone does not repeat inference when content/coverage inputs match.
   Evidence retains its original dates and commit. **Reuse footprint** lists monitored
   files and whether the boundary widened to repository-wide checking.
+- Fresh assessments use a bounded index of the latest 200 reachable commits to
+  prioritize current files linked by exact `Requirement: <id>` lines or conventional
+  commit scopes such as `feat(<id>):`. Changes since the scope's last assessment
+  commit also receive priority, including unmarked/shared changes, staged/unstaged
+  edits and untracked files. History and baseline diffs are cached per target/run.
+  This only ranks evidence windows: no commit text enters model evidence, no reviewed
+  boundary is inferred or narrowed, and content/coverage checks still determine reuse.
+  Missing/shallow/rewritten history or bounded-command failures fall back to ordinary
+  current-source ranking; cancellation still stops. Older assessments remain reusable.
+  Existing source capture and main verification still run; no measured speedup is claimed.
 - **Reuse equivalent local/main assessments** can also avoid a second semantic model
   call when a compatible footprint, relevant decisions and selected model match the
   target capture exactly. Main checks still run first. The copied target checkpoint

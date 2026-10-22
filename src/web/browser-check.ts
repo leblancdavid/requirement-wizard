@@ -837,6 +837,12 @@ try {
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await expect.poll(async () => Math.round((await header.boundingBox())!.y)).toBe(0);
     await expect(headerStatus).toBeInViewport();
+    const workspaceTabs = header.getByRole("tablist", { name: "Workspace", exact: true });
+    await expect(workspaceTabs).toBeInViewport();
+    for (const name of ["Design", "Review", "Implement", "Project map", "Activity"]) {
+      await expect(workspaceTabs.getByRole("tab", { name: new RegExp(name) })).toBeInViewport({ ratio: 1 });
+    }
+    assert.ok((await workspaceTabs.boundingBox())!.y >= (await page.locator(".queue-header").boundingBox())!.y + (await page.locator(".queue-header").boundingBox())!.height, "Workspace tabs sit below current processing controls");
     await expect(header.getByRole("button", { name: "Stop discovery", exact: true })).toBeInViewport();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Sticky header fits viewport");
     await page.screenshot({ path: resolve(`.reqwizit-state/header-${width}.png`) });

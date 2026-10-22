@@ -16,6 +16,17 @@ fills the viewport width and uses the selected accent color with automatically
 contrasting title/menu text. Processing and progress controls retain their surface
 colors and their existing behavior. Settings' back link is below the header.
 
+The Design, Review, Implement, Project map and Activity tabs occupy a second row
+of the sticky header, below current processing and project progress. They remain
+visible while scrolling on desktop and mobile and are hidden in Settings and
+project creation. Tab counts and navigation are unchanged. This layout-only
+change does not affect persisted data or require a migration.
+
+Verification (2026-10-21): type check, UI build and browser/portable-browser
+checks passed (browser tests on Node 22.23.3), including all five tabs staying
+fully visible below processing controls after scrolling at 1440px and 390px.
+The existing Vite chunk-size warning remains non-blocking; no inference was used.
+
 Desktop users also get **Quit**, using the same safe shutdown as closing the window,
 without a confirmation or tray mode. It is hidden in regular browsers, which cannot
 reliably close user-opened tabs. Saved data is retained; unsubmitted text is not saved.

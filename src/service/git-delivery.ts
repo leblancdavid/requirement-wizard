@@ -55,6 +55,8 @@ export async function inspectWorkspaceRepository(directory?: string): Promise<Wo
 }
 
 export class GitDelivery {
+  private assessmentHistory?: Promise<Map<string, Set<string>>>;
+  private assessmentChanges = new Map<string, Promise<Set<string>>>();
   constructor(readonly directory: string, readonly config: ExecutionConfig, readonly signal: AbortSignal) {}
   async git(args: string[]) {
     const result = await command(this.directory, "git", args, this.signal);
@@ -93,6 +95,43 @@ export class GitDelivery {
   at(directory: string) { return new GitDelivery(directory, this.config, this.signal); }
   async head() { return this.git(["rev-parse", "HEAD"]); }
   async clean() { return !(await this.git(["status", "--porcelain"])); }
+  /** Advisory navigation only. Never authorizes reuse or excludes current evidence.
+   * Cache bounded history and per-baseline changes for this assessment target/run. */
+  async assessmentHints(requirementID: string, baseline?: string) {
+    const optional = async <T>(read: () => Promise<T>, fallback: T): Promise<T> => {
+      try { return await read(); } catch (error) { this.signal.throwIfAborted(); return fallback; }
+    };
+    this.assessmentHistory ??= optional(async () => {
+      const history = await this.git(["log", "-200", "--format=%x1e%B%x1f", "--name-only", "-z", "--no-renames", "HEAD", "--"]);
+      const index = new Map<string, Set<string>>();
+      for (const record of history.split("\x1e")) {
+        const split = record.indexOf("\x1f");
+        if (split < 0) continue;
+        const message = record.slice(0, split);
+        const ids = [...message.matchAll(/^Requirement: ([^\r\n]+)\r?$/gm)].map((match) => match[1]!);
+        const titleID = /^\w+\(([^)\r\n]+)\)!?:/.exec(message)?.[1];
+        if (titleID) ids.push(titleID);
+        const paths = record.slice(split + 1).replace(/^\0?\r?\n/, "").split("\0").filter(Boolean);
+        for (const id of ids) {
+          const files = index.get(id) ?? new Set<string>();
+          for (const path of paths) files.add(path);
+          index.set(id, files);
+        }
+      }
+      return index;
+    }, new Map<string, Set<string>>());
+    // Only accept object IDs, never revision expressions/options from saved data.
+    const base = baseline && /^[a-f0-9]{40,64}$/i.test(baseline) ? baseline : "HEAD";
+    if (!this.assessmentChanges.has(base)) this.assessmentChanges.set(base, optional(async () => {
+      // Includes tracked staged/unstaged edits and changes without feature markers,
+      // including shared modules, renames and reverts. Untracked files matter too.
+      const changed = await this.git(["diff", "--name-only", "-z", "--no-renames", base, "--"]);
+      const untracked = await this.git(["ls-files", "--others", "--exclude-standard", "-z"]);
+      return new Set((changed + "\0" + untracked).split("\0").filter(Boolean));
+    }, new Set<string>()));
+    const [history, changedPaths] = await Promise.all([this.assessmentHistory, this.assessmentChanges.get(base)!]);
+    return { linkedPaths: history.get(requirementID) ?? new Set<string>(), changedPaths };
+  }
   async verification(onCheck?: (result: CheckResult) => void, onStart?: (command: string) => void): Promise<CheckResult[]> {
     const results: CheckResult[] = [];
     for (const check of this.config.checks) {

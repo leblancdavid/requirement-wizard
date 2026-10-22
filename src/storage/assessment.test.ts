@@ -7,8 +7,77 @@ import { assessmentContextFingerprint, requirementTaskContext } from "../core/ex
 import { captureWorkspace } from "./scan.js";
 import { assessmentContext, assessmentCaptureFingerprint, assessmentFootprint, assessmentImpactReason, assertAssessmentCaptureCurrent } from "./assessment.js";
 import { executionConfigSchema } from "../core/execution.js";
+import { command, GitDelivery } from "../service/git-delivery.js";
 
 const requirement: Project["requirements"][number] = { id: "r1", epicID: "project", status: "accepted", statement: "Save records", rationale: "Required behavior", acceptance: ["Saved records survive restart"], sourceIDs: ["human:1"] };
+
+test("Git assessment hints find exact feature IDs and baseline changes without treating history as evidence", async () => {
+  await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
+  const root = await mkdtemp(resolve(".reqwizit-state/tests/assessment-history-"));
+  const signal = new AbortController().signal;
+  const git = async (...args: string[]) => {
+    const result = await command(root, "git", args, signal);
+    assert.equal(result.code, 0, result.output); return result.output;
+  };
+  const config = executionConfigSchema.parse({ repository: "owner/repo", providerID: "openai", modelID: "fixture", strategy: "main", checks: ["node --version"], dependencies: {} });
+  try {
+    await git("init"); await git("config", "user.name", "Fixture"); await git("config", "user.email", "fixture@example.test");
+    await writeFile(join(root, "feature.ts"), "export const value = 1;\n");
+    await writeFile(join(root, "shared.ts"), "export const shared = 1;\n");
+    await git("add", "."); await git("commit", "-m", "feat(r1): implement", "-m", "Requirement: r1");
+    const baseline = await git("rev-parse", "HEAD");
+    await writeFile(join(root, "other.ts"), "export const other = true;\n");
+    await git("add", "."); await git("commit", "-m", "feat(r10): unrelated", "-m", "Requirement: r10");
+    await writeFile(join(root, "feature.ts"), "export const value = 2;\n");
+    await git("add", "."); await git("commit", "-m", "change shared behavior without a feature ID");
+    await git("revert", "--no-edit", "HEAD");
+    await writeFile(join(root, "shared.ts"), "export const shared = 2;\n");
+    await git("add", "shared.ts"); await git("commit", "-m", "unmarked shared module update");
+    await writeFile(join(root, "other.ts"), "export const other = false;\n");
+    await git("add", "other.ts");
+    await writeFile(join(root, "new.ts"), "export const newlyAdded = true;\n");
+    const target = new GitDelivery(root, config, signal);
+    const hints = await target.assessmentHints("r1", baseline);
+    assert.deepEqual([...hints.linkedPaths].sort(), ["feature.ts", "shared.ts"]);
+    assert.ok(hints.changedPaths.has("shared.ts"), "Unmarked committed changes participate");
+    assert.ok(hints.changedPaths.has("other.ts"), "Unmarked staged/shared changes participate");
+    assert.ok(hints.changedPaths.has("new.ts"), "Untracked current code participates");
+    assert.ok(!hints.changedPaths.has("feature.ts"), "A fully reverted change has no net baseline difference");
+    const scan = await captureWorkspace(root, undefined, signal);
+    const before = assessmentCaptureFingerprint(scan);
+    const prepared = assessmentContext(requirement, scan, { gitHints: hints });
+    const text = JSON.parse(prepared.text);
+    assert.equal(prepared.sourceIDs.get(text.evidence[0].id), scan.snapshot.files.find((file) => file.path === "shared.ts")!.sourceID);
+    assert.ok(!prepared.text.includes("feat(r1)"), "Commit claims are not model evidence");
+    assert.equal(assessmentCaptureFingerprint(scan), before);
+    assert.ok((await target.assessmentHints("r10", baseline)).linkedPaths.has("other.ts"));
+    const missing = await new GitDelivery(root, config, signal).assessmentHints("r1", "a".repeat(40));
+    assert.ok(missing.linkedPaths.has("feature.ts"), "Missing old commit only disables advisory change hints");
+    const fallback = await new GitDelivery(root, config, signal).assessmentHints("r1", "--all");
+    assert.ok(fallback.changedPaths.has("new.ts"), "Invalid saved revisions safely use HEAD");
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(new GitDelivery(root, config, controller.signal).assessmentHints("r1"));
+    class UnavailableGit extends GitDelivery {
+      override async git(_args: string[]): Promise<string> { throw new Error("Unavailable history"); }
+    }
+    const unavailable = await new UnavailableGit(root, config, signal).assessmentHints("r1", baseline);
+    assert.equal(unavailable.linkedPaths.size, 0); assert.equal(unavailable.changedPaths.size, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("history hints rank current evidence without narrowing reviewed scope or hiding requested files", () => {
+  const sources = Array.from({ length: 10 }, (_, index) => ({ id: `code:${index}`, kind: "workspace" as const, epicID: "project", text: `Save records component ${index}` }));
+  const scan = { workspaceKey: "fixture", sources, snapshot: { id: "scan", capturedAt: "2026-10-21T00:00:00Z",
+    files: sources.map((source, index) => ({ sourceID: source.id, path: `src/component-${index}.ts`, hash: "hash", lines: 1 })), omitted: [], traversalLimited: false, changes: [], affectedRequirementIDs: [] } };
+  const gitHints = { linkedPaths: new Set(["src/component-9.ts", "deleted.ts"]), changedPaths: new Set(["src/component-8.ts"]) };
+  const prepared = assessmentContext(requirement, scan, { gitHints });
+  assert.equal([...prepared.sourceIDs.values()][0], "code:9");
+  assert.equal([...prepared.sourceIDs.values()][1], "code:8");
+  assert.ok(prepared.availableEvidenceIDs.has("file:8"), "Unlinked code remains discoverable");
+  assert.ok(assessmentContext(requirement, scan, { gitHints, requestEvidenceIDs: ["file:1"] }).sourceIDs.has("file:1"));
+  const scoped = assessmentContext(requirement, scan, { gitHints, impactPaths: new Set(["src/component-0.ts"]) });
+  assert.deepEqual([...scoped.sourceIDs.values()], ["code:0"], "Git does not override reviewed boundaries");
+});
 
 test("large omission inventories cannot displace exact source evidence from assessment context", async () => {
   await mkdir(resolve(".reqwizit-state/tests"), { recursive: true });
