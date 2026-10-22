@@ -13,6 +13,8 @@ import { continuationState, decodePortable, portableDigest } from "./portable.js
 import { dirname, join } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
+import { applySpecificationUpdates } from "../core/specification.js";
+import { specificationUpdatesSchema } from "../core/model.js";
 import { wordingKey } from "../core/similarity.js";
 import { refinementIsStale, validateResolutionEvidence } from "../core/resolution.js";
 import { planIncrementalResolution } from "../core/incremental-resolution.js";
@@ -39,6 +41,7 @@ function readStoredJob(payload: string): Job {
     ...(job.result?.refinements ?? []).flatMap((p) => p.resolution ? [p.resolution] : [])];
   if (envelopes.some((value) => value.format !== 1)) throw new Error("Unsupported requirement-resolution format in saved job. Upgrade the app; saved evidence was not overwritten.");
   if (job.result?.pendingChanges !== undefined) pendingChangesSchema.parse(job.result.pendingChanges);
+  if (job.result?.specificationUpdates !== undefined) specificationUpdatesSchema.parse(job.result.specificationUpdates);
   if (job.context?.gapExploration?.check !== undefined) gapCheckSchema.parse(job.context.gapExploration.check);
   if (job.gapReport !== undefined) gapReportSchema.parse(job.gapReport);
   if (job.context?.epicReview !== undefined) epicReviewSchema.parse(job.context.epicReview);
@@ -830,6 +833,7 @@ export class ProjectStore {
         requirement.sourceIDs.push(sourceID);
       }
       requirement.status = action;
+      delete requirement.authority;
       requirement.reviewNote = note;
     });
   }
@@ -947,6 +951,22 @@ export class ProjectStore {
         if (report.modelCalls || job.context?.epicReview) throw new Error("Invalid no-call epic review outcome.");
         job.status = "completed"; job.leaseUntil = null;
       }
+      this.saveJob(job); return job;
+    }).immediate();
+  }
+
+  /** A valid missing-evidence response finishes work without certifying a review or revising the project. */
+  finishEpicReviewBlocked(id: string, report: EpicReviewReport): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Epic review worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      const parsed = epicReviewReportSchema.parse(report);
+      if (!job.context?.epicReview || job.result || job.retrievalWork?.final
+        || !parsed.blockers.some((b) => b.packageID === job.context!.epicReview!.packageID)
+        || !parsed.blocked || parsed.modelCalls !== job.retrievalWork?.attempts) throw new Error("Invalid evidence-blocked epic review outcome.");
+      job.epicReviewReport = parsed;
+      job.status = "completed"; job.leaseUntil = null;
       this.saveJob(job); return job;
     }).immediate();
   }
@@ -1320,7 +1340,8 @@ export class ProjectStore {
             for (const proposal of project.refinements) if (proposal.status === "pending" && !proposal.resolution
               && proposal.requirementID === job.context.refinementTarget.requirementID && refinementIsStale(project, proposal)) proposal.status = "dismissed";
           }
-          applyRound(project, result, randomUUID, job.researchEvidence, job.context?.refinementPair?.triggerSourceIDs);
+          const aliases = applyRound(project, result, randomUUID, job.researchEvidence, job.context?.refinementPair?.triggerSourceIDs, job.context?.questionTarget !== undefined);
+          applySpecificationUpdates(before, project, result, aliases, job, submissions);
           if (result.resolutionCheck) project.roundChanges.push(`Requirement overlap check (${result.resolutionCheck.outcome}): ${result.resolutionCheck.explanation}`);
           if (omittedConcepts) project.roundChanges.push(`Omitted ${omittedConcepts} malformed concept annotations; question wording was preserved.`);
           if (job.context?.refinementOnly) project.roundChanges.push(`Requirement refinement (bounded working set): ${result.summary}`);

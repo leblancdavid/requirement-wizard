@@ -2,7 +2,18 @@
 
 ## Question-help context boundaries
 
-Word explanations and the question help panel use a dedicated question-local
+Word explanations use a separate **definition-only** request (`define`), containing
+the clicked word, its complete displayed text and the exact enclosing question
+wording. The server checks that the text and word belong to the current question
+or an option. It does not load the project's evidence chain, dependency guardrails,
+other options or previous help merely to explain vocabulary. Definitions must not
+recommend a choice, infer unseen decisions or invent a project-specific meaning;
+ambiguous wording is identified explicitly. Saved legacy word explanations remain
+visible, including their original revision. Requests can run while discovery or
+implementation is active; waiting for that work would not reduce an oversized
+saved evidence chain. No deferred-help queue is introduced.
+
+The broader question help panel uses a dedicated question-local
 context, not the discovery working-set planner. One 48,000-character application
 input budget includes the current request, exact question/options, forward-linked
 evidence, initial human input, current feature notes and project/dependency human
@@ -37,6 +48,13 @@ use subtle accent-tinted backgrounds and borders, contrasting text and meters, a
 visible hover/keyboard-focus states instead of bright surface-colored cards. Their
 behavior is unchanged; opened dialogs retain normal workspace surface colors.
 Settings' back link is below the header. This styling change needs no data migration.
+The compact header aligns processing and overall progress in matching-height panels,
+with Stop/Resume grouped inside the processing panel. Task headlines and detail lines
+truncate visually rather than expanding the header; full task details remain in
+Processing & queue. Question totals and local-code findings remain in the progress
+breakdown rather than the header. Smaller, evenly spaced tabs retain their counts.
+At narrower widths, processing moves below project identity and progress. This is
+presentation-only: saved project data, appearance preferences and jobs are unchanged.
 The whole header uses a scoped accent palette: the application-menu dropdown,
 recent-workspace list, selected/hover/focus states, separators, activity widgets,
 tabs and count badges all follow the selected preset or custom accent. Text and
@@ -52,6 +70,12 @@ Progress summary lines remain separate instead of running together. The tabs rem
 visible while scrolling on desktop and mobile and are hidden in Settings and
 project creation. Tab counts and navigation are unchanged. This layout-only
 change does not affect persisted data or require a migration.
+
+Only the content below the header/tabs scrolls; the scrollbar no longer extends
+alongside the header. Its thumb follows the selected theme accent, with a workspace
+background track. The viewport-sized layout also accounts for the desktop titlebar.
+Settings and project creation use the same content scroller. No saved-data changes
+or migration are needed.
 
 Verification (2026-10-21): type check, UI build and browser/portable-browser
 checks passed (browser tests on Node 22.23.3), including all five tabs staying
@@ -130,6 +154,49 @@ checks passed on Node 22.23.3. Browser checks include separate answer/local sect
 live local-checkpoint updates without main credit and mobile progress layout.
 
 ## Moving between Design and Review
+
+### Compact discovery and predictable review pauses (2026-10-22)
+
+Design has one **Explore next gaps** button, using epic workflow discovery, beside
+a compact **Questions ready** input (1–50, default 5). The existing per-project
+browser preference is retained. This is the project-wide unanswered-question target,
+not a count of additional questions; final-package overshoot and bounded runs remain
+unchanged. Details live in the tooltip and Processing & queue rather than a large
+explanatory card. Gap controls and inline legacy continuation appear only in Design;
+saved-job continuation also remains in Processing & queue. Review is for requirement
+decisions, changes and linked clarifications, not starting gap discovery.
+
+While discovery/scanning owns a live project snapshot, Review shows **Project
+processing—decisions temporarily paused**. This is a project-wide restriction, not
+a claim that each displayed requirement is being rewritten. Requirement decision
+buttons and change-request submission are unavailable, while cards, evidence and
+review notes stay accessible. Related queued input also pauses the affected decisions;
+failed related processing is labelled **Needs attention**, not an endlessly active
+update. Use **Process blocking input** or Processing & queue for the next step.
+
+Finishing, cancelling or failing a worker releases its live-worker lock; other
+clarification/input blockers still apply. Unchanged eligible items become actionable;
+changed wording/evidence retains the existing comparison and note. A fresh decision
+click is required. The UI no longer invites approvals to be queued during an unsafe
+processing window. Existing durable submitted reviews still follow their original
+storage/queue safety checks; no saved decision is erased or replayed by this UI change.
+Submission-time checks remain authoritative for races between a render and a click.
+Allowing unrelated decisions during active workers requires a separate enforced
+write-scope/publication change and is not implemented here. Formats and fingerprints
+are unchanged; see [compatibility ledger](migrations.md#compact-design-discovery-and-review-pauses-2026-10-22).
+
+Verification (2026-10-22, Windows Node 22.23.3): type checking, all 573 deterministic
+tests and the focused 23-test Review rerun passed. Production UI build, reliability,
+main workspace, portable-project, legacy retrieval/navigation/pilot and epic workflow
+browser runners passed, including a full `npm run test:browser:all` rerun, with
+deterministic adapters and no live inference. Browser
+fixtures verify paused map/Review clicks create no queued or failed attempt, retained
+notes, fresh decisions after processing, Design-only controls, target persistence and
+desktop/mobile layout. Screenshots: `.reqwizit-state/browser-design-controls.png`,
+`browser-design-controls-mobile.png`, and `browser-review-paused.png`. Legacy browser
+fixtures explicitly use the authenticated individual-check API rather than pretending
+the consolidated workflow button still selects that strategy. The existing >500 kB
+Vite chunk warning remains non-blocking. No data rewrite or live qualification ran.
 
 ### Shared modal behavior
 
@@ -428,7 +495,7 @@ and explicit corrected-response retry. Live model behavior remains unverified.
 
 ## Exploring gaps in large projects
 
-**Review next epic workflow** is the new alternative for combined, epic-scoped reviews.
+**Design → Explore next gaps** is the single action for combined, epic-scoped reviews.
 It prepares exact linked evidence locally, reviews up to six related records across all
 three lenses together, and permits only one extra evidence batch before final review.
 Declared dependency-boundary packages follow workflow packages. Select a feature to
@@ -436,15 +503,44 @@ restrict scope. It has separate reviewed/waiting/blocked progress in **Processin
 and preserves all legacy checks. Manual epic reviews leave queued responses paused;
 use ordinary Resume to process them. See [epic workflow review](epic-workflow-review.md)
 for grouping limits, upgrade compatibility, recovery and outstanding live qualification.
-The existing per-record path described below is unchanged.
+The retained API/terminal per-record path described below is unchanged; it is no
+longer a competing main browser button.
 
-After the initial interpretation, **Explore next gaps** works from a durable task
+After the initial interpretation, legacy individual-check exploration works from a durable task
 backlog rather than loading a whole feature. Requirements offer three bounded lenses:
 workflow/behavior, failures/recovery, and acceptance boundaries. Questions and human
 notes offer one behavior lens. These are opportunities to investigate, not a checklist
 that must all be run to finish a specification. Choose a feature to restrict the scope.
 An explicitly selected empty feature can start from the original idea and its saved
 purpose, without inventing a new evidence record or changing the original input.
+
+**Design → Questions ready** selects a project-wide stopping threshold
+from 1–50 (default 5), remembered per project in this browser. **Explore next
+gaps** continues through sequential workflow packages
+until the threshold is reached, no eligible packages remain, or the run reaches
+10 packages / 15 minutes. Questions appear after each validated package publishes.
+The target is not an exact quota or a hard output cap: four pending plus three
+useful questions becomes seven, then scanning stops. The model is not asked to
+invent questions to fill the target. Existing five-per-response schema bounds
+remain; the old five-pending aggregate restriction is bypassed only for explicitly
+targeted gap packages. Other discovery/follow-up can still save zero-question
+results when the project already has more than five pending questions.
+
+The feature filter restricts packages, not the project-wide pending count. Stop,
+failure or stale publication ends the run without undoing earlier saved packages;
+restart never restarts inference. Saved submissions take priority in ordinary
+discovery; responses arriving during a package pause scanning for explicit follow-up.
+No background auto-refill is enabled. API/terminal calls without a question target
+retain their one-package policy. Completed checks and spent request allowances are
+reused without being reset when the target changes.
+
+Epic-review continuation was corrected on 2026-10-22: new pending questions stay
+out of requirement/note grouping and boundary pairing. Workflow-specific questions
+that also cite a shared source no longer act like global discovery blockers.
+Directly affected workflows and genuinely unscoped/global questions still wait;
+the separate human approval safeguards are unchanged. A deterministic browser
+regression verifies ten selected, three questions per package, four packages and
+twelve retained questions within one epic.
 
 By default each task makes **at most three model request attempts across explicit retries** (initial
 interpretation keeps its existing one-request path). Compatible completed checks are reused,
@@ -467,7 +563,7 @@ approval; conflicting intent still needs clarification. Omitted history cannot b
 **Processing & queue → Gap exploration backlog** shows checked, pending, waiting and
 context-blocked counts for that exploration's input scope/revision, plus whether a model
 request was attempted. Counts are not a live completeness score. Up to twenty candidate
-packages are checked locally per click. Oversized tasks retain their evidence and are
+packages are checked locally per package-selection pass. Oversized tasks retain their evidence and are
 recorded as blocked so later tasks can proceed; changing their scope reconsiders them.
 Queued-response follow-up, scans, question help and Refine keep their separate policies.
 
@@ -2006,12 +2102,14 @@ that context is too large, selection retries with a submitted-response area, a
 pending-question area, or the first ordinary epic. Larger projects start focused;
 submitted-response areas take precedence over unrelated pending questions. Every
 area required by the current batch and all selected dependencies remain included.
-The five-pending-question limit is project-wide. Discovery prompts report the global
+Without an explicit question target, the five-pending-question limit is project-wide. Discovery prompts report the global
 pending count and remaining slots even when some questions are outside the working
 set. The response schema caps new questions at the available slots plus detailed
 pending questions eligible for evidence-backed retirement; deferred retirements free
 no slots. A full batch can still receive summary, requirement and assessment updates
-with no new questions.
+with no new questions, including when targeted gap runs already saved a larger
+backlog. Explicit targeted gap packages instead have a per-response bound and may
+exceed the project-wide soft stopping target; see Questions ready above.
 Input detail normally targets **48,000 characters**. If full detail still does not fit,
 the deterministic task planner switches to an explicitly partial working set:
 

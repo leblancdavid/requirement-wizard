@@ -32,7 +32,7 @@ function prepareAliases(project: Project, result: Analysis): Analysis {
   return { ...result, organization };
 }
 
-export function applyRound(project: Project, result: Analysis, newID: () => string, research: ResearchEvidence[] = [], resolutionTriggerSourceIDs: string[] = []) {
+export function applyRound(project: Project, result: Analysis, newID: () => string, research: ResearchEvidence[] = [], resolutionTriggerSourceIDs: string[] = [], batchQuestions = false) {
   result = prepareAliases(project, result);
   let omittedConcepts = 0;
   result = { ...result, questions: result.questions.map((question) => {
@@ -43,7 +43,7 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
   }) };
   const updated = result.pendingChanges?.changes.length ? structuredClone(project) : project;
   if (updated !== project) applyPendingChanges(updated, result);
-  validateAnalysisReferences(updated, result);
+  validateAnalysisReferences(updated, result, batchQuestions);
   // Validate model-facing IDs before replacing aliases with durable IDs, so
   // rejected references retain the names needed to diagnose the model output.
   const newRecords = new Set([...result.questions, ...result.requirements, ...(result.researchFindings ?? [])].flatMap((item) => item.localID ? [item.localID] : []));
@@ -147,9 +147,10 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
     } else {
       const requirement = project.requirements.find((r) => r.id === change.requirementID);
       if (!requirement || !project.epics.some((e) => e.id === requirement.epicID && !e.archived)) throw new Error("Review change targets a missing or archived requirement.");
-      if (change.type === "revise") {
+    if (change.type === "revise") {
         requirement.statement = change.statement; requirement.rationale = change.rationale; requirement.acceptance = change.acceptance;
         requirement.status = "needs-review";
+        delete requirement.authority;
       } else requirement.status = "rejected";
       requirement.reviewNote = change.reason;
       if (!requirement.sourceIDs.includes(source.id)) requirement.sourceIDs.push(source.id);
@@ -183,4 +184,5 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
     project.assessments.push({ ...input, epicID, checks, atRevision: project.revision + 1, answerVersions });
   }
   project.scopeAssessment = result.scopeAssessment ?? null;
+  return aliases;
 }

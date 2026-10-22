@@ -2,6 +2,16 @@
 
 ## User controls and scope
 
+2026-10-22 update: Design's single **Explore next gaps** button now uses workflow
+review, which does not use model-driven search or this experiment. The Settings
+checkbox is now **Use auxiliary merge for legacy individual-check exploration**;
+it applies only to legacy exploration resumed through ordinary discovery. Explicit
+API callers can continue selecting `savedEvidencePolicy: "prefix-aux-v1"` without
+`gapMode: "epic"`. Existing experimental receipts and recovery remain unchanged.
+The focused browser runner now starts legacy checks through the authenticated API
+and checks Settings' default/reset behavior separately. The original rollout
+instructions below are historical, not instructions for the new workflow button.
+
 2026-10-20. The prefix-preserving auxiliary merge is available for deliberate browser
 testing, **not enabled by default or qualified for broader rollout**.
 

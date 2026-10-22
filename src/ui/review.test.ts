@@ -252,8 +252,11 @@ test("review and duplicate removal explain pending evidence without invoking dec
   p.refinements = [];
   const ordinary = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [waiting], epicID: "all", sending: [], disabled: false,
     refine: () => {}, submit: async () => true, reviewRefinement: async () => true }));
-  assert.match(ordinary, /A saved review will need your attention instead of applying automatically/);
+  assert.match(ordinary, /Related processing needs attention/);
+  assert.match(ordinary, /aria-disabled="true"[^>]*>Approve<\/button>/);
+  assert.match(ordinary, /aria-disabled="true"[^>]*>Reject<\/button>/);
   assert.match(ordinary, /<textarea/);
+  assert.equal(reviewReadiness(p, reviewItems(p, [waiting], "pending")[0]!, [waiting]), "attention", "Failed related input must not look like a running update");
   assert.deepEqual({ ...p, refinements: before.refinements }, before);
 });
 
@@ -348,4 +351,27 @@ test("change requests use a separate required feedback editor without treating f
   assert.match(html, /maxlength="12000"/i); assert.match(html, /aria-disabled="true"[^>]*>Send change request/);
   const retained = renderToStaticMarkup(createElement(ChangeRequestForm, { initialText: "Keep my exact requested changes", disabled: true, reason: "Review updated evidence first", change: () => {}, send: async () => false, close: () => {} }));
   assert.match(retained, /Keep my exact requested changes/); assert.match(retained, /Review updated evidence first/);
+});
+
+test("active workers pause review decisions without hiding wording or disabling notes; completion and failure release the worker lock", () => {
+  const p = fixture(); p.refinements = [];
+  const job: Job = { id: "scan", projectID: p.id, expectedRevision: p.revision, model: p.model, kind: "scan", status: "running", leaseUntil: Date.now() + 60000 };
+  const props = { project: p, submissions: [], epicID: "all", sending: [], disabled: false, focusRequirementID: "aim",
+    refine: () => assert.fail("No inference"), submit: async () => assert.fail("No decision on render"), reviewRefinement: async () => assert.fail("No decision") };
+  const active = renderToStaticMarkup(createElement(ReviewQueue, { ...props, jobs: [job] }));
+  assert.match(active, /Project processing—decisions temporarily paused/);
+  assert.match(active, /does not necessarily mean this requirement is changing/);
+  assert.match(active, /Acceptance scenarios/);
+  assert.match(active, /<textarea[^>]*>/);
+  assert.doesNotMatch(active, /<textarea[^>]*disabled/);
+  for (const label of ["Approve", "Reject", "Request changes"]) assert.match(active, new RegExp(`aria-disabled="true"[^>]*>${label}<\\/button>`));
+  for (const status of ["completed", "failed", "cancelled"] as const) {
+    const finished = renderToStaticMarkup(createElement(ReviewQueue, { ...props, jobs: [{ ...job, status }] }));
+    assert.doesNotMatch(finished, /Project processing—decisions temporarily paused/);
+    assert.match(finished, /<button class="primary">Approve<\/button>/);
+  }
+  const expired = renderToStaticMarkup(createElement(ReviewQueue, { ...props, jobs: [{ ...job, leaseUntil: 0 }] }));
+  assert.match(expired, /<button class="primary">Approve<\/button>/);
+  const help = renderToStaticMarkup(createElement(ReviewQueue, { ...props, jobs: [{ ...job, helpRequest: { questionID: "question", action: "why" } }] }));
+  assert.match(help, /<button class="primary">Approve<\/button>/, "Advisory help does not own a specification write snapshot");
 });

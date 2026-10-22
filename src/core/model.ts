@@ -45,9 +45,11 @@ export type Concept = z.infer<typeof conceptSchema>;
 
 export const questionHelpRequestSchema = z.object({
   questionID: z.string().min(1),
-  action: z.enum(["rephrase", "why", "example", "decide", "follow-up"]),
+  action: z.enum(["rephrase", "why", "example", "decide", "follow-up", "define"]),
   message: z.string().min(1).max(4000).refine((value) => !!value.trim()).optional(),
-}).strict().refine((value) => value.action !== "follow-up" || !!value.message, "A follow-up needs a message.");
+  word: z.object({ phrase: z.string().trim().min(1).max(160), text: z.string().min(1).max(12000) }).strict().optional(),
+}).strict().refine((value) => value.action !== "follow-up" || !!value.message, "A follow-up needs a message.")
+  .refine((value) => value.action === "define" ? !!value.word && !value.message : !value.word, "Only word definitions require a word and its displayed text.");
 export type QuestionHelpRequest = z.infer<typeof questionHelpRequestSchema>;
 export const questionHelpResponseSchema = z.object({
   explanation: z.string().trim().min(1).max(6000),
@@ -66,12 +68,18 @@ const question = z.object({
   category: z.enum(dimensions).optional(),
   evidenceIDs: z.array(z.string().min(1)).min(1).max(8).optional(),
 });
+export const requirementAuthoritySchema = z.object({
+  format: z.literal(1), kind: z.literal("answer-derived"), sourceIDs: z.array(z.string().min(1)).min(1).max(8),
+  reason: z.string().trim().min(1).max(1200), atRevision: z.number().int().positive(),
+}).strict();
 const requirement = z.object({
   id: z.string(), statement: text, rationale: text, sourceIDs: z.array(z.string()).min(1),
   epicID: z.string().default("inbox"),
   acceptance: z.array(text).min(1).max(8),
   status: z.enum(["proposed", "accepted", "rejected", "needs-review"]),
   reviewNote: z.string().optional(),
+  /** Current wording derived from explicit input, not a human approval of generated text. */
+  authority: requirementAuthoritySchema.optional(),
 });
 export const researchEvidenceSchema = z.object({
   url: z.string().url().refine((value) => value.startsWith("https://") || value.startsWith("http://")),
@@ -147,12 +155,18 @@ export const pendingChangesSchema = z.object({ format: z.literal(1), changes: z.
   z.object({ type: z.literal("withdraw-requirement"), requirementID: z.string().min(1), ...pendingChangeEvidence }).strict(),
 ])).max(10) }).strict();
 
+/** Opt-in attestation for this response only. Missing on legacy/checkpoint outputs. */
+export const specificationUpdatesSchema = z.object({ format: z.literal(1), changes: z.array(z.discriminatedUnion("type", [
+  z.object({ type: z.literal("activate"), requirementID: z.string().min(1), ...pendingChangeEvidence }).strict(),
+  requirement.pick({ statement: true, rationale: true, acceptance: true }).extend({ type: z.literal("revise"), requirementID: z.string().min(1), ...pendingChangeEvidence }).strict(),
+])).max(10) }).strict();
+
 export const analysisSchema = z.object({
   summary: text, goals: z.array(text).max(10), actors: z.array(text).max(10),
   assumptions: z.array(text).max(15),
   questions: z.array(question.omit({ id: true, status: true, sourceID: true, retirementReason: true }).extend({ localID: z.string().optional(), epicID: z.string().optional() }).strict()).max(5),
   retireQuestions: z.array(z.object({ questionID: z.string(), reason: text }).strict()).max(30),
-  requirements: z.array(requirement.omit({ id: true, status: true, reviewNote: true }).extend({ localID: z.string().optional(), epicID: z.string().optional() }).strict()).max(10),
+  requirements: z.array(requirement.omit({ id: true, status: true, reviewNote: true, authority: true }).extend({ localID: z.string().optional(), epicID: z.string().optional() }).strict()).max(10),
   organization: z.array(organizationSchema).max(40).optional(),
   assessments: z.array(assessmentProposal).max(30).optional(),
   scopeAssessment: z.object({ confidence: z.enum(["low", "medium", "high"]), explanation: text }).strict().optional(),
@@ -161,6 +175,7 @@ export const analysisSchema = z.object({
   refinements: z.array(refinementProposalSchema).max(10).optional(),
   resolutionCheck: z.object({ format: z.literal(1), outcome: z.enum(["distinct", "proposal", "question", "blocked"]), explanation: text }).strict().optional(),
   pendingChanges: pendingChangesSchema.optional(),
+  specificationUpdates: specificationUpdatesSchema.optional(),
   reviewChanges: z.array(z.discriminatedUnion("type", [
     z.object({ type: z.literal("revise"), sourceID: z.string(), requirementID: z.string(), statement: text, rationale: text, acceptance: z.array(text).min(1).max(8), reason: text }).strict(),
     z.object({ type: z.literal("reject"), sourceID: z.string(), requirementID: z.string(), reason: text }).strict(),
@@ -271,6 +286,8 @@ export type Job = {
     epicReview?: import("./epic-review-types.js").EpicReview;
     decisionProjection?: { format: 1; omittedReviewSourceIDs: string[]; retainedReviewNoteSourceIDs: string[]; projectedReceiptSourceIDs?: string[] };
     refinementOnly?: boolean;
+    /** Soft stopping target; a completed package may exceed it. */
+    questionTarget?: number;
     refinementTarget?: { requirementID: string; fingerprint: string; contextKey?: string };
     refinementPair?: { requirementIDs: [string, string]; contextKey: string; includeUnapproved?: boolean; triggerSourceIDs?: string[] };
     submissionIDs?: string[];
@@ -328,7 +345,7 @@ export function validateRequirementEvidence(project: Project, requirements: Anal
   }
 }
 
-export function validateAnalysisReferences(project: Project, result: Analysis) {
+export function validateAnalysisReferences(project: Project, result: Analysis, batchQuestions = false) {
   const knownEvidence = new Set([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => r.id));
   for (const question of result.questions) {
     validateConcepts(question);
@@ -352,7 +369,7 @@ export function validateAnalysisReferences(project: Project, result: Analysis) {
     seen.add(key);
   }
   const pending = project.questions.filter((item) => item.status === "pending" && !retired.has(item.id)).length;
-  if (pending + result.questions.length > 5) throw new Error("Analysis exceeds the five-question active batch limit.");
+  if (!batchQuestions && result.questions.length && pending + result.questions.length > 5) throw new Error("Analysis exceeds the five-question active batch limit.");
   const requirements = new Set(project.requirements.map((item) => wordingKey(item.statement)));
   for (const item of result.requirements) {
     const key = wordingKey(item.statement);

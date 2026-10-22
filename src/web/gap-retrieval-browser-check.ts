@@ -1,4 +1,5 @@
 import { workspaceMenu } from "./menu-check-helpers.js";
+import { exploreLegacyGaps } from "./legacy-gap-check-helpers.js";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -49,7 +50,7 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Focused retrieval/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption(project.requirements[0]!.epicID);
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(project.id));
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("failed");
   assert.equal(store.jobs(project.id).at(-1)!.retrievalWork?.stages.length, 1, store.jobs(project.id).at(-1)!.diagnostic);
   const failed = structuredClone(store.jobs(project.id).at(-1)!);
@@ -64,7 +65,7 @@ try {
   await page.reload(); assert.equal(calls, 2);
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption(project.requirements[0]!.epicID);
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(project.id));
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("completed");
   assert.equal(calls, 3);
   await page.locator(".topbar .queue-trigger").click();

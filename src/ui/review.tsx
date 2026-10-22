@@ -58,7 +58,7 @@ export function reviewReadiness(project: Project, item: ReviewItem, submissions:
   if (availability.jobIDs.length) return "updating";
   const latest = [...submissions].reverse().find((s) => s.input.type === "review" && ids.includes(s.input.requirementID));
   if (latest?.status === "needs-attention" && !latest.conflict && !resolvedReviewAttempts(project, submissions).has(latest.id)) return "attention";
-  if (availability.submissionIDs.length) return "updating";
+  if (availability.submissionIDs.length) return submissions.some((s) => availability.submissionIDs.includes(s.id) && s.status === "needs-attention") ? "attention" : "updating";
   if (decisionClarifications(project, ids).length) return "decision";
   if (availability.state !== "ready") return "changed";
   return "ready";
@@ -212,6 +212,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
     return <section className="review-clarifications" aria-label="Decisions needed before approval"><h4>{questions.length} {questions.length === 1 ? "decision" : "decisions"} needed before approval</h4><p>Answer here without leaving Review. After processing, check the updated requirement and explicitly approve it. Deferring or delegating does not settle this choice.</p>{questions.map((q) => <React.Fragment key={q.id}>{captureAnswerScope(project, q.id) && <p className="save-notice">This answer's queued follow-up is limited to its {captureAnswerScope(project, q.id)!.requirementIDs.length} linked requirements. Use Add information in Design for broader constraints.</p>}{renderClarification(q)}</React.Fragment>)}</section>;
   };
   return <ActionScope reason={disabledReason}><section aria-label="Requirement review">
+    {disabled && disabledReason && <p className="save-notice" role="status"><strong>Decisions temporarily paused.</strong> {disabledReason} You can keep reading and writing notes. A paused click will not queue a decision; review the result and choose again when available.</p>}
     {!focusRequirementID && openIssue && <AttentionInbox project={project} submissions={submissions} jobs={jobs} open={openIssue} />}
     {!focusRequirementID && <><div className="review-toolbar">
       <p className="view-intro">Review at any time; unrelated open Design questions do not block approval. Answer linked clarifications here or in Design. Refine requirements checks wording and possible duplicates/conflicts. Approved requirements stay unchanged until you approve a replacement or resolution.</p>
@@ -259,13 +260,13 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
             </section>}
             <details><summary>Supporting evidence</summary>{p.original.sourceIDs.map((id) => <p className="source-excerpt" key={id}>{project.sources.find((s) => s.id === id)?.text ?? id}</p>)}</details>
             {stale && <p role="status">{refinementStaleReason(project, p)} This proposal cannot be approved as-is. Refresh only this {p.resolution ? "comparison" : "requirement"}, make your own duplicate-removal decision, or dismiss the proposal. No full refinement run is needed.</p>}
-            {pending && waiting && <p role="status">{availability.reason ?? "Finish the pending human input before approving this refinement or resolution."}</p>}
+            {pending && waiting && <p className="save-notice" role="status">{availability.jobIDs.length ? "Project processing—decisions temporarily paused. You can keep reading; use Processing & queue to view or stop the work." : availability.reason ?? "Finish the pending human input before approving this refinement or resolution."}</p>}
             {pending && <ClarificationLinks availability={availability} openQuestion={openQuestion} />}
             {pending && clarifications([p.requirementID, ...(p.resolution ? [p.resolution.relatedRequirementID] : [])])}
             {pending && !!availability.submissionIDs.length && processBlocking && <ActionButton className="secondary" disabled={disabled} onClick={() => processBlocking(availability.submissionIDs)}>Process blocking input</ActionButton>}
             {pending ? <div className="button-row"><ActionButton className="primary" disabled={disabled || stale || waiting} reason={disabled ? undefined : stale ? "This proposal is outdated. Refresh only this item, remove a duplicate yourself, or dismiss the proposal." : availability.reason} onClick={() => void save(true)}>{p.resolution ? "Approve resolution" : "Approve refinement"}</ActionButton>
               {stale && refreshRefinement && <ActionButton className="secondary" disabled={disabled || waiting} reason="Process pending human input before refreshing this comparison." onClick={() => refreshRefinement(p.id)}>{p.resolution ? "Refresh this comparison" : "Refresh this requirement"}</ActionButton>}
-              <ActionButton className="secondary" disabled={disabled} onClick={() => void save(false)}>{stale ? "Dismiss outdated proposal" : p.resolution ? "Keep both unchanged" : "Keep current wording"}</ActionButton>
+              <ActionButton className="secondary" disabled={disabled || !!availability.jobIDs.length} reason={availability.reason} onClick={() => void save(false)}>{stale ? "Dismiss outdated proposal" : p.resolution ? "Keep both unchanged" : "Keep current wording"}</ActionButton>
               {saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={p.resolution?.relatedRequirementID ?? p.requirementID} keepID={p.resolution ? p.requirementID : undefined} disabled={disabled} save={saveDuplicate} />}</div>
               : <p className="save-notice">{withdrawn ? "This outdated suggestion left the actionable review list automatically. It was not a human rejection. Use Refine requirements if a current suggestion is still needed." : p.status === "accepted" ? "This replacement was approved. Later requirement decisions may have changed its wording." : "This refinement was dismissed without applying its proposed changes. Later decisions may have changed or removed its requirements."}</p>}
           </div>}
@@ -286,6 +287,8 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
       const changed = !!draft && (draft.fingerprint !== fingerprint || draft.contextKey !== contextKey);
       const availability = decisionAvailability(project, [r.id], submissions, jobs);
       const approvalNeedsDecision = decisionClarifications(project, [r.id]).length > 0;
+      const decisionPaused = disabled || availability.jobIDs.length > 0 || availability.submissionIDs.length > 0 || availability.state === "needs-review";
+      const pauseReason = disabledReason || availability.reason;
       const retainedConflict = !!latest && !resolvedAttempts.has(latest.id) && latest.conflict && !latest.applied && latest.status === "needs-attention";
       const response = latest?.response;
       const blocked = sending.includes(`review:${r.id}`) || !!latest && (["queued", "saved", "processing"].includes(latest.status) || latest.status === "needs-attention" && latest.applied && !latest.conflict);
@@ -320,17 +323,17 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
             const current = drafts.current[r.id];
             drafts.current[r.id] = { ...(current ?? reviewDraft(project, r, note)), note, edited: true };
           }} />
-          {availability.state !== "ready" && <p role="status">{availability.questionIDs?.length ? <>Approval: {availability.reason} You can still reject this requirement and use your note to request different behavior; rejection does not answer or retire these questions.</> : availability.jobIDs.length ? <>{availability.reason} Your review can be saved and queued while processing finishes. It applies afterwards only if the reviewed evidence and relevant decision checks remain current.</> : <>{availability.reason} A saved review will need your attention instead of applying automatically.</>}</p>}
+          {availability.state !== "ready" && <p className="save-notice" role="status">{availability.questionIDs?.length ? <>Approval: {availability.reason} You can still reject this requirement and use your note to request different behavior; rejection does not answer or retire these questions.</> : availability.jobIDs.length ? <><strong>Project processing—decisions temporarily paused.</strong> Discovery or a folder scan is running; this does not necessarily mean this requirement is changing. You can keep reading and writing notes. Use Processing & queue to view or stop the work.</> : availability.submissionIDs.length ? <><strong>{submissions.some((s) => availability.submissionIDs.includes(s.id) && s.status === "needs-attention") ? "Related processing needs attention." : "Waiting for related input to finish processing."}</strong> {availability.reason} Your notes stay here; review the result before deciding.</> : availability.reason}</p>}
           <ClarificationLinks availability={availability} openQuestion={openQuestion} />
           {clarifications([r.id])}
           {!retainedConflict && !!availability.submissionIDs.length && (processBlocking || resume) && <ActionButton className="secondary" disabled={disabled} onClick={() => processBlocking ? processBlocking(availability.submissionIDs) : resume?.()}>Process blocking input</ActionButton>}
           {changed && <ReviewComparison original={draft?.original} evidenceIDs={draft?.evidenceIDs} current={r} project={project} />}
           {changed && <p className="save-notice" role="alert"><strong>Updated since you started reviewing.</strong> This requirement or its supporting information changed. Your note is retained. Check the changes above before choosing a decision below.</p>}
-          <div className="button-row"><ActionButton className="primary" disabled={blocked || approvalNeedsDecision} reason={approvalNeedsDecision ? "Answer the linked clarification here or in Design, process its follow-up, then review this requirement again." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton><ActionButton className="secondary" disabled={blocked} reason="This review is being saved or is already waiting for processing." onClick={() => void save("rejected")}>Reject</ActionButton>
+          <div className="button-row"><ActionButton className="primary" disabled={blocked || decisionPaused || approvalNeedsDecision} reason={decisionPaused ? pauseReason : approvalNeedsDecision ? "Answer the linked clarification here or in Design, process its follow-up, then review this requirement again." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton><ActionButton className="secondary" disabled={blocked || decisionPaused} reason={decisionPaused ? pauseReason : "This review is being saved or is already waiting for processing."} onClick={() => void save("rejected")}>Reject</ActionButton>
           {r.status !== "rejected" && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={r.id} disabled={disabled || blocked} save={saveDuplicate} />}
            </div>
-          {r.status !== "rejected" && <ActionButton className="secondary" disabled={blocked} onClick={() => setChangeTarget(r.id)}>Request changes</ActionButton>}
-          {changeTarget === r.id && r.status !== "rejected" && <ChangeRequestForm initialText={draft?.changeNote ?? (latest?.conflict && latest.input.type === "review" && latest.input.action === "changes-requested" ? latest.input.note : "")} disabled={blocked} reason="This requirement already has a response being saved or processed." change={(text) => {
+          {r.status !== "rejected" && <ActionButton className="secondary" disabled={blocked || decisionPaused} reason={pauseReason} onClick={() => setChangeTarget(r.id)}>Request changes</ActionButton>}
+          {changeTarget === r.id && r.status !== "rejected" && <ChangeRequestForm initialText={draft?.changeNote ?? (latest?.conflict && latest.input.type === "review" && latest.input.action === "changes-requested" ? latest.input.note : "")} disabled={blocked || decisionPaused} reason={pauseReason || "This requirement already has a response being saved or processed."} change={(text) => {
             drafts.current[r.id] = { ...(drafts.current[r.id] ?? reviewDraft(project, r, "")), changeNote: text };
           }} send={(text) => save("changes-requested", text)} close={() => setChangeTarget(undefined)} />}
         </div>}

@@ -31,6 +31,76 @@ function seed(store: ProjectStore) {
   return p;
 }
 
+test("question-target scans publish successive packages and keep final-package overshoot", async () => {
+  for (const gapMode of [undefined, "epic"] as const) for (const initial of [0, 4, 7]) {
+    const store = new ProjectStore(":memory:");
+    let queue: DiscoveryQueue | undefined;
+    try {
+      let p = seed(store);
+      const questions = (count: number, prefix: string) => Array.from({ length: count }, (_, i) => ({ text: `${prefix} decision ${i}?`, whyItMatters: "A specific unresolved choice", options: [{ label: "Yes", consequence: "Preserve behavior" }, { label: "No", consequence: "Change behavior" }] }));
+      if (initial) {
+        const job = store.beginJob(p.id, p.revision).job;
+        store.claimJob(job.id, Date.now() + 60000);
+        store.attachContext(job.id, { revision: p.revision, focusEpicID: null, includedIDs: [], omittedIDs: [], characters: 0, budget: 48000, questionTarget: 5 });
+        // Saved states may already exceed the old five-question aggregate limit.
+        store.finishJob(job.id, { ...empty(), questions: questions(Math.min(initial, 5), "Existing") });
+        p = store.get(p.id);
+        if (initial > 5) {
+          const extra = store.beginJob(p.id, p.revision).job; store.claimJob(extra.id, Date.now() + 60000);
+          store.attachContext(extra.id, { revision: p.revision, focusEpicID: null, includedIDs: [], omittedIDs: [], characters: 0, budget: 48000, questionTarget: 5 });
+          store.finishJob(extra.id, { ...empty(), questions: questions(initial - 5, "More existing") });
+        }
+      }
+      let calls = 0;
+      queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(project, options) {
+        calls++;
+        assert.equal(options.context.manifest.questionTarget, 5);
+        if (calls > 1) assert.ok(project.questions.length >= 3, "previous results publish before the next package");
+        return { ...empty(), questions: questions(3, `Package ${calls}`).map((q) => ({ ...q,
+          ...(options.context.manifest.epicReview ? { epicID: options.context.manifest.epicReview.epicID, evidenceIDs: options.context.manifest.epicReview.recordIDs } : {}) })) };
+      } }));
+      queue.resume(p.id, { questionTarget: 5, research: false, gapMode });
+      for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(queue.isActive(p.id), false);
+      assert.equal(calls, initial >= 5 ? 0 : initial === 4 ? 1 : 2, queue.progress(p.id).join("\n"));
+      assert.equal(store.get(p.id).questions.length, initial >= 5 ? initial : initial === 4 ? 7 : 6);
+      assert.match(queue.progress(p.id).join("\n"), /target reached/);
+      // Ordinary answer/review follow-up must still be able to save with >5 pending.
+      const current = store.get(p.id);
+      const followup = await new DiscoveryService(store, { async analyze() { return empty(); } }).analyze(p.id, current.revision, { recordIDs: [current.requirements[0]!.id], isolatedTask: true });
+      assert.equal(followup.status, "completed", followup.diagnostic);
+    } finally { await queue?.close(); store.close(); }
+  }
+});
+
+test("question-target scans stop on exhaustion, failure and cancellation without forcing questions", async () => {
+  for (const outcome of ["empty", "failure", "cancel", "budget"] as const) {
+    const store = new ProjectStore(":memory:");
+    let queue: DiscoveryQueue | undefined;
+    try {
+      const p = seed(store); let calls = 0;
+      queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_project, options) {
+        calls++;
+        if (outcome === "budget" || outcome !== "empty" && calls === 1) return { ...empty(), questions: [{ text: `Unresolved package decision ${calls}?`, whyItMatters: "Clarify a real boundary", options: [{ label: "Keep", consequence: "Preserve behavior" }, { label: "Change", consequence: "Revise behavior" }] }],
+          requirements: outcome === "budget" ? [{ statement: `Additional behavior ${calls}`, rationale: "Supported by the original idea", sourceIDs: [p.sources[0]!.id], acceptance: [`Outcome ${calls} is observable`] }] : [] };
+        if (outcome === "failure") throw new Error("Deliberate fixture failure");
+        if (outcome === "cancel") { queue!.stop(p.id); options.signal.throwIfAborted(); }
+        return empty();
+      } }));
+      queue.resume(p.id, { questionTarget: 50, research: false });
+      for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(queue.isActive(p.id), false);
+      assert.equal(store.get(p.id).questions.length, outcome === "empty" ? 0 : outcome === "budget" ? 10 : 1);
+      assert.ok(calls > 0 && calls <= 10);
+      if (outcome === "budget") { assert.equal(calls, 10); assert.match(queue.progress(p.id).join("\n"), /stopped after 10 packages/); }
+      else if (outcome !== "empty") assert.equal(calls, 2);
+      else assert.match(queue.progress(p.id).join("\n"), /No eligible packages remain/);
+      assert.throws(() => queue!.resume(p.id, { questionTarget: 0 }), /1 to 50/);
+      assert.throws(() => queue!.resume(p.id, { questionTarget: 51 }), /1 to 50/);
+    } finally { await queue?.close(); store.close(); }
+  }
+});
+
 function reviewSource(id: string, r: Project["requirements"][number], note: string, supersedes?: string): Project["sources"][number] {
   return { id, kind: "confirmation", epicID: r.epicID, requirementID: r.id, ...(supersedes ? { supersedes } : {}),
     text: `Requirement ${r.id}: ${r.statement}\nAcceptance scenarios: ${JSON.stringify(r.acceptance)}\nHuman decision: accepted\nAddendum: ${note}` };

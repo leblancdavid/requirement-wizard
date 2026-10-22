@@ -110,12 +110,13 @@ export class DiscoveryQueue {
     return item;
   }
 
-  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic" } = {}) {
+  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number } = {}) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
     if (this.isActive(id)) throw new Error("This project already has an active discovery job.");
     const project = this.service.store.get(id);
+    if (options.questionTarget !== undefined && (!Number.isInteger(options.questionTarget) || options.questionTarget < 1 || options.questionTarget > 50 || options.refinementOnly)) throw new Error("Choose a question target from 1 to 50 for gap exploration.");
     if (options.refreshProposalID) {
       const proposal = project.refinements.find((p) => p.id === options.refreshProposalID && p.status === "pending");
       if (!options.refinementOnly || !proposal || !refinementIsStale(project, proposal)) throw new Error("Choose an outdated pending proposal to refresh.");
@@ -134,8 +135,10 @@ export class DiscoveryQueue {
       const progress: string[] = []; this.messages.set(id, progress);
       this.refinementRuns.delete(id);
       const promise = Promise.resolve().then(async () => {
-        await this.service.analyze(id, project.revision, { gapMode: "epic", focusEpicID: options.focusEpicID, research: options.research,
-          signal: controller.signal, onProgress: (message) => { progress.push(message); if (progress.length > 20) progress.shift(); } });
+        const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
+        if (options.questionTarget !== undefined) await this.findQuestions(id, options, controller.signal, report);
+        else await this.service.analyze(id, project.revision, { gapMode: "epic", focusEpicID: options.focusEpicID, research: options.research,
+          signal: controller.signal, onProgress: report });
       }).catch((error) => { progress.push(safeMessage(error instanceof Error ? error.message : error)); }).finally(() => this.active.delete(id));
       this.active.set(id, { controller, promise });
       return;
@@ -209,7 +212,41 @@ export class DiscoveryQueue {
     }
   }
 
-  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy }) {
+  private async findQuestions(id: string, options: { questionTarget?: number; focusEpicID?: string; research?: boolean; gapMode?: "epic"; savedEvidencePolicy?: SavedEvidencePolicy }, signal: AbortSignal, report: (message: string) => void) {
+    const target = options.questionTarget!;
+    const batchSignal = AbortSignal.any([signal, AbortSignal.timeout(15 * 60_000)]);
+    const waitingInput = () => {
+      const submissions = this.service.store.submissions(id);
+      const resolved = resolvedReviewAttempts(this.service.store.get(id), submissions);
+      return submissions.some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "needs-attention"].includes(s.status));
+    };
+    for (let index = 0; index < 10; index++) {
+      if (this.closing || batchSignal.aborted) { report("Gap scan stopped; completed packages are saved."); return; }
+      if (waitingInput()) {
+        this.service.store.pauseQueue(id, true);
+        report("Gap scan paused for saved responses. Resolve or process waiting responses before finding more questions."); return;
+      }
+      const project = this.service.store.get(id);
+      // The target is project-wide, even when the next packages are feature-scoped.
+      const pending = project.questions.filter((q) => q.status === "pending").length;
+      if (pending >= target) { report(`Question target reached: ${pending} pending (target ${target}). All questions from the last package were kept.`); return; }
+      report(`Finding gaps · ${pending} pending / target ${target} · package ${index + 1} of at most 10. The target is not a quota or hard cap.`);
+      const job = await this.service.analyze(id, project.revision, { ...options, signal: batchSignal, onProgress: report });
+      if (job.status !== "completed") { this.service.store.pauseQueue(id, true); report(job.diagnostic ?? `Gap scan ${job.status}; completed packages are saved.`); return; }
+      if (!job.result && job.context?.epicReview && job.epicReviewReport?.blockers.some((b) => b.packageID === job.context!.epicReview!.packageID)) {
+        report("Package evidence blocker saved, not reviewed. Continuing independent eligible packages within the same run limits.");
+        continue;
+      }
+      if (!job.result) { report("No eligible packages remain in this scope. Review saved blockers or answer waiting questions; this is not proof of completeness."); return; }
+      if (waitingInput()) {
+        this.service.store.pauseQueue(id, true);
+        report("Gap scan paused for saved responses. Resume discovery to process them before finding more questions."); return;
+      }
+    }
+    report("Gap scan stopped after 10 packages; completed results are saved. Start again to explore more.");
+  }
+
+  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; questionTarget?: number }) {
     if (this.closing || this.isActive(id) || this.service.store.executionActive(id)) return;
     if (!manual && this.service.store.executionExpired(id)) {
       this.service.store.pauseQueue(id, true);
@@ -366,6 +403,10 @@ export class DiscoveryQueue {
         if (batch.length) report(`Processing one saved response in its own context; waiting: ${waiting}.`);
         for (const item of batch) { delete item.contextBlock; delete item.diagnostic; this.service.store.saveSubmission(item); }
         const research = manual?.research ?? batch.some((s) => s.research);
+        if (!batch.length && manual?.questionTarget !== undefined) {
+          await this.findQuestions(id, manual, controller.signal, report);
+          break;
+        }
         const job = await this.service.analyze(id, project.revision, {
           savedEvidencePolicy: batch.length ? undefined : manual?.savedEvidencePolicy,
           signal: controller.signal, research, ...task(batch), submissionIDs: batch.map((s) => s.id), onProgress: report,
@@ -387,6 +428,10 @@ export class DiscoveryQueue {
         }
         if (followupStopped) break; // Failure owns its pause; a newer worker must not be paused here.
         if (job.status !== "completed" || batch.some((s) => s.status === "needs-attention")) { this.service.store.pauseQueue(id, true); break; }
+        if (manual?.questionTarget !== undefined) {
+          explicit = manual;
+          continue;
+        }
         // Finish the finite selected work, then leave unrelated areas paused.
         if (scope && !continuing) {
           const remaining = this.service.store.submissions(id).some((s) => ["queued", "saved"].includes(s.status) || s.status === "needs-attention" && !s.conflict);

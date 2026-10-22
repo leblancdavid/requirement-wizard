@@ -95,7 +95,9 @@ function interpretation(project: Project) {
 function requirementMarkdown(items: Project["requirements"], evidenceLink: (id: string) => string) {
   return items.flatMap((item) => [`### ${item.id} — ${item.status}`, item.statement, `Rationale: ${item.rationale}`,
     "Acceptance criteria:", ...item.acceptance.map((criterion) => `- ${criterion}`),
-    `Sources: ${item.sourceIDs.map(evidenceLink).join(", ")}`, ...(item.reviewNote ? [`Review: ${item.reviewNote}`] : [])]);
+    `Sources: ${item.sourceIDs.map(evidenceLink).join(", ")}`,
+    ...(item.authority ? [`Authority: derived from explicit human input at revision ${item.authority.atRevision}; not a separate approval of generated wording. ${item.authority.reason}`] : []),
+    ...(item.reviewNote ? [`Review: ${item.reviewNote}`] : [])]);
 }
 function questionMarkdown(items: Project["questions"]) {
   return ["## Open questions", ...items.filter((q) => ["pending", "deferred", "delegated"].includes(q.status)).map((q) => `- [${q.status}] ${q.id}: ${q.text}`)];

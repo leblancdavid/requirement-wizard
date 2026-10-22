@@ -39,6 +39,7 @@ export function validateScopedAnswerResult(project: Project, scopes: AnswerScope
   if (areas.has(undefined) || areas.has("project") || result.requirements.length || result.retireQuestions.length || result.organization?.length || result.assessments?.length || result.reviewChanges?.length
     || result.pendingChanges?.changes.some((c) => c.type === "revise-question" ? !questionInScope(c.questionID) : !ids.has(c.requirementID))
     || result.refinements?.some((p) => !ids.has(p.requirementID) || p.resolution && !ids.has(p.resolution.relatedRequirementID))
+    || result.specificationUpdates?.changes.some((c) => !ids.has(c.requirementID))
     || result.questions.some((q) => !areas.has(q.epicID) || !q.evidenceIDs?.some((id) => ids.has(id)) || q.evidenceIDs.some((id) => project.requirements.some((r) => r.id === id) && !ids.has(id)))) {
     throw new Error("Scoped answers can only revise their linked requirements or propose replacements/linked clarifications. Broader input needs a feature or project note; no unrelated changes were applied.");
   }

@@ -131,6 +131,10 @@ scope, assumptions, and unknowns from the initial idea.
 **RW-008 — Adaptive question batches.** Generate small related batches, normally
 three to five questions, prioritized by impact, uncertainty, and dependencies.
 
+- Allow a configurable pending-question stopping target. Continue bounded packages
+  until the target is reached or eligible work/safety budget runs out. Keep useful
+  final-package questions even above the target; never force questions to fill it.
+
 - Explain why a question matters and the consequences of its options.
 - Support custom text, help deciding, deferral, and scoped delegation.
 - Re-evaluate outstanding questions after answers; retire irrelevant ones with a reason.
@@ -181,6 +185,12 @@ and allow editing, accepting, or rejecting proposed requirements.
   rewrite previously confirmed intent.
 - Provide a dedicated requirement Review queue beside Questions, with optional
   addenda, approve/reject actions, automatic advance, and durable AI follow-up.
+- Keep gap discovery in Design with one workflow-based action and compact question
+  target. While live project processing or related unfinished input makes a decision
+  unsafe, keep Review records and draft notes visible but pause decision submission
+  with an explicit reason/next step. Release the worker pause when processing ends;
+  preserve changed-evidence comparisons and require a fresh click, not queued replay.
+  Global active-worker exclusion remains until independently safe publication exists.
 - Apply clearly requested wider changes from review addenda with linked provenance;
   ask targeted questions when scope is ambiguous. Revised wording returns to review,
   and removed features retain their records/history (DEC-020).

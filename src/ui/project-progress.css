@@ -1,5 +1,8 @@
 .progress-trigger { text-align: left; border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; background: var(--surface); }
 .progress-trigger:hover { background: var(--soft); border-color: var(--accent); }
+.topbar .progress-trigger { min-width: 0; min-height: 5.5rem; border-radius: 8px; padding: 8px 12px; }
+.topbar .header-progress-label strong { font-size: 1.429rem; line-height: 1.2; }
+.topbar .progress-trigger > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .progress-dialog { --modal-width: 680px; }
 .progress-dialog p, .progress-dialog small { color: var(--muted); }
 .progress-stage { margin: 12px 0; border: 1px solid var(--border); border-radius: 9px; padding: 14px; }

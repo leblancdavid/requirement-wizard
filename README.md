@@ -31,7 +31,12 @@ current gaps. Expand an area's definition assessment in the breakdown for catego
 explanations and linked evidence. Local code findings do not earn main-delivery credit.
 Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
-**Review next epic workflow** adds an alternative to individual gap checks: related
+**Design → Explore next gaps** reviews related workflows and their declared dependency
+boundaries. The compact **Questions ready** input configures how many unanswered questions to
+keep ready (1–50, default 5). Gap exploration continues through bounded packages,
+showing results as they save. The target is a stopping threshold, not a quota or
+hard cap: useful questions from the final package are kept even above the target.
+This is the single Design-only discovery action: related
 records are reviewed together across behavior, recovery and acceptance, with exact
 linked evidence prepared locally and no model-driven search/paging. Select a feature
 or work epic by epic; dependency-boundary packages follow. Existing saved checks are
@@ -52,14 +57,15 @@ For an exhausted saved gap task, **Continue exploration** offers an explicit one
 allowance of up to three additional requests (six cumulative attempts maximum), retaining
 saved stages and spent calls. Ordinary Resume does not reset the limit or grant calls.
 After six attempts without a final response, unchanged checks remain request-limit blocked;
-**Explore next gaps** moves to other pending checks rather than repeatedly selecting them.
+legacy individual-check exploration moves to other pending checks rather than repeatedly selecting them.
 The [deterministic retrieval baseline](docs/retrieval-baseline.md) records first-query
 hits, intentional misses and exact-use blockers on large synthetic saved projects.
 An [offline candidate evaluation](docs/retrieval-evaluation.md) compares bounded retrieval
 approaches across two domains; density-ranking and sampling policies are not enabled in the app.
 A [prefix-preserving merge experiment](docs/retrieval-merge.md) tests auxiliary-field gains
 through actual service/checkpoints. A [default-off browser pilot](docs/retrieval-browser-pilot.md)
-now permits explicit manual testing; terminal and automatic discovery keep default search.
+retains explicit legacy API/recovery testing; the workflow button does not use search,
+and terminal and automatic discovery keep default search.
 Connect a local folder for each project to automatically save versionable requirements
 and progress files. Choose it during creation or use **Settings → Project workspace**.
 Generated requirements are split by stable feature ID with a linked overview and shared

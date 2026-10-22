@@ -19,6 +19,153 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Evidence-blocked epic outcomes and independent continuation (2026-10-22)
+
+Source and target remain SQLite 3, epic-review/retrieval format 1 and unchanged
+project/portable formats. A new valid `reviewBlocked` response is saved atomically
+as a completed job with its existing `epicReviewReport` blocker and no `result`
+or retrieval final. Completion records finished work, **not** a reviewed package.
+The transaction requires a live lease, matching expected revision, package blocker
+and matching spent-attempt count; it makes no specification revision. Invalid
+output/provider failures retain failure semantics. Targeted runs continue independent
+packages after valid evidence blockers without extra retries or relaxed run bounds.
+
+No persisted-data rewrite or schema migration is necessary. The planner recognizes
+both old failed blockers and new completed-without-result blockers, preserves their
+specific reasons, checkpoints, original IDs/history and spent attempts, and skips
+unchanged packages. No automatic inference, blocker reset or reassessment is granted.
+The uncertainty-versus-factual-evidence clarification is runtime prompt text only:
+package construction, exact context data, evidence/check fingerprints and compatible
+saved finals remain unchanged. Existing genuinely stale evidence is not made current.
+Older failed jobs are not relabelled; downgrade behavior for the new outcome semantics
+is not qualified.
+
+Upgrade tests reproduce the previous failed-blocker payload, retain a new blocker
+after an exact load plus a completed check, reopen SQLite twice and verify no replay
+or rewrites. Tests also cover grounded unknown-startup questions, linked versus
+path-mentioned script evidence, independent continuation, all-blocked termination,
+provider/malformed failures, cancellation, stale revisions and expired leases.
+Live model question quality and the reported project's actual scan/link state remain
+unverified; no user database inspection or live calls are required by these checks.
+Verification: type check, full 584-test suite, latest 38/38 epic tests, production
+UI build and epic browser regression passed on Windows Node 22.23.3. The final
+targeted run includes an additional ten-package-ceiling check. The browser assertion
+was updated after its first run to expect the final run outcome rather than the
+intermediate blocker; saved blocker details remain explicitly asserted.
+
+## Compact Design discovery and review pauses (2026-10-22)
+
+Source and target SQLite, project, portable, assessment/checkpoint and job formats
+are unchanged. The single Design button now explicitly chooses existing epic mode;
+it does not convert legacy checks, reset spent attempts or invalidate compatible
+workflow results. Existing per-project `reqwizit-question-target` browser preferences
+retain their key, bounds and meaning under the **Questions ready** label.
+
+Review now prevents predictable unsafe submissions while live workers or related
+unfinished input block a decision, instead of inviting queued approvals. This changes
+UI availability only: original submissions, notes, decision bases, histories and
+transactional storage/queue semantics remain untouched. No forward data migration,
+startup inference or reassessment is needed. Existing saved queued reviews remain
+recoverable under their original checks. Failed/cancelled/completed jobs and expired
+leases do not independently leave a live-worker UI lock; other blockers still apply.
+Deterministic render tests cover these states and read-only notes; browser coverage
+checks a blocked click creates no submission, retained notes and an explicit later
+decision. Concurrent unrelated publication remains future work.
+
+## Epic question continuation / waiting isolation (2026-10-22)
+
+Source and target remain the existing epic-review format 1 and unchanged SQLite,
+project and portable formats. This is a planner correction, not a saved-data
+rewrite: unresolved questions no longer participate in requirement/note grouping
+or boundary pairing; they have waiting-only singleton packages and remain exact
+supporting evidence for linked targets. Recompute scheduling on explicit review.
+No startup inference or reset is required, and existing question IDs/answers,
+source evidence, jobs, checkpoints, spent attempts and histories are retained.
+
+Package IDs and exact-evidence keys keep their existing algorithms. Compatible
+requirement/note packages retain their memberships and completed checks. Former
+mixed packages containing unresolved questions were waiting, not completed review
+work; they are not relabelled as checked. Saved original package records remain in
+history. Human approval semantics/fingerprints are unchanged. For discovery only,
+an explicitly other-workflow question's shared-source citation does not block
+independent review; source-only/global uncertainty, direct links, answer provenance
+and saved human input remain conservative blockers. Previously dated evidence is
+never made current by changing this scheduling rule.
+
+Tests cover stable independent workflow/boundary identities after three new
+grounded questions, separate approval/global-question gates, ten-question
+continuation with overshoot, and repeated SQLite reopen preserving prior completed
+checks, pending questions and original jobs without replay. A deterministic browser
+fixture exercises 24 requirements in one epic and four sequential three-question
+results, retaining twelve questions with a target of ten. Live-provider behavior
+has not been requalified by these fixture checks.
+
+Verification on Windows Node 22.23.3: full deterministic suite **572 passed**;
+final targeted epic/backlog suite **42 passed**; type check, UI build, epic-review
+browser regression (including shared-source citations), and diff check passed.
+
+## Configurable gap question targets (2026-10-21)
+
+SQLite/project/portable schema versions, check fingerprints and evidence identities
+are unchanged. Targeted gap jobs add optional `context.questionTarget` scheduling
+metadata; legacy jobs without it keep their original five-pending publication policy.
+The browser remembers each project's target in a separate localStorage key (default
+5, integer 1–50); this is a local UI preference, not a shared specification decision.
+No saved records need rewriting, no forward data transformation is required, and
+existing completed checks, request allowances, IDs, evidence and histories remain
+valid. Changing the target does not trigger reassessment or reset model-call budgets.
+
+Publication permits final-package overshoot only for explicitly targeted jobs;
+ordinary no-new-question follow-up also tolerates already-saved larger backlogs.
+Each package retains the existing expected-revision transaction/checkpoints. Stopping,
+failure or restart preserves earlier packages, without automatically restarting
+inference. Existing legacy-reopen/checkpoint tests remain applicable; targeted queue
+tests cover successive publication, overshoot, already-exceeded targets, empty work,
+failure/cancellation and ordinary follow-up with more than five pending questions.
+
+Verification: Windows Node 22.23.3 type checking, deterministic tests, UI build,
+main/portable browser checks and the epic-review browser check passed. Browser
+coverage includes per-project target persistence, multi-package exhaustion, saved
+stage reuse, outcome explanations and mobile layout. Live model usefulness/cost
+and long-running live scan behavior have not been qualified; no provider inference
+was used for these checks.
+Two full runs passed 568 tests before the additional API-boundary test was added.
+The final 569-test run passed 568, with a Windows `EPERM` creating the unrelated
+credential transaction lock directory; both credential tests passed on isolated
+rerun. The new question-target API test passed in that full run.
+
+## Definition-only word help (2026-10-21)
+
+The prior question-local fix still allowed vocabulary clicks to pull in more than
+48k of exact project/dependency evidence. New UI clicks use the additive `define`
+help action with `word: { phrase, text }`, instead of encoding vocabulary help in a
+generic `follow-up` message. New `word-help-v1` manifests explicitly describe a
+partial question representation: exact enclosing wording plus the selected display
+field in the request, not a review of full question/evidence records. No evidence
+is truncated or rewritten; this request is only authorized to explain terminology,
+not recommend product choices. Other help actions keep their guarded context.
+
+SQLite, portable formats, assessment semantics and freshness identities are unchanged.
+Old requests/manifests/responses remain valid and unmodified; the UI recognizes
+legacy word-help message prefixes as well as structured definitions. There is no
+startup transformation, automatic retry, data reset or model-call replay. A failed
+old explanation remains historical; a new click explicitly requests a definition.
+Completed new definition jobs round-trip through the same durable job storage.
+No queue or lease/revision/cancellation policy changes are made.
+
+Regression fixtures reproduce more than 73k of mandatory guardrails while discovery
+holds a live job: broader advice blocks with no inference, but definition-only help
+completes without modifying human state, the live job or the failed attempt. Two
+reopens preserve exact jobs and revisions without replay. Additional checks cover
+large option fields and linked files, prior advice omission, exact display-field
+validation and malformed definition payloads. Live provider qualification is not
+established by these fixtures.
+
+Verification: `npm run check`, all 571 deterministic tests (566 main-suite and
+five worker lifecycle checks), `npm run test:browser` (including the UI production
+build and portable-browser checks), and `git diff --check` passed with Node
+22.23.3 for SQLite-backed checks. No live model calls were made.
+
 ## Question-local advisory help context (2026-10-21)
 
 New help jobs use a `question-help-v1` context manifest instead of the generic

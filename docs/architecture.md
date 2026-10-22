@@ -35,6 +35,9 @@ implemented under `src/`. See [decisions.md](decisions.md),
 - `src/core/question-help-context.ts`: dedicated advisory question context with exact
   linked evidence and human guardrails; one 48k input bound reserves the request and
   trims only counted historical exchanges, without discovery expansion.
+  Structured word-definition requests instead load exact displayed wording only,
+  validate it against the current question, and explicitly disallow decision advice
+  based on unloaded evidence. This lexical scope uses `word-help-v1` manifests.
 - `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.
 - `src/desktop/backend-host.ts` and `backend.ts`: owned service worker lifecycle.
   SQLite, providers and portable publication run off Electron's native-window event
@@ -49,6 +52,9 @@ implemented under `src/`. See [decisions.md](decisions.md),
   linked clarification, dependency guardrails and live discovery snapshots inside
   write transactions; browser review explains the same policy. New reviews/wording
   proposals retain their basis without rewriting legacy provenance or completed checks.
+  Browser Review and Project map pause unsafe decision buttons before submission,
+  retaining readable records/notes. This is not per-record concurrent publication:
+  active discovery snapshots still exclude decisions project-wide.
 - `src/core/input-scope.ts`: conservative server-side answer-scope capture, immutable
   source/receipt checks and target-bounded follow-up validation. Queue tasks include
   scoped requirements as mandatory evidence; generic/legacy input stays feature-wide.

@@ -208,9 +208,13 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic";
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
+    if (options.questionTarget !== undefined) {
+      z.number().int().min(1).max(50).parse(options.questionTarget);
+      if (options.helpRequest || options.refinementOnly || options.recordIDs?.length || options.submissionIDs?.length || options.continueGapJobID) throw new Error("Question targets require manual gap exploration.");
+    }
     if (options.savedEvidencePolicy !== undefined) savedEvidencePolicySchema.parse(options.savedEvidencePolicy);
     if (options.gapMode !== undefined && options.gapMode !== "epic") throw new Error("Unsupported gap discovery mode.");
     if (options.gapMode && (options.helpRequest || options.refinementOnly || options.recordIDs?.length || options.submissionIDs?.length
@@ -248,7 +252,7 @@ export class DiscoveryService {
         options.onProgress?.("No pending epic packages: review saved blockers or answer waiting decisions. No model request made.");
         return this.store.attachEpicReviewReport(job.id, epicPlan.report, true);
       }
-      let context = options.helpRequest ? questionHelpContext(project, options.helpRequest, this.store.jobs(projectID))
+      let context = options.helpRequest ? questionHelpContext(project, options.helpRequest, options.helpRequest.action === "define" ? [] : this.store.jobs(projectID))
         : continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
         : epicPlan?.task?.context ? epicPlan.task.context
         : generalExploration ? planGapContext(project, this.store.gapHistory(projectID), options.focusEpicID, (revision) => this.store.get(projectID, revision))
@@ -260,6 +264,7 @@ export class DiscoveryService {
       if (continuationSource?.gapReport) context.gapReport = structuredClone(continuationSource.gapReport);
       context.manifest.submissionIDs = options.submissionIDs;
       context.manifest.refinementOnly = options.refinementOnly;
+      context.manifest.questionTarget = options.questionTarget ?? continuationSource?.context?.questionTarget;
       if (context.manifest.gapExploration) {
         const targetID = context.manifest.gapExploration.targetRecordID;
         const target = project.requirements.find((r) => r.id === targetID) ?? project.questions.find((q) => q.id === targetID) ?? project.sources.find((s) => s.id === targetID);
@@ -315,13 +320,20 @@ export class DiscoveryService {
           : { format: 1, research: adapterOptions.research, stages: [], attempts: 0 };
         const reviewReport = { ...epicPlan.report, modelCalls: work.attempts };
         const checkpoint = () => {
+          context.manifest.questionTarget = options.questionTarget;
           reviewReport.modelCalls = work.attempts;
           this.store.checkpointRetrieval(job.id, work, context.manifest);
           this.store.attachEpicReviewReport(job.id, reviewReport);
         };
-        const block = (reason: string): never => {
+        const block = (reason: string, finish = false): Job => {
           reviewReport.pending--; reviewReport.blocked++;
           reviewReport.blockers = [{ packageID: review.packageID, epicID: review.epicID, reason }, ...reviewReport.blockers].slice(0, 20);
+          if (finish) {
+            controller.signal.throwIfAborted();
+            const blocked = this.store.finishEpicReviewBlocked(job.id, reviewReport);
+            report(`Evidence blocked: ${reason} No proposals applied; saved stages retained. This package is blocked, not reviewed.`);
+            return blocked;
+          }
           this.store.attachEpicReviewReport(job.id, reviewReport);
           throw new Error(`Epic workflow review needs evidence: ${reason} No proposals applied. Saved stages retained; this unchanged package is blocked, not reviewed.`);
         };
@@ -339,6 +351,7 @@ export class DiscoveryService {
         if (work.final && epicReviewOutsideArea(context, work.final.output)) delete work.final;
         checkpoint();
         while (true) {
+          context.manifest.questionTarget = options.questionTarget;
           controller.signal.throwIfAborted();
           if (work.final) {
             if (work.final.evidenceBasis?.key !== retrievalEvidenceBasis(context).key) throw new Error("Saved epic final evidence changed; original response retained without replay.");
@@ -348,21 +361,21 @@ export class DiscoveryService {
             if (prior?.researchEvidence) this.store.attachResearch(job.id, prior.researchEvidence);
             return this.store.finishJob(job.id, work.final.output);
           }
-          if (work.attempts >= 3) block("Three model attempts were spent across retries. Review the connection or genuinely change the missing evidence/scope.");
+          if (work.attempts >= 3) return block("Three model attempts were spent across retries. Review the connection or genuinely change the missing evidence/scope.");
           work.attempts++; checkpoint();
           const raw = await this.adapter.analyze(project, { ...adapterOptions, context });
           controller.signal.throwIfAborted();
           if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
-          if (raw && typeof raw === "object" && "reviewBlocked" in raw) block(epicReviewBlockedSchema.parse(raw).reviewBlocked.reason);
-          if (raw && typeof raw === "object" && "searchEvidence" in raw) block("Search/paging is not available in epic review. Supply or link the specific missing evidence instead.");
+          if (raw && typeof raw === "object" && "reviewBlocked" in raw) return block(epicReviewBlockedSchema.parse(raw).reviewBlocked.reason, true);
+          if (raw && typeof raw === "object" && "searchEvidence" in raw) return block("Search/paging is not available in epic review. Supply or link the specific missing evidence instead.");
           if (raw && typeof raw === "object" && "retrieveEvidence" in raw) {
-            if (work.stages.length || work.attempts >= 3) block("Additional evidence was requested after the one-batch loading allowance. Final analysis cannot cite unseen records.");
+            if (work.stages.length || work.attempts >= 3) return block("Additional evidence was requested after the one-batch loading allowance. Final analysis cannot cite unseen records.");
             const request = validateRetrieval(context, raw);
             work.stages.push({ revision: project.revision, contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context),
               includedIDs: [...context.manifest.includedIDs], request, sessionID: this.store.getJob(job.id).sessionID });
             checkpoint();
             try { context = epicReviewContext(project, review, request.retrieveEvidence.recordIDs, true); }
-            catch (error) { if (error instanceof ContextBudgetError) block("The requested exact evidence and human guardrails exceed the context bound; no evidence was truncated."); throw error; }
+            catch (error) { if (error instanceof ContextBudgetError) return block("The requested exact evidence and human guardrails exceed the context bound; no evidence was truncated."); throw error; }
             continue;
           }
           if (JSON.stringify(raw)?.length > 96000) throw new Error("Epic review output exceeds the 96,000-character saved-output bound.");

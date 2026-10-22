@@ -70,7 +70,11 @@ export function reviewRefinement(project: Project, id: string, accept: boolean, 
       record.status = rejected ? "rejected" : "accepted";
     }
     Object.assign(target, { statement: proposal.statement, rationale: proposal.rationale, acceptance: [...proposal.acceptance] });
-    if (proposal.resolution.change.type === "revise") Object.assign(related, { statement: proposal.resolution.change.statement, rationale: proposal.resolution.change.rationale, acceptance: [...proposal.resolution.change.acceptance] });
+    delete target.authority;
+    if (proposal.resolution.change.type === "revise") {
+      Object.assign(related, { statement: proposal.resolution.change.statement, rationale: proposal.resolution.change.rationale, acceptance: [...proposal.resolution.change.acceptance] });
+      delete related.authority;
+    }
     proposal.status = "accepted";
     project.assessments = project.assessments.filter((a) => !a.checks.some((c) => c.evidenceIDs.some((id) => [target.id, related.id].includes(id))));
     project.roundChanges = [`Approved requirement resolution: ${target.id} and ${related.id}. ${proposal.reason}`];
@@ -82,6 +86,7 @@ export function reviewRefinement(project: Project, id: string, accept: boolean, 
     ...(previous ? { supersedes: previous.id } : {}),
     text: `Human approved requirement cleanup. Original: ${JSON.stringify(proposal.original)}\nReplacement: ${proposal.statement}\nAcceptance scenarios: ${JSON.stringify(proposal.acceptance)}\nReason: ${proposal.reason}` });
   Object.assign(target, { statement: proposal.statement, rationale: proposal.rationale, acceptance: [...proposal.acceptance], status: "accepted", reviewNote: proposal.reason });
+  delete target.authority;
   target.sourceIDs.push(sourceID);
   proposal.status = "accepted";
   // Previously resolved coverage no longer establishes the revised wording.

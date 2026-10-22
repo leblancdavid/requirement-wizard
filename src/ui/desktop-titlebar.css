@@ -9,4 +9,3 @@
   app-region: drag; -webkit-app-region: drag;
 }
 .desktop-titlebar img { pointer-events: none; }
-.app:has(.desktop-titlebar) .topbar { top: 36px; }

@@ -5,6 +5,7 @@ import { ContextBudgetError, type ContextPack } from "./context.js";
 export function questionHelpContext(project: Project, request: QuestionHelpRequest, jobs: Job[], budget = 48000): ContextPack {
   const question = project.questions.find((item) => item.id === request.questionID);
   if (!question) throw new Error("Question-help question is missing.");
+  if (request.action === "define") return wordDefinitionContext(project, question, request, budget);
   const areas = new Set(["project", question.epicID]);
   const dependencies = (id: string) => {
     for (const dependency of project.epics.find((epic) => epic.id === id)?.dependencies ?? []) {
@@ -79,4 +80,33 @@ export function questionHelpContext(project: Project, request: QuestionHelpReque
     throw error;
   }
   return pack;
+}
+
+/** Defining visible wording is not authority to advise on unseen product decisions. */
+function wordDefinitionContext(project: Project, question: Project["questions"][number], request: QuestionHelpRequest, budget: number): ContextPack {
+  const word = request.word;
+  const fields = [question.text, question.whyItMatters, ...question.options.flatMap((option) => [option.label, option.consequence])];
+  if (!word || !fields.includes(word.text) || !word.text.includes(word.phrase)) {
+    throw new Error("The word and displayed text must match the current question or one of its options. Reopen the explanation and try again.");
+  }
+  const data = {
+    project: { id: project.id, revision: project.revision },
+    question: { id: question.id, text: question.text },
+    limitations: "Word-definition scope only. The request contains the exact clicked word and its complete displayed text; question.text is the exact enclosing question wording. Other question fields/options, project decisions, human constraints, source evidence and previous help are intentionally NOT loaded. Explain the wording, not the project's chosen behavior or implementation. Do not recommend an option, infer product preferences, or claim to have reviewed omitted evidence. Describe possible implications conditionally and identify ambiguity explicitly. If meaning depends on an unseen project-specific definition, say so rather than guessing. Broader decision help requires a separate request with its evidence.",
+  };
+  const records = [...project.sources, ...project.questions, ...project.requirements, ...project.research];
+  const manifest: ContextPack["manifest"] = {
+    version: "word-help-v1", revision: project.revision, focusEpicID: question.epicID,
+    budget, characters: JSON.stringify(data).length + JSON.stringify(request).length,
+    includedIDs: [question.id], omittedIDs: records.filter((item) => item.id !== question.id).map((item) => item.id),
+    epicIDs: [question.epicID], taskRecordIDs: [question.id],
+    selectionReason: "Lexical explanation only: exact question wording and requested displayed text, not full question/evidence records. No decision advice or history expansion.",
+    sectionCharacters: { ...Object.fromEntries(Object.entries(data).map(([key, value]) => [key, JSON.stringify(value).length])), request: JSON.stringify(request).length },
+  };
+  if (manifest.characters > budget) {
+    const error = new ContextBudgetError(manifest);
+    error.message = "Word-definition wording exceeds the bounded input budget. No model call was made; saved responses are retained.";
+    throw error;
+  }
+  return { data, manifest };
 }

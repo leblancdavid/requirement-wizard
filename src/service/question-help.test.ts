@@ -62,6 +62,12 @@ test("concept references reject missing, ambiguous, overlapping, and misplaced p
   assert.throws(() => validateConcepts({ ...q, text: "offline or offline", concepts: [concept] }));
   assert.equal(questionHelpRequestSchema.safeParse({ questionID: "q", action: "follow-up" }).success, false);
   assert.equal(questionHelpRequestSchema.safeParse({ questionID: "q", action: "follow-up", message: "  " }).success, false);
+  for (const request of [
+    { questionID: "q", action: "define" },
+    { questionID: "q", action: "define", word: { phrase: "offline", text: "offline" }, message: "Choose an option" },
+    { questionID: "q", action: "decide", word: { phrase: "offline", text: "offline" } },
+    { questionID: "q", action: "define", word: { phrase: "offline", text: "x".repeat(12001) } },
+  ]) assert.equal(questionHelpRequestSchema.safeParse(request).success, false);
 });
 
 test("malformed glossary entries do not lose a discovery round and cleanup survives reopening", async () => {
@@ -306,4 +312,76 @@ test("legacy help manifests and completed guidance survive repeated upgrades wit
     assert.deepEqual(store.jobs(project.id).slice(0, oldJobs.length), oldJobs);
     assert.deepEqual(store.get(project.id), project);
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("word definitions work above 73k of guardrails during processing without replaying failed advice", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "reqwizit-word-help-"));
+  const path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    let project = seed(store);
+    const question = project.questions[0]!;
+    for (let index = 0; index < 7; index++) project = store.note(project.id, project.revision, `Human constraint ${index}: ${"n".repeat(11950)}`);
+    let calls = 0;
+    const service = new DiscoveryService(store, { analyze: noAnalysis, async clarify(snapshot, request, options) {
+      calls++;
+      assert.equal(request.action, "define");
+      assert.equal(options.context.manifest.version, "word-help-v1");
+      assert.deepEqual(options.context.manifest.includedIDs, [question.id]);
+      assert.ok(options.context.manifest.characters < 4000);
+      assert.equal(options.context.manifest.characters, JSON.stringify(options.context.data).length + JSON.stringify(request).length);
+      for (const source of project.sources) assert.ok(options.context.manifest.omittedIDs.includes(source.id));
+      assert.ok(!JSON.stringify(options.context.data).includes("Human constraint"));
+      const prompt = questionHelpPrompt(snapshot, request, options.context);
+      assert.match(prompt, /Define ONLY request.word.phrase/);
+      assert.match(prompt, /do not recommend an option/);
+      assert.match(prompt, /NOT reviewed project decisions/);
+      assert.equal(options.research, false);
+      return explanation;
+    } });
+    const failed = await service.clarify(project.id, project.revision, { questionID: question.id, action: "decide" });
+    assert.equal(failed.status, "failed");
+    assert.ok(failed.context!.characters > 73000);
+    assert.equal(calls, 0);
+    const active = store.beginJob(project.id, project.revision).job;
+    store.claimJob(active.id, Date.now() + 60000);
+    const activeBefore = store.getJob(active.id);
+    const request = { questionID: question.id, action: "define" as const, word: { phrase: "offline", text: question.text } };
+    const completed = await service.clarify(project.id, project.revision, request);
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.equal(calls, 1);
+    assert.deepEqual(store.getJob(failed.id), failed);
+    assert.deepEqual(store.getJob(active.id), activeBefore);
+    const originalJobs = store.jobs(project.id);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.jobs(project.id), originalJobs);
+      assert.deepEqual(store.get(project.id), project);
+      assert.equal(calls, 1, "Startup never repeats definition or failed advice calls");
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("definitions load only exact displayed wording, not large options, source chains or prior advice", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    const question = project.questions[0]!;
+    question.text = `What is ${"q".repeat(11000)}?`;
+    question.whyItMatters = "w".repeat(12000);
+    question.options = Array.from({ length: 5 }, () => ({ label: "l".repeat(12000), consequence: "c".repeat(12000) }));
+    project.sources.push({ ...project.sources[0]!, id: "large-linked", kind: "workspace", text: "e".repeat(100000) });
+    question.evidenceIDs = ["large-linked"];
+    const history: Job[] = [{ ...store.jobs(project.id)[0]!, helpRequest: { questionID: question.id, action: "decide" }, helpResponse: explanation }];
+    const request = { questionID: question.id, action: "define" as const, word: { phrase: "ccc", text: question.options[0]!.consequence } };
+    const original = structuredClone(project);
+    const context = questionHelpContext(project, request, history);
+    assert.ok(context.manifest.characters < 26000);
+    const data = context.data as { question: { text: string } };
+    assert.equal(data.question.text, question.text);
+    assert.ok(!JSON.stringify(data).includes(explanation.explanation));
+    assert.deepEqual(project, original);
+    assert.throws(() => questionHelpContext(project, { ...request, word: { phrase: "absent", text: request.word.text } }, []), /must match the current question/);
+    assert.throws(() => questionHelpContext(project, { ...request, word: { phrase: "offline", text: "Invented offline context" } }, []), /must match the current question/);
+  } finally { store.close(); }
 });

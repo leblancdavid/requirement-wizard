@@ -30,7 +30,7 @@ import type { SnapshotTokens } from "../web/snapshot.js";
 import { questionReviewFingerprint, reviewFingerprint } from "../core/model.js";
 import { ReviewUpdateNotice } from "./review-update.js";
 import { AppearanceSettings } from "./appearance-settings.js";
-import { AnnotatedText, QuestionHelp, wordHelpContext, type HelpControls } from "./question-help.js";
+import { AnnotatedText, QuestionHelp, type HelpControls } from "./question-help.js";
 import { AIConnections } from "./connections.js";
 import { WorkspacePicker, WorkspaceConnection, WorkspaceScan, ImplementationProgress } from "./workspace-files.js";
 import type { Workspace } from "../storage/workspace.js";
@@ -102,6 +102,11 @@ function App() {
   const [auto, setAuto] = useState(localStorage.getItem("reqwizit-auto") !== "false");
   const [research, setResearch] = useState(localStorage.getItem("reqwizit-research") !== "false");
   const [evidencePilot, setEvidencePilot] = useState(false);
+  const [questionTarget, setQuestionTarget] = useState(5);
+  useEffect(() => {
+    const saved = Number(localStorage.getItem(`reqwizit-question-target:${id}`));
+    setQuestionTarget(Number.isInteger(saved) && saved >= 1 && saved <= 50 ? saved : 5);
+  }, [id]);
   useEffect(() => { setEvidencePilot(false); }, [id]);
   const [name, setName] = useState(""); const [idea, setIdea] = useState("");
   const [workspacePath, setWorkspacePath] = useState(""); const [createDirectory, setCreateDirectory] = useState(false);
@@ -247,13 +252,13 @@ function App() {
     if (analyze && auto) await api(`projects/${project.id}/analyze`, { revision: updated.revision, research: updated.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
     await list();
   }
-  async function explore() {
+  async function explore(target?: number) {
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before exploring.");
-    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, savedEvidencePolicy: evidencePilot ? "prefix-aux-v1" : "prefix", ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
+    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, ...(target === undefined ? {} : { questionTarget: target }), research: project.model.connectionID ? false : research, savedEvidencePolicy: evidencePilot ? "prefix-aux-v1" : "prefix", ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
   async function reviewEpic() {
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before reviewing.");
-    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, gapMode: "epic",
+    if (project) await api(`projects/${project.id}/analyze`, { revision: project.revision, gapMode: "epic", questionTarget,
       research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
   async function continueExploration() {
@@ -411,6 +416,7 @@ function App() {
         {!showSettings && project && summary && data && !creating && <ProjectProgress key={`progress:${project.id}`} progress={mapProgress!} definition={summary} project={project} />}
         {!showSettings && project && summary && data && !creating && <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Review"], ["implementation", "Implement"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}{key === "review" && <span>{pendingReviewCount}</span>}{key === "implementation" && <span>{implementationRemaining}</span>}</button>)}</div>}
       </header>
+      <div className="tab-content">
       {pending && <ActivityFeedback label={actionLabel} />}
       {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
       {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
@@ -422,8 +428,8 @@ function App() {
         {project && !creating ? <><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically explore queued answers</label><p>Waiting answers are batched into the next round. Each round uses your model allowance.</p></> : <p>Your selected connection and model will be used when you create a project.</p>}
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
         {project && !creating && !!(project.requirements.length || project.questions.length) && <section aria-label="Saved-evidence retrieval pilot"><h2>Experimental saved-evidence search</h2>
-          <label><input type="checkbox" checked={evidencePilot} disabled={busy} onChange={(event) => setEvidencePilot(event.target.checked)} /> Use prefix-preserving auxiliary merge for manual Explore next gaps</label>
-          <p>Default off. Applies only to manual gap exploration in this tab, not queued answers, scans, Refine or terminal commands. Resets on reload or project change. Existing prefix hits keep priority; auxiliary fields fill only free slots. Model requests, scan and context budgets do not increase.</p>
+          <label><input type="checkbox" checked={evidencePilot} disabled={busy} onChange={(event) => setEvidencePilot(event.target.checked)} /> Use auxiliary merge for legacy individual-check exploration</label>
+          <p>Default off. Applies to legacy individual-check exploration resumed here, not the workflow-based Explore next gaps button, queued answers, scans, Refine or terminal commands. Resets on reload or project change. Existing prefix hits keep priority; auxiliary fields fill only free slots. Model requests, scan and context budgets do not increase.</p>
           <p>Switching off affects new searches, not committed receipts: compatible retries reuse original results and cumulative attempts. Relevance quality is not independently qualified; exact loading is still required.</p>
         </section>}
         {project && !creating && <WorkspaceConnection project={project} scanJob={lastScan} workspace={data?.workspace ?? null} request={api} disabled={busy} run={act} />}
@@ -454,13 +460,14 @@ function App() {
         <div className="workspace-status" role="status"><span>{data.workspace ? `${data.workspace.status === "saved" ? "Saved" : data.workspace.status === "pending" ? "Saving" : data.workspace.status === "conflict" ? "Conflict" : "Unavailable"} · ${data.workspace.path}${data.workspace.savedRevision ? ` · r${data.workspace.savedRevision}` : ""}` : "No local folder connected"}</span><button className="quiet" onClick={() => navigate("settings")}>{data.workspace ? "Workspace settings" : "Connect workspace"}</button>{data.workspace?.diagnostic && <span>{data.workspace.diagnostic}</span>}</div>
         <section className="workspace">
           <div className="discovery-column">
-            <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "review" ? "Review one requirement at a time" : tab === "implementation" ? "Build one requirement at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div>{tab !== "implementation" && <button className="primary" disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(explore, "Starting discovery…")}>{data.active && <Spinner />}{data.active ? "Discovering…" : "Explore next gaps →"}</button>}</div>
-            {tab !== "implementation" && <section className="insight-card" aria-label="Epic workflow discovery"><h3>Review workflows, one epic at a time</h3>
-              <p>Review related requirements together across normal behavior, failures and acceptance. Linked evidence is prepared locally, without model-driven search or paging. Dependency-boundary packages follow workflow reviews. The older Explore next gaps action keeps its separate per-record checks.</p>
-              <button className="primary" disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(reviewEpic, "Preparing epic workflow evidence…")}>Review next epic workflow</button>
-              <small>{epicID === "all" ? "Works epic by epic across the project." : "Uses the selected feature and its declared dependency boundaries."} Reviews are bounded checks, not proof of completeness. Saved responses remain paused; use Resume to process them.</small>
-            </section>}
-            {lastJob && tab !== "implementation" && <GapContinuation key={lastJob.id} job={lastJob} available={!!lastJob.gapContinuationAvailable} disabled={busy || connectionChanged || needsInitialization}
+            <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "review" ? "Review one requirement at a time" : tab === "implementation" ? "Build one requirement at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div>{tab === "discover" && <div className="gap-controls" aria-label="Gap discovery">
+              <button className="primary" title={discoveryReason || "Explore related workflows and their dependency boundaries in the selected feature, or across the project."} disabled={busy || connectionChanged || needsInitialization} onClick={() => void act(reviewEpic, "Preparing workflow evidence…")}>{data.active && <Spinner />}{data.active ? "Discovering…" : "Explore next gaps →"}</button>
+              <label title="Project-wide unanswered question target, not additional questions. Stops when reached or eligible work runs out; the final package may exceed it. At most 10 packages or 15 minutes per run. Stop preserves completed results.">Questions ready <input aria-label="Questions ready" type="number" min={1} max={50} value={questionTarget} disabled={busy} onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isInteger(value) && value >= 1 && value <= 50) { setQuestionTarget(value); localStorage.setItem(`reqwizit-question-target:${project.id}`, String(value)); }
+              }} /></label>
+            </div>}</div>
+            {lastJob && tab === "discover" && <GapContinuation key={lastJob.id} job={lastJob} available={!!lastJob.gapContinuationAvailable} disabled={busy || connectionChanged || needsInitialization}
               continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} />}
             {needsInitialization && tab !== "implementation" && <p role="status">Initialization must complete before gap discovery. Retry the folder scan below.</p>}
             {tab !== "implementation" && tab !== "requirements" && data.workspace && !project.scans.length && <WorkspaceScan project={project} scanJob={lastScan} disabled={busy || connectionChanged} scan={(resumeJobID) => act(async () => { await api(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); setTab("requirements"); })} />}
@@ -509,7 +516,7 @@ function App() {
                 {members.map((requirement) => <details className="requirement-detail" key={requirement.id}><summary><span className={`badge ${requirement.status}`}>{requirement.status === "accepted" ? "Confirmed" : requirement.status === "needs-review" ? "Needs review" : requirement.status === "proposed" ? "Proposed" : "Rejected"}</span><strong>{requirement.statement}</strong></summary><article className="requirement-card"><p>{requirement.rationale}</p><h4>Acceptance scenarios</h4><ul>{requirement.acceptance.map((item) => <li key={item}>{item}</li>)}</ul><details><summary>Supporting decisions</summary>{requirement.sourceIDs.map((sourceID) => <Evidence key={sourceID} id={sourceID} project={project} />)}</details><label>Organize into<select aria-label={`Feature for ${requirement.statement}`} disabled={busy} value={requirement.epicID} onChange={(event) => void act(() => mutate("organize", { operations: [{ type: "move", recordID: requirement.id, epicID: event.target.value }] }))}>{epics.map((area) => <option key={area.id} value={area.id}>{areaTitle(area)}</option>)}</select></label><p className="review-note">{requirement.reviewNote}</p>
                    <ReviewUpdateNotice project={project} recordType="requirement" recordID={requirement.id} />
                    <ItemProcessingNotice error={itemErrors[`review:${requirement.id}`]} submission={[...data.submissions].reverse().find((s) => s.input.type === "review" && s.input.requirementID === requirement.id)} resume={() => void act(explore)} disabled={busy || connectionChanged} />
-                  <ReviewForm project={project} requirementID={requirement.id} submissions={data.submissions} disabled={sending.includes(`review:${requirement.id}`) || data.submissions.some((s) => s.input.type === "review" && s.input.requirementID === requirement.id && ["queued", "saved", "processing"].includes(s.status))} onReview={async (action, note, reviewedRevision) => submit({ type: "review", requirementID: requirement.id, requirementText: requirement.statement, fingerprint: reviewFingerprint(requirement), action, note, reviewedRevision }, `review:${requirement.id}`)} />
+                  <ReviewForm project={project} requirementID={requirement.id} submissions={data.submissions} jobs={data.jobs} disabledReason={discoveryReason} disabled={busy || connectionChanged || needsInitialization || sending.includes(`review:${requirement.id}`) || data.submissions.some((s) => s.input.type === "review" && s.input.requirementID === requirement.id && ["queued", "saved", "processing"].includes(s.status))} onReview={async (action, note, reviewedRevision) => submit({ type: "review", requirementID: requirement.id, requirementText: requirement.statement, fingerprint: reviewFingerprint(requirement), action, note, reviewedRevision }, `review:${requirement.id}`)} />
                 </article></details>)}
                 <details className="feature-decisions"><summary>Saved answers & notes</summary>{related.filter((q) => q.sourceID).map((q) => <div key={q.id}><strong>{q.text}</strong><p className="source-excerpt">{project.sources.find((s) => s.id === q.sourceID)?.text}</p><button className="quiet" onClick={() => { setEpicID(epic.id); setTab("discover"); setQuestionFilter(queuedQuestionIDs.has(q.id) ? "submitted" : q.status === "answered" ? "answered" : "later"); setExpandedQuestion(q.id); }}>Edit answer</button></div>)}{project.sources.filter((s) => s.kind === "note" && s.epicID === epic.id).map((s) => <p className="source-excerpt" key={s.id}>{s.text}</p>)}</details>
                 </>}</EpicOverview>;
@@ -531,6 +538,7 @@ function App() {
           </aside>}
         </section>
       </>}
+      </div>
       </div>
     </main>
   </div></ActionScope>;
@@ -555,7 +563,7 @@ function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, h
   const explain = useCallback(async (phrase: string, context: string) => {
     if (explanationInFlight.current || help.busy) return;
     explanationInFlight.current = true; setExplaining(true); setHelpReveal((value) => value + 1);
-    try { await help.request({ questionID: question.id, action: "follow-up", message: `${wordHelpContext(phrase, context)}Start with a short, plain-language summary in one or two sentences as the first paragraph (for an inline tooltip). Then explain what it changes for this project's choice. Keep any assumptions or caveats explicit.` }); }
+    try { await help.request({ questionID: question.id, action: "define", word: { phrase, text: context } }); }
     finally { explanationInFlight.current = false; setExplaining(false); }
   }, [help, question.id]);
   // Answer keystrokes do not change the word/concept controls. Reuse their
@@ -588,21 +596,23 @@ function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, h
   };
    return <ActionScope reason={disabled ? "Your response is being saved. Wait for it to finish." : undefined}>{inline ? <div className="inline-question">{render()}</div> : render()}</ActionScope>;
 }
-function ReviewForm({ project, requirementID, submissions, disabled, onReview }: { project: Project; requirementID: string; submissions: Submission[]; disabled: boolean; onReview: (action: ReviewAction, note: string, reviewedRevision: number) => Promise<boolean> }) {
+function ReviewForm({ project, requirementID, submissions, jobs, disabled, disabledReason, onReview }: { project: Project; requirementID: string; submissions: Submission[]; jobs: Job[]; disabled: boolean; disabledReason?: string; onReview: (action: ReviewAction, note: string, reviewedRevision: number) => Promise<boolean> }) {
   const [note, setNote] = useState("");
   const [requestOpen, setRequestOpen] = useState(false);
   const [requestedChanges, setRequestedChanges] = useState("");
   const contextKey = decisionContextKey(project, [requirementID]);
   const [basis, setBasis] = useState<{ contextKey: string; revision: number }>();
   const changed = !!basis && basis.contextKey !== contextKey;
-  const availability = decisionAvailability(project, [requirementID], submissions);
-  return <ActionScope reason={changed ? "Review the updated requirement and supporting context first." : "This review is being saved or already waiting for processing."}><div className="review-form">
+  const availability = decisionAvailability(project, [requirementID], submissions, jobs);
+  const paused = disabled || !!availability.jobIDs.length || !!availability.submissionIDs.length || availability.state === "needs-review";
+  return <ActionScope reason={disabledReason || availability.reason || (changed ? "Review the updated requirement and supporting context first." : "This review is being saved or already waiting for processing.")}><div className="review-form">
     <label>Review rationale (optional)<input maxLength={12000} value={note} onChange={(event) => { setNote(event.target.value); setBasis((current) => current ?? { contextKey, revision: project.revision }); }} placeholder="Anything to add or change?" /></label>
-    {availability.state !== "ready" && <p role="status">{availability.questionIDs?.length ? <>Approval: {availability.reason} You can still reject this requirement and use your note to request different behavior; rejection does not answer or retire these questions.</> : <>{availability.reason} A saved review will need your attention instead of applying automatically.</>}</p>}
+    {paused && <p className="save-notice" role="status"><strong>Decisions temporarily paused.</strong> {disabledReason || availability.reason} Your note is retained; review the result before deciding.</p>}
+    {!paused && availability.questionIDs?.length && <p role="status">Approval: {availability.reason} You can still reject this requirement; rejection does not answer or retire these questions.</p>}
     {changed && <p role="status">Supporting information changed. Your note is retained. <button className="quiet" onClick={() => setBasis({ contextKey, revision: project.revision })}>I have reviewed the updated information</button></p>}
-    <div className="button-row"><ActionButton className="secondary" disabled={disabled || changed} onClick={() => void onReview("accepted", note, basis?.revision ?? project.revision)}>Confirm requirement</ActionButton><ActionButton className="quiet" disabled={disabled || changed} onClick={() => void onReview("rejected", note, basis?.revision ?? project.revision)}>Reject</ActionButton></div>
-    {project.requirements.find((r) => r.id === requirementID)?.status !== "rejected" && <ActionButton className="secondary" disabled={disabled} onClick={() => { setBasis((current) => current ?? { contextKey, revision: project.revision }); setRequestOpen(true); }}>Request changes</ActionButton>}
-    {requestOpen && <ChangeRequestForm initialText={requestedChanges} disabled={disabled || changed} reason={changed ? "Review the updated requirement and supporting context first." : "This requirement already has a waiting response."} change={setRequestedChanges} send={async (text) => {
+    <div className="button-row"><ActionButton className="secondary" disabled={paused || changed || !!availability.questionIDs?.length} onClick={() => void onReview("accepted", note, basis?.revision ?? project.revision)}>Confirm requirement</ActionButton><ActionButton className="quiet" disabled={paused || changed} onClick={() => void onReview("rejected", note, basis?.revision ?? project.revision)}>Reject</ActionButton></div>
+    {project.requirements.find((r) => r.id === requirementID)?.status !== "rejected" && <ActionButton className="secondary" disabled={paused} onClick={() => { setBasis((current) => current ?? { contextKey, revision: project.revision }); setRequestOpen(true); }}>Request changes</ActionButton>}
+    {requestOpen && <ChangeRequestForm initialText={requestedChanges} disabled={paused || changed} reason={disabledReason || availability.reason || (changed ? "Review the updated requirement and supporting context first." : "This requirement already has a waiting response.")} change={setRequestedChanges} send={async (text) => {
       const saved = await onReview("changes-requested", text, basis?.revision ?? project.revision);
       if (saved) setRequestedChanges("");
       return saved;

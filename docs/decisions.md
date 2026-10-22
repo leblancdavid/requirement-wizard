@@ -52,8 +52,11 @@ assessment reuse is tested; real-project/live cross-machine workflows remain unq
 Confirmed direction (2026-10-21): the user approved changing gap discovery toward
 epic/workflow reviews, preparing evidence locally, combining lenses, checking cross-epic
 boundaries and reusing unaffected reviews rather than repeatedly increasing allowances.
-Implemented first slice adds **Review next epic workflow** alongside legacy discovery,
-with deterministic bounded candidate packages (not inferred/named workflows), exact linked
+Implemented first slice originally added **Review next epic workflow** alongside legacy discovery;
+the approved 2026-10-22 UI consolidation now presents it as the single **Design →
+Explore next gaps** action, with a compact **Questions ready** target and no discovery
+controls in Review. Legacy API/terminal discovery and saved-job recovery remain.
+Workflow mode uses deterministic bounded candidate packages (not inferred/named workflows), exact linked
 evidence, one extra evidence batch and separate progress/check identities. Declared
 dependency boundaries receive bounded counterpart passes, not exhaustive integration
 coverage. Existing saved work is preserved. Live usefulness and provider cost reductions

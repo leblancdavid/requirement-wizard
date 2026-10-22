@@ -52,7 +52,9 @@ export function AnnotatedText({ text, concepts = [], onExplain, onCancel, busy =
     return value.split(/([\p{L}\p{N}]+(?:[’'\-][\p{L}\p{N}]+)*)/u).map((part, index) => {
       const start = position; position += part.length;
       if (index % 2 === 0) return part;
-      const job = jobs.filter((job) => job.helpRequest?.action === "follow-up" && job.helpRequest.message?.startsWith(wordHelpContext(part, text))).at(-1);
+      const job = jobs.filter((job) => job.helpRequest?.action === "define"
+        ? job.helpRequest.word?.phrase === part && job.helpRequest.word.text === text
+        : job.helpRequest?.action === "follow-up" && job.helpRequest.message?.startsWith(wordHelpContext(part, text))).at(-1);
       const loading = requesting === start || !!job && ["pending", "running"].includes(job.status);
       const response = job?.status === "completed" ? job.helpResponse : undefined;
       return <span className="explain-word" key={start}>
@@ -85,7 +87,7 @@ const actions = [
   ["rephrase", "Rephrase simply"], ["why", "Explain why it matters"],
   ["example", "Show an example"], ["decide", "Help me decide"],
 ] as const;
-const actionLabel = (action: QuestionHelpRequest["action"]) => actions.find(([key]) => key === action)?.[1] ?? "Your follow-up";
+const actionLabel = (action: QuestionHelpRequest["action"]) => action === "define" ? "Word explanation" : actions.find(([key]) => key === action)?.[1] ?? "Your follow-up";
 
 export type HelpControls = {
   jobs: Job[]; revision: number; busy: boolean;
@@ -122,6 +124,7 @@ export function QuestionHelp({ questionID, help, reveal = 0, requesting = false 
       {jobs.map((job) => <section className="help-exchange" key={job.id} aria-label={actionLabel(job.helpRequest!.action)}>
         <strong>{actionLabel(job.helpRequest!.action)}</strong><small>Context revision {job.expectedRevision}{job.expectedRevision !== help.revision ? " · Earlier project context" : ""}</small>
         {job.helpRequest?.message && <blockquote className="source-excerpt">{job.helpRequest.message}</blockquote>}
+        {job.helpRequest?.word && <blockquote className="source-excerpt">{wordHelpContext(job.helpRequest.word.phrase, job.helpRequest.word.text).trim()}</blockquote>}
         {job.helpResponse ? <><p className="source-excerpt">{job.helpResponse.explanation}</p>{job.helpResponse.assumptions.length > 0 && <><b>Assumptions to check</b><ul>{job.helpResponse.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></>}{job.helpResponse.followUp && <p><b>Something to consider:</b> {job.helpResponse.followUp}</p>}<small>AI guidance · No answer selected or requirement confirmed.</small></>
           : ["pending", "running"].includes(job.status) ? <ActivityFeedback label="Preparing clarification…" /> : <p role="status">{job.status}: {job.diagnostic ?? "Request help again to retry."}</p>}
       </section>)}

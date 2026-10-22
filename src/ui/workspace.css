@@ -1,12 +1,18 @@
 /* Focused workspace: one content column, detail only when requested. */
 .sidebar { width: 185px; padding: 24px 14px; }
 .brand { margin-bottom: 30px; font-size: 15px; }
-main { flex: 1; min-width: 0; max-width: none; padding: 0 40px 24px; margin: 0; }
-main > :not(.topbar) { max-width: 1100px; margin-left: auto; margin-right: auto; }
-.topbar { position: sticky; top: 0; z-index: 20; background: var(--background); border-bottom: 1px solid var(--border); padding: 12px 24px; margin: 0 -40px 16px; align-items: center; }
+html, body { height: 100%; overflow: hidden; }
+.app { display: flex; height: 100dvh; min-height: 0; overflow: hidden; }
+main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; max-width: none; padding: 0; margin: 0; }
+.tab-content { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 40px 24px; scrollbar-color: var(--accent) var(--background); scrollbar-gutter: stable; }
+.tab-content > * { max-width: 1100px; margin-left: auto; margin-right: auto; }
+.tab-content::-webkit-scrollbar { width: 12px; }
+.tab-content::-webkit-scrollbar-track { background: var(--background); }
+.tab-content::-webkit-scrollbar-thumb { background: var(--accent); border: 3px solid var(--background); border-radius: 8px; }
+.topbar { position: relative; flex-shrink: 0; z-index: 20; background: var(--background); border-bottom: 1px solid var(--border); padding: 10px 24px 0; margin: 0; align-items: center; }
 .topbar h1 { font-size: 23px; }
 .topbar small { font-size: 12px; }
-.topbar { gap: 12px 20px; flex-wrap: wrap; }
+.topbar { gap: 8px 16px; flex-wrap: wrap; }
 .topbar > div:first-child { min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
 .topbar .round-status { flex: 2 1 300px; min-width: 0; margin: 0; display: flex; align-items: center; gap: 10px; overflow-wrap: anywhere; }
 .status-copy { min-width: 0; }
@@ -15,7 +21,7 @@ main > :not(.topbar) { max-width: 1100px; margin-left: auto; margin-right: auto;
 .round-status > .pulse, .round-status > .connection-dot, .round-status > button { flex-shrink: 0; }
 .round-status > button { margin-left: auto; }
 .header-progress { width: 220px; max-width: 100%; flex-shrink: 0; }
-.header-progress-label { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; font-size: 12px; }
+.header-progress-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; }
 .header-progress-label strong { font-size: 22px; font-variant-numeric: tabular-nums; }
 .header-progress .meter { margin: 5px 0; }
 .header-progress small { display: block; font-size: 11px; }
@@ -32,10 +38,15 @@ main > :not(.topbar) { max-width: 1100px; margin-left: auto; margin-right: auto;
 .workspace { display: block; }
 .discovery-column { min-width: 0; }
 .main-tabs { margin: 0 0 22px; flex-wrap: wrap; }
-.topbar .main-tabs { grid-column: 1 / -1; flex: 0 0 100%; order: 4; min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.topbar .main-tabs { grid-column: 1 / -1; flex: 0 0 100%; order: 4; min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; gap: 8px; }
+.topbar .main-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 7px 14px; }
+.topbar .main-tabs button > span { display: inline-flex; align-items: center; justify-content: center; min-width: 1.6em; height: 1.6em; padding: 0 4px; margin: 0; border-radius: 4px; font-variant-numeric: tabular-nums; }
 .main-tabs button { padding: 12px 16px; }
 .work-heading { margin: 0 0 14px; gap: 16px; align-items: center; }
 .work-heading h2 { font-size: 18px; margin: 0 0 8px; }
+.gap-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.gap-controls label { display: flex; align-items: center; gap: 8px; }
+.gap-controls input { width: 5rem; margin: 0; padding: 8px; }
 .area-filter { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .area-filter select { width: auto; max-width: 300px; margin: 0; padding: 6px 28px 6px 10px; }
 .round-status { margin-bottom: 16px; padding: 9px 0; font-size: 12px; }
@@ -101,8 +112,9 @@ main > :not(.topbar) { max-width: 1100px; margin-left: auto; margin-right: auto;
 .history-list { margin-top: 20px; }
 .question-card, .feature-group, .insight-card, .settings-panel { overflow-wrap: anywhere; }
 @media (max-width: 800px) {
-  main { padding: 0 20px 20px; }
-  .topbar { margin: 0 -20px 16px; padding: 16px 20px; }
+  main { padding: 0; }
+  .tab-content { padding: 16px 20px 20px; }
+  .topbar { margin: 0; padding: 10px 20px 0; }
   .topbar .round-status { order: 3; flex-basis: 100%; }
   .header-progress { width: 180px; }
   .sidebar { width: 155px; }
@@ -117,13 +129,15 @@ main > :not(.topbar) { max-width: 1100px; margin-left: auto; margin-right: auto;
   .sidebar { position: relative; }
   .brand { padding-right: 50px; }
   .sidebar-tools { position: absolute; top: 12px; right: 16px; margin: 0; padding: 0; }
-  .topbar { gap: 12px; }
+  .topbar { gap: 8px; }
   .header-progress { width: 125px; }
   .header-progress-label { gap: 6px; }
-  main { padding: 0 16px 16px; }
-  .topbar { margin: 0 -16px 16px; padding: 12px 16px; }
+  main { padding: 0; }
+  .tab-content { padding: 16px; }
+  .topbar { margin: 0; padding: 10px 16px 0; }
   .topbar > div:first-child { flex-basis: 120px; }
-  .main-tabs button { padding: 11px 9px; font-size: 12px; }
+  .topbar .main-tabs { gap: 2px; }
+  .topbar .main-tabs button { padding: 7px 8px; font-size: .857rem; }
   .work-heading h2 { font-size: 16px; }
   .work-heading .primary { max-width: 120px; padding: 8px; font-size: 11px; }
   .question-card, .feature-group { padding: 13px; }

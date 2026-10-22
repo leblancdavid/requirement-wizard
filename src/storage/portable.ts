@@ -274,7 +274,8 @@ function validatePortableReferences(project: Project) {
   const all = [...project.sources, ...project.requirements, ...project.questions, ...project.epics, ...project.research, ...project.scans, ...project.refinements];
   if (new Set(all.map((r) => r.id)).size !== all.length) throw new Error("Duplicate portable record IDs.");
   const sources = new Set(project.sources.map((s) => s.id)), records = new Set(all.map((r) => r.id)), epics = new Set(project.epics.map((e) => e.id));
-  for (const r of project.requirements) if (!epics.has(r.epicID) || r.sourceIDs.some((id) => !sources.has(id))) throw new Error("Portable requirement has missing evidence or feature.");
+  for (const r of project.requirements) if (!epics.has(r.epicID) || r.sourceIDs.some((id) => !sources.has(id))
+    || r.authority?.sourceIDs.some((id) => !sources.has(id) || !r.sourceIDs.includes(id)) || (r.authority?.atRevision ?? 0) > project.revision) throw new Error("Portable requirement has missing evidence or feature.");
   for (const q of project.questions) if (!epics.has(q.epicID) || q.sourceID && !sources.has(q.sourceID) || q.evidenceIDs?.some((id) => !records.has(id))) throw new Error("Portable question has missing evidence or feature.");
   for (const s of project.sources) if (s.supersedes && !sources.has(s.supersedes)) throw new Error("Portable evidence has a broken supersession link.");
   for (const e of project.epics) if (e.dependencies.some((id) => !epics.has(id))) throw new Error("Portable feature has a missing dependency.");

@@ -2,21 +2,31 @@
 
 ## Implemented first slice (2026-10-21)
 
-Use **Design → Review next epic workflow**. The feature filter restricts workflow
+Use **Design → Explore next gaps**. The feature filter restricts workflow
 packages to one epic and includes declared incoming/outgoing dependency-boundary
 packages. **All project areas** visits epics in saved order, then boundaries. Each
-click reviews **one package**, not the entire epic or backlog; there is no automatic
-model-call loop. Existing **Explore next gaps**, terminal discovery, initial
+click without a question target reviews **one package**, not the entire epic or backlog.
+The browser action uses the compact **Questions ready** input to continue
+sequential packages (at most ten packages / fifteen minutes), publishing each result
+and retaining final-package overshoot. The target is project-wide even with a feature
+filter. No automatic refill runs after completion/restart. Existing terminal discovery, initial
 interpretation and queued answer/review follow-up retain their existing behavior.
 
-This replaces neither old checks nor human review. It is a separate discovery path
+The workflow action is now the single Design discovery button; it is absent from
+Review, Project map and Activity. The explanatory card is removed; target semantics
+and run limits are available in its tooltip and detailed outcomes in Processing & queue.
+Legacy individual checks remain available through their API/terminal and explicit
+saved-job continuation; their checkpoints are not relabelled as workflow results.
+
+This replaces neither old saved checks nor human review. It is a separate discovery path
 intended to avoid three independent lens reviews of every requirement and repeated
 model-driven evidence search. Live usefulness/cost improvements have not been measured.
 
 ### Local packages and evidence
 
-- Locally group up to six active requirements, unresolved questions and human notes
-  per epic. Shared explicit evidence links are preferred, excluding the ubiquitous
+- Locally group up to six active requirements and human notes per epic. Unresolved
+  questions have separate waiting-only singleton packages; they never displace
+  requirements into newly regrouped packages. Shared explicit evidence links are preferred, excluding the ubiquitous
   initial idea; remaining records use stable ID order. These are **candidate workflow
   packages**, not model-discovered/named workflows or confirmed product boundaries.
 - Review actors, normal behavior, state/data, permissions, failures/recovery and
@@ -37,6 +47,22 @@ model-driven evidence search. Live usefulness/cost improvements have not been me
   grant. A usual review uses one call; a successful extra load uses two. The third is
   retry headroom, not permission for another navigation stage. Failed attempts count.
 
+2026-10-22 evidence-blocker correction: explicitly unknown intended behavior can
+support a focused clarification question citing the detailed requirement or note.
+Missing script contents prevent claims about current code, not questions about what
+the user wants. A scene attachment alone never establishes startup behavior. Exact
+saved source links are closed locally; a file path mentioned inside scene text is
+not itself a saved source-ID link. This change does not add file parsing, search,
+automatic rescanning or access to the live workspace during review.
+
+A valid `reviewBlocked` response now finishes the job with an evidence-blocked
+report and **no review result**, proposals or specification revision. Targeted
+exploration continues independent eligible packages within the same ten-package /
+fifteen-minute limits. All-blocked scopes stop without inference. Provider failures,
+malformed/unauthorized responses, oversized requested evidence, cancellation and
+stale/expired workers still stop the run. Original blocker explanations remain
+visible on later no-call reports instead of being replaced by a generic reason.
+
 ### Boundaries, waiting and progress
 
 Workflow packages precede boundary packages. A declared epic dependency gets bounded
@@ -49,6 +75,16 @@ of being re-asked. Manual epic review leaves the submission queue paused; explic
 resume ordinary discovery to process those responses. Compatible reviewed packages and
 unchanged evidence/attempt blockers are skipped on later clicks. If all work is reviewed,
 waiting or blocked, save a no-call report without a specification revision.
+
+Continuation fix (2026-10-22): newly proposed questions no longer get mixed into
+independent workflow packages or dependency-boundary counterpart groups. A question
+citing another workflow's requirement IDs plus a shared source (such as the initial
+idea) does not freeze independent gap exploration merely because both workflows
+cite that source. Direct target links, answer provenance, source-only/global
+questions without explicit requirement targets, and pending human input still
+block applicable work. Human approval keeps its separate conservative policy.
+With eligible independent work, a target of ten can now progress through 3, 6, 9,
+and 12 pending questions in one run, preserving final-package overshoot.
 
 **Processing & queue → Epic workflow review** shows reviewed/pending/waiting/evidence
 blocked package counts, attempts and up to twenty blocker explanations. Counts describe
@@ -72,11 +108,17 @@ unauthorized cleanup/reorganization and whole-area assessment. A crash after the
 checkpoint can publish that saved response without repeating inference. Startup never
 starts model work. See [migration ledger](migrations.md#epic-workflow-review).
 
+Older evidence blockers remain failed jobs in history and retain their unchanged-package
+skip policy. New completed-but-blocked jobs are also skipped, never counted as reviewed.
+The prompt clarification does not reset existing blockers or replay their calls; supply
+genuinely changed linked evidence/decisions to reopen such a package. Compatible completed
+checks and saved stage/final fingerprints are unchanged.
+
 Proposal area IDs are constrained in the review response schema to the round's detailed
 areas, not every area shown in the navigation map. Omitted areas default to the focused
 area; explicit out-of-scope assignments are rejected before final checkpointing, never
 silently moved. Diagnostics identify the offending ID and allowed IDs. Restart the app
-after updating, then explicitly use **Review next epic workflow** again. Older failed
+after updating, then explicitly use **Explore next gaps** again. Older failed
 jobs with an unpublishable out-of-scope final can request a corrected response within
 the same three-attempt ceiling; original output and spent attempts remain in history.
 Exhausted packages remain blocked. Compatible valid finals/checks still reuse normally.
@@ -87,6 +129,17 @@ rejection, corrected retry and older saved-final recovery across repeated reopen
 No live provider calls or browser checks were run for this service/prompt-only fix.
 
 ## Verification and remaining work
+
+Evidence-blocker correction verification (2026-10-22): type checking, the full
+**584-test** deterministic suite, and the latest **38/38** epic tests passed on
+Windows Node 22.23.3 (the final targeted run adds a ten-package-ceiling test).
+The UI production build and deterministic epic browser regression passed, including
+same-click blocker continuation, retained reasons, no-call reload and mobile layout.
+The first browser run retained an obsolete assertion expecting the blocker to be
+the final run outcome; it was corrected to inspect the saved blocker details and
+the actual no-eligible-packages outcome. The existing >500 kB bundle warning remains.
+These checks do not establish live-model question quality or the user's script
+capture/link state; no live calls or user database inspection were performed.
 
 `src/core/epic-review.test.ts` covers package/lens batching, dependency boundaries, exact
 local evidence, no-call reuse, legacy separation, single-load/final recovery, malformed

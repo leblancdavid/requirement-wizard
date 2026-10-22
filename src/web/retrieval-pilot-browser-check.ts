@@ -1,4 +1,5 @@
 import { applicationMenu, workspaceMenu } from "./menu-check-helpers.js";
+import { exploreLegacyGaps } from "./legacy-gap-check-helpers.js";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -57,12 +58,12 @@ try {
   await page.addInitScript(() => { localStorage.setItem("reqwizit-research", "false"); localStorage.setItem("reqwizit-auto", "false"); });
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: false }).click();
-  const pilot = page.getByRole("checkbox", { name: "Use prefix-preserving auxiliary merge for manual Explore next gaps", exact: true });
+  const pilot = page.getByRole("checkbox", { name: "Use auxiliary merge for legacy individual-check exploration", exact: true });
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await expect(pilot).not.toBeChecked(); await expect(page.getByRole("region", { name: "Saved-evidence retrieval pilot" })).toContainText("Default off");
   await pilot.check(); await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await page.getByRole("tab", { name: /^Design/ }).click(); await page.getByLabel("Filter by feature").selectOption("admission");
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(p.id), true);
   await expect.poll(() => store.jobs(p.id).at(-1)!.status).toBe("failed");
   const first = structuredClone(store.jobs(p.id).at(-1)!);
   assert.equal(first.retrievalWork!.requestedPolicy, "prefix-aux-v1"); assert.equal(calls, 1);
@@ -80,7 +81,7 @@ try {
   await pilot.check(); await pilot.uncheck(); // Explicit switching back is distinct from reloading.
   await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await page.getByRole("tab", { name: /^Design/ }).click(); await page.getByLabel("Filter by feature").selectOption("admission");
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(p.id));
   await expect.poll(() => store.jobs(p.id).at(-1)!.status).toBe("completed");
   const final = store.jobs(p.id).at(-1)!;
   assert.equal(final.retrievalWork!.requestedPolicy, "prefix"); assert.equal(final.retrievalWork!.attempts, 3); assert.equal(calls, 3);

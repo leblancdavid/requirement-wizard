@@ -30,7 +30,10 @@ export function applyPendingChanges(project: Project, result: Analysis) {
       if (change.type === "withdraw-requirement") {
         if (requirement.status !== "proposed" || project.sources.some((s) => s.requirementID === id && s.kind === "confirmation")) throw new Error("Only a never-approved proposal can be withdrawn automatically; confirmed behavior needs a human review decision.");
         requirement.status = "rejected";
-      } else Object.assign(requirement, { statement: change.statement, rationale: change.rationale, acceptance: change.acceptance });
+      } else {
+        Object.assign(requirement, { statement: change.statement, rationale: change.rationale, acceptance: change.acceptance });
+        delete requirement.authority;
+      }
       requirement.sourceIDs = [...new Set([...requirement.sourceIDs, ...change.sourceIDs])];
     }
   }

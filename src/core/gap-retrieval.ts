@@ -218,6 +218,7 @@ export function nextGapContext(project: Project, base: ContextPack, requestedIDs
     throw error;
   }
   next.manifest.gapExploration = gap;
+  next.manifest.questionTarget = base.manifest.questionTarget;
   next.gapReport = base.gapReport;
   const previousStage = (base.data as { evidenceRetrieval: { stage: number } }).evidenceRetrieval.stage;
   enableGapRetrieval(next, previousStage + 1, extended);

@@ -305,6 +305,26 @@ test("implementation API authenticates actions, rejects stale settings and malfo
   } finally { await app.close(); store.close(); if (detectionRoot) rmSync(detectionRoot, { recursive: true, force: true }); }
 });
 
+test("gap question target API rejects malformed settings before starting model work", async () => {
+  const store = new ProjectStore(":memory:");
+  const project = store.create("Question target API", "Preserve the original idea", { providerID: "openai", modelID: "fixture" });
+  let calls = 0;
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; throw new Error("Unexpected inference"); } } });
+  const endpoint = `${app.origin}/api/projects/${project.id}/analyze`;
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  try {
+    for (const questionTarget of [0, -1, 51, 1.5, "5", null]) {
+      const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify({ revision: project.revision, questionTarget }) });
+      assert.equal(response.status, 400);
+    }
+    assert.equal((await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: project.revision, questionTarget: 5 }) })).status, 403);
+    assert.equal((await fetch(endpoint, { method: "POST", headers, body: JSON.stringify({ revision: project.revision, questionTarget: 5, refinementOnly: true }) })).status, 400);
+    assert.equal(calls, 0);
+    assert.equal(store.jobs(project.id).length, 0);
+    assert.deepEqual(store.get(project.id), project);
+  } finally { await app.close(); store.close(); }
+});
+
 test("refinement action creates separate approved-requirement proposals and reviews them through authenticated revision checks", async () => {
   const store = new ProjectStore(":memory:");
   let project = store.create("Cleanup API", "Jump from ledges", { providerID: "openai", modelID: "fixture" });

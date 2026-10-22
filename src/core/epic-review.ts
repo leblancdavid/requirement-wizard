@@ -24,11 +24,12 @@ export function validateEpicReviewFinal(project: Project, context: ContextPack, 
 type Record = Project["requirements"][number] | Project["questions"][number] | Project["sources"][number];
 export type EpicReviewTask = { review: EpicReview; context?: ContextPack; reason?: string; state: "pending" | "reviewed" | "waiting" | "blocked"; prior?: Job };
 
-/** Co-locate shared evidence, but cap each package: these are candidate workflows, not inferred human decisions. */
+/** Keep unanswered questions out of work grouping: they must not displace independent
+ * requirements into new, waiting packages after each result publishes. */
 function groups(project: Project, records: Record[], size: number): Record[][] {
   const initial = new Set(project.sources.filter((s) => s.kind === "initial").map((s) => s.id));
   const links = (r: Record) => ("statement" in r ? r.sourceIDs : "options" in r ? r.evidenceIDs ?? [] : []).filter((id) => !initial.has(id));
-  const remaining = records.slice().sort((a, b) => a.id.localeCompare(b.id));
+  const remaining = records.filter((r) => !("options" in r)).sort((a, b) => a.id.localeCompare(b.id));
   const batches: Record[][] = [];
   while (remaining.length) {
     const batch = [remaining.shift()!];
@@ -39,7 +40,9 @@ function groups(project: Project, records: Record[], size: number): Record[][] {
     }
     batches.push(batch);
   }
-  return batches;
+  // Keep unresolved questions visible as waiting tasks, not new work to re-ask.
+  // Linked questions are also loaded as supporting evidence for their real targets.
+  return [...batches, ...records.filter((r) => "options" in r).sort((a, b) => a.id.localeCompare(b.id)).map((r) => [r])];
 }
 
 export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false): ContextPack {
@@ -68,6 +71,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   const active = project.epics.filter((e) => !e.archived);
   if (focusEpicID && !active.some((e) => e.id === focusEpicID)) throw new Error("Focused epic does not exist.");
   const evidence = gapEvidence(project);
+  const requirementIDs = new Set(project.requirements.map((r) => r.id));
   const tasks: EpicReviewTask[] = [];
   const recordsFor = (id: string): Record[] => [...project.requirements.filter((r) => r.status !== "rejected"),
     ...project.questions.filter((q) => q.status !== "retired" && q.status !== "answered"),
@@ -121,14 +125,30 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       } catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
     });
     const completed = matching.some((j) => j.status === "completed" && !!j.result);
-    const prior = matching.filter((j) => ["failed", "cancelled", "interrupted", "stale"].includes(j.status)
+    const prior = matching.filter((j) => (["failed", "cancelled", "interrupted", "stale"].includes(j.status)
+      || j.status === "completed" && !j.result && j.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID))
       && j.model.providerID === project.model.providerID && j.model.modelID === project.model.modelID
       && j.model.connectionID === project.model.connectionID).at(-1);
     const blocked = !!prior && !prior.retrievalWork?.final && (prior.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID)
       || (prior.retrievalWork?.attempts ?? 0) >= 3);
+    const availability = decisionAvailability(project, records.filter((r) => "statement" in r).map((r) => r.id), submissions);
+    // Approval is deliberately conservative about shared source citations. A gap
+    // question citing the original idea AND another workflow's requirements must
+    // not freeze independent exploration of every requirement citing that idea.
+    // Keep source-only/global questions, direct links, answer provenance and saved
+    // human submissions blocking. This does not change the approval policy.
+    const otherWorkflowQuestions = !!availability.questionIDs?.length && availability.questionIDs.every((id) => {
+      const question = project.questions.find((q) => q.id === id);
+      return question?.epicID !== "project" && question?.evidenceIDs?.some((id) => requirementIDs.has(id))
+        && !question.evidenceIDs.some((id) => project.requirements.some((r) => r.id === id && r.epicID === "project"))
+        && !question.evidenceIDs.some((id) => recordIDs.includes(id))
+        && !records.some((r) => "statement" in r && (!!question.sourceID && r.sourceIDs.includes(question.sourceID)
+          || project.sources.some((s) => s.questionID === id && r.sourceIDs.includes(s.id))));
+    });
     const waiting = records.some((r) => evidence(r).waiting)
-      || decisionAvailability(project, records.filter((r) => "statement" in r).map((r) => r.id), submissions).state !== "ready";
-    tasks.push({ review, context, prior, reason: reason ?? (blocked ? "Saved evidence blocker or three spent attempts; unchanged packages are not retried automatically." : undefined),
+      || availability.state !== "ready" && !otherWorkflowQuestions;
+    tasks.push({ review, context, prior, reason: reason ?? (blocked ? prior?.epicReviewReport?.blockers.find((b) => b.packageID === review.packageID)?.reason
+      ?? "Saved evidence blocker or three spent attempts; unchanged packages are not retried automatically." : undefined),
       state: completed ? "reviewed" : reason || blocked ? "blocked" : waiting ? "waiting" : "pending" });
   };
   const selected = active.filter((e) => !focusEpicID || e.id === focusEpicID);
@@ -143,7 +163,9 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   for (const epic of active) for (const dependency of epic.dependencies) {
     if (!active.some((e) => e.id === dependency) || focusEpicID && epic.id !== focusEpicID && dependency !== focusEpicID) continue;
     const edge = `${epic.id}:${dependency}`; if (edges.has(edge)) continue; edges.add(edge);
-    const left = groups(project, recordsFor(epic.id), 3), right = groups(project, recordsFor(dependency), 3);
+    // Question-only counterparts would shift the stable boundary pairing and block
+    // unrelated hand-offs. Their linked targets already carry their waiting state.
+    const left = groups(project, recordsFor(epic.id).filter((r) => !("options" in r)), 3), right = groups(project, recordsFor(dependency).filter((r) => !("options" in r)), 3);
     // Cover each side's records with a bounded counterpart, not a Cartesian product/completeness claim.
     if (left.length && right.length) for (let i = 0; i < Math.max(left.length, right.length); i++) {
       add(epic.id, [epic.id, dependency], "boundary", [...left[i % left.length]!, ...right[i % right.length]!]);

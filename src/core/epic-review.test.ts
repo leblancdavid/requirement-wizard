@@ -5,6 +5,7 @@ import { resolve, join } from "node:path";
 import Database from "better-sqlite3";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
+import { DiscoveryQueue } from "../service/queue.js";
 import { planEpicReview } from "./epic-review.js";
 import { gapBacklog } from "./gap-backlog.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
@@ -14,6 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GapExplorationStatus } from "../ui/gap-status.js";
+import { decisionAvailability } from "./decision-availability.js";
 
 const empty = (): Analysis => ({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 function seed(store: ProjectStore, count = 8) {
@@ -22,12 +24,16 @@ function seed(store: ProjectStore, count = 8) {
     { type: "upsert", epicID: "orders", title: "Orders", purpose: "Submit and recover orders", dependencies: [] },
     { type: "upsert", epicID: "billing", title: "Billing", purpose: "Settle accepted orders", dependencies: ["orders"] },
   ]);
-  const j = store.beginJob(p.id, p.revision).job; store.claimJob(j.id, Date.now() + 60000);
-  store.finishJob(j.id, { ...empty(), requirements: Array.from({ length: count }, (_, i) => ({ epicID: "orders", statement: `Order workflow step ${i}`,
+  const requirements = Array.from({ length: count }, (_, i) => ({ epicID: "orders", statement: `Order workflow step ${i}`,
     rationale: "Original human idea", sourceIDs: [p.sources[0]!.id], acceptance: [`Step ${i} has an observable result`] })).concat([
     { epicID: "billing", statement: "Settle an accepted order", rationale: "Original human idea", sourceIDs: [p.sources[0]!.id], acceptance: ["Settlement is retained"] },
-  ]) });
-  return store.get(p.id);
+  ]);
+  for (let offset = 0; offset < requirements.length; offset += 10) {
+    const j = store.beginJob(p.id, p.revision).job; store.claimJob(j.id, Date.now() + 60000);
+    store.finishJob(j.id, { ...empty(), requirements: requirements.slice(offset, offset + 10) });
+    p = store.get(p.id);
+  }
+  return p;
 }
 
 test("epic packages combine lenses, bound related records, and schedule dependency boundaries after workflows", () => {
@@ -46,6 +52,124 @@ test("epic packages combine lenses, bound related records, and schedule dependen
     assert.match(wire, /failures\/recovery/); assert.match(wire, /acceptance boundaries in ONE pass/);
     assert.deepEqual(p, before);
   } finally { store.close(); }
+});
+
+test("new unanswered questions do not regroup or block independent workflow and boundary packages", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 18);
+    for (const [index, r] of p.requirements.entries()) r.id = `r-${String(index).padStart(2, "0")}`;
+    const before = planEpicReview(p, [], "orders");
+    const first = before.task!.review;
+    for (const [index, id] of ["r-06-a", "r-12-a", "r-17-a"].entries()) p.questions.push({ id, epicID: "orders", text: `Clarify first workflow decision ${index}?`, whyItMatters: "Resolve a specific uncertainty", status: "pending", evidenceIDs: [...first.recordIDs, p.sources[0]!.id],
+      options: [{ label: "Keep", consequence: "Preserve behavior" }, { label: "Change", consequence: "Revise behavior" }] });
+    const after = planEpicReview(p, [], "orders");
+    for (const original of before.tasks.filter((t) => !t.review.recordIDs.some((id) => first.recordIDs.includes(id)))) {
+      const current = after.tasks.find((t) => t.review.packageID === original.review.packageID);
+      assert.ok(current, `Independent ${original.review.kind} package was displaced by unanswered questions`);
+      assert.equal(current.review.inputKey, original.review.inputKey, "Independent saved check identities remain reusable");
+      assert.equal(current.state, "pending");
+    }
+    assert.equal(after.tasks.find((t) => t.review.packageID === first.packageID)!.state, "waiting");
+    assert.ok(after.task!.review.recordIDs.every((id) => !first.recordIDs.includes(id)));
+    assert.equal(decisionAvailability(p, after.task!.review.recordIDs, []).state, "waiting", "Discovery must not weaken the separate conservative approval gate");
+    for (const question of p.questions) question.epicID = "project";
+    assert.equal(planEpicReview(p, [], "orders").task, undefined, "Explicit project-wide questions must not be treated as other-workflow uncertainty");
+    for (const question of p.questions) question.epicID = "orders";
+    for (const question of p.questions) question.evidenceIDs = [p.sources[0]!.id];
+    assert.equal(planEpicReview(p, [], "orders").task, undefined, "Source-only questions without an explicit workflow target remain conservative blockers");
+  } finally { store.close(); }
+});
+
+test("targeted epic review continues past three grounded questions in the same epic", async () => {
+  const store = new ProjectStore(":memory:");
+  let queue: DiscoveryQueue | undefined;
+  try {
+    const p = seed(store, 24); let calls = 0;
+    const reviewed = new Set<string>();
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_project, { context }) {
+      const review = context.manifest.epicReview!;
+      assert.equal(review.epicID, "orders");
+      assert.ok(review.recordIDs.every((id) => !reviewed.has(id)), "Do not replay a workflow waiting on its questions");
+      review.recordIDs.forEach((id) => reviewed.add(id));
+      calls++;
+      return { ...empty(), questions: Array.from({ length: 3 }, (_, index) => ({ text: `Workflow ${calls} decision ${index}?`, epicID: "orders", whyItMatters: "Resolve the package's own uncertainty", evidenceIDs: [...review.recordIDs, p.sources[0]!.id],
+        options: [{ label: "Keep", consequence: "Preserve behavior" }, { label: "Change", consequence: "Revise behavior" }] })) };
+    } }));
+    queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 10, research: false });
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(queue.isActive(p.id), false);
+    assert.equal(store.get(p.id).questions.length, 12, queue.progress(p.id).join("\n"));
+    assert.equal(reviewed.size, 24);
+    assert.equal(calls, 4);
+    assert.match(queue.progress(p.id).join("\n"), /Question target reached: 12 pending \(target 10\)/);
+  } finally { await queue?.close(); store.close(); }
+});
+
+test("targeted review saves an evidence blocker and continues independent packages", async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    const p = seed(store, 18); let calls = 0;
+    const first = planEpicReview(p, [], "orders").task!.review;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_p, { context }) {
+      calls++;
+      if (calls === 1) return { reviewBlocked: { reason: "Need exact external settlement evidence." } };
+      assert.notEqual(context.manifest.epicReview!.packageID, first.packageID);
+      return { ...empty(), questions: [{ text: "Which recovery policy should this workflow use?", epicID: "orders", whyItMatters: "Resolve intended recovery", evidenceIDs: context.manifest.epicReview!.recordIDs,
+        options: [{ label: "Retry", consequence: "Attempt recovery" }, { label: "Stop", consequence: "Request intervention" }] }] };
+    } }));
+    queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 1 });
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(queue.isActive(p.id), false);
+    assert.equal(calls, 2, queue.progress(p.id).join("\n"));
+    assert.equal(store.get(p.id).questions.length, 1);
+    const blocked = store.epicReviewHistory(p.id)[0]!;
+    assert.equal(blocked.status, "completed"); assert.equal(blocked.result, undefined);
+    assert.equal(blocked.retrievalWork!.attempts, 1); assert.equal(blocked.retrievalWork!.final, undefined);
+    assert.equal(blocked.epicReviewReport!.reviewed, 0);
+    const plan = planEpicReview(store.get(p.id), store.jobs(p.id), "orders");
+    assert.equal(plan.tasks.find((t) => t.review.packageID === first.packageID)!.state, "blocked");
+    assert.equal(plan.report.blockers[0]!.reason, "Need exact external settlement evidence.");
+    assert.match(queue.progress(p.id).join("\n"), /Continuing independent eligible packages/);
+  } finally { await queue?.close(); store.close(); }
+});
+
+for (const mode of ["blocked", "failure", "malformed", "cancelled"] as const) test(`targeted review stops safely with ${mode} outcomes`, async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    const p = seed(store, 18); let calls = 0;
+    const packageCount = planEpicReview(p, [], "orders").tasks.length;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() {
+      calls++;
+      if (mode === "failure") throw new Error("Connection unavailable");
+      if (mode === "malformed") return { reviewBlocked: { reason: 42 } };
+      if (mode === "cancelled") queue!.stop(p.id);
+      return { reviewBlocked: { reason: "Missing exact factual evidence." } };
+    } }));
+    queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 1 });
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(queue.isActive(p.id), false);
+    assert.deepEqual(store.get(p.id), p);
+    assert.equal(calls, mode === "blocked" ? packageCount : 1, queue.progress(p.id).join("\n"));
+    if (mode === "blocked") {
+      assert.match(queue.progress(p.id).join("\n"), /No eligible packages remain/);
+      assert.equal(planEpicReview(p, store.jobs(p.id), "orders").report.blocked, packageCount);
+    } else assert.equal(store.epicReviewHistory(p.id).at(-1)!.status, mode === "cancelled" ? "cancelled" : "failed");
+  } finally { await queue?.close(); store.close(); }
+});
+
+test("evidence-blocked continuation does not exceed the ten-package run ceiling", async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    const p = seed(store, 70); let calls = 0;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { calls++; return { reviewBlocked: { reason: "Missing exact external contract." } }; } }));
+    queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 1 });
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(queue.isActive(p.id), false); assert.equal(calls, 10);
+    assert.match(queue.progress(p.id).join("\n"), /stopped after 10 packages/);
+    assert.ok(planEpicReview(p, store.jobs(p.id), "orders").task, "Independent pending work must not be called reviewed or blocked by the run ceiling");
+    assert.deepEqual(store.get(p.id), p);
+  } finally { await queue?.close(); store.close(); }
 });
 
 test("large-catalog structural comparison reduces fragmented checks without omitting target records", () => {
@@ -85,6 +209,46 @@ test("local preparation includes exact linked files, human evidence and linked a
     assert.match(prompt, /EPIC WORKFLOW REVIEW/); assert.match(prompt, /reviewBlocked/);
     const schema = JSON.parse(prompt.split("Schema: ")[1]!.split("\nWorking context")[0]!);
     assert.ok(!JSON.stringify(schema).includes('"searchEvidence"'));
+  } finally { store.close(); }
+});
+
+test("scene path mentions do not load unlinked scripts, but explicit source links load their exact evidence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1), target = p.requirements[0]!;
+    target.statement = "Attach scripts/Main.cs to scenes/Main.tscn";
+    target.rationale = "Script behavior and transitions are unknown.";
+    p.sources.push({ id: "scene", epicID: "orders", kind: "workspace", text: '[ext_resource type="Script" path="res://scripts/Main.cs" id="1"]\n[node name="Main"]\nscript = ExtResource("1")' },
+      { id: "script", epicID: "orders", kind: "workspace", text: "// Exact saved script\r\npublic override void _Ready() { ShowTitle(); }\r\n" });
+    target.sourceIDs.push("scene");
+    const before = planEpicReview(p, [], "orders").task!.context!;
+    assert.ok(before.manifest.includedIDs.includes("scene"));
+    assert.ok(!before.manifest.includedIDs.includes("script"));
+    target.sourceIDs.push("script");
+    const after = planEpicReview(p, [], "orders").task!.context!;
+    assert.ok(after.manifest.includedIDs.includes("script"));
+    assert.ok(JSON.stringify(after.data).includes(JSON.stringify(p.sources.at(-1)!.text)));
+  } finally { store.close(); }
+});
+
+test("explicitly unknown startup intent supports a grounded question without claiming unseen code behavior", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let p = seed(store, 1);
+    p = store.note(p.id, p.revision, "Only the script attachment is defined. Intended startup behavior and transitions are unknown.", "orders");
+    const job = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      const prompt = discoveryPrompt(p, context);
+      assert.match(prompt, /PRODUCT UNCERTAINTY IS A GAP/);
+      assert.match(prompt, /Missing script contents prevent claims about current implementation/);
+      assert.match(prompt, /without asserting what existing code does/);
+      return { ...empty(), questions: [{ epicID: "orders", text: "What should players encounter when launching the game, and what should happen if startup fails?", whyItMatters: "Startup intent is explicitly unknown, not verified implementation.", evidenceIDs: context.manifest.epicReview!.recordIDs,
+        options: [{ label: "Title screen", consequence: "Show a title screen before play; recovery still needs a decision" }, { label: "Start play", consequence: "Enter play directly; recovery still needs a decision" }] }] };
+    } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.equal(job.epicReviewReport!.reviewed, 1);
+    assert.equal(store.get(p.id).questions.length, 1);
+    assert.equal(store.get(p.id).questions[0]!.status, "pending");
+    assert.deepEqual(store.get(p.id).requirements, p.requirements);
   } finally { store.close(); }
 });
 
@@ -170,7 +334,7 @@ for (const kind of ["search", "second-load", "explicit", "unseen", "malformed", 
       if (kind === "cleanup") return { ...empty(), refinements: [{ requirementID: first.review.recordIDs[0], statement: "Rewrite it", rationale: "Cleanup", reason: "Tuning", acceptance: ["Success"] }] };
       return { ...empty(), questions: [{ text: "Missing rule?", whyItMatters: "Recovery", evidenceIDs: [hidden.id], options: [{ label: "Yes", consequence: "Retain" }, { label: "No", consequence: "Omit" }] }] };
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
-    assert.equal(job.status, "failed", job.diagnostic); assert.deepEqual(store.get(p.id), p);
+    assert.equal(job.status, kind === "explicit" ? "completed" : "failed", job.diagnostic); assert.deepEqual(store.get(p.id), p);
     assert.equal(job.epicReviewReport!.reviewed, 0); assert.equal(calls, kind === "second-load" ? 2 : 1);
     if (["search", "second-load", "explicit"].includes(kind)) {
       assert.equal(job.epicReviewReport!.blocked, 1);
@@ -194,7 +358,7 @@ test("failed attempts retain their three-attempt ceiling across retries and unch
   } finally { store.close(); }
 });
 
-for (const mode of ["cancelled", "stale", "lease"] as const) test(`epic review ${mode} results never publish checks`, async () => {
+for (const response of ["final", "blocked"] as const) for (const mode of ["cancelled", "stale", "lease"] as const) test(`epic review ${mode} ${response} results never publish checks`, async () => {
   const store = new ProjectStore(":memory:");
   try {
     const p = seed(store, 2), stop = new AbortController();
@@ -202,7 +366,7 @@ for (const mode of ["cancelled", "stale", "lease"] as const) test(`epic review $
       if (mode === "cancelled") stop.abort();
       if (mode === "stale") store.note(p.id, p.revision, "New exact constraint", "orders");
       if (mode === "lease") store.recoverExpiredJobs(Date.now() + 1000000);
-      return empty();
+      return response === "blocked" ? { reviewBlocked: { reason: "Missing startup evidence." } } : empty();
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", signal: stop.signal });
     assert.equal(job.status, mode === "lease" ? "interrupted" : mode);
     assert.equal(job.retrievalWork!.attempts, 1); assert.equal(job.epicReviewReport!.reviewed, 0);
@@ -278,6 +442,78 @@ test("workflow keys reuse after unrelated edits but reopen changed evidence and 
     p.questions.push({ id: "pending", epicID: "orders", text: "Recovery?", whyItMatters: "Resolve ambiguity", status: "pending", evidenceIDs: [target.id], options: [{ label: "Retry", consequence: "Keep" }, { label: "Cancel", consequence: "Stop" }], category: "failures" });
     assert.equal(planEpicReview(p, [], "orders").tasks.find((t) => t.review.kind === "workflow")!.state, "waiting");
   } finally { store.close(); }
+});
+
+test("saved workflow checks retain their identities through question isolation and repeated reopening", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "epic-question-upgrade-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    let p = seed(store, 18);
+    const first = await new DiscoveryService(store, { async analyze() { return empty(); } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(first.status, "completed");
+    p = store.get(p.id);
+    const second = await new DiscoveryService(store, { async analyze(_p, { context }) { return { ...empty(), questions: [{ epicID: "orders", text: "Which recovery policy should this workflow use?", whyItMatters: "Resolve a specific choice", evidenceIDs: context.manifest.epicReview!.recordIDs,
+      options: [{ label: "Retry", consequence: "Attempt recovery" }, { label: "Stop", consequence: "Request intervention" }] }] }; } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(second.status, "completed", second.diagnostic);
+    const snapshot = store.get(p.id), originalJobs = store.jobs(p.id);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.get(p.id), snapshot);
+      assert.deepEqual(store.jobs(p.id), originalJobs);
+      const plan = planEpicReview(snapshot, store.jobs(p.id), "orders", [], (revision) => store.get(p.id, revision));
+      assert.equal(plan.tasks.find((t) => t.review.packageID === first.context!.epicReview!.packageID)!.state, "reviewed", "Completed pre-question checks must not repeat");
+      assert.equal(plan.tasks.find((t) => t.review.packageID === second.context!.epicReview!.packageID)!.state, "waiting");
+      assert.ok(plan.task!.review.recordIDs.every((id) => !first.context!.epicReview!.recordIDs.includes(id) && !second.context!.epicReview!.recordIDs.includes(id)));
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("older failed blockers, new completed blockers and reviewed checks survive repeated reopen without replay", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "epic-blocker-upgrade-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    let p = seed(store, 13);
+    p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "billing", title: "Billing", purpose: "Independent", dependencies: [] }]);
+    const first = await new DiscoveryService(store, { async analyze() { return { reviewBlocked: { reason: "Need the external startup contract." } }; } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(first.status, "completed");
+    const hiddenID = first.context!.epicReview!.recordIDs[0]!; let calls = 0;
+    const second = await new DiscoveryService(store, { async analyze() {
+      calls++;
+      return calls === 1 ? { retrieveEvidence: { format: 1, recordIDs: [hiddenID], reason: "Compare exact startup motivation" } }
+        : { reviewBlocked: { reason: "Loaded motivation does not establish the external failure contract." } };
+    } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(second.status, "completed", second.diagnostic);
+    assert.equal(second.result, undefined); assert.equal(second.retrievalWork!.attempts, 2);
+    assert.equal(second.retrievalWork!.stages.length, 1); assert.equal(second.epicReviewReport!.reviewed, 0);
+    const third = await new DiscoveryService(store, { async analyze() { return empty(); } })
+      .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(third.status, "completed", third.diagnostic); assert.ok(third.result);
+    const snapshot = store.get(p.id);
+    // Reproduce the previous binary's failed-job representation without rewriting its evidence.
+    const legacy = { ...first, status: "failed", diagnostic: "Epic workflow review needs evidence: Need the external startup contract. No proposals applied. Saved stages retained; this unchanged package is blocked, not reviewed." };
+    store.close();
+    const db = new Database(path);
+    db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(legacy), first.id); db.close();
+    store = new ProjectStore(path);
+    const originalJobs = store.jobs(p.id);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.get(p.id), snapshot); assert.deepEqual(store.jobs(p.id), originalJobs);
+      const plan = planEpicReview(snapshot, store.epicReviewHistory(p.id), "orders", [], (revision) => store.get(p.id, revision));
+      assert.equal(plan.report.blocked, 2); assert.equal(plan.report.reviewed, 1); assert.equal(plan.task, undefined);
+      assert.ok(plan.report.blockers.some((b) => b.reason === "Need the external startup contract."));
+      const idle = await new DiscoveryService(store, { async analyze() { assert.fail("Upgrade must not replay saved blocker/review calls"); } })
+        .analyze(p.id, snapshot.revision, { gapMode: "epic", focusEpicID: "orders" });
+      assert.equal(idle.status, "completed"); assert.equal(idle.epicReviewReport!.modelCalls, 0);
+      assert.deepEqual(store.getJob(first.id), legacy); assert.deepEqual(store.getJob(second.id), second);
+      assert.deepEqual(store.getJob(third.id), third);
+      // Only the explicit no-call report may be appended, never a rewritten checkpoint.
+      originalJobs.push(idle);
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("saved load/final recovery survives reopen without replay; old jobs remain untouched; future envelopes reject reads", async () => {

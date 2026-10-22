@@ -1,4 +1,5 @@
 import { applicationMenu, workspaceMenu } from "./menu-check-helpers.js";
+import { exploreLegacyGaps } from "./legacy-gap-check-helpers.js";
 import assert from "node:assert/strict";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
@@ -90,7 +91,7 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
     if (!options.context.manifest.includedIDs.includes(extra.id)) return { retrieveEvidence: { format: 1, recordIDs: [extra.id], reason: "Inspect the exact adjacent rule, not its index label." } };
     if (retrievalCalls === 2) throw new Error("Fixture interruption after saved navigation stage");
     assert.equal(retrievalCalls, 3, "Explicit retry must reuse the completed navigation request");
-    return analysisSchema.parse({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+    return analysisSchema.parse({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [], questions: [{ text: "Should restored drafts preserve every saved edit?", whyItMatters: "Clarify the recovery boundary", evidenceIDs: project.requirements.map((r) => r.id), options: [{ label: "All edits", consequence: "Restore every saved change" }, { label: "Latest draft", consequence: "Restore the most recent draft" }] }], requirements: [], retireQuestions: [] });
   }
   if (project.name === "Gap backlog fixture") {
     gapCalls++;
@@ -192,7 +193,10 @@ const app = await startApp({ store, connections, port: 0, executionAdapter: { as
     ] }], scopeAssessment: { confidence: "low", explanation: "More workflows may still be missing." }, researchFindings: [],
   });
 }, async clarify(_project, request, options) {
-  if (request.message?.startsWith("What do you mean by")) {
+  if (request.action === "define") {
+    assert.equal(options.context.manifest.version, "word-help-v1");
+    assert.ok(request.word?.phrase && request.word.text.includes(request.word.phrase));
+    assert.ok(options.context.manifest.characters < 48000);
     await new Promise<void>((accept) => { releaseWordHelp = accept; options.signal.addEventListener("abort", () => accept(), { once: true }); });
     return { explanation: "In this context, this word describes who can use your project's first version.\n\nMore detail: the full explanation and tradeoffs stay in the saved history below.", assumptions: [], followUp: null };
   }
@@ -614,14 +618,19 @@ try {
   await expect(page.getByText("Create and manage contractor jobs.", { exact: true })).toBeVisible();
   await page.locator(".requirement-detail > summary").click();
   await page.getByLabel("Review rationale").fill("Saving jobs is essential.");
-  await page.locator(".review-form").getByRole("button", { name: "Request changes", exact: true }).click();
-  await page.locator(".review-form").getByRole("textbox", { name: "Requested changes", exact: true }).fill("Separate feedback draft must not become an approval note");
-  await page.locator(".review-form").getByRole("button", { name: "Cancel change request", exact: true }).click();
-  await page.getByRole("button", { name: "Confirm requirement" }).click();
+  await expect(page.locator(".review-form").getByRole("button", { name: "Request changes", exact: true })).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByRole("button", { name: "Confirm requirement" })).toHaveAttribute("aria-disabled", "true");
+  await page.getByRole("button", { name: "Confirm requirement" }).click({ force: true });
   const safetyProjectID = store.list()[0]!.id;
+  assert.equal(store.submissions(safetyProjectID).some((s) => s.input.type === "review"), false, "Blocked map approval does not create a failed or queued attempt");
+  // Retain recovery coverage for submissions made by an older client before this UI guard.
+  const legacyProject = store.get(safetyProjectID), legacyRequirement = legacyProject.requirements[0]!;
+  store.enqueue(safetyProjectID, { id: crypto.randomUUID(), auto: false, research: false,
+    input: { type: "review", requirementID: legacyRequirement.id, requirementText: legacyRequirement.statement,
+      fingerprint: reviewFingerprint(legacyRequirement), action: "accepted", note: "Saving jobs is essential.", reviewedRevision: legacyProject.revision } });
   await expect.poll(() => store.submissions(safetyProjectID).some((s) => s.input.type === "review" && s.status === "needs-attention" && s.conflict && !s.applied)).toBe(true);
   assert.equal(store.get(safetyProjectID).requirements[0]!.status, "proposed", "A review cannot bypass pending related human input");
-  await expect(page.locator(".review-form")).toContainText("A saved review will need your attention");
+  await expect(page.locator(".review-form")).toContainText("Decisions temporarily paused");
   await page.screenshot({ path: ".reqwizit-state/browser-decision-safety.png", fullPage: true });
   await page.getByRole("button", { name: "Process waiting answers", exact: true }).click();
   await expect.poll(() => releases.length).toBe(1);
@@ -848,9 +857,39 @@ try {
   assert.ok(Math.abs(headerBounds.x + headerBounds.width - 1440) < 1, "Header fills available width");
   const queueBounds = await page.locator(".queue-header").boundingBox();
   assert.ok(queueBounds && Math.abs(queueBounds.x + queueBounds.width / 2 - (headerBounds.x + headerBounds.width / 2)) < 1, "Queue control is centered in the header");
-  for (const width of [1440, 2666, 390]) {
+  for (const width of [1440, 2666, 1000, 390]) {
     await page.setViewportSize({ width, height: 700 });
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    const processingBounds = await page.locator(".queue-header").boundingBox();
+    const progressBounds = await headerProgress.boundingBox();
+    assert.ok(processingBounds && progressBounds);
+    assert.ok(Math.abs(processingBounds.height - progressBounds.height) < 2, "Processing and progress panels have matching heights");
+    if (width > 1100) {
+      assert.ok(Math.abs(processingBounds.y - progressBounds.y) < 2, "Status panels align vertically on desktop");
+      assert.ok((await header.boundingBox())!.height < 150, "Active desktop header stays compact");
+    } else {
+      assert.ok(processingBounds.y >= progressBounds.y + progressBounds.height, "Processing moves below identity and progress on narrower screens");
+    }
+    await expect(headerStatus.locator("small")).toHaveCSS("white-space", "nowrap");
+    await expect(headerStatus.locator("small")).toHaveCSS("text-overflow", "ellipsis");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Compact header fits the viewport");
+    const content = page.locator(".tab-content");
+    await content.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    const contentBounds = await content.boundingBox(), fixedHeaderBounds = await header.boundingBox();
+    assert.ok(contentBounds && fixedHeaderBounds && contentBounds.y >= fixedHeaderBounds.y + fixedHeaderBounds.height, "Content scrollbar starts below the header and tabs");
+    assert.ok(await content.evaluate((element) => element.scrollTop > 0), "Tab content scrolls independently");
+    assert.equal(await page.evaluate(() => window.scrollY), 0, "Document does not scroll alongside the header");
+    await expect(page.locator("html")).toHaveCSS("overflow-y", "hidden");
+    await expect(content).toHaveCSS("scrollbar-color", await content.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const probe = document.createElement("span");
+      element.append(probe);
+      probe.style.color = style.getPropertyValue("--accent");
+      const accent = getComputedStyle(probe).color;
+      probe.style.color = style.getPropertyValue("--background");
+      const background = getComputedStyle(probe).color;
+      probe.remove();
+      return `${accent} ${background}`;
+    }));
     await expect.poll(async () => Math.round((await header.boundingBox())!.y)).toBe(0);
     await expect(headerStatus).toBeInViewport();
     const workspaceTabs = header.getByRole("tablist", { name: "Workspace", exact: true });
@@ -896,7 +935,7 @@ try {
     assert.equal(store.jobs(store.list()[0]!.id).at(-1)!.status, "running", "Closing queue leaves processing running");
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.locator(".tab-content").evaluate((element) => { element.scrollTop = 0; });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(headerStatus.locator(".activity-spinner")).toHaveCSS("animation-name", "none");
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -1013,7 +1052,10 @@ try {
   failNextScan = true;
   await page.getByRole("button", { name: "Create & initialize" }).click();
   await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("Initialization incomplete");
+  await expect(page.getByRole("button", { name: "Explore next gaps" })).toHaveCount(0);
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(page.getByRole("button", { name: "Explore next gaps" })).toBeDisabled();
+  await page.getByRole("tab", { name: "Project map", exact: true }).click();
   await expect(page.getByRole("button", { name: "Start new scan", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("batches saved");
   await page.reload();
@@ -1094,10 +1136,11 @@ try {
     assert.equal(typedReview.type, "review");
     assert.equal(typedReview.type === "review" ? typedReview.note : undefined, "Also export jobs as CSV",
       "Submitting must read the latest locally typed note, not the last queue render");
-   await expect(reviewPanel.locator(".review-card").first()).toContainText("Send job notifications");
-   await expect(addendum).toHaveValue("");
-   await reviewPanel.getByRole("button", { name: "Reject", exact: true }).click();
-    await expect.poll(() => store.submissions(reviewProject.id).filter((s) => s.status === "needs-attention" && s.conflict && !s.applied).length).toBe(1);
+    await expect(reviewPanel.locator(".review-card").first()).toContainText("Send job notifications");
+    await expect(addendum).toHaveValue("");
+    await expect(reviewPanel.getByRole("button", { name: "Reject", exact: true })).toHaveAttribute("aria-disabled", "true");
+    await reviewPanel.getByRole("button", { name: "Reject", exact: true }).click({ force: true });
+    assert.equal(store.submissions(reviewProject.id).length, 1, "A paused rejection cannot create a confusing failed attempt");
    await reviewPanel.getByRole("button", { name: /Submitted/ }).click();
    await expect(reviewPanel).toContainText("Also export jobs");
    await page.reload();
@@ -1343,8 +1386,8 @@ try {
          await expect.poll(() => store.submissions(changes.id).some((s) => s.input.type === "review" && s.input.action === "changes-requested")).toBe(true);
          assert.deepEqual(store.get(changes.id).requirements, original, "Feedback alone cannot apply a requirement decision");
          const saved = store.submissions(changes.id).find((s) => s.input.type === "review")!;
-         assert.equal(saved.input.type === "review" ? saved.input.note : "", "Also save reports while offline.");
-         await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+          assert.equal(saved.input.type === "review" ? saved.input.note : "", "Also save reports while offline.");
+          await page.getByRole("button", { name: /^(Resume discovery|Process waiting answers)$/ }).first().click();
          await expect.poll(() => store.submissions(changes.id).find((s) => s.id === saved.id)?.status).toBe("completed");
          await reviewPanel.getByRole("button", { name: /^To review/ }).click();
          if (approved) {
@@ -1395,15 +1438,24 @@ try {
          await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
          await expect.poll(() => store.get(narrow.id).requirements[1]!.status).toBe("accepted");
          await expect(reviewPanel.locator('.review-card-heading[aria-expanded="true"]')).toContainText("Manage display preferences");
-         assert.equal(narrowCalls, 0, "Manual processing preferences must not start inference");
-         await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+          assert.equal(narrowCalls, 0, "Manual processing preferences must not start inference");
+          await page.getByRole("button", { name: /^(Resume discovery|Process waiting answers)$/ }).first().click();
          await expect.poll(() => !!releaseNarrow).toBe(true);
-         await expect(reviewPanel).toContainText("Your review can be saved and queued while processing finishes");
-         await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
-         await expect.poll(() => store.submissions(narrow.id).filter((s) => s.status === "queued").length).toBe(1);
+          await expect(reviewPanel).toContainText("Project processing—decisions temporarily paused");
+          await reviewPanel.getByLabel("Anything to add? (optional)").fill("Keep this note while processing finishes");
+          await expect(reviewPanel.getByRole("button", { name: "Approve", exact: true })).toHaveAttribute("aria-disabled", "true");
+          await page.screenshot({ path: ".reqwizit-state/browser-review-paused.png", fullPage: true });
+          await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click({ force: true });
+          assert.equal(store.submissions(narrow.id).filter((s) => s.input.type === "review").length, 1, "A paused decision must not create a queued approval");
          assert.equal(store.get(narrow.id).requirements[2]!.status, "proposed", "Live snapshot still owns specification writes");
          releaseNarrow!(); releaseNarrow = undefined;
-         await expect.poll(() => store.submissions(narrow.id).filter((s) => s.status === "completed").length).toBe(3);
+          await expect.poll(() => store.submissions(narrow.id).filter((s) => s.status === "completed").length).toBe(2);
+          await expect(reviewPanel.getByLabel("Anything to add? (optional)")).toHaveValue("Keep this note while processing finishes");
+          await expect(reviewPanel.getByRole("button", { name: "Approve", exact: true })).not.toHaveAttribute("aria-disabled", "true");
+          assert.equal(store.get(narrow.id).requirements[2]!.status, "proposed", "Completion cannot replay the blocked approval");
+          await reviewPanel.getByRole("button", { name: "Approve", exact: true }).click();
+          await page.getByRole("button", { name: /^(Resume discovery|Process waiting answers)$/ }).first().click();
+          await expect.poll(() => store.submissions(narrow.id).filter((s) => s.status === "completed").length).toBe(3);
          assert.equal(narrowCalls, 3, "One scoped answer and each original review run once, without resubmission");
          assert.equal(store.get(narrow.id).requirements[2]!.status, "accepted");
          assert.equal(store.get(narrow.id).requirements[0]!.status, "proposed");
@@ -2325,14 +2377,16 @@ try {
    await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Gap backlog fixture/ }).click();
    await page.getByRole("tab", { name: /^Design/ }).click();
    await page.getByLabel("Filter by feature").selectOption(gapProject.requirements[0]!.epicID);
-   for (let i = 0; i < 4; i++) {
+     await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("5");
+     await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("7");
+    for (let i = 0; i < 2; i++) {
      const jobsBefore = store.jobs(gapProject.id).length, revisionBefore = store.get(gapProject.id).revision;
-     await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
-     await expect.poll(() => store.jobs(gapProject.id).length).toBe(jobsBefore + 1);
+      await exploreLegacyGaps(page, store.get(gapProject.id), false, true);
+      await expect.poll(() => store.jobs(gapProject.id).length).toBe(jobsBefore + (i === 0 ? 4 : 1));
      await expect.poll(() => store.jobs(gapProject.id).at(-1)!.status).toBe("completed");
      await expect(page.getByRole("button", { name: "Explore next gaps →", exact: true })).toBeEnabled();
-     assert.equal(store.jobs(gapProject.id).at(-1)!.gapReport!.checked, Math.min(i + 1, 3));
-     if (i === 3) assert.equal(store.get(gapProject.id).revision, revisionBefore, "A no-call reuse outcome cannot create a specification revision");
+      assert.equal(store.jobs(gapProject.id).at(-1)!.gapReport!.checked, 3);
+      if (i === 1) assert.equal(store.get(gapProject.id).revision, revisionBefore, "A no-call reuse outcome cannot create a specification revision");
    }
    assert.equal(gapCalls, 3, "Explore reuses all three compatible lenses instead of calling the adapter again");
    assert.deepEqual(store.get(gapProject.id).requirements, gapOriginal.requirements);
@@ -2346,7 +2400,8 @@ try {
    await page.setViewportSize({ width: 390, height: 844 });
    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Gap backlog status fits mobile width");
    await page.screenshot({ path: ".reqwizit-state/browser-gap-backlog.png", fullPage: true });
-   await page.getByRole("button", { name: "Close processing queue" }).click(); await page.reload();
+    await page.getByRole("button", { name: "Close processing queue" }).click(); await page.reload();
+     await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("7");
    await page.locator(".topbar .queue-trigger").click();
    await expect(gapStatus).toContainText("3 checked"); await expect(gapStatus).toContainText("No model request made");
    assert.equal(gapCalls, 3, "Reload cannot start another inference request");
@@ -2360,8 +2415,10 @@ try {
     const retrievalOriginal = structuredClone(retrievalProject);
     await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Staged retrieval fixture/ }).click();
     await page.getByRole("tab", { name: /^Design/ }).click();
-    await page.getByLabel("Filter by feature").selectOption(retrievalProject.requirements[0]!.epicID);
-    await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+     await page.getByLabel("Filter by feature").selectOption(retrievalProject.requirements[0]!.epicID);
+      await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("5");
+      await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("1");
+     await exploreLegacyGaps(page, store.get(retrievalProject.id));
     await expect.poll(() => store.jobs(retrievalProject.id).at(-1)!.status).toBe("failed");
     await page.locator(".topbar .queue-trigger").click();
     await expect(gapStatus).toContainText("1 evidence navigation stages saved");
@@ -2369,7 +2426,7 @@ try {
     await expect(gapStatus).toContainText("navigation hints cannot be cited");
     await page.getByRole("button", { name: "Close processing queue" }).click();
     await page.reload(); assert.equal(retrievalCalls, 2, "Reload must not resume inference");
-    await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+     await exploreLegacyGaps(page, store.get(retrievalProject.id));
     await expect.poll(() => store.jobs(retrievalProject.id).at(-1)!.status).toBe("completed");
     assert.equal(retrievalCalls, 3);
     await page.locator(".topbar .queue-trigger").click();

@@ -1,4 +1,5 @@
 import { workspaceMenu } from "./menu-check-helpers.js";
+import { exploreLegacyGaps } from "./legacy-gap-check-helpers.js";
 import assert from "node:assert/strict";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { mkdir } from "node:fs/promises";
@@ -124,7 +125,7 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Bounded saved search/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("editing");
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(project.id));
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("failed");
   const failed = structuredClone(store.jobs(project.id).at(-1)!);
   assert.equal(failed.retrievalWork?.stages[0]?.searchResult?.records[0]?.id, buried.id, failed.diagnostic);
@@ -141,7 +142,7 @@ try {
   await page.reload(); assert.equal(calls, 1);
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("editing");
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(project.id));
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("completed");
   assert.equal(calls, 3);
   await page.locator(".topbar .queue-trigger").click();
@@ -163,7 +164,7 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Bounded continuation/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("editing");
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(paging.id));
   await expect.poll(() => store.jobs(paging.id).at(-1)!.status).toBe("failed");
   const firstPage = structuredClone(store.jobs(paging.id).at(-1)!);
   assert.equal(firstPage.retrievalWork!.attempts, 1, firstPage.diagnostic);
@@ -176,7 +177,7 @@ try {
   await page.reload(); assert.equal(pagingCalls, 1);
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("editing");
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(paging.id));
   await expect.poll(() => store.jobs(paging.id).at(-1)!.status).toBe("failed");
   const exhausted = structuredClone(store.jobs(paging.id).at(-1)!);
   assert.equal(pagingCalls, 3); assert.equal(exhausted.retrievalWork!.stages.length, 2, exhausted.diagnostic);
@@ -192,7 +193,7 @@ try {
   await page.getByRole("button", { name: "Close processing queue" }).click(); await page.reload();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("editing");
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(paging.id));
   await expect.poll(() => store.jobs(paging.id).at(-1)!.status).toBe("failed");
   assert.match(store.jobs(paging.id).at(-1)!.diagnostic!, /three-request bound/); assert.equal(pagingCalls, 3);
   assert.deepEqual(store.getJob(firstPage.id), firstPage); assert.deepEqual(store.getJob(exhausted.id), exhausted);
@@ -223,7 +224,7 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Exhausted check scheduling/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("inbox");
-  await page.getByRole("button", { name: "Explore next gaps →", exact: true }).click();
+  await exploreLegacyGaps(page, store.get(exhaustedProject.id));
   await expect.poll(() => store.jobs(exhaustedProject.id).at(-1)!.status).toBe("completed");
   assert.equal(exhaustedNextCalls, 1);
   assert.equal(store.jobs(exhaustedProject.id).at(-1)!.gapReport!.requestBlocked, 1);

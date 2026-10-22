@@ -3,6 +3,7 @@ import type { Analysis } from "./model.js";
 /** Scan requirements cannot be referenced by organization operations, so their
  * optional model-local IDs are unnecessary. Durable IDs are assigned on apply. */
 export function prepareScanAnalysis(result: Analysis): Analysis {
+  if (result.specificationUpdates?.changes.length) throw new Error("Scans cannot activate or revise the specification from workspace observations.");
   if (result.pendingChanges?.changes.length) throw new Error("Scans cannot update pending decisions; process human input through discovery.");
   if (result.refinements?.length) throw new Error("Scans cannot refine existing requirements; use discovery after scanning.");
   if (result.resolutionCheck) throw new Error("Scans cannot resolve requirement conflicts.");

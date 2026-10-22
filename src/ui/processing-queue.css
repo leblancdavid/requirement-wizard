@@ -1,11 +1,11 @@
-.topbar .queue-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: 2 1 300px; min-width: 0; }
-.topbar .queue-header .queue-trigger { flex: 1 1 200px; width: auto; }
-.queue-header-action { flex: 0 1 auto; border: 1px solid var(--border); background: var(--surface); overflow-wrap: anywhere; }
+.topbar .queue-header { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; flex: 2 1 300px; min-width: 0; min-height: 5.5rem; }
+.topbar .queue-header .queue-trigger { flex: 1 1 0; width: auto; min-width: 0; min-height: calc(5.5rem - 2px); }
+.topbar .queue-header-action { flex: 0 0 auto; max-width: 45%; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: .857rem; line-height: 1.3; overflow-wrap: anywhere; }
 .queue-header-action:hover { background: var(--soft); }
 .topbar .queue-trigger { text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); }
 .topbar .queue-trigger:hover { background: var(--soft); }
 .queue-trigger .status-copy { flex: 1; }
-.queue-trigger .status-copy strong, .queue-trigger .status-copy small { display: block; }
+.queue-trigger .status-copy strong, .queue-trigger .status-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-trigger .queue-chevron { margin-left: auto; flex-shrink: 0; }
 .topbar .queue-trigger { position: relative; padding-bottom: 15px; }
 .queue-trigger > .activity-bar { position: absolute; bottom: 4px; left: 12px; width: calc(100% - 24px); }

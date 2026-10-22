@@ -26,8 +26,6 @@ function ProjectProgressView({ progress, definition, project }: { progress: Retu
       <span className="header-progress-label"><span>Overall progress</span><strong>{progress.percent}%</strong></span>
       <ProgressMeter value={progress.percent} label="Overall progress" />
        <small>{progress.status} · View breakdown ▾</small>
-       <small>{progress.questions.answered} / {progress.questions.total} questions answered</small>
-       {progress.stages[2]?.localAssessment && <small>Local code: {progress.stages[2].localAssessment.complete} complete · {progress.stages[2].localAssessment.partial} partial · {progress.stages[2].localAssessment.stale} need reassessment</small>}
     </button>
     {open && <Modal id="project-progress" className="progress-dialog" titleID="progress-title" title="Project progress" description={<p>{progress.percent}% overall · {progress.status}</p>} close={() => setOpen(false)} closeLabel="Close progress">
       <p>Equal-weight average of saved definition coverage, requirements review, and verified delivery to main. Missing coverage counts as zero in this estimate; outdated coverage retains its last score. Questions answered and local code findings are shown separately and do not certify definition completeness or delivery. New scope can lower the estimate; 100% does not prove readiness.</p>
