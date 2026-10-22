@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, renameSync, existsSync, rmSync, cpSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -268,6 +269,52 @@ test("shared revision objects bound exports when scattered edits defeat simple a
     assert.ok(Buffer.byteLength(JSON.stringify(work)) < originalBytes / 5, "Repeated records are shared, not copied into each wide middle-array delta");
     const decoded = decodePortable(renderWorkspace(large, emptyExecution(), work), selection);
     for (const snapshot of decoded.snapshots()) assert.deepEqual(snapshot, { ...originals.get(snapshot.revision)!, model: { providerID: "openai", modelID: "fixture" } });
+  } finally { f.cleanup(); }
+});
+
+test("cached continuation comparisons preserve legacy delta bytes and exact older snapshots", () => {
+  const f = fixture();
+  try {
+    const current = structuredClone(f.project); current.revision = 100;
+    current.goals = ["Keep prefix", "Current middle", "Keep suffix"];
+    const originals = Array.from({ length: 12 }, (_, index) => {
+      const value = structuredClone(current); value.revision = index + 1;
+      value.goals = index % 3 === 0 ? ["Keep prefix", `Old middle ${index}`, "Keep suffix"]
+        : index % 3 === 1 ? [] : ["Extra", ...current.goals, "Tail"];
+      value.requirements[0]!.statement = `Original statement ${index}`;
+      value.requirements.at(-1)!.reviewNote = `Original note ${index}`;
+      value.sources = index % 2 ? value.sources.slice(0, -1) : [...value.sources, { ...value.sources[0]!, id: `old-${index}`, text: `Original evidence ${index}` }];
+      return value;
+    });
+    const jobs = originals.map((p) => ({ id: `checkpoint-${p.revision}`, projectID: p.id, expectedRevision: p.revision, status: "failed" as const, model: selection, leaseUntil: null,
+      context: { revision: p.revision, focusEpicID: null, characters: 1, budget: 100, includedIDs: [], omittedIDs: [], refinementOnly: true } }));
+    const work = continuationState(current, jobs, [], (revision) => originals[revision - 1]!);
+    // Independent pre-optimization encoder: compatibility is byte-for-byte, not
+    // merely equivalent decoded evidence or a new format requiring reassessment.
+    const clean = (p: Project): Record<string, unknown> => ({ ...p, model: { providerID: p.model.providerID, modelID: p.model.modelID } });
+    const base = clean(current), objects: Record<string, unknown> = {}, snapshots: Record<string, unknown> = {};
+    const intern = (value: unknown) => {
+      const key = createHash("sha256").update(JSON.stringify(value)).digest("hex"); objects[key] ??= value; return key;
+    };
+    for (const original of originals) {
+      const previous = clean(original), delta: Record<string, unknown> = { model: { value: intern(previous.model) } };
+      for (const key of new Set([...Object.keys(base), ...Object.keys(previous)])) {
+        const before = previous[key], after = base[key];
+        if (JSON.stringify(before) === JSON.stringify(after)) continue;
+        if (Array.isArray(before) && Array.isArray(after)) {
+          let prefix = 0, suffix = 0;
+          while (prefix < Math.min(before.length, after.length) && JSON.stringify(before[prefix]) === JSON.stringify(after[prefix])) prefix++;
+          while (suffix < Math.min(before.length, after.length) - prefix && JSON.stringify(before[before.length - suffix - 1]) === JSON.stringify(after[after.length - suffix - 1])) suffix++;
+          delta[key] = { prefix, suffix, items: before.slice(prefix, before.length - suffix).map(intern) };
+        } else delta[key] = { value: intern(before ?? null) };
+      }
+      snapshots[String(original.revision)] = delta;
+    }
+    assert.equal(JSON.stringify(work.snapshots), JSON.stringify(snapshots));
+    assert.equal(JSON.stringify(work.objects), JSON.stringify(objects));
+    const decoded = decodePortable(renderWorkspace(current, emptyExecution(), work), selection);
+    for (const snapshot of decoded.snapshots()) assert.deepEqual(snapshot, clean(originals[snapshot.revision - 1]!));
+    assert.deepEqual(work, continuationState(current, jobs, [], (revision) => originals[revision - 1]!), "Repeated publication is deterministic");
   } finally { f.cleanup(); }
 });
 

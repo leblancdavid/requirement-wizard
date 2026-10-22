@@ -1,13 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ProjectStore } from "../storage/store.js";
 import { defaultDataDirectory } from "../storage/paths.js";
-import { ConnectionManager } from "../providers/connections.js";
-import { CredentialStore } from "../providers/credentials.js";
-import { ConnectedDiscovery } from "../providers/discovery.js";
-import { OpenCodeDiscovery } from "../runtime/discovery.js";
-import { startApp } from "../web/server.js";
+import { DesktopBackend } from "./backend-host.js";
 
 app.setName("Reqwizit");
 const args = process.argv.slice(1);
@@ -22,8 +17,7 @@ const directory = resolve(argument("--data-dir") ?? defaultDataDirectory());
 // Keep Chromium profiles separate from portable project files; one instance per data directory.
 app.setPath("userData", join(directory, "desktop"));
 let window: BrowserWindow | undefined;
-let store: ProjectStore | undefined;
-let backend: Awaited<ReturnType<typeof startApp>> | undefined;
+let backend: DesktopBackend | undefined;
 let shuttingDown = false;
 let finished = false;
 let startup: Promise<void> = Promise.resolve();
@@ -36,7 +30,6 @@ async function shutdown() {
   try { await startup; await backend?.close(); }
   catch { process.exitCode = 1; }
   finally {
-    try { store?.close(); } catch { process.exitCode = 1; }
     finished = true; app.quit();
   }
 }
@@ -55,19 +48,16 @@ else {
   process.once("SIGTERM", () => { void shutdown(); });
   startup = app.whenReady().then(async () => {
     if (shuttingDown) return;
-    store = new ProjectStore(join(directory, "projects.sqlite"));
-    store.recoverExpiredJobs();
-    const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
-    const options = { store, connections, adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), staticDir: join(app.getAppPath(), "web") };
     // Stable preferred origin retains Chromium UI preferences. A busy browser port
     // must not prevent the desktop from opening its own authenticated backend.
-    try { backend = await startApp({ ...options, port: 4318 }); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
-      backend = await startApp({ ...options, port: 0 });
-    }
+    backend = new DesktopBackend(directory, join(app.getAppPath(), "web"), () => {
+      if (!shuttingDown) {
+        if (window) dialog.showErrorBox("Reqwizit backend stopped", "The local service stopped unexpectedly. Saved work is retained; reopen the app to recover interrupted work.");
+        setImmediate(() => { void shutdown(); });
+      }
+    });
+    const origin = await backend.ready;
     if (shuttingDown) return;
-    const origin = backend.origin;
     const browserSession = session.defaultSession;
     browserSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     browserSession.setPermissionCheckHandler(() => false);

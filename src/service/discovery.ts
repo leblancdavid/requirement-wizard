@@ -4,6 +4,7 @@ import { ProjectStore } from "../storage/store.js";
 import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext } from "../core/working-set.js";
+import { questionHelpContext } from "../core/question-help-context.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
 import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
 import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch, type SavedEvidencePolicy } from "../core/gap-navigation.js";
@@ -247,14 +248,15 @@ export class DiscoveryService {
         options.onProgress?.("No pending epic packages: review saved blockers or answer waiting decisions. No model request made.");
         return this.store.attachEpicReviewReport(job.id, epicPlan.report, true);
       }
-      let context = continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
+      let context = options.helpRequest ? questionHelpContext(project, options.helpRequest, this.store.jobs(projectID))
+        : continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
         : epicPlan?.task?.context ? epicPlan.task.context
         : generalExploration ? planGapContext(project, this.store.gapHistory(projectID), options.focusEpicID, (revision) => this.store.get(projectID, revision))
         : planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
         requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
         recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
         isolatedTask: options.refinementOnly || options.isolatedTask,
-        budget: options.helpRequest ? 36000 : 48000, advisory: !!options.helpRequest, expandMandatory: !options.helpRequest });
+        budget: 48000, expandMandatory: true });
       if (continuationSource?.gapReport) context.gapReport = structuredClone(continuationSource.gapReport);
       context.manifest.submissionIDs = options.submissionIDs;
       context.manifest.refinementOnly = options.refinementOnly;
@@ -283,24 +285,6 @@ export class DiscoveryService {
       if (context.manifest.version === "tasks-v7") options.onProgress?.("Omitted generated background rationales and unselected historical option explanations to fit the hard context bound. Exact human input, requirement wording/scenarios and selected-option consequences are retained.");
       if (context.manifest.budget > 48000) options.onProgress?.(`Mandatory evidence requires ${context.manifest.characters.toLocaleString("en-US")} characters; using the bounded 96,000-character fallback after task planning. Exact human evidence is retained; no optional detail was added.`);
       if (context.manifest.compaction) options.onProgress?.(`Context overhead reduced from ${context.manifest.compaction.originalCharacters.toLocaleString("en-US")} to ${context.manifest.characters.toLocaleString("en-US")} characters; exact decisions and evidence retained.`);
-      if (options.helpRequest) {
-        // Full exchanges are retained; a bounded recent window is explicitly labelled.
-        const history = this.store.jobs(projectID).filter((j) => j.helpRequest?.questionID === question!.id && j.status === "completed");
-        const helpHistory = history.slice(-6).map((j) => ({ revision: j.expectedRevision, request: j.helpRequest, response: j.helpResponse }));
-        const projectData = context.data;
-        const render = () => ({ project: projectData, helpHistory, omittedHelpExchanges: history.length - helpHistory.length });
-        // Reserve the request itself; drop only explicitly counted historical
-        // help exchanges, never the current question or human evidence.
-        while (helpHistory.length && JSON.stringify(render()).length + JSON.stringify(options.helpRequest).length > 48000) helpHistory.shift();
-        context.data = render();
-        context.manifest.budget = 48000;
-        context.manifest.characters = JSON.stringify(context.data).length + JSON.stringify(options.helpRequest).length;
-        context.manifest.sectionCharacters = Object.fromEntries(Object.entries(context.data as Record<string, unknown>).map(([key, value]) => [key, JSON.stringify(value).length]));
-        if (context.manifest.characters > context.manifest.budget) {
-          this.store.attachContext(job.id, context.manifest);
-          throw new Error(`Question-help context exceeds the bounded input budget (${context.manifest.characters} / ${context.manifest.budget} characters). No model call was made.`);
-        }
-      }
       this.store.attachContext(job.id, context.manifest);
       if (context.gapReport) this.store.attachGapReport(job.id, context.gapReport);
       const shorten = (text: string) => { const line = text.replace(/\s+/g, " ").trim(); return line.length > 140 ? `${line.slice(0, 137)}…` : line; };

@@ -47,11 +47,46 @@ dependencies: a process holding a native SQLite module can block `npm ci`.
   project Settings. Browser clients keep their existing folder browser.
 - ChatGPT authorization and external web links open in the system browser. The
   desktop renderer never becomes a provider sign-in window.
-- The backend is owned by Electron's main process and retains the same authenticated
+- The backend runs in an owned Node worker thread, not Electron's native-window
+  event loop, and retains the same authenticated
   loopback API. It prefers `127.0.0.1:4318`, falling back to an available port if busy.
   The normal browser server can continue using port 4317. Chromium preferences are
   origin-specific, so fallback ports can show default UI preferences; project data
   does not depend on that port.
+
+### Responsiveness during checkpoint publication
+
+SQLite, discovery, providers and portable workspace publication run in the service
+worker. Synchronous history validation, JSON comparisons and file publication can
+delay an API response, but no longer block native window events. Only the ready
+loopback origin crosses the worker startup boundary; credentials remain in the
+provider service. Native directory/link/title-bar IPC stays in Electron's main process.
+Closing or Quit immediately destroys the window, requests service cancellation and
+awaits worker cleanup (including saved workspace publication) before exiting. It
+does not forcibly terminate a worker during writes. Unexpected worker exit reports
+a generic error and shuts down the shell instead of leaving a disconnected window.
+
+Investigation on 2026-10-21 reproduced an 18.6-second synchronous continuation build
+against Rust Grind Galaxy's existing saved data: 406 historical snapshot reads,
+391 exported deltas and 429 retained jobs. This was a read-only measurement, not a
+capture of the original Windows hang. Current-field and array-item JSON comparisons
+are now cached for each export; evidence selection, validation, order, hashes and
+portable format remain unchanged. Historical work can still be expensive; the
+worker isolation, not a promised export-time limit, protects native responsiveness.
+A later read-only check at revision 1793 took 14.9 seconds for the same 406 historical
+reads (the original check was revision 1791, so this is not a controlled speedup claim).
+No project migration, reset or model replay is required.
+
+Verification: Node 22.23.3 type check, all 565 deterministic tests (560 engine/UI/API
+tests plus five worker lifecycle tests), UI build, desktop compilation and independently
+staged real Electron smoke checks passed. Smoke checks include actual worker/SQLite
+startup, relaunch, native IPC and clean window-close/menu-Quit shutdown with saved
+project retention. Worker regression checks cover CPU-bound startup with a responsive
+owner, close during startup, awaited cleanup, idempotent close, startup/runtime errors
+and unexpected clean exit. Portable checks compare optimized delta/object bytes to
+the previous encoder and reconstruct exact historical evidence. No user data was
+written and no live inference was used. The running development app was not replaced;
+restart a newly built desktop to use this change. Installer generation was not repeated.
 
 Default project data follows the existing local `reqwizit` directory rules,
 including reuse of an existing `requirement-wizard` directory. Chromium profile

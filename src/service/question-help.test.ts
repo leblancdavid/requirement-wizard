@@ -8,6 +8,7 @@ import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService, type DiscoveryAdapter } from "./discovery.js";
 import { questionHelpPrompt } from "../runtime/discovery.js";
 import { buildContext } from "../core/context.js";
+import { questionHelpContext } from "../core/question-help-context.js";
 
 const explanation = { explanation: "Offline editing lets people keep working without a connection. It adds synchronization decisions.", assumptions: ["Field work may have unreliable connectivity."], followUp: "Must people edit while disconnected?" };
 function seed(store: ProjectStore) {
@@ -177,7 +178,132 @@ test("help rejects concurrent requests, stale revisions, missing questions, and 
     await assert.rejects(service.clarify(project.id, project.revision, { ...request, questionID: "absent" }), /missing/);
     let current = project;
     for (let i = 0; i < 5; i++) current = store.note(current.id, current.revision, "x".repeat(12000));
-    assert.equal((await service.clarify(current.id, current.revision, request)).status, "failed");
+    const blocked = await service.clarify(current.id, current.revision, request);
+    assert.equal(blocked.status, "failed");
+    assert.match(blocked.diagnostic!, /Question-help context exceeds/);
+    assert.doesNotMatch(blocked.diagnostic!, /split its work/);
+    assert.equal(blocked.context?.version, "question-help-v1");
+    assert.equal(blocked.context?.budget, 48000);
     assert.equal(calls, 1);
   } finally { store.close(); }
+});
+
+test("word help excludes large unrelated discovery records while discovery is running", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let project = seed(store);
+    const question = project.questions[0]!;
+    const { job } = store.beginJob(project.id, project.revision);
+    store.claimJob(job.id, Date.now() + 60000);
+    store.finishJob(job.id, analysisSchema.parse({ summary: "Background", goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [],
+      questions: Array.from({ length: 4 }, (_, index) => ({ text: `Unrelated choice ${index}?`, whyItMatters: "background".repeat(1200),
+        options: [{ label: "Yes", consequence: "Enable" }, { label: "No", consequence: "Disable" }] })) }));
+    project = store.get(project.id);
+    const active = store.beginJob(project.id, project.revision).job;
+    store.claimJob(active.id, Date.now() + 60000);
+    const before = store.getJob(active.id);
+    const result = await new DiscoveryService(store, { analyze: noAnalysis, async clarify(snapshot, request, options) {
+      assert.deepEqual(snapshot, project);
+      assert.deepEqual(options.context.manifest.taskRecordIDs, [question.id]);
+      assert.ok(options.context.manifest.characters < 48000);
+      assert.equal(options.context.manifest.characters, JSON.stringify(options.context.data).length + JSON.stringify(request).length);
+      for (const other of project.questions.slice(1)) assert.ok(options.context.manifest.omittedIDs.includes(other.id));
+      assert.ok(!JSON.stringify(options.context.data).includes("backgroundbackground"));
+      return explanation;
+    } }).clarify(project.id, project.revision, { questionID: question.id, action: "follow-up", message: "What does offline mean here?" });
+    assert.equal(result.status, "completed", result.diagnostic);
+    assert.deepEqual(store.getJob(active.id), before);
+    assert.deepEqual(store.get(project.id), project);
+  } finally { store.close(); }
+});
+
+test("help retains exact linked evidence, moved human ownership, and dependency/feature guardrails without shared-file fanout", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    const question = project.questions[0]!;
+    project.epics.push({ ...project.epics[0]!, id: "dependency", title: "Dependency", dependencies: [] });
+    project.epics.find((epic) => epic.id === question.epicID)!.dependencies.push("dependency");
+    const initial = project.sources[0]!;
+    project.sources.push(
+      { ...initial, id: "file", kind: "workspace", text: "Exact linked static evidence" },
+      { ...initial, id: "feature-note", kind: "note", epicID: question.epicID, text: "  Keep offline access\n" },
+      { ...initial, id: "dependency-note", kind: "note", epicID: "dependency", text: "  No network required\n" },
+      { ...initial, id: "human-answer", kind: "answer", questionID: "historical", text: "  Keep original choice\n" });
+    project.questions.push({ ...question, id: "historical", epicID: "dependency", sourceID: "human-answer", status: "answered" },
+      { ...question, id: "unrelated", evidenceIDs: ["file"] });
+    project.requirements.push({ id: "linked-requirement", epicID: question.epicID, status: "accepted", statement: "Exact requirement", rationale: "Original reason",
+      acceptance: ["Exact scenario"], sourceIDs: ["file", "human-answer"] });
+    question.evidenceIDs = ["linked-requirement"];
+    const original = structuredClone(project);
+    const context = questionHelpContext(project, { questionID: question.id, action: "decide" }, []);
+    for (const id of [question.id, initial.id, "linked-requirement", "file", "human-answer", "historical", "feature-note", "dependency-note"]) {
+      assert.ok(context.manifest.includedIDs.includes(id), id);
+    }
+    assert.ok(context.manifest.omittedIDs.includes("unrelated"));
+    const data = context.data as { project: { sources: unknown[]; requirements: unknown[]; questions: unknown[] } };
+    assert.deepEqual(data.project.sources, project.sources);
+    assert.deepEqual(data.project.requirements, project.requirements);
+    assert.deepEqual(project, original);
+  } finally { store.close(); }
+});
+
+test("help uses one 48k budget, reserves the current request, and counts dropped exchanges exactly", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const project = seed(store);
+    const question = project.questions[0]!;
+    // Mandatory evidence fits 48k but not the previous preliminary 36k cap.
+    for (let index = 0; index < 3; index++) project.sources.push({ ...project.sources[0]!, id: `note-${index}`, kind: "note", text: "n".repeat(12000) });
+    const request = { questionID: question.id, action: "follow-up" as const, message: "m".repeat(4000) };
+    const history: Job[] = Array.from({ length: 8 }, (_, index) => ({ ...store.jobs(project.id)[0]!, id: `help-${index}`, status: "completed",
+      helpRequest: { questionID: question.id, action: "why" }, helpResponse: { ...explanation, explanation: "e".repeat(6000) } }));
+    const original = structuredClone(history);
+    const context = questionHelpContext(project, request, history);
+    const data = context.data as { helpHistory: unknown[]; omittedHelpExchanges: number };
+    assert.ok(context.manifest.characters > 36000);
+    assert.ok(context.manifest.characters <= 48000);
+    assert.equal(context.manifest.characters, JSON.stringify(context.data).length + JSON.stringify(request).length);
+    assert.equal(data.omittedHelpExchanges, history.length - data.helpHistory.length);
+    assert.ok(data.omittedHelpExchanges > 2);
+    assert.deepEqual(history, original);
+    for (const source of project.sources) assert.ok(context.manifest.includedIDs.includes(source.id));
+  } finally { store.close(); }
+});
+
+test("legacy help manifests and completed guidance survive repeated upgrades without replay", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "reqwizit-help-upgrade-"));
+  const path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const project = seed(store);
+    const request = { questionID: project.questions[0]!.id, action: "why" as const };
+    const completed = store.beginJob(project.id, project.revision, request).job;
+    store.claimJob(completed.id, Date.now() + 60000);
+    store.attachContext(completed.id, buildContext(project).manifest);
+    store.finishHelp(completed.id, explanation);
+    const failed = store.beginJob(project.id, project.revision, request).job;
+    store.claimJob(failed.id, Date.now() + 60000);
+    store.attachContext(failed.id, { ...buildContext(project).manifest, version: "tasks-v1", budget: 36000 });
+    store.failJob(failed.id, "failed", "Legacy bounded context failure; no model call made");
+    const oldJobs = store.jobs(project.id);
+    const revisions = store.history(project.id);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.jobs(project.id), oldJobs);
+      assert.deepEqual(store.get(project.id), project);
+      assert.deepEqual(store.history(project.id), revisions);
+    }
+    let calls = 0;
+    const result = await new DiscoveryService(store, { analyze: noAnalysis, async clarify(_snapshot, _request, options) {
+      calls++;
+      assert.ok(JSON.stringify(options.context.data).includes(explanation.explanation));
+      assert.equal(options.context.manifest.version, "question-help-v1");
+      return explanation;
+    } }).clarify(project.id, project.revision, request);
+    assert.equal(result.status, "completed", result.diagnostic);
+    assert.equal(calls, 1, "Only the explicit new request calls the adapter");
+    assert.deepEqual(store.jobs(project.id).slice(0, oldJobs.length), oldJobs);
+    assert.deepEqual(store.get(project.id), project);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });

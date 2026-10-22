@@ -284,11 +284,27 @@ try {
     const onAccent = themeTokens(palette)["--on-accent"];
     await expect(page.locator(".topbar h1")).toHaveCSS("color", cssRGB(onAccent));
     await expect(menuToggle).toHaveCSS("color", cssRGB(onAccent));
+    const themedMenu = await applicationMenu(page);
+    await expect(themedMenu).toHaveCSS("color", cssRGB(onAccent));
+    await expect(themedMenu).not.toHaveCSS("background-color", cssRGB(palette.surface));
+    await expect(themedMenu.locator(".app-menu-brand")).toHaveCSS("color", cssRGB(onAccent));
+    for (const button of await themedMenu.getByRole("button").all()) {
+      await expect(button).toHaveCSS("color", cssRGB(onAccent));
+    }
+    await expect(themedMenu.getByRole("button", { name: "New project", exact: true })).toHaveCSS("outline-color", cssRGB(onAccent));
+    await themedMenu.getByRole("button", { name: "Recent workspaces", exact: true }).click();
+    await expect(themedMenu.locator(".recent-workspaces")).toBeVisible();
+    await expect(themedMenu.locator(".recent-workspaces")).not.toHaveCSS("border-left-color", cssRGB(themeTokens(palette)["--border"]));
+    await page.keyboard.press("Escape");
     await expect(appearance.locator('.theme-card[aria-pressed="false"]').first()).toHaveCSS("background-color", cssRGB(palette.surface));
   }
   await appearance.getByRole("button", { name: "Customize current preset", exact: true }).click();
   await appearance.getByLabel("Accent color", { exact: true }).fill("#dab489");
   await expect(page.locator(".topbar")).toHaveCSS("background-color", "rgb(218, 180, 137)");
+  const customMenu = await applicationMenu(page);
+  await expect(customMenu).toHaveCSS("color", await page.locator(".topbar").evaluate((element) => getComputedStyle(element).color));
+  await expect(customMenu).not.toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await page.keyboard.press("Escape");
   await appearance.getByLabel("Interface font").selectOption("serif");
   await appearance.getByLabel("Text size", { exact: true }).fill("20");
   await expect(page.locator("html")).toHaveCSS("font-size", "20px");
@@ -832,16 +848,32 @@ try {
   assert.ok(Math.abs(headerBounds.x + headerBounds.width - 1440) < 1, "Header fills available width");
   const queueBounds = await page.locator(".queue-header").boundingBox();
   assert.ok(queueBounds && Math.abs(queueBounds.x + queueBounds.width / 2 - (headerBounds.x + headerBounds.width / 2)) < 1, "Queue control is centered in the header");
-  for (const width of [1440, 390]) {
+  for (const width of [1440, 2666, 390]) {
     await page.setViewportSize({ width, height: 700 });
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await expect.poll(async () => Math.round((await header.boundingBox())!.y)).toBe(0);
     await expect(headerStatus).toBeInViewport();
     const workspaceTabs = header.getByRole("tablist", { name: "Workspace", exact: true });
     await expect(workspaceTabs).toBeInViewport();
+    await expect(workspaceTabs).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    const headerInk = await header.evaluate((element) => getComputedStyle(element).color);
+    const surfaceHex = await page.locator("html").evaluate((element) => getComputedStyle(element).getPropertyValue("--surface").trim());
+    const surfaceColor = `rgb(${[1, 3, 5].map((start) => parseInt(surfaceHex.slice(start, start + 2), 16)).join(", ")})`;
+    for (const control of [headerStatus, header.locator(".progress-trigger"), header.locator(".queue-header-action")]) {
+      await expect(control).toHaveCSS("color", headerInk);
+      await expect(control).not.toHaveCSS("background-color", surfaceColor);
+    }
+    await expect(headerStatus.locator("strong")).toHaveCSS("color", headerInk);
+    await expect(headerStatus.locator("small")).toHaveCSS("color", headerInk);
+    await expect(headerStatus.locator(".activity-spinner")).toHaveCSS("color", headerInk);
+    await expect(header.locator(".header-progress small").first()).toHaveCSS("color", headerInk);
+    await expect(header.locator(".meter > span")).toHaveCSS("background-color", headerInk);
+    await expect(workspaceTabs.getByRole("tab", { selected: true })).toHaveCSS("border-bottom-color", headerInk);
     for (const name of ["Design", "Review", "Implement", "Project map", "Activity"]) {
       await expect(workspaceTabs.getByRole("tab", { name: new RegExp(name) })).toBeInViewport({ ratio: 1 });
+      await expect(workspaceTabs.getByRole("tab", { name: new RegExp(name) })).toHaveCSS("color", headerInk);
     }
+    if (width >= 1440) assert.ok((await header.boundingBox())!.height < 220, "Desktop header uses a compact summary instead of a narrow, tall progress card");
     assert.ok((await workspaceTabs.boundingBox())!.y >= (await page.locator(".queue-header").boundingBox())!.y + (await page.locator(".queue-header").boundingBox())!.height, "Workspace tabs sit below current processing controls");
     await expect(header.getByRole("button", { name: "Stop discovery", exact: true })).toBeInViewport();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Sticky header fits viewport");

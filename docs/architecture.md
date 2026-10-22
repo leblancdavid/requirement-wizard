@@ -32,7 +32,13 @@ implemented under `src/`. See [decisions.md](decisions.md),
   replay; compatible legacy completed checks remain reusable. See [migrations.md](migrations.md).
 - `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`, `working-set.ts`: organization, material
   change review, deterministic coverage, and bounded working sets.
+- `src/core/question-help-context.ts`: dedicated advisory question context with exact
+  linked evidence and human guardrails; one 48k input bound reserves the request and
+  trims only counted historical exchanges, without discovery expansion.
 - `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.
+- `src/desktop/backend-host.ts` and `backend.ts`: owned service worker lifecycle.
+  SQLite, providers and portable publication run off Electron's native-window event
+  loop; the shell retains native IPC and awaits worker cancellation/cleanup on quit.
 - `src/storage/portable.ts` and `workspace.ts`: manifest-3 `.reqwizit/` publication,
   conservative continuation projection, lazy exact revision deltas, schema/hash/reference
   validation and explicit transactional clone/pull adoption. Local-history backups and

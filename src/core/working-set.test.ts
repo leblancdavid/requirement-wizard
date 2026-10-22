@@ -1036,8 +1036,8 @@ test("task fallback pins cross-cutting decisions, transitive dependency decision
 test("question help can fit independently of a large area and counts omitted help history", async () => {
   const store = new ProjectStore(":memory:");
   try {
-    let project = seed(store);
-    for (let i = 0; i < 5; i++) project = store.note(project.id, project.revision, "n".repeat(12000), "inbox");
+    const project = seed(store);
+    assert.ok(JSON.stringify(project).length > 48000);
     let calls = 0;
     const service = new DiscoveryService(store, { async analyze() { assert.fail("Unexpected discovery"); },
       async clarify(_snapshot, _request, options) {

@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": false, "rootDir": "src", "outDir": "dist/desktop-app/app" },
-  "include": ["src/desktop/main.ts", "src/desktop/preload.cts"],
+  "include": ["src/desktop/main.ts", "src/desktop/backend.ts", "src/desktop/preload.cts"],
   "exclude": []
 }

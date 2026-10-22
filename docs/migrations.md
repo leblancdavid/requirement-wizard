@@ -19,6 +19,61 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Question-local advisory help context (2026-10-21)
+
+New help jobs use a `question-help-v1` context manifest instead of the generic
+`epics-v3`/`tasks-v*` working-set manifests. SQLite, portable formats, help request/
+response schemas and assessment/checkpoint identities are unchanged. This is a
+new-request selection policy, not a reinterpretation of completed evidence; no
+forward payload transformation, reset or startup model call is needed. Historical
+manifests, failed jobs, guidance, IDs and revision provenance remain unchanged.
+New requests reuse the ordinary completed-help history window, including legacy
+responses, without automatically retrying failed jobs. Existing transactional job
+publication, revision validation, cancellation and lease recovery remain in place.
+
+Unlike the former advisory fallback, current feature notes and dependency human
+guardrails are explicitly pinned alongside target evidence. Unrelated generated
+records are no longer added simply because they fit a discovery budget. Truly
+oversized mandatory evidence still blocks before inference; this does not mark
+previous valid help stale or require users to repeat completed calls.
+
+Upgrade tests construct legacy completed/failed help manifests, reopen twice,
+verify exact original jobs and human revisions, then explicitly request new help
+using the retained guidance. Scope/budget tests cover concurrent discovery,
+forward-only shared-file links, moved source ownership, request reservation and
+history omission counts. Live model qualification is not established by fixtures.
+
+Verification: `npm run check`, all 569 deterministic tests (564 main-suite plus
+five desktop worker lifecycle tests), and `git diff --check` passed. Tests ran
+with the existing Node 22.23.3 runtime because the default Node 20 executable is
+incompatible with the installed SQLite native module. No dependencies were rebuilt,
+no live model calls were made, and browser automation was not repeated for this
+service-only change.
+
+## Desktop backend isolation and continuation comparison cache
+
+SQLite schema 3, execution schema 1 and all portable formats are unchanged. Desktop
+startup now opens the same store and protected provider service in an owned worker
+thread; no records are transferred to a replacement database. Shutdown still waits
+for service cancellation and store publication. Interrupted work retains the existing
+lease/recovery and explicit-resume rules; worker failure never starts replacement
+model calls automatically. No forward data transformation or startup replay is needed.
+
+Continuation export caches only the current snapshot's serialized fields and array
+items for the lifetime of one call. Historical records are still loaded/validated;
+selection, exact delta encoding, object hashes/order, original evidence, assessment
+identities and checkpoint reuse remain unchanged. No persistent cache or freshness
+key is introduced. Existing transactional publication, pending hashes and conflict
+checks remain in place; cleanup is awaited rather than forcibly terminating writes.
+
+Verification (2026-10-21, Node 22.23.3): portable tests compare exact delta/object JSON
+bytes with the previous encoder and restore historical arrays/scalars/evidence;
+existing clone/adoption, interrupted scan/planning and assessment reuse checks passed.
+All 565 deterministic tests passed (560 engine/UI/API plus five worker lifecycle
+checks). Independently staged real Electron startup/relaunch/
+shutdown checks passed without user-data writes or model calls. Installer upgrade
+and a real process-crash-during-publication check were not repeated.
+
 ## Git-assisted assessment navigation
 
 SQLite schema 3/execution schema 1 and portable formats are unchanged. Fresh assessment

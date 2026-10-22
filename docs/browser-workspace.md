@@ -1,5 +1,24 @@
 # Browser workspace, epics, and estimated completeness
 
+## Question-help context boundaries
+
+Word explanations and the question help panel use a dedicated question-local
+context, not the discovery working-set planner. One 48,000-character application
+input budget includes the current request, exact question/options, forward-linked
+evidence, initial human input, current feature notes and project/dependency human
+guardrails. Shared files and epic membership do not pull in unrelated records.
+Generated summaries, coverage assessments, concept tooltip metadata and navigation
+indexes are not included. Missing wider context must be stated, not guessed.
+
+Up to six completed exchanges for the same question are included, newest last;
+oldest exchanges are removed first if needed, with an exact omitted-exchange count.
+Original help history remains saved. Mandatory evidence is never silently cut.
+If it cannot fit even without history, a question-help-specific diagnostic is saved
+before inference rather than advising users to split their project. Help remains
+advisory, revision-linked, and independent of a running discovery/implementation job;
+existing stale-result and cancellation checks still apply. Old completed help is
+retained without replay; retrying a failed explanation is explicit.
+
 ## Application menu and header
 
 The top-left **Application menu** replaces the persistent project sidebar. It offers
@@ -13,11 +32,23 @@ state, and survives reload. Older installations need no project migration.
 The menu supports Tab, arrow keys, Home/End, Escape and outside-click dismissal.
 Choosing an action closes it; Escape returns focus to the menu button. The header
 fills the viewport width and uses the selected accent color with automatically
-contrasting title/menu text. Processing and progress controls retain their surface
-colors and their existing behavior. Settings' back link is below the header.
+contrasting title/menu text. Processing and progress controls and Resume/Stop buttons
+use subtle accent-tinted backgrounds and borders, contrasting text and meters, and
+visible hover/keyboard-focus states instead of bright surface-colored cards. Their
+behavior is unchanged; opened dialogs retain normal workspace surface colors.
+Settings' back link is below the header. This styling change needs no data migration.
+The whole header uses a scoped accent palette: the application-menu dropdown,
+recent-workspace list, selected/hover/focus states, separators, activity widgets,
+tabs and count badges all follow the selected preset or custom accent. Text and
+indicators use its contrasting foreground. Portaled dialogs and the workspace
+below the header retain their normal palette; saved appearance settings are unchanged.
 
 The Design, Review, Implement, Project map and Activity tabs occupy a second row
-of the sticky header, below current processing and project progress. They remain
+of the sticky header, below current processing and project progress. The tabs blend
+into the accent background, with contrasting text/counts and an underlined, subtly
+highlighted active tab. Reduced desktop padding, vertically centered project identity
+and a wider progress card keep the header compact without hiding summary information.
+Progress summary lines remain separate instead of running together. The tabs remain
 visible while scrolling on desktop and mobile and are hidden in Settings and
 project creation. Tab counts and navigation are unchanged. This layout-only
 change does not affect persisted data or require a migration.
@@ -26,6 +57,18 @@ Verification (2026-10-21): type check, UI build and browser/portable-browser
 checks passed (browser tests on Node 22.23.3), including all five tabs staying
 fully visible below processing controls after scrolling at 1440px and 390px.
 The existing Vite chunk-size warning remains non-blocking; no inference was used.
+The compact/accent-tab follow-up also passed type checking, UI build and full
+browser/portable-browser checks on Node 22.23.3, including 1440px, 2666px and 390px
+sticky-header layouts, contrasting tab text/active underline and desktop height
+below 220px with processing controls visible. No persisted formats, preferences or
+freshness rules changed; no data migration is needed.
+Accent-tinted processing/progress controls also passed type checking, UI build and
+browser/portable-browser checks on Node 22.23.3 at those three viewport widths,
+including contrasting summary text, spinner and progress fill (no inference).
+Whole-header palette verification also passed type checking, UI build and full
+browser/portable-browser checks, including application-menu text, focus outline,
+recent-workspace separators across all 12 presets and a custom accent. The existing
+Vite chunk-size warning remains non-blocking. No data formats changed.
 
 Desktop users also get **Quit**, using the same safe shutdown as closing the window,
 without a confirmation or tray mode. It is hidden in regular browsers, which cannot

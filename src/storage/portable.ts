@@ -78,6 +78,11 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   }
   for (const submission of waiting) if (submission.appliedRevision) { revisions.add(submission.appliedRevision); revisions.add(submission.appliedRevision - 1); }
   const base = portableProject(project) as Record<string, unknown>;
+  // The current snapshot is identical for every historical comparison. Serialize
+  // each field/array item once, rather than hundreds of times on large projects.
+  const baseJSON = new Map(Object.entries(base).map(([key, value]) => [key, JSON.stringify(value)]));
+  const baseItems = new Map(Object.entries(base).filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]))
+    .map(([key, value]) => [key, value.map((item) => JSON.stringify(item))]));
   const snapshots: Record<string, Delta> = {};
   const objects: Record<string, unknown> = {};
   const intern = (value: unknown) => {
@@ -91,11 +96,12 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     const delta: Delta = { model: { value: intern(withoutAccount(original.model)) } };
     for (const key of new Set([...Object.keys(base), ...Object.keys(previous)])) {
       const before = previous[key], after = base[key];
-      if (JSON.stringify(before) === JSON.stringify(after)) continue;
+      if (JSON.stringify(before) === baseJSON.get(key)) continue;
       if (Array.isArray(before) && Array.isArray(after)) {
+        const items = baseItems.get(key)!;
         let prefix = 0, suffix = 0;
-        while (prefix < Math.min(before.length, after.length) && JSON.stringify(before[prefix]) === JSON.stringify(after[prefix])) prefix++;
-        while (suffix < Math.min(before.length, after.length) - prefix && JSON.stringify(before[before.length - suffix - 1]) === JSON.stringify(after[after.length - suffix - 1])) suffix++;
+        while (prefix < Math.min(before.length, after.length) && JSON.stringify(before[prefix]) === items[prefix]) prefix++;
+        while (suffix < Math.min(before.length, after.length) - prefix && JSON.stringify(before[before.length - suffix - 1]) === items[after.length - suffix - 1]) suffix++;
         delta[key] = { prefix, suffix, items: before.slice(prefix, before.length - suffix).map(intern) };
       } else delta[key] = { value: intern(before ?? null) };
     }
