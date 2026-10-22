@@ -229,8 +229,8 @@ test("staged partition retains distributed requirements, confirmations, answered
     assert.deepEqual(p, before);
   } finally { store.close(); }
 });
-/** Reproduce pre-headroom identities independently, without rewriting saved evidence. */
-function legacyContext(p: Project, recordIDs: string[], epicID = "orders", epicIDs = [epicID], kind: EpicReview["kind"] = "workflow") {
+/** Reproduce saved policy identities independently, without rewriting evidence. */
+function legacyContext(p: Project, recordIDs: string[], epicID = "orders", epicIDs = [epicID], kind: EpicReview["kind"] = "workflow", contextPolicy?: EpicReview["contextPolicy"]) {
   recordIDs = recordIDs.slice().sort();
   const records = [...p.requirements, ...p.questions, ...p.sources].filter((r) => recordIDs.includes(r.id));
   const evidence = gapEvidence(p);
@@ -238,7 +238,8 @@ function legacyContext(p: Project, recordIDs: string[], epicID = "orders", epicI
     evidence: records.map((r) => [r.id, evidence(kind === "workflow" ? { ...r, epicID } : r).inputKey]).sort(),
     epics: p.epics.filter((e) => epicIDs.includes(e.id)).map((e) => ({ id: e.id, purpose: e.purpose, dependencies: e.dependencies })),
     research: p.research.filter((r) => epicIDs.includes(r.epicID)) });
-  const review: EpicReview = { format: 1, epicID, epicIDs, kind, recordIDs, inputKey: semantic, packageID: digest({ kind, epicIDs, recordIDs }) };
+  const review: EpicReview = { format: 1, epicID, epicIDs, kind, recordIDs, inputKey: semantic, packageID: digest({ kind, epicIDs, recordIDs }),
+    ...(contextPolicy ? { contextPolicy } : {}) };
   const context = epicReviewContext(p, review);
   review.inputKey = digest({ semantic, exact: retrievalEvidenceBasis(context).key });
   return context;
@@ -260,6 +261,39 @@ function behaviorHeavy(p: Project, characters = 12000) {
   return p;
 }
 
+test("current-spec upgrade retains headroom completed checks, exhausted attempts and unpublished finals across repeated reopen", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  for (const outcome of ["completed", "exhausted", "final"] as const) {
+    const directory = mkdtempSync(join(root, "current-spec-upgrade-")), path = join(directory, "projects.sqlite");
+    let store = new ProjectStore(path);
+    try {
+      const p = seed(store, 1), ids = p.requirements.filter((r) => r.epicID === "orders").map((r) => r.id);
+      const context = legacyContext(p, ids, "orders", ["orders"], "workflow", "headroom-v1");
+      let saved;
+      if (outcome === "exhausted") {
+        const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+        store.checkpointRetrieval(job.id, { format: 1, research: false, stages: [], attempts: 3 }, context.manifest);
+        store.failJob(job.id, "failed", "Three headroom-policy attempts spent"); saved = store.getJob(job.id);
+      } else saved = saveLegacyFinal(store, p, context, outcome === "completed");
+      for (let reopen = 0; reopen < 2; reopen++) {
+        store.close(); store = new ProjectStore(path);
+        const current = store.get(p.id), plan = planEpicReview(current, store.epicReviewHistory(p.id), "orders");
+        const retained = plan.tasks.find((t) => t.review.packageID === context.manifest.epicReview!.packageID)!;
+        assert.equal(retained.review.contextPolicy, "headroom-v1");
+        assert.equal(retained.review.inputKey, context.manifest.epicReview!.inputKey);
+        assert.equal(retained.state, outcome === "completed" ? "reviewed" : outcome === "exhausted" ? "blocked" : "pending");
+        assert.deepEqual(store.getJob(saved.id), saved);
+      }
+      if (outcome === "final") {
+        const recovered = await new DiscoveryService(store, { async analyze() { assert.fail("Saved headroom final must not replay"); } })
+          .analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+        assert.equal(recovered.status, "completed", recovered.diagnostic);
+        assert.equal(recovered.context!.epicReview!.contextPolicy, "headroom-v1");
+      }
+    } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
 test("fresh workflow packages target 72k after early optimization and reserve actual evidence headroom", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -271,7 +305,7 @@ test("fresh workflow packages target 72k after early optimization and reserve ac
     assert.equal(workflows.length, 2);
     assert.deepEqual(new Set(workflows.flatMap((t) => t.review.recordIDs)), new Set(ids));
     for (const t of workflows) {
-      assert.equal(t.review.contextPolicy, "headroom-v1");
+      assert.equal(t.review.contextPolicy, "current-spec-v1");
       const b = t.context!.manifest.epicContextBudget!;
       assert.equal(b.characters, JSON.stringify(t.context!.data).length);
       assert.ok(b.characters <= 72000); assert.ok(b.headroom >= 24000);
@@ -299,7 +333,7 @@ test("optimization chooses the smaller measured representation instead of adding
     let p = seed(store, 1); const target = p.requirements.find((r) => r.epicID === "orders")!;
     p = store.review(p.id, p.revision, target.id, "accepted", "");
     const task = planEpicReview(p, [], "orders").tasks.find((t) => t.review.kind === "workflow")!;
-    assert.equal(task.review.contextPolicy, "headroom-v1");
+    assert.equal(task.review.contextPolicy, "current-spec-v1");
     assert.ok(!JSON.stringify(task.context!.data).includes("reviewSnapshotEncoding"));
     const approval = p.sources.find((s) => s.kind === "confirmation")!;
     assert.ok(JSON.stringify(task.context!.data).includes(JSON.stringify(approval.text)));
@@ -347,7 +381,7 @@ test("compatible legacy completed packages remain intact instead of being split 
     const reopened = planEpicReview(changed, store.epicReviewHistory(p.id), "orders");
     const current = reopened.tasks.filter((t) => t.review.kind === "workflow" && t.review.recordIDs.some((id) => ids.includes(id)));
     assert.ok(current.length > 0);
-    assert.ok(current.every((t) => t.state === "pending" && t.review.contextPolicy === "headroom-v1"));
+    assert.ok(current.every((t) => t.state === "pending" && t.review.contextPolicy === "current-spec-v1"));
     assert.ok(current.every((t) => t.review.inputKey !== context.manifest.epicReview!.inputKey));
     assert.deepEqual(store.getJob(completed.id), completed);
   } finally { store.close(); }

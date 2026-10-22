@@ -78,6 +78,41 @@ function snapshotHeavyProject(store: ProjectStore, count: number) {
   return p;
 }
 
+test("current-spec requests proactively remove generated background detail while retaining exact human evidence and current rules", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = snapshotHeavyProject(store, 5);
+    for (const r of p.requirements) r.rationale = `Generated rationale for ${r.id}: ` + "Redundant explanatory background. ".repeat(40);
+    const q = p.questions[0]!, answer = p.sources.find((s) => s.id === q.sourceID)!;
+    answer.text = q.options[0]!.label;
+    q.options[1]!.consequence += " Unselected generated alternative. ".repeat(30);
+    p.sources.push({ id: "human-addendum", kind: "confirmation", epicID: "project", requirementID: "requirement-1",
+      text: "Human exception: keep receipts even after cancellation.\r\n", reviewAddendum: true });
+    p.requirements[1]!.sourceIDs.push("human-addendum");
+    const target = { id: "target", epicID: "inbox", status: "proposed" as const, statement: "Display saved receipts",
+      rationale: "Target reasoning remains visible", acceptance: ["A saved receipt is readable"], sourceIDs: [p.sources[0]!.id] };
+    p.requirements.push(target);
+    const before = structuredClone(p), task = { recordIDs: [target.id], isolatedTask: true, gapExploration: true, compactWorkflowInstructions: true };
+    const old = planContext(p, task), current = planContext(p, { ...task, currentSpecification: true });
+    const previous = decodeContext<{ sources: Project["sources"]; questions: Project["questions"]; requirements: Project["requirements"] }>(old.data);
+    const data = decodeContext<typeof previous>(current.data);
+    assert.ok(current.manifest.characters < old.manifest.characters * .85);
+    assert.deepEqual(data.sources, previous.sources, "Every human source remains byte-for-byte exact");
+    assert.deepEqual(new Set(current.manifest.includedIDs), new Set(old.manifest.includedIDs));
+    for (const r of data.requirements) {
+      const original = p.requirements.find((item) => item.id === r.id)!;
+      assert.equal(r.statement, original.statement); assert.deepEqual(r.acceptance, original.acceptance);
+      assert.deepEqual(r.sourceIDs, original.sourceIDs); assert.equal(r.status, original.status);
+      assert.equal(r.rationale, r.id === target.id ? original.rationale : undefined);
+    }
+    assert.deepEqual(data.questions[0]!.options[0], q.options[0]);
+    assert.deepEqual(data.questions[0]!.options[1], { label: q.options[1]!.label });
+    assert.deepEqual(data.questions[1]!.options, p.questions[1]!.options, "Freeform answers cannot discard alternatives");
+    assert.deepEqual(p, before, "Original history and generated explanations stay available in storage");
+    console.log(JSON.stringify({ comparison: "current-spec-background-detail", before: old.manifest.characters, after: current.manifest.characters }));
+  } finally { store.close(); }
+});
+
 test("bounded repeated-phrase sharing reduces distinct human prose without changing exact text or evidence identity", () => {
   const clause = "Preserve every original decision, including its exact punctuation and provenance, while keeping recovery behavior observable to the owner.";
   const sources = Array.from({ length: 80 }, (_, i) => ({ id: `human-${i}`, kind: "note", epicID: "project",

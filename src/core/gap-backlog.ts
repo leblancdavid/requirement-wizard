@@ -3,6 +3,7 @@ import type { Job, Project } from "./model.js";
 import { currentDecisionProjection } from "./current-decisions.js";
 import { gapCheckSchema, gapLensSchema, gapReportSchema, type GapLens, type GapReport } from "./gap-types.js";
 import { retrievalAllowanceSchema, type RetrievalAllowance } from "./gap-retrieval.js";
+import { evidenceGraph, type EvidenceGraph } from "./evidence-graph.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Record = Project["requirements"][number] | Project["questions"][number] | Project["sources"][number];
@@ -13,7 +14,8 @@ export type GapHistory = Pick<Job, "id" | "expectedRevision" | "status"> & { kin
 export type GapTask = { record: Record; lens: GapLens; inputKey: string; recordIDs: string[]; supportingRecordIDs: string[]; state: "pending" | "checked" | "waiting" | "blocked"; exhaustedJobID?: string };
 
 /** Revision-independent identities, computed from explicit evidence and conservative feature human guardrails. */
-export function gapEvidence(project: Project) {
+export function gapEvidence(project: Project, graph: EvidenceGraph = evidenceGraph(project)) {
+  if (graph.project !== project) throw new Error("Evidence graph belongs to a different project snapshot.");
   const decisions = currentDecisionProjection(project);
   const records = new Map<string, Record>([...project.sources, ...project.questions, ...project.requirements].map((r) => [r.id, r]));
   const owners = new Map([...project.questions, ...project.requirements].map((r) => [r.id, r.epicID]));
@@ -29,20 +31,14 @@ export function gapEvidence(project: Project) {
   };
   const ordered = (items: Record[]) => items.slice().sort((a, b) => a.id.localeCompare(b.id)).map(normalize);
   const close = (ids: Set<string>) => {
-    const queue = [...ids];
-    for (let index = 0; index < queue.length; index++) {
-      const r = records.get(queue[index]!);
-      const linked = !r ? [] : "statement" in r ? r.sourceIDs : "options" in r ? [...r.evidenceIDs ?? [], ...r.sourceID ? [r.sourceID] : []]
-        : [r.questionID, r.requirementID].filter((value): value is string => !!value);
-      for (const link of linked) if (!ids.has(link) && !decisions.omitted.has(link)) { ids.add(link); queue.push(link); }
-    }
+    graph.close(ids, (edge) => !decisions.omitted.has(edge.to));
   };
   const scopes = new Map<string, string>();
   function scope(epicID: string) {
     if (scopes.has(epicID)) return scopes.get(epicID)!;
     const selected = new Set(["project", epicID]);
     const visit = (id: string) => {
-      for (const dependency of project.epics.find((e) => e.id === id)?.dependencies ?? []) if (!selected.has(dependency)) { selected.add(dependency); visit(dependency); }
+      for (const dependency of graph.epics.get(id)?.dependencies ?? []) if (!selected.has(dependency)) { selected.add(dependency); visit(dependency); }
     };
     for (const id of [...selected]) visit(id);
     const human = project.sources.filter((s) => s.kind !== "workspace" && !decisions.omitted.has(s.id)
@@ -60,7 +56,7 @@ export function gapEvidence(project: Project) {
     close(ids);
     // Explicit target-linked questions block re-asking unresolved choices and
     // invalidate this work when their answers change. Generic lexical hints don't.
-    const linkedQuestions = project.questions.filter((q) => q.status !== "retired" && (q.id === record.id || q.evidenceIDs?.includes(record.id)));
+    const linkedQuestions = graph.linkedQuestions(record.id).filter((q) => q.status !== "retired");
     for (const q of linkedQuestions) ids.add(q.id);
     close(ids);
     return { inputKey: digest({ compatibility: "gap-evidence-v1", scope: scope(area(record)), records: ordered([...ids].flatMap((id) => records.has(id) ? [records.get(id)!] : [])),

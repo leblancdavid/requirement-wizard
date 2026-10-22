@@ -53,6 +53,10 @@ draft gaps publish only after every batch checks them. Long packages pause after
 requests per package attempt; Explore next gaps resumes saved stages without replay.
 See [epic workflow review](docs/epic-workflow-review.md) for
 bounded packages, blockers, recovery and verification limits.
+New workflow reviews use a [graph-backed current-specification context](docs/discovery-efficiency.md)
+to traverse exact evidence and reduce redundant generated background, while keeping
+human history saved and compatible completed reviews reusable. Benchmark locally with
+`npm run benchmark:discovery`; live model speed/quality gains are not yet established.
 Gap discovery can request additional exact saved evidence in up to three bounded stages,
 retaining human constraints and checkpointing completed calls for explicit retry. Navigation
 hints cannot support citations; oversized evidence blocks rather than silently truncating it.

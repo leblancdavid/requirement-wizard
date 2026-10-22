@@ -2,6 +2,7 @@ import { buildContext, ContextBudgetError, type ContextPack } from "./context.js
 import type { Project } from "./model.js";
 import { currentDecisionProjection, reviewSnapshot } from "./current-decisions.js";
 import { gapInstructions, type GapLens } from "./gap-types.js";
+import { evidenceGraph, type EvidenceGraph } from "./evidence-graph.js";
 
 export type ContextTask = {
   focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; budget?: number;
@@ -25,6 +26,8 @@ export type ContextTask = {
   preferCompactEvidence?: boolean;
   /** Explicit staged epic review only: other guardrails are checked in separate exact batches. */
   stagedGuardrailIDs?: string[];
+  /** New workflow policy only; legacy jobs reconstruct their original wire context. */
+  currentSpecification?: boolean;
 };
 
 /** Lossless wire representation only; stored records and evidence IDs stay intact. */
@@ -178,7 +181,8 @@ export function shareRecordStructure(data: unknown, additionalRecordFields: stri
 }
 
 /** Plan locally before inference. Exact human guardrails are never summarized away. */
-export function planContext(project: Project, task: ContextTask = {}): ContextPack {
+export function planContext(project: Project, task: ContextTask = {}, graph?: EvidenceGraph): ContextPack {
+  if (graph && graph.project !== project) throw new Error("Evidence graph belongs to a different project snapshot.");
   const budget = task.budget ?? 48000;
   const decisions = task.gapExploration || task.isolatedTask ? currentDecisionProjection(project) : undefined;
   const superseded = new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
@@ -286,6 +290,20 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
   // Resolve exact evidence transitively: sources may point back to a question or
   // requirement, and requirements may cite evidence in a different area.
   const closeEvidence = (ids: Set<string>) => {
+    if (task.currentSpecification) {
+      const index = graph ??= evidenceGraph(project);
+      index.close(ids, (edge) => {
+        const record = index.records.get(edge.from);
+        if (edge.kind === "supports" && decisions?.omitted.has(edge.to) && !taskIDs.has(edge.to)) return false;
+        if (!workspaceIDs.has(edge.to)) return true;
+        if (edge.kind === "motivates" && record && "options" in record && record.status === "answered"
+          && !taskIDs.has(record.id) && !(record.sourceID && taskIDs.has(record.sourceID))) return false;
+        if (edge.kind === "supports" && backgroundAccepted.has(edge.from)) return false;
+        return !task.deferWorkspaceEvidence || taskIDs.has(edge.to);
+      });
+      return;
+    }
+    // Legacy ordering is retained for exact raw-wire checkpoint reconstruction.
     let changed = true;
     while (changed) {
       const size = ids.size;
@@ -481,7 +499,16 @@ export function planContext(project: Project, task: ContextTask = {}): ContextPa
         + (data.omittedRequirementWorkspaceEvidence ? " Historical workspace motivation for confirmed background requirements is explicitly omitted where not otherwise required." : ""),
       sectionCharacters: Object.fromEntries(Object.entries(data).map(([key, value]) => [key, JSON.stringify(value).length])) } };
   };
+  // Current-spec workflow requests exclude redundant generated background prose
+  // proactively, not only when human evidence has already exhausted the hard cap.
+  // This uses the existing conservative unique-answer rules and lossless formats.
   let result = pack(included);
+  if (task.currentSpecification) {
+    const current = pack(included, false, true);
+    // An omission ledger can cost more than a very short generated explanation.
+    // Keep the smaller measured representation, rather than adding boilerplate.
+    if (current.manifest.characters < result.manifest.characters) result = current;
+  }
   if (result.manifest.characters > budget) {
     // Queued follow-up first plans against the preferred bound. A single discovery
     // task may expand only after compaction and evidence closure, without adding

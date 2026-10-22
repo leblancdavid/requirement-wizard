@@ -6,7 +6,7 @@ export const epicReviewSchema = z.object({
   epicID: z.string().min(1), kind: z.enum(["workflow", "boundary"]),
   recordIDs: z.array(z.string().min(1)).min(1).max(6),
   epicIDs: z.array(z.string().min(1)).min(1).max(2),
-  contextPolicy: z.enum(["headroom-v1", "staged-guardrails-v1"]).optional(),
+  contextPolicy: z.enum(["headroom-v1", "staged-guardrails-v1", "current-spec-v1"]).optional(),
   guardrailBatches: z.array(z.array(z.string().min(1)).max(10000)).min(1).max(16).optional(),
 }).strict().refine((r) => (r.contextPolicy === "staged-guardrails-v1") === !!r.guardrailBatches, "Staged reviews require explicit guardrail batches.");
 export type EpicReview = z.infer<typeof epicReviewSchema>;

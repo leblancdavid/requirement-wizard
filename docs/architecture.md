@@ -15,6 +15,12 @@ implemented under `src/`. See [decisions.md](decisions.md),
   [continuous specification](continuous-specification.md) and [migrations](migrations.md).
 
 - `src/core/model.ts`: project/evidence/proposal schemas and reference rules.
+- `src/core/evidence-graph.ts`: derived, invocation-local typed forward/reverse
+  provenance index and queue traversal. New `current-spec-v1` workflow contexts use
+  exact graph closure and proactive generated-background projection; compatible saved
+  policies reconstruct unchanged. Human history is stored separately from bounded
+  inference projections, not deleted or summarized away. See
+  [discovery efficiency](discovery-efficiency.md) and [migrations](migrations.md).
 - `src/core/similarity.ts`: wording identity, project-wide lexical candidate retrieval,
   advisory proposal warnings and read-only requirement comparisons. Discovery adds
   bounded navigation hints without changing citation authority or mandatory evidence;

@@ -6,6 +6,7 @@ import { gapEvidence } from "./gap-backlog.js";
 import { decisionAvailability } from "./decision-availability.js";
 import { retrievalEvidenceBasis, validateGapFinal } from "./gap-retrieval.js";
 import { epicReviewDiagnostic, epicReviewSchema, type EpicReview, type EpicReviewReport } from "./epic-review-types.js";
+import { evidenceGraph, type EvidenceGraph } from "./evidence-graph.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -47,9 +48,11 @@ function groups(project: Project, records: Record[], size: number): Record[][] {
   return [...batches, ...records.filter((r) => "options" in r).sort((a, b) => a.id.localeCompare(b.id)).map((r) => [r])];
 }
 
-export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false, guardrailIDs?: string[]): ContextPack {
+export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false, guardrailIDs?: string[], index?: EvidenceGraph): ContextPack {
   if (review.contextPolicy === "staged-guardrails-v1" && !guardrailIDs) guardrailIDs = review.guardrailBatches![0]!;
   const optimized = !!review.contextPolicy;
+  const currentSpecification = review.contextPolicy === "current-spec-v1";
+  const graph = currentSpecification ? index ?? evidenceGraph(project) : undefined;
   const task = { focusEpicID: review.epicID, requiredEpicIDs: review.epicIDs,
     recordIDs: [...new Set([...review.recordIDs, ...extraIDs])], isolatedTask: true, gapExploration: true,
     supportingRecordIDs: project.questions.filter((q) => q.status !== "retired" && q.evidenceIDs?.some((id) => review.recordIDs.includes(id))).map((q) => q.id),
@@ -58,7 +61,8 @@ export function epicReviewContext(project: Project, review: EpicReview, extraIDs
     const context = planContext(project, { ...task, ...(deferredWorkspace ? { deferWorkspaceEvidence: true } : {}),
       ...(compactReviewSnapshots ? { compactReviewSnapshots: true } : {}),
       ...(compactWorkflowInstructions ? { compactWorkflowInstructions: true } : {}),
-      ...(optimized ? { preferCompactEvidence: true } : {}) });
+      ...(optimized ? { preferCompactEvidence: true } : {}),
+      ...(currentSpecification ? { currentSpecification: true } : {}) }, graph);
     // No project-wide search. Deferred links grant navigation, not evidence authority.
     context.manifest.epicReview = review;
     context.data = { ...(context.data as object),
@@ -182,7 +186,9 @@ export const epicBatchKey = (contexts: ContextPack[]) => hash(contexts.map((c) =
 export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: string, submissions: Submission[] = [], readRevision?: (revision: number) => Project) {
   const active = project.epics.filter((e) => !e.archived);
   if (focusEpicID && !active.some((e) => e.id === focusEpicID)) throw new Error("Focused epic does not exist.");
-  const evidence = gapEvidence(project);
+  // This index lives only for this synchronous plan, never across project mutations.
+  const graph = evidenceGraph(project);
+  const evidence = gapEvidence(project, graph);
   const requirementIDs = new Set(project.requirements.map((r) => r.id));
   const tasks: EpicReviewTask[] = [];
   const scheduledPackageIDs = new Set<string>();
@@ -207,7 +213,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     try {
       const staged = contextPolicy === "staged-guardrails-v1" ? stagedEpicReview(project, review) : undefined;
       if (staged) review = staged.review;
-      context = staged?.contexts[0] ?? epicReviewContext(project, review);
+      context = staged?.contexts[0] ?? epicReviewContext(project, review, [], false, undefined, graph);
       const withoutIdentity = { ...context, manifest: { ...context.manifest } };
       delete withoutIdentity.manifest.epicReview;
       review.inputKey = hash({ semantic: review.inputKey, exact: staged ? epicBatchKey(staged.contexts) : retrievalEvidenceBasis(withoutIdentity).key });
@@ -223,7 +229,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     const stage = j.retrievalWork?.stages[0];
     const extra = stage && "retrieveEvidence" in stage.request ? stage.request.retrieveEvidence.recordIDs : [];
     try {
-      const current = extra.length ? epicReviewContext(project, review, extra, true) : context;
+      const current = extra.length ? epicReviewContext(project, review, extra, true, undefined, graph) : context;
       if (j.retrievalWork?.final) return j.retrievalWork.final.evidenceBasis?.key === retrievalEvidenceBasis(current).key;
       if (!extra.length || j.expectedRevision === project.revision) return true;
       if (!readRevision) return true;
@@ -266,7 +272,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
         add(epicID, epicIDs, kind, remaining);
         return;
       }
-      candidate = build(epicID, epicIDs, kind, records, "headroom-v1");
+      candidate = build(epicID, epicIDs, kind, records, "current-spec-v1");
     }
     let { review, context, error } = candidate;
     const recordIDs = review.recordIDs;

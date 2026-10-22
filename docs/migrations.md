@@ -19,6 +19,45 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Graph-backed current-specification contexts (2026-10-22)
+
+Source formats: no-policy, `headroom-v1` and `staged-guardrails-v1` epic-review format 1.
+Additive target: epic-review format 1 also accepts `contextPolicy: current-spec-v1`.
+No SQLite/project/portable version, optimistic revision, saved evidence, assessment
+or `gap-evidence-v1` fingerprint semantics change. The graph is a derived local index,
+never a new persisted source of authority. Existing lossless encodings and explicit
+generated-metadata omission legends are reused.
+
+New/changed non-staged workflow work compares current-spec metadata projection before
+the existing headroom/staging/splitting path. Reconstruct compatible completed,
+partial, exhausted and unpublished-final work under its saved policy first; do not
+relabel old calls or repeat them merely to change context representation. Legacy
+working-set closure order is retained for exact raw-wire checkpoint reconstruction.
+Normalized legacy gap identities use indexed closure with the same evidence set.
+The new policy's actual projected context participates in the existing exact basis.
+Staged batches retain their original policy and mandatory evidence semantics.
+
+No existing payload or history is rewritten at startup, so there is no SQL migration,
+backup rewrite or interruption transaction to recover. Repeated startup is read-only
+with respect to this optimization; ordinary publication still uses existing leases
+and revision transactions. Unsupported future policy names reject reads without
+overwriting saved records. Downgrade compatibility for new-policy jobs is not promised.
+Original human evidence, IDs and dated completed work remain intact. This is not a
+license to delete history, infer missing supersession or certify stale checks current.
+
+Tests cover current/legacy closure equivalence, cycles/missing links, no shared-file
+fan-out, exact retained human evidence, generated-background reduction, ambiguous
+answer retention, unchanged input objects, and previous headroom completed/exhausted/
+unpublished-final jobs across repeated SQLite reopen and no-replay recovery. Existing
+legacy/staged upgrade and future-format rejection tests remain applicable. See
+[discovery efficiency](discovery-efficiency.md) for measurement and remaining scope.
+
+Verified on Windows Node 22.23.3: 28 pretests / 632 main tests, final five-test graph
+suite including a pre-graph identity oracle, type check, UI build, synthetic benchmark
+and focused workflow browser check. No model calls or user database inspection.
+Ranked search and narrower semantic invalidation are not implemented by this change;
+new-policy portable cross-machine continuation is not separately qualified.
+
 ## Oversized workflow context recovery (2026-10-22)
 
 ### Staged shared-decision review

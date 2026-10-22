@@ -22,6 +22,19 @@ This replaces neither old saved checks nor human review. It is a separate discov
 intended to avoid three independent lens reviews of every requirement and repeated
 model-driven evidence search. Live usefulness/cost improvements have not been measured.
 
+### Graph-backed current-specification policy (2026-10-22)
+
+New workflow/dependency work now tries `current-spec-v1`: graph-based exact evidence
+closure plus proactive omission of redundant generated background explanations,
+with the existing conservative unique-answer and current-decision rules. Choose the
+smaller measured representation; current wording/scenarios, human evidence and
+provenance remain intact. History is not deleted or indiscriminately summarized.
+Compatible saved no-policy/headroom/staged work retains its original context policy
+and completed/spent calls. Headroom targets and exact staged fallback below remain
+unchanged; those dated sections describe their retained policies.
+See [discovery efficiency](discovery-efficiency.md) for the implemented slice,
+synthetic benchmarks and remaining search/selective-invalidation work.
+
 ### Staged shared-decision review (2026-10-22)
 
 Oversized **new/changed** packages can now use `staged-guardrails-v1`. After normal
