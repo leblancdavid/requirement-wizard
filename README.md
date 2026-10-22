@@ -60,6 +60,9 @@ human history saved and compatible completed reviews reusable. Benchmark locally
 To investigate a real run, use **Processing & queue → Export discovery diagnostics**.
 New runs record bounded timings/context counts; older timings remain unknown. Review
 the metadata-only JSON before sharing; original text, paths and credentials are excluded.
+Queue **Resume discovery** now stays on workflow discovery when no human input is
+waiting; saved responses are processed separately without falling back to legacy
+gap checks. Compatible saved workflow stages and spent attempts are preserved.
 Gap discovery can request additional exact saved evidence in up to three bounded stages,
 retaining human constraints and checkpointing completed calls for explicit retry. Navigation
 hints cannot support citations; oversized evidence blocks rather than silently truncating it.

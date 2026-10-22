@@ -54,6 +54,36 @@ reviews retain their own existing policy and reconstructible exact batches. Neit
 metadata omission nor graph navigation earns evidence/citation authority for unread
 records. Oversized indivisible human evidence can still block.
 
+### Browser Resume routing (2026-10-22)
+
+**Processing & queue → Resume discovery** now uses a dedicated
+`POST /api/projects/:id/resume-discovery` request. The server decides from current
+saved-input state rather than a stale renderer snapshot:
+
+- With unfinished, non-archived/non-resolved input, process the finite selected
+  response scope using existing isolated follow-up and recovery rules. Never fall
+  through to legacy gap discovery if that scope is empty or another worker already
+  completed it. Conflicts and out-of-scope responses stay retained/paused.
+- With no unfinished input, run the same workflow discovery mode as **Explore next
+  gaps**, respecting the selected feature, question target and research choice.
+  The existing workflow planner reuses compatible saved policies, stages and attempts,
+  including older headroom and staged work. It does not restart completed stages.
+
+This fixes an inconsistency where the Design button selected workflow discovery but
+the queue's Resume button could select legacy individual/lens discovery. The two
+backlog ledgers remain distinct; old legacy checks/blockers are not relabelled as
+workflow checks or deleted. The existing terminal/legacy analyze and explicit
+Continue exploration paths remain available with their original semantics.
+Processing saved responses does not authorize additional gap exploration afterward;
+use **Explore next gaps** once the retained input is resolved. This routing fix does
+not guarantee that every mandatory human evidence chain fits the context budget.
+
+Verification: type check, UI build, 43 pretests / 633 main tests, and the focused
+workflow browser runner passed on Windows Node 22.23.3. The broader browser command
+still stops at its existing missing **Approve resolution** assertion. The focused
+browser check includes Resume after reload and unchanged original staged-job evidence;
+the SQLite test exercises restart without automatic inference. No live model calls.
+
 ## Measurement
 
 ### Export a representative discovery run

@@ -70,6 +70,13 @@ this focused check is not a claim that every legacy browser flow passed.
 
 ## Saved-response context blockers
 
+The queue's **Resume discovery / Process waiting answers** action now routes through
+current server state: unfinished responses receive finite isolated follow-up; otherwise
+Resume uses workflow discovery like **Explore next gaps**, not legacy individual
+checks. Selected-scope emptiness cannot trigger unrelated gap discovery. Existing
+staged/headroom checkpoints and spent calls remain reusable without relabelling old
+checks. See [Resume routing](discovery-efficiency.md#browser-resume-routing-2026-10-22).
+
 Saved-response follow-up now applies the existing current-decision projection to
 background guardrails: verified superseded plain approvals can be omitted, and
 verified app-generated current cleanup/resolution receipts can expose their exact

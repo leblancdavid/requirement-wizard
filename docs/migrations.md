@@ -19,6 +19,45 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Browser Resume mode correction (2026-10-22)
+
+No persisted schema, payload, context-policy, fingerprint, SQLite/portable version
+or revision-counter change. The new authenticated same-origin browser endpoint
+`POST /api/projects/:id/resume-discovery` validates the current revision and bounded
+question target, then routes using current server-side input state. It accepts no
+legacy retrieval-policy/mode override. Its `processOnly` queue option is ephemeral,
+not saved project state.
+
+Unfinished non-archived/non-resolved input uses finite isolated follow-up, preserving
+existing scope/conflict/overlap recovery. Empty selected queues stop rather than
+falling through to unrequested legacy discovery. Otherwise explicit browser Resume
+uses workflow discovery, as the Design button already did. Startup alone never
+starts work. Legacy terminal/API discovery and explicit saved-job continuation
+retain their existing contracts.
+
+The workflow planner still reconstructs compatible saved no-policy/headroom/staged
+contexts and spent allowances first. This correction does not rewrite old jobs,
+adopt legacy lens checks as workflow evidence, transfer/reset spent attempts, change
+human constraints or force completed calls to replay. No data transformation,
+backfill or SQL migration/backup transaction is needed. Existing dated evidence and
+future-format rejection remain unchanged. Unsupported oversized exact evidence can
+still block, independently of routing.
+
+Tests cover resuming after a legacy context blocker without modifying its ledger,
+finite saved-response processing, empty/out-of-scope input, authentication/origin/
+revision validation, and paused staged work across SQLite reopen: the six original
+receipts remain unchanged and only two remaining calls run. The focused browser
+runner now exercises the actual queue Resume button after reload, rather than
+using Explore next gaps as a substitute for Resume.
+
+Verification: Windows Node 22.23.3 type check, UI build, full `npm test` (43 pretests /
+633 main tests), and focused workflow browser check passed. The broad browser command
+still stops at the existing **Approve resolution** assertion (`browser-check.ts:1347`),
+so its later portable/specification runners did not execute. An initial focused run
+hit an index-page 404 while the broad command rebuilt the shared UI output; a separate
+rerun after the build passed, including the actual staged Resume-button path. No live
+model calls, user database changes, or imported diagnostic-file fixtures were used.
+
 ## Local discovery measurements and explicit diagnostic export (2026-10-22)
 
 Source: jobs without diagnostic measurements. Additive target: optional format-1

@@ -22,6 +22,14 @@ This replaces neither old saved checks nor human review. It is a separate discov
 intended to avoid three independent lens reviews of every requirement and repeated
 model-driven evidence search. Live usefulness/cost improvements have not been measured.
 
+2026-10-22 Resume correction: **Processing & queue → Resume discovery** now uses the
+workflow planner when no unfinished human input remains, including saved-stage
+recovery after browser/SQLite restart. It no longer silently selects the legacy
+individual-check path. Unfinished responses instead receive finite isolated
+processing, with no gap-discovery fallback from an empty selected response scope.
+Workflow policy/attempt/check identities are unchanged; see
+[routing and limitations](discovery-efficiency.md#browser-resume-routing-2026-10-22).
+
 ### Graph-backed current-specification policy (2026-10-22)
 
 New workflow/dependency work now tries `current-spec-v1`: graph-based exact evidence

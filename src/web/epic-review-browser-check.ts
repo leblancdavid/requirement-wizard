@@ -184,6 +184,7 @@ try {
   await page.getByLabel("Filter by feature").selectOption("orders");
   await review.click(); await expect(review).toBeEnabled();
   await expect.poll(() => stagedCalls).toBe(6);
+  const pausedStageJob = structuredClone(store.jobs(stagedProject.id).at(-1)!);
   assert.deepEqual(store.get(stagedProject.id), stagedProject, "Paused drafts must not publish");
   await page.locator(".topbar .queue-trigger").click();
   await expect(status.getByLabel("Staged decision review", { exact: true })).toContainText("6 / 8 stages saved");
@@ -193,8 +194,10 @@ try {
   await page.reload(); assert.equal(stagedCalls, 6, "Reload never starts paid work");
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
-  await review.click(); await expect(review).toBeEnabled();
+  await page.locator(".queue-header").getByRole("button", { name: "Resume discovery", exact: true }).click();
+  await expect(review).toBeEnabled();
   await expect.poll(() => stagedCalls).toBe(8);
+  assert.deepEqual(store.getJob(pausedStageJob.id), pausedStageJob, "Queue Resume preserves the original staged job and its spent calls");
   assert.ok(store.jobs(stagedProject.id).some((job) => job.result && job.retrievalWork?.epicStages?.phase === "complete"));
   let failedProject = store.create("Failed gap outcome browser", "Exercise one failed gap outcome", { providerID: "openai", modelID: "fixture" });
   failedProject = store.note(failedProject.id, failedProject.revision, "Clarify order retry behavior", "project");

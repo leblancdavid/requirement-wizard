@@ -134,7 +134,21 @@ export class DiscoveryQueue {
     return true;
   }
 
-  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number } = {}) {
+  /** Browser Resume is either finite saved-input processing or workflow discovery,
+   * never an implicit return to the legacy individual-check planner. Decide from
+   * current server state, not a potentially stale renderer submission list. */
+  resumeBrowser(id: string, options: { research?: boolean; focusEpicID?: string; questionTarget?: number } = {}) {
+    const project = this.service.store.get(id);
+    const submissions = this.service.store.submissions(id);
+    const resolved = resolvedReviewAttempts(project, submissions);
+    const unfinished = submissions.some((s) => !s.archivedAt && !resolved.has(s.id)
+      && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
+    this.resume(id, unfinished
+      ? { research: options.research, focusEpicID: options.focusEpicID, processOnly: true }
+      : { ...options, gapMode: "epic" });
+  }
+
+  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number; processOnly?: boolean } = {}) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
@@ -276,7 +290,7 @@ export class DiscoveryQueue {
     report("Gap scan stopped after 10 packages; completed results are saved. Start again to explore more.");
   }
 
-  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; questionTarget?: number }) {
+  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; questionTarget?: number; processOnly?: boolean }) {
     if (this.closing || this.isActive(id) || this.service.store.executionActive(id)) return;
     if (!manual && this.service.store.executionExpired(id)) {
       this.service.store.pauseQueue(id, true);
@@ -370,6 +384,15 @@ export class DiscoveryQueue {
           this.service.store.saveSubmission(item); return false;
         });
         if (localApprovals) report(`Saved ${localApprovals} approval${localApprovals === 1 ? "" : "s"} after local safety checks; no AI follow-up needed.`);
+        if (manual?.processOnly && !saved.length) {
+          const remaining = this.service.store.submissions(id), resolved = resolvedReviewAttempts(current, remaining);
+          const retained = remaining.some((s) => !s.archivedAt && !resolved.has(s.id)
+            && ["queued", "saved", "needs-attention"].includes(s.status));
+          if (retained) this.service.store.pauseQueue(id, true);
+          report(retained ? "No processable responses remain in the selected scope. Other responses or conflicts are retained; no gap exploration started."
+            : "Saved responses finished. No gap exploration started; use Explore next gaps for further discovery.");
+          break;
+        }
         if (localApprovals && !saved.length && manual?.questionTarget === undefined) {
           const remaining = this.service.store.submissions(id);
           if (scope && remaining.some((s) => ["queued", "saved"].includes(s.status) || s.status === "needs-attention" && !s.conflict)
