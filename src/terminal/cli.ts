@@ -19,6 +19,7 @@ const help = `Reqwizit — persistent terminal discovery
 
 npm run reqwizit -- new --name "My app" --idea "Describe the idea" --provider openai --model gpt-6.1-sol
 npm run reqwizit -- list
+npm run reqwizit -- open --path "D:\\Projects\\my-app" --provider openai --model gpt-6.1-sol
 npm run reqwizit -- show --project <id> [--revision <n>] [--json]
 npm run reqwizit -- export --project <id> [--revision <n>] [--json]
 npm run reqwizit -- interview --project <id>
@@ -37,7 +38,8 @@ answer supports --kind answer|delegation|deferral. Delegation text must describe
 review supports accept|reject. Historical revisions are read-only snapshots.
 export prints a combined Markdown specification, or portable JSON with --json.
 Optional --data-dir <directory> overrides the user-local data location.
-Optional --connection <saved-account-id|opencode> selects the route for new/model.
+Optional --connection <saved-account-id|opencode> selects the route for new/open/model.
+open restores .reqwizit project state without inference; processing starts paused.
 new supports --path <absolute-directory> [--create-directory] to connect a workspace.
 Implementation statuses: not-started, in-progress, blocked, implemented, verified.
 Verified requires --evidence. Disconnect retains workspace files and app data.
@@ -112,7 +114,7 @@ async function main() {
   } });
   if (values.help || !positionals.length) { console.log(help); return; }
   const command = positionals[0];
-  if (positionals.length !== 1 || !["new", "list", "show", "export", "model", "answer", "review", "analyze", "scan", "interview", "jobs", "recover", "workspace", "implementation"].includes(command!)) {
+  if (positionals.length !== 1 || !["new", "open", "list", "show", "export", "model", "answer", "review", "analyze", "scan", "interview", "jobs", "recover", "workspace", "implementation"].includes(command!)) {
     throw new Error("Unknown command. See --help.");
   }
   if (command === "interview" && (!stdin.isTTY || !stdout.isTTY)) throw new Error("interview requires an interactive terminal; use analyze/answer/review for scripting.");
@@ -138,7 +140,10 @@ async function main() {
       if (job.status !== "completed") process.exitCode = 1;
       return job;
     };
-    if (command === "new") {
+    if (command === "open") {
+      print(store.openWorkspace(resolve(required(values.path, "path")), selectModel()));
+      console.error("Opened saved project. Automatic processing is paused; review imported verification commands before running checks. No model calls were made.");
+    } else if (command === "new") {
       const created = store.create(required(values.name, "name"), required(values.idea, "idea"), selectModel());
       print(created);
       if (values.path) console.log(JSON.stringify(store.connectWorkspace(created.id, created.revision, resolve(values.path), values["create-directory"]), null, 2));

@@ -3,13 +3,14 @@ import { activityPage, activitySnapshot, saveActivity } from "./activity.js";
 import { revisionActivity, jobActivity, submissionActivity, executionActivities, type ActivityQuery } from "../core/project-activity.js";
 import { discoveryBlockReason, executionBlockReason, OperationConflictError } from "../core/operations.js";
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { z } from "zod";
 import { emptyExecution, type ExecutionState } from "../core/execution.js";
 import { executionSchemaVersion } from "../core/assessment-identity.js";
 import { databaseSchemaVersion, migrateDatabase } from "./migrations.js";
-import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace } from "./workspace.js";
-import { dirname } from "node:path";
+import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, migrateWorkspaceDirectory, readPortableWorkspace, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace } from "./workspace.js";
+import { continuationState, decodePortable, portableDigest } from "./portable.js";
+import { dirname, join } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
 import { wordingKey } from "../core/similarity.js";
@@ -33,6 +34,7 @@ import { questionReviewFingerprint, reviewFingerprint, validateRequirementEviden
 /** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
 function readStoredJob(payload: string): Job {
   const job = JSON.parse(payload) as Job;
+  if (job.portableReceipt !== undefined && job.portableReceipt !== 1) throw new Error("Unsupported portable checkpoint receipt. Upgrade the app; saved work was not overwritten.");
   const envelopes = [...(job.result?.resolutionCheck ? [job.result.resolutionCheck] : []),
     ...(job.result?.refinements ?? []).flatMap((p) => p.resolution ? [p.resolution] : [])];
   if (envelopes.some((value) => value.format !== 1)) throw new Error("Unsupported requirement-resolution format in saved job. Upgrade the app; saved evidence was not overwritten.");
@@ -121,6 +123,10 @@ export class ProjectStore {
       CREATE TABLE IF NOT EXISTS execution_leases (
         resource TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), owner TEXT NOT NULL, lease_until INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS portable_import_backups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL,
+        imported_at TEXT NOT NULL, project_payload TEXT NOT NULL, execution_payload TEXT NOT NULL, records_payload TEXT NOT NULL
+      );
     `);
     migrateDatabase(this.db);
     for (const row of this.db.prepare("SELECT project_id, payload FROM workspaces").all() as { project_id: string; payload: string }[]) {
@@ -129,7 +135,7 @@ export class ProjectStore {
         binding.bindingID = randomUUID();
         this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ?").run(JSON.stringify(binding), row.project_id);
       }
-      if (binding.formatVersion !== 2) this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(row.project_id);
+      if (binding.formatVersion !== 3 || existsSync(join(binding.path, ".requirement-wizard"))) this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(row.project_id);
     }
     this.syncWorkspaces();
   }
@@ -179,7 +185,10 @@ export class ProjectStore {
     if (!this.db.prepare("UPDATE execution_leases SET lease_until = ? WHERE project_id = ? AND owner = ? AND lease_until > ?").run(Date.now() + 120_000, id, owner, Date.now()).changes) throw new Error("Implementation worker lease expired.");
   }
 
-  releaseExecution(id: string, owner: string) { this.db.prepare("DELETE FROM execution_leases WHERE project_id = ? AND owner = ?").run(id, owner); }
+  releaseExecution(id: string, owner: string) {
+    this.db.prepare("DELETE FROM execution_leases WHERE project_id = ? AND owner = ?").run(id, owner);
+    queueMicrotask(() => { if (this.db.open) this.syncWorkspace(id); });
+  }
   executionActive(id: string) { return !!this.db.prepare("SELECT 1 FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()); }
   executionExpired(id: string) { return !!this.db.prepare("SELECT 1 FROM execution_leases WHERE project_id = ? AND lease_until <= ?").get(id, Date.now()); }
   acknowledgeExpiredExecution(id: string) { this.db.prepare("DELETE FROM execution_leases WHERE project_id = ? AND lease_until <= ?").run(id, Date.now()); }
@@ -221,8 +230,14 @@ export class ProjectStore {
     const manifest = readArtifact(directory, "manifest.json");
     if (manifest !== null && !Object.keys(binding.hashes).length && !Object.keys(binding.pendingHashes).length) {
       let parsed: { formatVersion: number; revision: number; hashes: Record<string, string> };
-      try { parsed = z.object({ formatVersion: z.union([z.literal(1), z.literal(2)]), projectID: z.literal(id), revision: z.number().int().positive(), hashes: z.record(z.string().regex(/^[a-f0-9]{64}$/)) }).parse(JSON.parse(manifest)); }
+      try { parsed = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]), projectID: z.literal(id), revision: z.number().int().positive(), hashes: z.record(z.string().regex(/^[a-f0-9]{64}$/)) }).parse(JSON.parse(manifest)); }
       catch { throw new Error("Workspace conflict: existing manifest belongs to another project or has an unsupported format. Choose a different folder."); }
+      const movedPublishedFolder = previous && previous.hashes["manifest.json"] === hash(manifest);
+      if (!movedPublishedFolder && parsed.revision !== expectedRevision) throw new Error("Workspace conflict: this folder has a different saved revision. Use Open shared checkpoint instead of reconnecting.");
+      if (parsed.formatVersion === 3 && !movedPublishedFolder) {
+        const intended = renderWorkspace(this.get(id), this.execution(id), continuationState(this.get(id), this.jobs(id), this.submissions(id), (revision) => this.get(id, revision)));
+        if (intended["manifest.json"] !== manifest) throw new Error("Workspace conflict: this folder has different portable state. Use Open shared checkpoint instead of reconnecting.");
+      }
       binding.hashes = { ...parsed.hashes, "manifest.json": hash(manifest) };
       binding.savedRevision = parsed.revision;
       binding.formatVersion = parsed.formatVersion;
@@ -243,6 +258,84 @@ export class ProjectStore {
     return this.syncWorkspace(id)!;
   }
 
+  /** Explicit clone/pull adoption. Never infer, execute repository commands, start
+   * workers, or overwrite divergent local work. The entire import is transactional. */
+  openWorkspace(path: string, selection: ModelSelection): Project {
+    const canonical = canonicalDirectory(path);
+    const bundle = readPortableWorkspace(canonical);
+    const imported = decodePortable(bundle.files, selection);
+    if (imported.project.id !== bundle.manifest.projectID || imported.project.revision !== bundle.manifest.revision) throw new Error("Portable manifest/project identity mismatch.");
+    const id = imported.project.id;
+    function* snapshots() { yield* imported.snapshots(); yield imported.project; }
+    const digest = portableDigest(bundle.manifest.hashes);
+    this.db.transaction(() => {
+      const existing = this.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(id);
+      const old = existing ? this.workspace(id) : null;
+      if (existing) {
+        this.assertWorkspaceIdle(id);
+        if (!old || directoryKey(old.path) !== directoryKey(canonical)) throw new Error("Project already exists locally in another folder. Use a separate data directory for another checkout; no local work was overwritten.");
+        const { "manifest.json": _manifest, ...published } = old.hashes;
+        const publishedDigest = portableDigest(published);
+        if (old.status === "pending" || digest !== publishedDigest && old.portableBase !== publishedDigest) throw new Error("Workspace conflict: local and shared project state diverged. Preserve both versions and reconcile them before opening; no data was overwritten.");
+        if (digest === publishedDigest) {
+          old.portableBase = digest;
+          this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ?").run(JSON.stringify(old), id);
+          return;
+        }
+      }
+      const binding: Workspace = { path: canonical, bindingID: randomUUID(), status: "saved", savedRevision: imported.project.revision,
+        diagnostic: null, hashes: { ...bundle.manifest.hashes, "manifest.json": hash(bundle.manifestContent) }, pendingHashes: {}, formatVersion: 3, portableBase: digest };
+      // Validate every saved envelope before any durable change, including old
+      // checkpoint formats which must reject rather than silently lose evidence.
+      for (const job of imported.continuation.jobs) readStoredJob(JSON.stringify(job));
+      for (const item of imported.continuation.submissions) {
+        submissionSchema.parse({ id: item.id, input: item.input, auto: item.auto, research: item.research, ...(item.replaces ? { replaces: item.replaces } : {}) });
+        readStoredSubmission(JSON.stringify(item));
+      }
+      const historical = this.db.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?");
+      for (const snapshot of snapshots()) {
+        const previous = historical.get(id, snapshot.revision) as { payload: string } | undefined;
+        if (previous) {
+          const oldProject = JSON.parse(previous.payload) as Project;
+          // Account routing is local and deliberately not part of shared identity.
+          if (portableDigest({ ...oldProject, model: null, roundChanges: [], reviewUpdates: null }) !== portableDigest({ ...snapshot, model: null, roundChanges: [], reviewUpdates: null }))
+            throw new Error("Workspace conflict: a local revision has different shared content. Preserve both branches; revision numbers alone cannot establish ancestry.");
+        }
+      }
+      if (readArtifact(managedDirectory(canonical), "manifest.json") !== bundle.manifestContent) throw new Error("Portable project changed before import. Retry.");
+      if (existing) {
+        const jobIDs = new Set(imported.continuation.jobs.map((j) => j.id)), submissionIDs = new Set(imported.continuation.submissions.map((s) => s.id));
+        this.db.prepare("INSERT INTO portable_import_backups(project_id,imported_at,project_payload,execution_payload,records_payload) VALUES (?, ?, ?, ?, ?)")
+          .run(id, new Date().toISOString(), JSON.stringify(this.get(id)), JSON.stringify(this.execution(id)), JSON.stringify({ jobs: this.jobs(id).filter((j) => jobIDs.has(j.id)), submissions: this.submissions(id).filter((s) => submissionIDs.has(s.id)) }));
+      }
+      this.db.prepare("INSERT INTO projects VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload")
+        .run(id, imported.project.revision, JSON.stringify(imported.project));
+      for (const snapshot of snapshots()) this.db.prepare("INSERT OR IGNORE INTO revisions VALUES (?, ?, ?, ?)")
+        .run(id, snapshot.revision, "Retained portable continuation evidence", JSON.stringify(snapshot));
+      imported.execution.version = existing ? this.execution(id).version + 1 : 1;
+      if (imported.execution.planning) imported.execution.planning.bindingID = binding.bindingID!;
+      for (const run of imported.execution.assessmentRuns ?? []) run.bindingID = binding.bindingID!;
+      this.db.prepare("INSERT INTO execution_state VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET version=excluded.version,payload=excluded.payload")
+        .run(id, imported.execution.version, JSON.stringify(imported.execution));
+      for (const job of imported.continuation.jobs) {
+        if (job.scan) job.scan.workspaceKey = workspaceScanKey(canonical);
+        if (job.scanWork) job.scanWork.bindingID = binding.bindingID!;
+        const previous = this.db.prepare("SELECT payload FROM jobs WHERE id = ?").get(job.id) as { payload: string } | undefined;
+        if (previous && JSON.parse(previous.payload).projectID !== id) throw new Error("Portable job ID belongs to another local project.");
+        this.db.prepare("INSERT INTO jobs VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload").run(job.id, id, JSON.stringify(job));
+      }
+      for (const item of imported.continuation.submissions) {
+        const previous = this.db.prepare("SELECT payload FROM submissions WHERE id = ?").get(item.id) as { payload: string } | undefined;
+        if (previous && JSON.parse(previous.payload).projectID !== id) throw new Error("Portable submission ID belongs to another local project.");
+        this.db.prepare("INSERT INTO submissions VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload").run(item.id, id, JSON.stringify(item));
+      }
+      this.db.prepare("INSERT INTO workspaces(project_id,path_key,payload,dirty) VALUES (?, ?, ?, 0) ON CONFLICT(project_id) DO UPDATE SET path_key=excluded.path_key,payload=excluded.payload,dirty=0")
+        .run(id, directoryKey(canonical), JSON.stringify(binding));
+      this.pauseQueue(id, true);
+    }).immediate();
+    return this.get(id);
+  }
+
   private assertWorkspaceIdle(id: string) {
     this.assertNoExecution(id);
     if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
@@ -259,17 +352,24 @@ export class ProjectStore {
   }
 
   syncWorkspace(id: string): Workspace | null {
-    if (this.db.inTransaction || this.executionActive(id)) return this.workspace(id);
+    // Workers checkpoint immediately in SQLite. Do not repeatedly rebuild the
+    // portable evidence set while a scan/discovery/implementation request owns it.
+    if (this.db.inTransaction || this.executionActive(id) || this.discoveryActive(id)) return this.workspace(id);
     const owner = randomUUID();
     const acquired = this.db.prepare("UPDATE workspaces SET owner = ?, lease_until = ? WHERE project_id = ? AND (owner IS NULL OR lease_until <= ?)")
       .run(owner, Date.now() + 300_000, id, Date.now()).changes;
     if (!acquired) return this.workspace(id);
     const binding = this.workspace(id)!;
     try {
-      const directory = checkWorkspace(binding);
+      if ((binding.formatVersion ?? 1) > 3) throw new Error("Workspace conflict: unsupported future workspace format. Upgrade the app; files were not overwritten.");
+      checkWorkspace(binding);
+      const directory = migrateWorkspaceDirectory(binding.path);
       const project = this.get(id);
-      if (binding.status === "saved" && binding.savedRevision === project.revision && binding.formatVersion === 2) return binding;
-      const files = renderWorkspace(project, this.execution(id));
+      const storedRevision = this.db.prepare("SELECT revision FROM projects WHERE id = ?").get(id) as { revision: number };
+      if (storedRevision.revision !== project.revision) throw new Error("Workspace snapshot changed before publication. Retry from the saved project revision.");
+      if (binding.status === "saved" && binding.savedRevision === project.revision && binding.formatVersion === 3) return binding;
+      const continuation = continuationState(project, this.jobs(id), this.submissions(id), (revision) => this.get(id, revision));
+      const files = renderWorkspace(project, this.execution(id), continuation);
       checkWorkspace(binding, Object.keys(files));
       binding.pendingRemovals = [...new Set([...Object.keys(binding.hashes), ...Object.keys(binding.pendingHashes)])].filter((name) => !(name in files));
       // Retain every recognized intermediate write until the whole publication succeeds.
@@ -279,7 +379,8 @@ export class ProjectStore {
       this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ? AND owner = ?").run(JSON.stringify(binding), id, owner);
       publishWorkspace(directory, files, binding.pendingRemovals);
       binding.hashes = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])); binding.pendingHashes = {};
-      binding.pendingRemovals = []; binding.formatVersion = 2;
+      binding.pendingRemovals = []; binding.formatVersion = 3;
+      binding.portableBase ??= portableDigest(JSON.parse(files["manifest.json"]!).hashes);
       binding.savedRevision = project.revision; binding.status = "saved";
       this.db.prepare("UPDATE workspaces SET payload = ?, dirty = CASE WHEN (SELECT revision FROM projects WHERE id = ?) = ? THEN 0 ELSE 1 END WHERE project_id = ? AND owner = ?")
         .run(JSON.stringify(binding), id, project.revision, id, owner);
@@ -411,6 +512,7 @@ export class ProjectStore {
     if (item.overlapFollowup !== undefined) overlapFollowupSchema.parse(item.overlapFollowup);
     this.db.transaction(() => {
       this.db.prepare("UPDATE submissions SET payload = ? WHERE id = ? AND project_id = ?").run(JSON.stringify(item), item.id, item.projectID);
+      this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(item.projectID);
       if (item.status === "needs-attention") {
         const project = this.get(item.projectID), entry = submissionActivity(item, project);
         if (entry) saveActivity(this.db, item.projectID, { ...entry, revision: entry.revision ?? project.revision, at: new Date().toISOString(), atLabel: "Recorded" });
@@ -490,6 +592,7 @@ export class ProjectStore {
         }
       }
       this.db.prepare("INSERT INTO submissions VALUES (?, ?, ?)").run(item.id, id, JSON.stringify(item));
+      this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(id);
       if (item.status === "needs-attention") this.saveSubmission(item);
       return item;
     }).immediate();
@@ -748,6 +851,7 @@ export class ProjectStore {
       const job: Job = { id: randomUUID(), projectID: id, expectedRevision: revision,
         status: "pending", model: project.model, leaseUntil: Date.now() + 360_000, ...(helpRequest ? { helpRequest } : {}), ...(scan ? { kind: "scan" as const } : {}) };
       this.db.prepare("INSERT INTO jobs VALUES (?, ?, ?)").run(job.id, id, JSON.stringify(job));
+      this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(id);
       return { project, job };
     }).immediate();
   }
@@ -816,6 +920,7 @@ export class ProjectStore {
   private saveJob(job: Job) {
     this.db.transaction(() => {
       this.db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(job), job.id);
+      this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(job.projectID);
       if (["failed", "cancelled", "interrupted", "stale"].includes(job.status)) {
         const entry = jobActivity(job, activitySnapshot(this.db, job.projectID, job.expectedRevision));
         if (entry) saveActivity(this.db, job.projectID, { ...entry, at: new Date().toISOString(), atLabel: "Recorded" });

@@ -122,7 +122,7 @@ test("planning rejects stale and malformed responses, supports cancellation, and
       const original = structuredClone(store.execution(p.id).config);
       service.start(p.id, p.revision, "plan");
       if (scenario === "stale" || scenario === "cancel") {
-        await started;
+        await Promise.race([started, until(service, p.id).then(() => assert.fail(`Planning stopped before adapter: ${store.execution(p.id).planning?.diagnostic}`))]);
         if (scenario === "stale") {
           assert.throws(() => store.note(p.id, p.revision, "An ordinary concurrent edit is blocked."), /implementation is running/);
           // Simulate a newer snapshot arriving from an external integration despite
@@ -251,7 +251,7 @@ test("scoped pending queue avoids unrelated inference, detects additions and del
   } };
   try {
     await git(["init", "-b", "main"]);
-    await writeFile(join(root, "README.md"), "Fixture baseline\n"); await writeFile(join(root, ".gitignore"), ".requirement-wizard/\n");
+    await writeFile(join(root, "README.md"), "Fixture baseline\n"); await writeFile(join(root, ".gitignore"), ".reqwizit/\n.requirement-wizard/\n");
     await git(["add", "."]); await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Baseline"]);
     await mkdir(join(root, "src", "a"), { recursive: true }); await mkdir(join(root, "src", "b"), { recursive: true });
     await writeFile(join(root, "src", "a", "a.ts"), "export const a = 1;\n"); await writeFile(join(root, "src", "b", "b.ts"), "export const b = 1;\n");
@@ -321,7 +321,7 @@ test("workspace assessment skips remote preflight, compacts omission metadata, r
   try {
     await git(directory, ["init", "--bare", remote]); await git(root, ["init", "-b", "main"]);
     await writeFile(join(root, "README.md"), "Records are persisted and reopened after restarting the application.\n");
-    await writeFile(join(root, ".gitignore"), ".requirement-wizard/\nassets/\n");
+    await writeFile(join(root, ".gitignore"), ".reqwizit/\n.requirement-wizard/\nassets/\n");
     await mkdir(join(root, "assets"));
     await Promise.all(Array.from({ length: 1700 }, (_, index) => writeFile(join(root, "assets", `large-omission-metadata-${index}-${"x".repeat(70)}.png`), "image")));
     await git(root, ["add", "."]);
@@ -344,7 +344,7 @@ test("workspace assessment skips remote preflight, compacts omission metadata, r
     assert.equal(state.assessmentRuns?.at(-1)?.completedIDs.length, 1); assert.equal(state.assessmentRuns?.at(-1)?.sessionID, "assessment-session");
     assert.ok(state.assessmentRuns?.at(-1)?.capture?.omitted.length! >= 1700);
     assert.equal(state.assessments[r.id]?.status, "complete"); assert.equal(Object.keys(state.delivered).length, 0);
-    const published = JSON.parse(await readFile(join(root, ".requirement-wizard", "progress.json"), "utf8"));
+    const published = JSON.parse(await readFile(join(root, ".reqwizit", "progress.json"), "utf8"));
     assert.equal(published.implementationDelivery[0].assessment.model, undefined, "Local model/cache selection does not enter portable artifacts");
     assert.equal(published.implementationDelivery[0].assessment.captureFingerprint, undefined);
     assert.equal(published.implementationDelivery[0].assessment.contextFingerprint, undefined);
@@ -382,7 +382,7 @@ test("opt-in equivalent local/main content reuses semantics while main checks, d
   }
   try {
     await git(directory, ["init", "--bare", remote]); await git(root, ["init", "-b", "main"]);
-    await writeFile(join(root, "README.md"), "Complete restart behavior\n"); await writeFile(join(root, ".gitignore"), ".requirement-wizard/\n");
+    await writeFile(join(root, "README.md"), "Complete restart behavior\n"); await writeFile(join(root, ".gitignore"), ".reqwizit/\n.requirement-wizard/\n");
     // Keep fixture bytes identical under hosts with Git autocrlf enabled.
     await writeFile(join(root, ".gitattributes"), "* -text\n");
     await git(root, ["add", "."]); await git(root, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Baseline"]);
@@ -431,7 +431,7 @@ test("one implementation check preserves local/main evidence, updates delivery, 
   try {
     await git(directory, ["init", "--bare", remote]); await git(root, ["init", "-b", "main"]);
     await writeFile(join(root, "README.md"), "Restart behavior source evidence\n");
-    await writeFile(join(root, ".gitignore"), ".requirement-wizard/\n");
+    await writeFile(join(root, ".gitignore"), ".reqwizit/\n.requirement-wizard/\n");
     await git(root, ["add", "."]); await git(root, ["-c", "user.name=Reqwizit Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Baseline"]);
     await git(root, ["remote", "add", "origin", remote]); await git(root, ["push", "origin", "main"]);
     const p = seed(store), r = p.requirements[0]!;
@@ -571,7 +571,7 @@ test("assessment holds submitted answers until both phases finish, with relevant
   try {
     await git(directory, ["init", "--bare", remote]); await git(root, ["init", "-b", "main"]);
     await writeFile(join(root, "README.md"), "Saved records survive restarting.\n");
-    await writeFile(join(root, ".gitignore"), ".requirement-wizard/\n");
+    await writeFile(join(root, ".gitignore"), ".reqwizit/\n.requirement-wizard/\n");
     await git(root, ["add", "."]); await git(root, ["-c", "user.name=Reqwizit Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Baseline"]);
     await git(root, ["remote", "add", "origin", remote]); await git(root, ["push", "origin", "main"]);
     let p = seed(store, 1);
@@ -627,7 +627,7 @@ test("assessment holds submitted answers until both phases finish, with relevant
       service.start(p.id, latest.revision, "check"); await until(service, p.id); state = service.snapshot(p.id);
       assert.equal(calls, mode === "unrelated" ? 2 : 4, "Unrelated answers allow reuse, relevant answers require fresh assessment");
       assert.equal(deliveredRequirement(latest, state, r.id), true, state.assessmentStatus);
-      const published = JSON.parse(await readFile(join(root, ".requirement-wizard", "progress.json"), "utf8"));
+      const published = JSON.parse(await readFile(join(root, ".reqwizit", "progress.json"), "utf8"));
       assert.equal(published.implementationDelivery[0].delivery.contextFingerprint, undefined);
       await service.close();
     }
@@ -860,7 +860,7 @@ for (const strategy of ["requirement-pr", "epic-pr", "branch", "main"] as const)
   } };
   try {
     await run(directory, ["init", "--bare", remote]); await run(root, ["init", "-b", "main"]);
-    await writeFile(join(root, "README.md"), "# Fixture\n"); await writeFile(join(root, ".gitignore"), ".requirement-wizard/\n");
+    await writeFile(join(root, "README.md"), "# Fixture\n"); await writeFile(join(root, ".gitignore"), ".reqwizit/\n.requirement-wizard/\n");
     await run(root, ["add", "."]); await run(root, ["commit", "-m", "Fixture baseline"]); await run(root, ["remote", "add", "origin", remote]); await run(root, ["push", "origin", "main"]);
     const p = seed(store); store.connectWorkspace(p.id, p.revision, root);
     projectID = p.id; targets = p.requirements;

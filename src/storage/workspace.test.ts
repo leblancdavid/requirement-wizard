@@ -222,7 +222,7 @@ test("implementation-only saves leave specification and evidence bytes and times
     assert.equal(f.store.syncWorkspace(project.id)?.status, "saved");
     const after = renderWorkspace(updated);
     for (const [name, content] of Object.entries(before)) {
-      if (["progress.md", "progress.json", "manifest.json"].includes(name)) continue;
+      if (["progress.md", "progress.json", "manifest.json", "state.json", "continuation.json"].includes(name)) continue;
       assert.equal(after[name], content, name);
       assert.equal(statSync(join(f.path, workspaceFolder, name)).mtimeMs, fixedTime.getTime(), name);
     }
@@ -273,7 +273,7 @@ test("version 1 folders migrate at the same revision and preserve edits before r
     writeFileSync(join(directory, "requirements.json"), legacy["requirements.json"]!);
     writeFileSync(join(directory, "personal-notes.md"), "Keep me");
     assert.equal(f.store.connectWorkspace(f.project.id, 1, f.path).status, "saved");
-    assert.equal(JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8")).formatVersion, 2);
+    assert.equal(JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8")).formatVersion, 3);
     assert.equal(f.store.get(f.project.id).revision, 1);
     assert.equal(existsSync(join(directory, "requirements.json")), false);
     assert.equal(readFileSync(join(directory, "personal-notes.md"), "utf8"), "Keep me");

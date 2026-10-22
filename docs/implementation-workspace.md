@@ -599,9 +599,17 @@ requests may need explicit reconciliation/resume.
 
 Workspace artifact publication pauses while implementation holds its lease. On release,
 `progress.json` gains `implementationDelivery`, and `progress.md` a delivery summary.
-Portable summaries omit local worktree paths, session IDs, model/credential settings
-and runtime logs. External-edit conflicts remain protected. These generated artifacts
-are not an execution-state import/backup. Historical manual statuses remain intact.
+Portable progress summaries omit local worktree paths, session IDs, account settings
+and runtime logs. DEC-029 adds separate `.reqwizit/execution.json` continuation state:
+assessment model/capture/context/footprint provenance, latest impact manifests, reviewed
+configuration, partial planning and commit/PR/delivery evidence survive clone/open.
+Compatible results are reused after current-code inspection, not merely trusted because
+the folder was opened. Main verification remains independent. Imported verification
+commands are not run on open; review them before explicitly checking. Imported coding
+runs retain foreign bindings and must be reviewed/archived rather than silently resuming
+missing sessions/worktrees. External-edit conflicts and historical manual statuses remain
+protected. This is not a complete database backup or full coding-recovery implementation;
+see [portable project workspaces](project-workspaces.md).
 
 ## Verification and remaining qualification
 

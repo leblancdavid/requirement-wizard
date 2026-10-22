@@ -260,6 +260,8 @@ export type Job = {
   kind?: "scan";
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
   model: ModelSelection; leaseUntil: number | null;
+  /** Portable completed-check ledger, not a full runtime/navigation transcript. */
+  portableReceipt?: 1;
   diagnostic?: string; sessionID?: string; result?: Analysis; telemetry?: Telemetry;
   context?: { revision: number; focusEpicID: string | null; characters: number; budget: number; includedIDs: string[]; omittedIDs: string[]; epicIDs?: string[]; version?: string; sectionCharacters?: Record<string, number>;
     partial?: boolean; taskRecordIDs?: string[]; indexedIDs?: string[]; selectionReason?: string;

@@ -33,6 +33,11 @@ implemented under `src/`. See [decisions.md](decisions.md),
 - `src/core/epics.ts`, `round.ts`, `coverage.ts`, `context.ts`, `working-set.ts`: organization, material
   change review, deterministic coverage, and bounded working sets.
 - `src/storage/store.ts`: SQLite transactions, revision snapshots, and analysis jobs.
+- `src/storage/portable.ts` and `workspace.ts`: manifest-3 `.reqwizit/` publication,
+  conservative continuation projection, lazy exact revision deltas, schema/hash/reference
+  validation and explicit transactional clone/pull adoption. Local-history backups and
+  shared-baseline conflicts prevent silent overwrites; machine bindings and accounts
+  remain local. Ordinary action history is not the portable format (DEC-029).
 - `src/core/decision-availability.ts`: shared requirement-decision availability and
   versioned relevant-evidence bases. Storage checks overlapping unfinished input,
   linked clarification, dependency guardrails and live discovery snapshots inside

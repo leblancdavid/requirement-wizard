@@ -419,6 +419,17 @@ and automatically save revision-linked requirements and progress Markdown/JSON.
 - Keep unchanged outputs byte-identical without rewriting them, and reference requirement
   statements from progress. Version the manifest and preserve external edits during
   migration/retired-file cleanup. Offer a combined specification export on demand (DEC-021).
+- Under DEC-029, commit portable continuation state under `.reqwizit/` and support
+  clone/open into a fresh local database without inference. Preserve current decisions,
+  necessary original evidence, unresolved input, reusable checks/assessments and plans;
+  exclude routine activity history, credentials and machine-specific runtime state.
+- Verify partial assessment → commit → clone → open → continue with no repeated
+  completed compatible model calls. Genuinely changed code/decisions/models still
+  require fresh evidence. Opening never executes imported verification commands.
+- Migrate legacy folders safely and reject malformed/future formats. Require explicit
+  adoption after pulls/branch changes, reject divergent local state, and start imported
+  automatic work paused. Initial collaboration uses coordinated editing per branch;
+  automatic concurrent merging and cross-machine coding-session recovery are deferred.
 
 **RW-024 — Manual implementation progress.** Track not-started, in-progress, blocked,
 implemented, and verified states per requirement independently of requirements review

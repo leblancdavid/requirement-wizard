@@ -36,7 +36,7 @@ export function WorkspacePicker({ path, create, onChange, request, disabled, exi
       <button type="button" disabled={disabled || loading} onClick={() => { onChange(listing.path, false); setListing(null); }}>Use this folder</button>
       <button type="button" onClick={() => setListing(null)}>Close browser</button></div>
       <div className="folder-list">{listing.directories.map((name) => <button type="button" key={name} disabled={disabled || loading} onClick={() => void browse(`${listing.path.replace(/[\\/]$/, "")}${listing.path.includes("\\") ? "\\" : "/"}${name}`)}>▸ {name}</button>)}{!listing.directories.length && <p>No subdirectories.</p>}</div></div>}
-    <small>Requirements and progress are saved under .requirement-wizard in this folder. Git commits are managed in your repo.</small>
+    <small>Portable project state is saved under .reqwizit in this folder. Commit it with your code to share saved work. Legacy .requirement-wizard folders migrate on sync.</small>
   </div></ActionScope>;
 }
 
@@ -59,9 +59,9 @@ export function WorkspaceConnection({ project, workspace, request, disabled, run
     {(working || workspace?.status === "pending") && <ActivityFeedback label="Updating workspace files…" />}
     <WorkspacePicker path={path} create={create} onChange={(value, make) => { setPath(value); setCreate(make); }} request={request} disabled={disabled} />
     <div className="button-row"><button className="secondary" title={!disabled && !path.trim() ? "Choose or enter a local folder first." : undefined} disabled={disabled || !path.trim()} onClick={() => void action({ operation: "connect", revision: project.revision, path, create })}>{workspace ? "Reconnect workspace" : "Connect workspace"}</button>
-      {workspace && <><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "sync" })}>Retry sync</button><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "disconnect", revision: project.revision })}>Disconnect folder</button></>}</div>
+      {workspace && <><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "sync" })}>Retry sync</button><button disabled={disabled} className="quiet" onClick={() => void run(async () => { await request("projects/open", { path: workspace.path, model: project.model }); })}>Open shared checkpoint</button><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "disconnect", revision: project.revision })}>Disconnect folder</button></>}</div>
     {workspace && <WorkspaceScan project={project} scanJob={scanJob} disabled={disabled} scan={(resumeJobID) => run(async () => { await request(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); })} />}
-    <small>Disconnecting keeps the generated files and all app data. To resolve a conflict, preserve external edits and restore the generated files, or choose a new folder.</small>
+    <small>After pulling or switching branches, use Open shared checkpoint. Divergent local work is never overwritten. Opening an unchanged checkpoint acknowledges it as the shared baseline. Disconnecting keeps files and app data.</small>
   </section></ActionScope>;
 }
 

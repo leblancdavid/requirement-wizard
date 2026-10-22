@@ -12,7 +12,10 @@ import { captureWorkspace } from "./scan.js";
 
 export type AssessmentCapture = NonNullable<Job["scan"]>;
 export function assessmentCaptureFingerprint(scan: AssessmentCapture) {
-  return createHash("sha256").update(JSON.stringify({ files: scan.snapshot.files, omitted: scan.snapshot.omitted, limited: scan.snapshot.traversalLimited })).digest("hex");
+  // Preserve the existing identity across the publication-folder rename. This
+  // excluded metadata is not inspected code; do not invalidate expensive checks.
+  const omitted = scan.snapshot.omitted.map((item) => item.path === ".reqwizit" ? { ...item, path: ".requirement-wizard" } : item);
+  return createHash("sha256").update(JSON.stringify({ files: scan.snapshot.files, omitted, limited: scan.snapshot.traversalLimited })).digest("hex");
 }
 
 /** Hash the search/impact boundary, not merely the evidence cited by the model.
@@ -38,7 +41,7 @@ export function assessmentFootprint(project: Project, id: string, config: Execut
   // Our publication directory exists only in the connected working folder, not
   // necessarily in a detached main worktree. It is never captured code evidence;
   // normative requirements/decisions have their own independent identity.
-  const omissionsFingerprint = hash(scan.snapshot.omitted.filter((item) => item.path !== ".requirement-wizard")
+  const omissionsFingerprint = hash(scan.snapshot.omitted.filter((item) => ![".requirement-wizard", ".reqwizit"].includes(item.path))
     .sort((a, b) => a.path.localeCompare(b.path, "en") || a.reason.localeCompare(b.reason, "en")));
   const policy = assessmentImpactPolicy(project, id, config);
   return { version: 1, policy, fingerprint: hash({ policy, files, omissionsFingerprint, broad, limited: scan.snapshot.traversalLimited }), files, omissionsFingerprint, broad };

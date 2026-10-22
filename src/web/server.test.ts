@@ -14,6 +14,27 @@ import { randomUUID } from "node:crypto";
 import type { ActivityPage } from "../core/project-activity.js";
 import { snapshotHeader } from "./snapshot.js";
 
+test("opening a portable project is authenticated, bounded, paused, and makes no model calls", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "portable-api-"));
+  const publisher = new ProjectStore(":memory:"), store = new ProjectStore(":memory:");
+  const project = publisher.create("Shared", "Retain original input", { providerID: "openai", modelID: "fixture" });
+  publisher.connectWorkspace(project.id, project.revision, directory); publisher.close();
+  let calls = 0;
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; throw new Error("No inference"); } } });
+  const input = { path: directory, model: { providerID: "openai", modelID: "fixture" } };
+  const post = (headers = {}, value = input) => fetch(`${app.origin}/api/projects/open`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(value) });
+  try {
+    assert.equal((await post()).status, 403);
+    const headers = { "X-Reqwizit-Token": app.token, Origin: app.origin };
+    assert.equal((await post({ ...headers, Origin: "https://example.invalid" })).status, 403);
+    assert.equal((await post(headers, { ...input, path: "x".repeat(4097) })).status, 400);
+    const response = await post(headers); assert.equal(response.status, 200); assert.equal((await response.json()).id, project.id);
+    assert.equal(store.queuePaused(project.id), true); assert.equal(calls, 0);
+    assert.equal((await post(headers)).status, 200); assert.equal(store.history(project.id).length, 1);
+  } finally { await app.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("snapshot section tokens preserve legacy reads and independent queue, worker and workspace changes", async () => {
   const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
   const directory = mkdtempSync(join(parent, "snapshot-api-"));
@@ -214,7 +235,7 @@ test("workspace API authenticates folder access, creates directories, syncs prog
     assert.equal((await post(`${route}/implementation`, input)).status, 409);
     const snapshot = await (await fetch(`${app.origin}/api/${route}`, { headers })).json() as { workspace: { status: string; savedRevision: number }; project: Project };
     assert.equal(snapshot.workspace.status, "saved"); assert.equal(snapshot.workspace.savedRevision, snapshot.project.revision);
-    assert.equal(JSON.parse(readFileSync(join(path, ".requirement-wizard", "progress.json"), "utf8")).implementation[0].status, "in-progress");
+    assert.equal(JSON.parse(readFileSync(join(path, ".reqwizit", "progress.json"), "utf8")).implementation[0].status, "in-progress");
     assert.equal((await post(`${route}/workspace`, { operation: "disconnect", revision: snapshot.project.revision })).status, 200);
     assert.equal(store.workspace(project.id), null);
     const failed = await post("projects", { name: "Retained", idea: "Retained idea", model: { providerID: "openai", modelID: "fixture" }, workspace: { path: join(directory, "missing") } });

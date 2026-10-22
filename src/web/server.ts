@@ -143,6 +143,11 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const input = z.object({ path: z.string().min(1).max(4096).optional() }).strict().parse(await body(req));
         json(res, 200, browseDirectories(input.path)); return;
       }
+      if (url.pathname === "/api/projects/open" && req.method === "POST") {
+        const input = z.object({ path: z.string().min(1).max(4096), model: modelSelection }).strict().parse(await body(req));
+        // Opening a repository never probes providers or executes saved commands.
+        json(res, 200, options.store.openWorkspace(input.path, input.model)); return;
+      }
       if (url.pathname === "/api/projects") {
         if (req.method === "GET") { json(res, 200, options.store.list()); return; }
         if (req.method === "POST") {

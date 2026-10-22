@@ -19,6 +19,85 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Portable projects and workspace-folder rename (DEC-029)
+
+Workspace manifest **1/2 → 3**; feature/project/progress JSON remains format **2**.
+New `state.json`, `execution.json`, and `continuation.json` each have independent
+format **1** envelopes. SQLite remains schema **3**, with an additive, initially empty
+`portable_import_backups` table; execution schema and assessment identities are unchanged.
+No original database revisions, jobs, evidence, assessments or completed calls are
+deleted, recomputed or invalidated simply to adopt this representation.
+
+`.requirement-wizard/` is renamed to `.reqwizit/` only after the existing artifact
+hash/journal checks succeed. A same-parent directory rename preserves bytes and unrelated
+files and is recoverable on reopen; existing publication journals still apply at the
+new path. Both folders existing is a conflict, never an automatic selection/merge.
+Active discovery/scan/implementation leases defer migration/publication until worker release. Do not
+restart a real long-running check solely to migrate the folder. Unavailable/edited
+folders retain local state and report a conflict/unavailability. New portable files use
+the normal intended-hash journal and manifest-last publication, including retry after
+interruption. Folder-local `.gitattributes` disables text conversion to preserve hashes
+and exact human evidence through Windows Git checkout.
+
+Portability is a continuation projection, not an export of the activity archive.
+Current sources/decisions and necessary supersession links remain intact. Execution
+keeps semantic findings, exact capture/context/model/footprint identities, manual
+invalidation requests, latest impact evidence per scope, planning packages and coding
+commit/PR/delivery evidence. Process/session/worktree details and progress transcripts
+are omitted. Original revisions used by retained discovery/checkpoint receipts are
+exact array-prefix/suffix deltas with content-hashed shared records against current state, decoded one snapshot at a time
+to avoid materializing a full revision archive in memory. Completed ordinary
+interpretation/help jobs and activity events are not imported. Local database-history
+compaction and further source pruning are separate future work. Completed refinement
+checks whose target fingerprints cannot pass the existing reuse predicate are omitted;
+their current approved/dismissed proposals and supporting source evidence remain intact.
+Retained completed refinement checks use a marked `portableReceipt: 1` ledger with
+their original outcome/model/keys, not their runtime navigation indexes. Historical
+snapshots retain the original schema-valid payload even when an older release retained
+duplicate/dangling references; they are never substituted for the validated current
+project graph. Legacy context reconstruction must still prove its original wire hash.
+
+Import/adoption is explicit, hash-checked and transactional. It rejects future envelopes,
+malformed records/references, path traversal/links, inconsistent revisions and divergent
+local state. Size bounds are 64 MiB/artifact and 256 MiB/set. The selected account route
+and folder binding are local; old model IDs remain inference provenance. Pending
+discovery work is imported interrupted, automatic processing is paused, and source-scan
+bindings are explicitly mapped to the new workspace. Planning bindings are remapped;
+coding runs retain a foreign binding and cannot silently reuse absent local worktrees.
+Opening never runs model calls, repository commands or verification scripts.
+
+Before adopting a changed shared checkpoint into an existing local project, original
+current project/execution payloads and overwritten job/submission records are retained
+in `portable_import_backups` in the same transaction. Prior revisions and other jobs/
+submissions remain in place. Idempotent open creates no backup or revision. A failed
+import rolls back everything, including backups. Recovery can inspect the backup table
+offline; there is not yet a restore UI. A normal consistent SQLite backup remains
+recommended before upgrading real data. Legacy manifest 1/2 exports cannot supply the
+working state they omitted: upgrade/sync from their originating database first.
+
+Excluded publication-directory omissions normalize to the legacy marker for full-capture
+identity; scoped footprints ignore both folder names. This preserves previous equivalent
+assessment identities across the rename without manufacturing inspected code. Other
+byte/scope/decision/model changes retain existing conservative invalidation rules.
+
+Initial checks: typecheck and the dedicated portable storage suite passed, including
+an actual Git commit/clone into a fresh database: one completed assessment was reused
+and only two unfinished requirements invoked the deterministic adapter. Changed code
+then required fresh assessments. Dedicated browser checks passed for open, retained
+evidence, paused queue, reload, shared-checkpoint acknowledgement and 390px layout.
+Broader checks and remaining gaps are recorded in project-workspaces.md. No live model
+calls, user database writes or RustGrindGalaxy folder migration were performed.
+
+A subsequent read-only RustGrindGalaxy projection validated 390 retained original
+revision-evidence snapshots and all 276 saved workspace assessments with exact data
+and freshness parity. A naive array-delta representation exceeded the string-size
+bound; content-hashed shared records and exclusion of provably obsolete target checks
+reduced the portable set to 51,862,803 bytes. See project-workspaces.md for counts,
+timing and remaining large-project/live qualification limits. Historical duplicate
+references exposed by this check remain original evidence, not silently repaired data.
+Final verification: Node 22.23.3 typecheck, all 553 deterministic tests, standard and
+portable browser checks/UI build, terminal help commands and whitespace checks passed.
+
 ## Assessment responsiveness
 
 SQLite **3 → 3**, execution schema **1 → 1**, assessment identity/fingerprint

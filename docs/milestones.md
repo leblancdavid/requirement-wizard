@@ -6,6 +6,13 @@ coverage/context slice implemented with readiness work pending. Requirements ref
 [product-specification.md](product-specification.md). Complete and verify each
 vertical slice before expanding it. The integrated build pilot follows the initial release.
 
+DEC-029 adds portable `.reqwizit/` state, explicit clone/open and conflict-safe shared
+checkpoint adoption. An actual local Git clone test preserves a partial implementation
+assessment and reuses completed calls; source-folder migration and browser opening are
+covered deterministically. This does not complete portable phased build handoffs,
+automatic multi-user merges, live cross-machine qualification or coding-session recovery.
+See [project workspaces](project-workspaces.md).
+
 DEC-025 planning slice: reviewable requirement-linked work packages, dependency
 proposals/reasons, selected hard-edge validation and deterministic sequence now feed the
 integrated executor. Planning is checkpointed and explicitly reviewed; broad epic

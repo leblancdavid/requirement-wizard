@@ -53,7 +53,14 @@ now permits explicit manual testing; terminal and automatic discovery keep defau
 Connect a local folder for each project to automatically save versionable requirements
 and progress files. Choose it during creation or use **Settings → Project workspace**.
 Generated requirements are split by stable feature ID with a linked overview and shared
-evidence files; unchanged outputs are not rewritten. Existing folders migrate on sync.
+evidence files; unchanged outputs are not rewritten. Commit `.reqwizit/` with your code
+and use **Open Reqwizit project** after cloning to restore decisions, reusable assessments,
+plans and continuation checkpoints into a local database without model calls. Imported
+work starts paused. Existing `.requirement-wizard/` folders migrate safely on sync;
+active implementation workers defer publication. After pulls, use **Open shared
+checkpoint** in workspace Settings; divergent local work blocks adoption. See
+[portable team state](docs/project-workspaces.md#share-and-continue-a-project-dec-029)
+for coordinated editing, Git baselines, retention and current recovery limits.
 Use `npm run --silent reqwizit -- export --project "your-project-id" [--json]` for a
 combined specification on demand.
 Folder scans process small sequential batches and save checkpoints; **Resume scan**

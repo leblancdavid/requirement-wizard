@@ -85,6 +85,7 @@ function App() {
   const [data, setData] = useState<Snapshot | null>(null);
   const refresh = useRef(new SnapshotRefresh<Snapshot>());
   const [creating, setCreating] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [tab, setTab] = useState<"discover" | "review" | "implementation" | "requirements" | "research" | "history">("discover");
   const [epicID, setEpicID] = useState("all");
   const [error, setError] = useState("");
@@ -291,6 +292,14 @@ function App() {
       if (created.workspaceError) setError(`Project created, but workspace connection failed: ${created.workspaceError}. Connect it in Settings.`);
     }, "Creating project…");
   }
+  async function openProject(event: FormEvent) {
+    event.preventDefault();
+    await act(async () => {
+      const opened = await api<Project>("projects/open", { path: workspacePath, model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } });
+      setID(opened.id); selected.current = opened.id; setCreating(false); setOpening(false); setWorkspacePath(""); setTab("requirements");
+      await list();
+    }, "Opening saved Reqwizit project…");
+  }
   const epics = project?.epics.filter((item) => !item.archived) ?? [];
   const selectedEpic = epics.find((item) => item.id === epicID);
   const epicScore = summary?.epics.find((item) => item.epicID === epicID);
@@ -391,14 +400,15 @@ function App() {
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">✦</span><div>Reqwizit</div></div>
       <div className="sidebar-label">YOUR WORKSPACE</div>
-      <button className="new-project" onClick={() => { setCreating(true); navigate("workspace"); }}>＋ New project</button>
+      <button className="new-project" onClick={() => { setOpening(false); setCreating(true); navigate("workspace"); }}>＋ New project</button>
+      <button className="new-project" onClick={() => { setOpening(true); setCreating(true); setInitializeFolder(false); setCreateDirectory(false); navigate("workspace"); }}>Open Reqwizit project</button>
       <nav aria-label="Projects">{projects.map((item) => <button key={item.id} className={`project-link ${id === item.id && !showSettings ? "selected" : ""}`} onClick={() => { setID(item.id); setCreating(false); navigate("workspace"); }}><span>◇</span>{item.name}</button>)}</nav>
       <div className="sidebar-tools"><button className={`settings-toggle ${showSettings ? "selected" : ""}`} aria-label="Settings" title="Settings" aria-current={showSettings ? "page" : undefined} onClick={() => navigate("settings")}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.2-1.7 1-2.2-.6L2.5 10l1.6 1.6v1.8L2.5 15 5 19.4l2.2-.6 1.7 1 .6 2.2h5l.6-2.2 1.7-1 2.2.6 2.5-4.4-1.6-1.6v-1.8l1.6-1.6L19 5.6l-2.2.6-1.7-1L14.5 3Z" /><circle cx="12" cy="12.5" r="3" /></svg></button></div>
       <div className="sidebar-bottom"><span className="connection-dot" /> Local-first workspace<p>Project files are saved on this device.<br />Discovery sends context to ChatGPT.</p></div>
     </aside>
     <main>
       {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
-      <header className="topbar"><div><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small><HeaderActivity /></div>
+      <header className="topbar"><div><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? opening ? "Open Reqwizit project" : "New project" : project?.name ?? "Your next idea starts here."}</h1><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small><HeaderActivity /></div>
         {!creating && project && data && <ProcessingQueue key={project.id} project={project} jobs={data.jobs} openIssue={openIssue} active={data.active} progress={data.progress} refinementProgress={data.refinementProgress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(explore, "Starting discovery…")} continuationAvailable={!!lastJob?.gapContinuationAvailable} continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
         {!showSettings && project && summary && data && !creating && <ProjectProgress key={`progress:${project.id}`} progress={mapProgress!} definition={summary} />}</header>
       {pending && <ActivityFeedback label={actionLabel} />}
@@ -421,7 +431,14 @@ function App() {
       {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => navigate("settings")}>Review connection settings</button></div>}
       {(creating || projectsLoaded && !id && !project && !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>
-        <form onSubmit={(event) => void create(event)}>
+        {opening && <form onSubmit={(event) => void openProject(event)} aria-label="Open Reqwizit project">
+          <h2>Continue saved project work</h2><p>Choose a cloned repository containing .reqwizit. Saved decisions, assessments and continuation checkpoints are restored without model calls. Automatic processing starts paused.</p>
+          <WorkspacePicker path={workspacePath} create={false} existingOnly onChange={(path) => setWorkspacePath(path)} request={api} disabled={pending} />
+          <p>Review shared evidence before publishing it. Imported verification commands are not executed on open; review Implementation settings before running checks. Coding sessions and worktrees do not transfer between machines.</p>
+          <p>Local discovery connection: {connectionID ? "Direct ChatGPT plan" : "OpenCode"} · {model || "Choose a model"}. <button type="button" className="quiet" onClick={() => navigate("settings")}>Choose AI connection</button> Saved assessment models remain attached to their findings.</p>
+          <button className="primary" disabled={pending || !workspacePath.trim() || !model}>Open saved project</button>
+        </form>}
+        <form hidden={opening} onSubmit={(event) => void create(event)}>
           <fieldset className="project-start"><legend>Start from</legend><label><input type="radio" name="project-start" checked={!initializeFolder} disabled={pending} onChange={() => setInitializeFolder(false)} /> New idea</label><label><input type="radio" name="project-start" checked={initializeFolder} disabled={pending} onChange={() => { setInitializeFolder(true); setCreateDirectory(false); }} /> Existing project</label></fieldset>
           {initializeFolder && <><WorkspacePicker path={workspacePath} create={false} existingOnly onChange={(path) => setWorkspacePath(path)} request={api} disabled={pending} /><div className="folder-preview" aria-live="polite">{previewBusy ? "Inspecting local metadata and documentation…" : folderPreview ? <><strong>Detected: {folderPreview.projectType}</strong><p>Name and description are editable suggestions. No AI connection was used for this preview.</p><small>{folderPreview.evidence.length ? folderPreview.evidence.map((item) => `${item.field}: ${item.path}`).join(" · ") : "Name suggested from the folder name; no descriptive metadata found."}</small>{!folderPreview.description && <p>No suitable description found. You can enter one or let initialization reconstruct it.</p>}</> : "Choose an existing folder to suggest the project name and description."}{previewError && <p role="alert">{previewError}</p>}</div></>}
           <label>Project name<input required maxLength={150} value={name} onChange={(event) => { editedIdentity.current.name = true; setName(event.target.value); }} placeholder="Something worth building" /></label>

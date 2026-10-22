@@ -3,7 +3,60 @@
 Status: implemented for browser and terminal clients under DEC-016. Each app project
 can connect to one local directory, including an existing Git repository or a new
 ordinary folder. SQLite remains the working store and revision history; generated
-files provide readable, versionable specification and progress artifacts.
+files provide readable, versionable specification and progress artifacts. Under
+DEC-029, `.reqwizit/` also contains portable continuation state for clone-and-open.
+
+## Share and continue a project (DEC-029)
+
+Commit the entire `.reqwizit/` directory alongside the code. In another checkout,
+choose **Open Reqwizit project**, select the repository root, then **Open saved project**.
+The app validates the complete manifest and imports into its local SQLite store without
+inference, scanning, fetching, running verification commands or starting workers. Choose
+your own connection/model in Settings. Automatic processing is paused after import.
+Review imported verification commands before explicitly running checks.
+
+```powershell
+npm run reqwizit -- open --path "D:\Projects\my-app" --provider openai --model gpt-6.1-sol
+```
+
+Use the same assessment model to reuse its compatible results. Check progress captures
+current code and reuses unchanged semantic findings, including partial/missing/unknown
+findings. Main verification still runs its independent checks. Paths, machine bindings
+and Git HEAD changes alone do not invalidate content-equivalent scoped assessments.
+Different code bytes (including checkout line-ending changes outside `.reqwizit/`),
+relevant decisions, models, scope or assessment semantics can require reassessment.
+Teams should establish consistent source line endings in their repository attributes.
+
+After committing local project changes, **Open shared checkpoint** in workspace Settings
+acknowledges that checkpoint as the shared baseline. After pulling or switching branches,
+use that action again to adopt a new checkpoint. Polling detects external changes but does
+not auto-import or overwrite them. Local changes since the acknowledged baseline block
+adoption; same revision numbers with different content also conflict. Reconcile branches
+explicitly; automatic concurrent merging is not implemented. One active requirements
+editor per branch is the initial collaboration model. Another checkout with the same
+project ID needs a separate app data directory. Git commits/pushes remain user-managed.
+
+This is sufficient continuation state, not an activity archive: it retains current
+decisions and original evidence, pending input/reviews, reusable outcomes, assessments,
+plans and delivery evidence. Original revisions needed to validate retained checkpoint
+receipts are stored as exact deltas with shared content-hashed records against the current project, not an export of every
+historical snapshot. Ordinary completed interpretation/help jobs, activity/navigation
+logs, runtime sessions and worktree paths are not exported. Conservative source retention
+keeps superseded evidence while IDs/fingerprints still reference it; no automatic source
+deletion or local database compaction occurs.
+
+Incomplete planning and source-scan/retrieval checkpoints require explicit continuation;
+import never revives worker leases. Saved coding commits/PR references travel, but coding
+sessions/worktrees do not: imported unfinished coding runs retain a foreign binding and
+must be reviewed/archived before a new local run. Full cross-machine coding recovery and
+automatic multi-user merging remain future work.
+
+While a discovery/scan/implementation worker is active, completed checkpoints are saved
+immediately in SQLite; filesystem publication waits until the worker releases its lease.
+Only published files that you commit enter Git history. Do not restart an hours-long run
+just to upgrade. Take a consistent SQLite backup before upgrading real project data
+(SQLite backup API, or a database copy after all app processes close; do not copy only the
+main database file while WAL writers are active).
 
 ## Browser
 
@@ -25,12 +78,16 @@ Disconnecting retains both generated files and app records.
 
 ```text
 my-repo/
-  .requirement-wizard/
+  .reqwizit/
+    .gitattributes               # exact bytes survive Windows Git checkout
     manifest.json
     requirements.md              # overview and feature links
     project.json                 # project metadata and feature index
     progress.md
     progress.json
+    state.json                   # current review/coverage/planning-related project metadata
+    execution.json               # reusable assessments, plans and delivery evidence
+    continuation.json            # necessary jobs/input and revision evidence deltas
     features/
       project/                   # shared, project-wide requirements
         requirements.md
@@ -62,20 +119,21 @@ my-repo/
 - **progress.md/json** contain estimated discovery coverage and manually recorded
   implementation status, notes, evidence, and review flags for each requirement.
   Requirement statements are referenced rather than copied into progress files.
-- **manifest.json** identifies format version 2, project ID, revision, and SHA-256
+- **manifest.json** identifies format version 3, project ID, revision, and SHA-256
   artifact hashes. It is published last and is the authoritative revision for the
   entire set; individual artifacts omit the changing revision to avoid unnecessary
   Git diffs. Consumers must verify hashes before treating files as a coherent revision.
 
-The portable set excludes model/account selection, credentials, local bindings, and
-job diagnostics. Start a coding session with the overview, Project-wide requirements,
+The portable set excludes account selection, credentials, local bindings, and job
+diagnostics. Saved results retain model IDs as inference provenance, not credentials.
+Start a coding session with the overview, Project-wide requirements,
 and the feature being built; follow dependencies and evidence links as needed.
 Splitting limits the amount a reader/agent needs to load. It does not discard retained
 evidence or promise a fixed reduction in total disk usage. Unchanged files retain their
 bytes and timestamps, and implementation-only updates do not rewrite feature definitions
 or evidence. SQLite remains the working store with full revision snapshots.
 
-Version 1 folders migrate on startup/sync/reconnection, without creating a project
+Version 1/2 folders migrate to manifest 3 on startup/sync/reconnection, without creating a project
 revision or making model calls. After checking the old files for external edits, the
 publisher creates the split set and removes the owned root `requirements.json`.
 External edits block migration until restored or a different folder is connected.
@@ -102,8 +160,11 @@ discovery jobs, queued answers applied by the service, reviews, and implementati
 updates. Ordinary folder sync does not initialize Git, stage, commit or push. Those
 operations remain user-managed except for the explicitly configured Implementation
 pilot's verified commits and delivery.
-These files are generated outputs, not a two-way editing or project-import format.
-They do not include the entire SQLite history or constitute a complete app backup.
+These files are app-managed: do not edit them manually. Manifest 3 supports explicit
+project import/adoption; it is not arbitrary two-way text editing. It does not include
+the entire SQLite history or constitute a complete app backup. Legacy manifest 1/2
+exports cannot reconstruct omitted working state: sync them from the originating
+database first. Renaming alone cannot manufacture missing results.
 
 ## Initialize definitions and rescan
 
@@ -144,7 +205,7 @@ existing specification documents are evidence alongside code and tests.
 
 The service reads eligible files without executing scripts. File contents are sent to
 the saved AI connection (direct ChatGPT or legacy OpenCode), with tools/web research
-disabled. Generated `.requirement-wizard` artifacts are excluded. Capture defaults:
+disabled. Generated `.reqwizit` and legacy `.requirement-wizard` artifacts are excluded. Capture defaults:
 160 explicit excerpts, up to 32,000 bytes captured per file and 180,000 bytes total
 (72KB documentation, 12KB configuration, 96KB source), 4,000 visited entries and depth 16.
 Each excerpt has exact text, full-file hash, line range and character offsets; partial
@@ -317,7 +378,43 @@ left alone. To resolve a conflict, preserve external edits and restore the gener
 files, or connect a different folder. There is no force-overwrite or automatic merge.
 Folder moves are handled by explicitly reconnecting the new path.
 
-## Verification
+## Portable-project verification and remaining limits
+
+Deterministic checks exercise a partial three-requirement assessment, actual Git
+commit/clone, empty local database import, exact saved finding preservation and only
+two new adapter calls for unfinished work. A relevant code change then reassesses.
+Separate tests continue a source scan under another folder/account and partial planning
+without repeating completed batches/packages. Upgrade/recovery coverage includes old
+folder formats, edited artifacts, interrupted rename/publication, dual-folder conflicts,
+idempotent reopen, explicit pull adoption, execution-only divergence, future/malformed
+formats, late transaction rollback/backups, immutable historical evidence and shared-object
+size bounds. API/browser checks cover authentication/origin/input bounds, open, paused
+processing, reload, shared-checkpoint acknowledgement and 390px layout. Screenshot:
+`.reqwizit-state/browser-portable.png`.
+
+A read-only RustGrindGalaxy revision-1786 projection validated 837 artifacts totaling
+51,862,803 bytes (about 49.5 MiB): execution 24,761,838 bytes, continuation 19,511,965 bytes.
+It retained 428 of 1,118 jobs, 12 unresolved submissions and 390 original revision-evidence
+deltas with 1,244 shared records. All 276 saved workspace assessments were preserved
+exactly and their freshness results were unchanged; there were no saved main assessments
+in that capture. Preparing and decoding the projection, including historical schemas,
+took about 19.6 seconds on this Windows environment. This is not a cross-machine or
+interactive-latency qualification; large-project publication remains a performance
+follow-up. No files, user database records, project folder names or live jobs were changed.
+
+Real project migration/import, live provider continuation across machines, effective
+concurrent team workflows and coding-session/worktree recovery remain unqualified.
+Do not interrupt an existing long-running assessment solely to install this change.
+
+Final verification on Windows/Node 22.23.3: `npm run check`, all 553 deterministic
+`npm test` checks, `npm run test:browser` (including UI build and portable browser
+checks), both terminal help commands and `git diff --check` passed. The broader suite
+exposed a stale-snapshot publication retry loop; publication now rejects a revision
+mismatch rather than continuously queuing retries. The read-only real-project check
+exposed the oversized naive delta representation, replaced by shared-object evidence.
+No live model calls were made. The existing UI bundle-size warning remains non-blocking.
+
+## Earlier verification
 
 Deterministic Windows/Node 20.11 checks cover automatic human/model publication,
 preservation of original text, account-selection exclusion, stale writes, external

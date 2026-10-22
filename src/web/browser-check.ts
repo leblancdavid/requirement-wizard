@@ -587,7 +587,7 @@ try {
   await page.getByLabel("Verification evidence", { exact: true }).fill("Restart test passed");
   await page.getByRole("button", { name: "Save implementation progress", exact: true }).click();
   await expect(page.locator(".implementation-progress > summary")).toContainText("1 verified");
-  const progressFile = resolve(workspaceDirectory, ".requirement-wizard/progress.json");
+  const progressFile = resolve(workspaceDirectory, ".reqwizit/progress.json");
   await expect.poll(async () => JSON.parse(await readFile(progressFile, "utf8")).implementation[0].status).toBe("verified");
   await expect(mapEpic.getByRole("meter")).toHaveAttribute("aria-valuenow", "0");
   await expect(mapEpic).toContainText("0 / 1 delivered to main");
@@ -726,7 +726,7 @@ try {
   await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole("tab", { name: "Project map", exact: true }).click();
-  const requirementsFile = resolve(workspaceDirectory, ".requirement-wizard/requirements.md");
+  const requirementsFile = resolve(workspaceDirectory, ".reqwizit/requirements.md");
   const generatedRequirements = await readFile(requirementsFile, "utf8");
   await writeFile(requirementsFile, "External editor changes");
   await expect(page.locator(".workspace-status")).toContainText("Conflict");

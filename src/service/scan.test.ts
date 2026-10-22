@@ -78,7 +78,7 @@ test("capture omits generated, hidden, binary, oversized and potential secret fi
     assert.deepEqual([...new Set(scan.snapshot.files.map((file) => file.path))], ["README.md", "auth.ts", "large.ts"]);
     assert.ok(scan.snapshot.files.filter((file) => file.path === "large.ts").length > 1);
     assert.ok(scan.snapshot.files.every((file) => file.startLine! <= file.endLine!));
-    for (const name of ["node_modules", ".env", "config.json", "binary.ts", "large.ts", ".requirement-wizard", "junction"]) assert.ok(scan.snapshot.omitted.some((item) => item.path === name));
+    for (const name of ["node_modules", ".env", "config.json", "binary.ts", "large.ts", ".reqwizit", "junction"]) assert.ok(scan.snapshot.omitted.some((item) => item.path === name));
     assert.ok(!JSON.stringify(scan.sources).includes("secret-value"));
   } finally { f.close(); }
 });

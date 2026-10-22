@@ -40,6 +40,7 @@ Executable application code now includes:
   material review, deterministic completeness estimates, and bounded context.
 - `src/storage/store.ts` — SQLite revisions, expected-revision writes, and durable jobs.
 - `src/storage/workspace.ts` — local folder bindings/artifacts, conflict checking, and revision-linked progress files; see `docs/project-workspaces.md`.
+- `src/storage/portable.ts` — `.reqwizit/` continuation projection and validation (DEC-029), with explicit clone/pull adoption in the store. Preserve semantic assessment/checkpoint identities; do not export full activity archives or machine-local execution sessions.
 - `src/storage/scan.ts` — bounded read-only file capture for initialization/rescan; scan jobs propose definitions and pause for review before gap discovery (DEC-018).
 - `src/storage/folder-preview.ts` — local metadata/document identity suggestions for explicit existing-project creation (DEC-019), with fingerprinted preview provenance.
 - `src/service/discovery.ts` — in-process orchestration and adapter contract.

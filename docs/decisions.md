@@ -30,6 +30,23 @@ every technical detail proposed in the planning documents.
 | DEC-021 | Process queued AI follow-up one submission at a time, each with its own focused revision-linked context. Do not combine the queue or include unrelated feature history solely because it shares an area. Retain exact target evidence and explicit guardrails; preserve omitted records and request wider context when needed. | User requested individual processing/contexts after repeated queue-size blockers |
 | DEC-021 | Split generated requirements by stable feature ID, keep original evidence in shared referenced files, and avoid rewriting unchanged outputs. Retain an on-demand combined specification export. | User reported large generated files and confirmed both reading/coding-agent context and disk/Git efficiency as goals after the feature-based export recommendation |
 
+## Portable team project state (DEC-029)
+
+Confirmed direction: commit `.reqwizit/` alongside code so a teammate can clone,
+open in Reqwizit and continue saved requirements work without unnecessary repeated
+assessment/model calls. Preserve sufficient current decisions, original evidence,
+unresolved input, reusable results and continuation checkpoints—not every user action
+or historical database snapshot. Accounts, folder bindings, processes and logs remain
+local. Safely migrate legacy `.requirement-wizard/` folders without discarding existing
+work. Start with coordinated editing per branch and explicit conflict-safe adoption;
+automatic concurrent merging and local-history deletion are not in scope.
+
+The first implementation uses manifest 3 plus independently versioned continuation
+artifacts and explicit browser/API/terminal opening. See
+[project workspaces](project-workspaces.md) and [migration ledger](migrations.md).
+Cross-machine coding sessions/worktrees are not reconstructed. Deterministic clone/
+assessment reuse is tested; real-project/live cross-machine workflows remain unqualified.
+
 ## Epic-by-epic alternative (DEC-028)
 
 Confirmed direction (2026-10-21): the user approved changing gap discovery toward
