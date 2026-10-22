@@ -2,6 +2,16 @@
 
 ## Header activity feedback
 
+**Processing & queue → Discovery diagnostics** exports a bounded metadata-only JSON
+report for selected recent discovery runs (initially the newest five). New runs
+record planning/request timings, context sizes/counts and workflow matching counters.
+Older timings remain unknown; running/interrupted measurements may be partial.
+Export never starts inference or changes the specification. Original text, paths,
+IDs, credentials and error prose are excluded, but counts/durations can still reveal
+project scale: review the file before sharing. See
+[discovery diagnostics](discovery-efficiency.md#export-a-representative-discovery-run)
+for fields, limits and interpretation.
+
 Foreground actions (including requirement review and saving answers) use a compact
 spinner in a permanently reserved slot beside the header title. Activity starts and
 finishes without adding a row or resizing the header. The action label remains

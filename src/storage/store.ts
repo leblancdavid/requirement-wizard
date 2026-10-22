@@ -26,6 +26,7 @@ import { retrievalAllowanceSchema, retrievalWorkSchema, retrievalEvidenceBasis, 
 import { validateEpicStages, epicStagePublicationContext } from "../core/epic-stages.js";
 import { epicReviewBatches } from "../core/epic-review.js";
 import type { GapHistory } from "../core/gap-backlog.js";
+import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSource } from "../core/discovery-diagnostics.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
@@ -39,6 +40,7 @@ import { questionReviewFingerprint, reviewFingerprint, validateRequirementEviden
 function readStoredJob(payload: string): Job {
   const job = JSON.parse(payload) as Job;
   if (job.portableReceipt !== undefined && job.portableReceipt !== 1) throw new Error("Unsupported portable checkpoint receipt. Upgrade the app; saved work was not overwritten.");
+  if (job.discoveryMetrics !== undefined) discoveryMetricsSchema.parse(job.discoveryMetrics);
   const envelopes = [...(job.result?.resolutionCheck ? [job.result.resolutionCheck] : []),
     ...(job.result?.refinements ?? []).flatMap((p) => p.resolution ? [p.resolution] : [])];
   if (envelopes.some((value) => value.format !== 1)) throw new Error("Unsupported requirement-resolution format in saved job. Upgrade the app; saved evidence was not overwritten.");
@@ -875,6 +877,42 @@ export class ProjectStore {
       ? this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid").all(projectID)
       : this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid DESC LIMIT ?").all(projectID, Math.max(1, Math.min(200, limit))).reverse();
     return (rows as Array<{ payload: string }>).map((row) => readStoredJob(row.payload));
+  }
+
+  /** Local diagnostic checkpoints do not modify revisions, activity or portable work. */
+  saveDiscoveryMetrics(id: string, input: unknown) {
+    const metrics = discoveryMetricsSchema.parse(input);
+    this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.discoveryMetrics?.state === "finished") throw new Error("Discovery measurements are already finalized.");
+      this.db.prepare("UPDATE jobs SET payload = json_set(payload, '$.discoveryMetrics', json(?)) WHERE id = ?").run(JSON.stringify(metrics), id);
+    }).immediate();
+  }
+
+  /** Bound the selection in SQL and decode metadata, never model output/history. */
+  discoveryDiagnostics(projectID: string, input: unknown) {
+    const ids = z.array(z.string().uuid()).min(1).max(20).refine((items) => new Set(items).size === items.length).parse(input);
+    const rows = this.db.prepare(`SELECT id, json_extract(payload, '$.expectedRevision') AS revision,
+      json_extract(payload, '$.status') AS status, json_extract(payload, '$.discoveryMetrics') AS metrics,
+      json_extract(payload, '$.context.epicReview.packageID') AS packageID, json_extract(payload, '$.context.epicReview.contextPolicy') AS policy,
+      json_extract(payload, '$.context.characters') AS characters, json_extract(payload, '$.context.budget') AS budget,
+      json_array_length(payload, '$.context.includedIDs') AS included, json_array_length(payload, '$.context.omittedIDs') AS omitted,
+      json_array_length(payload, '$.context.epicIDs') AS areas, json_extract(payload, '$.context.sectionCharacters') AS sections,
+      json_array_length(payload, '$.retrievalWork.stages') AS stages, json_extract(payload, '$.retrievalWork.attempts') AS savedAttempts,
+      json_extract(payload, '$.retrievalWork.reuse.stages') AS reusedStages, json_extract(payload, '$.retrievalWork.reuse.final') AS reusedFinal,
+      json_extract(payload, '$.retrievalWork.epicStages.batches') AS stagedBatches, json_array_length(payload, '$.retrievalWork.epicStages.receipts') AS stagedCompleted,
+      COALESCE(json_extract(payload, '$.epicReviewReport.reviewed'), json_extract(payload, '$.gapReport.checked')) AS reviewed,
+      COALESCE(json_extract(payload, '$.epicReviewReport.pending'), json_extract(payload, '$.gapReport.pending')) AS pending,
+      COALESCE(json_extract(payload, '$.epicReviewReport.waiting'), json_extract(payload, '$.gapReport.waiting')) AS waiting,
+      COALESCE(json_extract(payload, '$.epicReviewReport.blocked'), json_extract(payload, '$.gapReport.blocked')) AS blocked
+      FROM jobs WHERE project_id = ? AND id IN (${ids.map(() => "?").join(",")})
+      AND json_extract(payload, '$.kind') IS NULL AND json_extract(payload, '$.helpRequest') IS NULL
+      AND COALESCE(json_extract(payload, '$.context.refinementOnly'), 0) = 0 ORDER BY rowid DESC LIMIT 20`)
+      .all(projectID, ...ids) as DiagnosticSource[];
+    if (rows.length !== ids.length) throw new Error("Choose discovery runs from this project only.");
+    const report = discoveryDiagnosticReport(rows);
+    if (Buffer.byteLength(JSON.stringify(report)) > 256000) throw new Error("Diagnostics exceed the export bound. Select fewer runs.");
+    return report;
   }
 
   /** Bound ordinary job payload decoding before loading model output/checkpoints.

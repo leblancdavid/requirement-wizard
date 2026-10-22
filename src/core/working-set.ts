@@ -289,10 +289,11 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
   }
   // Resolve exact evidence transitively: sources may point back to a question or
   // requirement, and requirements may cite evidence in a different area.
+  let traversal: ContextPack["traversal"];
   const closeEvidence = (ids: Set<string>) => {
     if (task.currentSpecification) {
       const index = graph ??= evidenceGraph(project);
-      index.close(ids, (edge) => {
+      const measured = index.close(ids, (edge) => {
         const record = index.records.get(edge.from);
         if (edge.kind === "supports" && decisions?.omitted.has(edge.to) && !taskIDs.has(edge.to)) return false;
         if (!workspaceIDs.has(edge.to)) return true;
@@ -301,6 +302,7 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
         if (edge.kind === "supports" && backgroundAccepted.has(edge.from)) return false;
         return !task.deferWorkspaceEvidence || taskIDs.has(edge.to);
       });
+      traversal = { visitedRecords: measured.visitedRecords, examinedEdges: measured.examinedEdges, missingRecords: measured.missingIDs.length };
       return;
     }
     // Legacy ordering is retained for exact raw-wire checkpoint reconstruction.
@@ -483,7 +485,7 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
       removed++;
     }
     if (removed) data.recordIndex.splice(0, removed);
-    return { data, manifest: { version: data.omittedRequirementWorkspaceEvidence ? "tasks-v6" : data.omittedQuestionWorkspaceEvidence ? "tasks-v3" : "tasks-v1", revision: project.revision, focusEpicID: focus,
+    return { data, ...(traversal ? { traversal } : {}), manifest: { version: data.omittedRequirementWorkspaceEvidence ? "tasks-v6" : data.omittedQuestionWorkspaceEvidence ? "tasks-v3" : "tasks-v1", revision: project.revision, focusEpicID: focus,
       characters, budget, includedIDs: [...ids],
       omittedIDs: allRecords.filter((r) => !ids.has(r.id)).map((r) => r.id),
       indexedIDs: data.recordIndex.map((r) => r.id), epicIDs: [...selected], partial: true, taskRecordIDs: [...taskIDs],

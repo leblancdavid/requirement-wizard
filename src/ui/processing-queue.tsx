@@ -13,8 +13,10 @@ import { refinementActivity } from "./refinement-progress.js";
 import { GapExplorationStatus } from "./gap-status.js";
 import { GapContinuation } from "./gap-continuation.js";
 import { AttentionInbox, attentionGroups } from "./attention.js";
+import { DiscoveryDiagnostics } from "./discovery-diagnostics.js";
+import type { DiscoveryDiagnosticReport } from "../core/discovery-diagnostics.js";
 
-export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, stop, error, openIssue, jobs = [], continuationAvailable = false, continueExploration }: {
+export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, stop, error, openIssue, jobs = [], continuationAvailable = false, continueExploration, exportDiagnostics }: {
   project: Project;
   active: boolean; progress: string[]; submissions: Submission[]; paused: boolean; lastJob?: Job;
   refinementProgress?: RefinementProgress | null;
@@ -22,6 +24,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   scope: string; disabled: boolean; stopDisabled: boolean; resume: () => void; stop: () => void; error: string;
   openIssue?: (submissionID: string) => void; jobs?: Job[];
   continuationAvailable?: boolean; continueExploration?: () => void;
+  exportDiagnostics?: (jobIDs: string[]) => Promise<DiscoveryDiagnosticReport>;
 }) {
   const [open, setOpen] = useState(false);
   const processing = submissions.filter((item) => item.status === "processing");
@@ -97,6 +100,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
         {blocked.length > 0 && <p role="status">Context preflight stopped {blocked.length} {blocked.length === 1 ? "response" : "responses"} before starting an AI batch. Review that feature's cross-cutting notes and dependency scope in Project map, or split its work, then resume to recheck. The saved answers and approvals remain intact.</p>}
         {canResume && <div className="queue-actions"><p><strong>Discovery scope:</strong> {scope}.{scope !== "All project areas" ? " Other areas remain pending." : ""} Change the feature filter in the workspace to choose a different scope.</p><button className="secondary" disabled={disabled} onClick={resume}>{resumeLabel}</button></div>}
         {!submissions.length && <p>No responses submitted yet.</p>}
+        {exportDiagnostics && <LazyDetails summary={<>Discovery diagnostics</>}>{() => <DiscoveryDiagnostics jobs={jobs} load={exportDiagnostics} />}</LazyDetails>}
         {recent.length > 0 && <LazyDetails summary={<>Recent background work · {recent.length}</>}>{() => recent.map((item) => <article className="queue-item" key={item.id}><h3>{item.title} · {item.status}</h3>{item.stage && <p className={["failed", "blocked", "interrupted", "stale"].includes(item.status) ? "job-error" : undefined}>{item.stage}</p>}{item.detail && <p>{item.detail}</p>}</article>)}</LazyDetails>}
         {openIssue && <AttentionInbox project={project} submissions={submissions} jobs={jobs} open={openIssue} />}
         {([[processing, "Currently processing"], [waiting, "Waiting next · submission order"], [openIssue ? [] : attention, "Needs attention"], [saved, "Saved · awaiting discovery"]] as const).map(([entries, label]) => entries.length > 0 && <section key={label} aria-label={label}><h3>{label}</h3>{items(entries)}</section>)}

@@ -104,6 +104,8 @@ test("staged drafts remain unpublished across the six-request pause, resume with
     let job = await new DiscoveryService(store, adapter).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
     assert.equal(job.status, "failed", job.diagnostic); assert.match(job.diagnostic!, /paused after six requests/);
     assert.equal(job.retrievalWork!.epicStages!.receipts.length, 6);
+    assert.equal(job.discoveryMetrics!.requests.length, 6, "Only this invocation's actual requests are measured");
+    assert.ok(job.discoveryMetrics!.requests.every((request) => request.durationMs !== null));
     assert.deepEqual(store.get(p.id), p); assert.equal(job.result, undefined);
     const saved = structuredClone(job);
     store.close(); store = new ProjectStore(path);
@@ -124,6 +126,9 @@ test("staged drafts remain unpublished across the six-request pause, resume with
     assert.equal(job.retrievalWork!.epicStages!.phase, "complete");
     assert.equal(job.result!.questions.length, 0, "Later batch veto must remove the draft before publication");
     assert.equal(calls.length, job.retrievalWork!.epicStages!.batches * 2);
+    assert.equal(job.discoveryMetrics!.requests.length, calls.length - 6, "Resumed requests do not include earlier receipts");
+    const diagnosticRuns = store.discoveryDiagnostics(p.id, [saved.id, job.id]).runs;
+    assert.equal(diagnosticRuns[0]!.package, diagnosticRuns[1]!.package, "Report-local package handles correlate resumed jobs");
     assert.deepEqual(store.getJob(saved.id), saved, "Upgrade/retry must not overwrite prior response history");
     const current = store.get(p.id);
     assert.equal(current.questions.length, p.questions.length);
@@ -740,6 +745,8 @@ test("single batched load leaves room for final review and is checkpointed", asy
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
     assert.equal(job.status, "completed", job.diagnostic); assert.equal(calls, 2);
     assert.equal(job.retrievalWork!.stages.length, 1); assert.ok(job.retrievalWork!.final);
+    assert.deepEqual(job.discoveryMetrics!.requests.map((request) => request.response), ["load", "analysis"]);
+    assert.ok(job.discoveryMetrics!.requests[1]!.context.includedRecords > job.discoveryMetrics!.requests[0]!.context.includedRecords);
   } finally { store.close(); }
 });
 

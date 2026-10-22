@@ -191,6 +191,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   const evidence = gapEvidence(project, graph);
   const requirementIDs = new Set(project.requirements.map((r) => r.id));
   const tasks: EpicReviewTask[] = [];
+  const planningDecisions = { newPackage: 0, noCompatibleSavedPackage: 0, compatibleSavedPackage: 0 };
   const scheduledPackageIDs = new Set<string>();
   const recordsFor = (id: string): Record[] => [...project.requirements.filter((r) => r.status !== "rejected"),
     ...project.questions.filter((q) => q.status !== "retired" && q.status !== "answered"),
@@ -336,6 +337,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       || availability.state !== "ready" && !otherWorkflowQuestions;
     if (scheduledPackageIDs.has(review.packageID)) return;
     scheduledPackageIDs.add(review.packageID);
+    planningDecisions[preserved ? "compatibleSavedPackage" : history.length ? "noCompatibleSavedPackage" : "newPackage"]++;
     tasks.push({ review, context, prior, reason: reason ?? (blocked ? prior?.epicReviewReport?.blockers.find((b) => b.packageID === review.packageID)?.reason
       ?? "Saved evidence blocker or three spent attempts; unchanged packages are not retried automatically." : undefined),
       state: completed ? "reviewed" : reason || blocked ? "blocked" : waiting ? "waiting" : "pending" });
@@ -368,5 +370,5 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       largestPackage: tasks.reduce((largest, t) => Math.max(largest, t.context?.manifest.characters ?? 0), 0),
       aboveTarget: tasks.filter((t) => t.context && t.context.manifest.characters > epicContextTarget).length },
     explanation: "Revision-linked candidate workflow packages, followed by declared dependency-boundary passes. Reviews are bounded evidence checks, not specification completeness or implementation verification. Unrelated omitted history and all possible cross-epic record pairs are not reviewed. Legacy record/lens checks remain separate." };
-  return { task: tasks.find((t) => t.state === "pending"), report, tasks };
+  return { task: tasks.find((t) => t.state === "pending"), report, tasks, planningDecisions };
 }

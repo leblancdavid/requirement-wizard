@@ -19,6 +19,7 @@ import { prepareScanAnalysis } from "../core/scan.js";
 import { refinementContextKey } from "./refinement-tasks.js";
 import { pairQuestions, resolutionContextKey } from "../core/resolution.js";
 import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanWindowTimeout, scanLeaseDuration } from "./scan-batches.js";
+import { DiscoveryMeasurement } from "./discovery-metrics.js";
 
 export interface DiscoveryAdapter {
   clarify?(project: Project, request: QuestionHelpRequest, options: DiscoveryOptions): Promise<unknown>;
@@ -230,6 +231,13 @@ export class DiscoveryService {
     // Startup, discovery, and inference have a combined five-minute bound.
     // The longer lease permits a short recovery/cleanup window without stealing live work.
     this.store.claimJob(job.id, Date.now() + 360_000);
+    const measurement = !options.helpRequest && !options.refinementOnly
+      ? new DiscoveryMeasurement((value) => this.store.saveDiscoveryMetrics(job.id, value)) : undefined;
+    const completeMeasurement = (result: Job): Job => {
+      measurement?.finish();
+      if (measurement) result.discoveryMetrics = structuredClone(measurement.value);
+      return result;
+    };
     const controller = new AbortController();
     const abort = () => controller.abort();
     options.signal?.addEventListener("abort", abort, { once: true });
@@ -250,8 +258,9 @@ export class DiscoveryService {
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
       const epicPlan = options.gapMode ? planEpicReview(project, this.store.epicReviewHistory(projectID), options.focusEpicID, this.store.submissions(projectID), (revision) => this.store.get(projectID, revision)) : undefined;
       if (epicPlan && !epicPlan.task) {
+        measurement?.planned(undefined, epicPlan.planningDecisions);
         options.onProgress?.("No pending epic packages: review saved blockers or answer waiting decisions. No model request made.");
-        return this.store.attachEpicReviewReport(job.id, epicPlan.report, true);
+        return completeMeasurement(this.store.attachEpicReviewReport(job.id, epicPlan.report, true));
       }
       let context = options.helpRequest ? questionHelpContext(project, options.helpRequest, options.helpRequest.action === "define" ? [] : this.store.jobs(projectID))
         : continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
@@ -293,6 +302,7 @@ export class DiscoveryService {
       if (context.manifest.budget > 48000) options.onProgress?.(`Mandatory evidence requires ${context.manifest.characters.toLocaleString("en-US")} characters; using the bounded 96,000-character fallback after task planning. Exact human evidence is retained; no optional detail was added.`);
       if (context.manifest.compaction) options.onProgress?.(`Context overhead reduced from ${context.manifest.compaction.originalCharacters.toLocaleString("en-US")} to ${context.manifest.characters.toLocaleString("en-US")} characters; exact decisions and evidence retained.`);
       this.store.attachContext(job.id, context.manifest);
+      measurement?.planned(context, epicPlan?.planningDecisions);
       if (context.gapReport) this.store.attachGapReport(job.id, context.gapReport);
       const shorten = (text: string) => { const line = text.replace(/\s+/g, " ").trim(); return line.length > 140 ? `${line.slice(0, 137)}…` : line; };
       const submitted = options.submissionIDs?.map((id) => this.store.submissions(projectID).find((item) => item.id === id))[0];
@@ -314,6 +324,9 @@ export class DiscoveryService {
         research: continuationSource?.retrievalWork?.research ?? epicPlan?.task?.prior?.retrievalWork?.research ?? (options.helpRequest || options.refinementOnly ? false : options.research ?? false),
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
+      const requestModel = (context: ContextPack) => measurement
+        ? measurement.request(() => this.adapter.analyze(project, { ...adapterOptions, context }), context, controller.signal)
+        : this.adapter.analyze(project, { ...adapterOptions, context });
       controller.signal.throwIfAborted();
       if (epicPlan?.task) {
         const review = epicPlan.task.review;
@@ -336,7 +349,7 @@ export class DiscoveryService {
             controller.signal.throwIfAborted();
             const blocked = this.store.finishEpicReviewBlocked(job.id, reviewReport);
             report(`Evidence blocked: ${reason} No proposals applied; saved stages retained. This package is blocked, not reviewed.`);
-            return blocked;
+            return completeMeasurement(blocked);
           }
           this.store.attachEpicReviewReport(job.id, reviewReport);
           throw new Error(`Epic workflow review needs evidence: ${reason} No proposals applied. Saved stages retained; this unchanged package is blocked, not reviewed.`);
@@ -357,7 +370,7 @@ export class DiscoveryService {
             if (callsThisRun >= 6) throw new Error("Staged review paused after six requests in this package attempt. No drafts published. Explore next gaps to resume saved stages; completed calls will not repeat.");
             report(`Staged decision review: ${staged.phase === "discover" ? "drafting" : "checking drafts"}, batch ${staged.nextBatch + 1} of ${staged.batches}. ${staged.receipts.length} stages saved; no proposals publish before every batch is checked.`);
             work.attempts++; callsThisRun++; checkpoint();
-            const raw = await this.adapter.analyze(project, { ...adapterOptions, context });
+            const raw = await requestModel(context);
             controller.signal.throwIfAborted();
             if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
             if (JSON.stringify(raw)?.length > 12000) return block("Staged response exceeds the 12,000-character draft allowance; no proposals were published or truncated.");
@@ -382,7 +395,7 @@ export class DiscoveryService {
           validateEpicReviewFinal(project, context, staged.candidates);
           work.final = { contextKey: retrievalContextKey(context), evidenceBasis: retrievalEvidenceBasis(context), revision: project.revision, output: staged.candidates };
           checkpoint();
-          return this.store.finishJob(job.id, staged.candidates);
+          return completeMeasurement(this.store.finishJob(job.id, staged.candidates));
         }
         report(`Reviewing ${review.kind === "boundary" ? "dependency boundary" : "workflow package"} in ${project.epics.find((e) => e.id === review.epicID)?.title ?? review.epicID}: ${review.recordIDs.length} records together; exact linked evidence prepared locally. No search/paging calls.`);
         const budget = context.manifest.epicContextBudget;
@@ -408,11 +421,11 @@ export class DiscoveryService {
             if (prior?.sessionID) this.store.attachSession(job.id, prior.sessionID);
             if (prior?.telemetry) this.store.attachTelemetry(job.id, prior.telemetry);
             if (prior?.researchEvidence) this.store.attachResearch(job.id, prior.researchEvidence);
-            return this.store.finishJob(job.id, work.final.output);
+            return completeMeasurement(this.store.finishJob(job.id, work.final.output));
           }
           if (work.attempts >= 3) return block("Three model attempts were spent across retries. Review the connection or genuinely change the missing evidence/scope.");
           work.attempts++; checkpoint();
-          const raw = await this.adapter.analyze(project, { ...adapterOptions, context });
+          const raw = await requestModel(context);
           controller.signal.throwIfAborted();
           if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
           if (raw && typeof raw === "object" && "reviewBlocked" in raw) return block(epicReviewBlockedSchema.parse(raw).reviewBlocked.reason, true);
@@ -534,7 +547,7 @@ export class DiscoveryService {
           this.store.checkpointRetrieval(job.id, { ...work, attempts: ++work.attempts }, context.manifest);
           if (context.gapReport) this.store.attachGapReport(job.id, { ...context.gapReport, modelCalls: work.attempts });
           report(`Evidence stage ${stage + 1}: ${work.stages.length} navigation stages saved; request ${work.attempts} of ${maxRequests}, ${context.manifest.characters} / ${context.manifest.budget} characters. Unseen evidence cannot support proposals.`);
-          output = await this.adapter.analyze(project, { ...adapterOptions, context });
+          output = await requestModel(context);
           controller.signal.throwIfAborted();
           if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
           if (!output || typeof output !== "object" || !("retrieveEvidence" in output || "searchEvidence" in output)) {
@@ -567,21 +580,22 @@ export class DiscoveryService {
         }
         this.store.checkpointRetrieval(job.id, work, context.manifest);
       } else output = options.helpRequest ? await this.adapter.clarify!(project, options.helpRequest, adapterOptions)
-        : await this.adapter.analyze(project, adapterOptions);
+        : await requestModel(context);
       controller.signal.throwIfAborted();
       report("Checking returned proposals and references before saving…");
-      return options.helpRequest ? this.store.finishHelp(job.id, output) : this.store.finishJob(job.id, output);
+      return completeMeasurement(options.helpRequest ? this.store.finishHelp(job.id, output) : this.store.finishJob(job.id, output));
     } catch (error) {
       if (error instanceof GapBacklogIdle) {
         if (controller.signal.aborted) {
           this.store.attachGapReport(job.id, error.report);
           this.store.failJob(job.id, "cancelled", "Gap exploration cancelled. No model request was made; saved checks are retained.");
-          return this.store.getJob(job.id);
+          return completeMeasurement(this.store.getJob(job.id));
         }
         options.onProgress?.(error.message);
-        return this.store.finishGapIdle(job.id, error.report);
+        return completeMeasurement(this.store.finishGapIdle(job.id, error.report));
       }
       if (error instanceof ContextBudgetError) {
+        measurement?.planned({ data: null, manifest: error.manifest });
         if (error instanceof GapBacklogBlocked) this.store.attachGapReport(job.id, error.report);
         error.manifest.submissionIDs = options.submissionIDs;
         error.manifest.refinementOnly = options.refinementOnly;
@@ -595,8 +609,9 @@ export class DiscoveryService {
           error instanceof z.ZodError ? schemaDiagnostic(error) : safeMessage(error instanceof ContextBudgetError && retainedAttempts
             ? error.message.replace("No model call was made", "No additional request was made for the oversized stage; earlier attempts and saved stages are retained")
             : error instanceof Error ? error.message : error));
-      return this.store.getJob(job.id);
+      return completeMeasurement(this.store.getJob(job.id));
     } finally {
+      measurement?.finish();
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
     }

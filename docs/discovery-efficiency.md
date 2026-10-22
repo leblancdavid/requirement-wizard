@@ -56,6 +56,74 @@ records. Oversized indivisible human evidence can still block.
 
 ## Measurement
 
+### Export a representative discovery run
+
+1. Restart the updated app. New discovery and saved-answer follow-up jobs record
+   bounded local metadata; no inference is run just to collect diagnostics.
+2. Use **Design → Explore next gaps** on a representative feature as usual. Wait
+   for completion or a useful blocker; exporting a running run is also supported,
+   but its measurements are partial.
+3. Open **Processing & queue → Discovery diagnostics**. The newest five eligible
+   visible runs are initially selected. Expand **Select runs** to change selection,
+   clear it or select all recent eligible runs (at most twenty). Scans, help and
+   refinement jobs are excluded; selection comes from the workspace's recent jobs,
+   not an unbounded archive listing.
+4. Click **Export discovery diagnostics**. Review the downloaded
+   `reqwizit-discovery-diagnostics.json` and share it for analysis if desired.
+
+The authenticated same-origin API is `POST /api/projects/:id/discovery-diagnostics`
+with `{jobIDs:[...]}` (one to twenty distinct project-owned discovery job UUIDs).
+It reads bounded SQL metadata projections, never model outputs/history, and returns
+a no-store JSON report capped at 256,000 UTF-8 bytes. Export makes no model calls,
+does not revise the specification and does not change checkpoints or attempt limits.
+
+**Included:** report-local run/package handles, input revisions, status, known
+context policy, initial planning time, per-adapter-attempt duration and envelope
+category, exact context character/count breakdowns from known sections, selected
+current-spec context traversal counts, retained-stage/attempt/batch counts and saved
+backlog totals. Workflow planning counts distinguish new packages, compatible saved
+packages and packages without a compatible saved match. The latter can reflect
+changed evidence, scope or grouping; it is not a semantic explanation of a change.
+
+For finished measured runs, `timing` separates initial planning, adapter requests,
+and remaining local time (evidence preparation, validation, storage and orchestration).
+Request time includes adapter/server startup, tools and provider work, not just model
+inference. Request entries are checkpointed before dispatch; an in-flight entry is
+not proof that a provider accepted a call. Response categories are identified before
+validation; a returned response is not proof of successful publication.
+
+**Excluded:** original project/job/record IDs, project/feature names, source/requirement
+text, answers, prompts, responses, error/progress prose, file paths, timestamps,
+provider/model/account/session identifiers, credentials and arbitrary metadata keys.
+The export uses explicit field/key allowlists rather than trying to redact arbitrary
+logs. Counts, revisions, durations and package relationships can still reveal project
+scale or structure; this is minimized metadata, not a guarantee of anonymity.
+
+Older jobs have `measurements: null`; missing counts remain null. Do not manufacture
+zero requests from absent measurements or replay old calls to get timings. Measured
+requests belong only to that job invocation, while saved attempt/receipt counts may
+span retries. Abrupt interruption retains `state: recording` and null durations for
+unfinished requests; it does not fabricate a completed timing. Graph counts describe
+the selected context's traversal, not every candidate/compaction attempt during planning.
+Character counts describe the app context, not total runtime prompt overhead or tokens.
+For staged jobs, `savedContext` can describe the publication union rather than a single
+request. Use each measured request's context for actual app input sizes.
+Metrics are excluded from portable continuation and never affect evidence fingerprints.
+
+Diagnostics verification (2026-10-22, Windows Node 22.23.3): full `npm test` passed
+(38 pretests / 633 main tests), with final focused diagnostics checks, type checking,
+UI build and focused workflow/specification browser checks passing. Workflow browser
+coverage includes selection, actual JSON download, privacy assertions, export failure,
+reload, staged resume and mobile layout. Diagnostics are collapsed below active
+controls; the broader runner passed its active Stop visibility check after correcting
+an initial layout regression. The full browser command still stops at its existing
+missing **Approve resolution** assertion (`browser-check.ts:1347`); the separately
+run portable browser check still stops at its existing duplicate **Open shared
+checkpoint** selector (`portable-browser-check.ts:37`). Neither suite is claimed as
+passing. No live model calls or personal database inspection were used.
+
+### Synthetic benchmark
+
 Run `npm run benchmark:discovery` with Node 22.12+. It creates only disposable synthetic
 in-memory data and makes no model calls. It reports:
 
@@ -82,7 +150,8 @@ chunk-size warning remains non-blocking. No live inference or personal data was 
 ## Remaining work
 
 - Profile actual project blockers with explicit user consent; do not inspect personal
-  databases or make inference calls merely to collect performance numbers.
+  databases or make inference calls merely to collect performance numbers. The export
+  above now supports user-selected metadata sharing; real-project results remain unmeasured.
 - Introduce ranked full-text search alongside graph navigation. Existing bounded
   literal search remains unchanged, and the browser workflow path still avoids
   model-driven search/paging.

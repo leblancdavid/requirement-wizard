@@ -2,7 +2,9 @@ import type { Project, Job } from "./model.js";
 import { organizationRecords } from "./epics.js";
 import type { GapReport } from "./gap-types.js";
 
-export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]>; gapReport?: GapReport };
+export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]>; gapReport?: GapReport;
+  /** Local selected-context traversal only, never part of evidence/freshness hashes. */
+  traversal?: { visitedRecords: number; examinedEdges: number; missingRecords: number } };
 
 export class ContextBudgetError extends Error {
   constructor(readonly manifest: ContextPack["manifest"], records: { id: string; kind: string; characters: number }[] = []) {

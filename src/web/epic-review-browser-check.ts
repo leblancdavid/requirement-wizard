@@ -93,6 +93,27 @@ try {
   await page.locator(".topbar .queue-trigger").click();
   await expect(status).toContainText("1 reviewed"); await expect(status).toContainText("1 evidence blocked");
   await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("No eligible packages remain");
+  await page.getByText("Discovery diagnostics", { exact: true }).click();
+  const diagnostics = page.getByRole("region", { name: "Discovery diagnostics", exact: true });
+  await expect(diagnostics).toContainText("No requirement text");
+  await diagnostics.getByText(/Select runs ·/).click();
+  await diagnostics.getByRole("button", { name: "Clear run selection" }).click();
+  await expect(diagnostics.getByRole("button", { name: "Export discovery diagnostics", exact: true })).toBeDisabled();
+  await diagnostics.getByRole("button", { name: "Select all recent runs" }).click();
+  const [download] = await Promise.all([page.waitForEvent("download"), diagnostics.getByRole("button", { name: "Export discovery diagnostics", exact: true }).click()]);
+  assert.equal(download.suggestedFilename(), "reqwizit-discovery-diagnostics.json");
+  const stream = await download.createReadStream(); assert.ok(stream);
+  const chunks: Buffer[] = []; for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  const wire = Buffer.concat(chunks).toString("utf8"), exported = JSON.parse(wire);
+  assert.ok(exported.runs.length > 0 && exported.runs.length <= 20);
+  assert.ok(exported.runs.some((run: { measurements: unknown }) => run.measurements === null));
+  assert.ok(exported.runs.some((run: { measurements?: { state: string } }) => run.measurements?.state === "finished"));
+  for (const privateValue of [project.id, blocked.id, project.name, "Keep the original workflow decisions exact", "Missing the external order recovery contract."]) assert.ok(!wire.includes(privateValue));
+  assert.equal(calls, 2, "Diagnostics download is metadata-only, never another model call");
+  await page.route("**/discovery-diagnostics", (route) => route.abort());
+  await diagnostics.getByRole("button", { name: "Export discovery diagnostics", exact: true }).click();
+  await expect(diagnostics.getByRole("alert")).toContainText("Could not export diagnostics");
+  await page.unroute("**/discovery-diagnostics");
   await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-review.png"), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
@@ -190,6 +211,6 @@ try {
   assert.equal(dialogText.split(diagnostic).length - 1, 1, "A failed round repeated in progress is shown only once");
   await expect(page.getByText(/^Last round failed:/)).toHaveCount(0);
   assert.deepEqual(errors, []);
-  console.log("Epic review browser check passed: selected epic, blocker/next-package routing, staged pause/resume, no-call reuse, reload and mobile layout; no live model calls.");
+  console.log("Epic review browser check passed: diagnostic selection/download/privacy/failure, selected epic, blocker routing, staged pause/resume, no-call reuse, reload and mobile layout; no live model calls.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-epic-review-failure")); throw error; }
 finally { await browser?.close(); await app.close(); store.close(); }

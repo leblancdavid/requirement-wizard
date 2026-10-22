@@ -57,6 +57,9 @@ New workflow reviews use a [graph-backed current-specification context](docs/dis
 to traverse exact evidence and reduce redundant generated background, while keeping
 human history saved and compatible completed reviews reusable. Benchmark locally with
 `npm run benchmark:discovery`; live model speed/quality gains are not yet established.
+To investigate a real run, use **Processing & queue → Export discovery diagnostics**.
+New runs record bounded timings/context counts; older timings remain unknown. Review
+the metadata-only JSON before sharing; original text, paths and credentials are excluded.
 Gap discovery can request additional exact saved evidence in up to three bounded stages,
 retaining human constraints and checkpointing completed calls for explicit retry. Navigation
 hints cannot support citations; oversized evidence blocks rather than silently truncating it.

@@ -42,7 +42,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
       ?? context?.epicReview ?? job.gapReport ?? job.epicReviewReport ?? job.id, job.status === "completed"]);
     const copy = structuredClone(job);
     copy.model = withoutAccount(copy.model);
-    delete copy.sessionID; delete copy.telemetry; delete copy.diagnostic;
+    delete copy.sessionID; delete copy.telemetry; delete copy.diagnostic; delete copy.discoveryMetrics;
     copy.leaseUntil = null;
     if (["pending", "running"].includes(copy.status)) copy.status = "interrupted";
     if (copy.scan) copy.scan.workspaceKey = "portable";

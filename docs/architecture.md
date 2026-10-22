@@ -15,6 +15,12 @@ implemented under `src/`. See [decisions.md](decisions.md),
   [continuous specification](continuous-specification.md) and [migrations](migrations.md).
 
 - `src/core/model.ts`: project/evidence/proposal schemas and reference rules.
+- `src/core/discovery-diagnostics.ts`, `src/service/discovery-metrics.ts`: strict
+  local-only discovery measurement envelopes and allowlisted diagnostic reports.
+  The browser queue explicitly exports selected bounded SQL metadata projections;
+  no prose/credentials/paths or original identifiers enter the file. Metrics do not
+  affect project revisions, evidence identities or portable continuation. See
+  [diagnostics](discovery-efficiency.md#export-a-representative-discovery-run).
 - `src/core/evidence-graph.ts`: derived, invocation-local typed forward/reverse
   provenance index and queue traversal. New `current-spec-v1` workflow contexts use
   exact graph closure and proactive generated-background projection; compatible saved

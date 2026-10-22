@@ -19,6 +19,56 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Local discovery measurements and explicit diagnostic export (2026-10-22)
+
+Source: jobs without diagnostic measurements. Additive target: optional format-1
+`Job.discoveryMetrics`, a strict bounded metadata envelope (initial planning/context,
+workflow matching counters and up to six adapter-attempt durations/context summaries).
+No SQLite/project/portable version or optimistic revision changes. Measurements are
+outside context data/manifests, semantic hashes and assessment/continuation identities.
+The local selected-context traversal property is ephemeral; only safe numeric summaries
+are saved. Diagnostics are excluded explicitly from portable continuation.
+
+No startup backfill or legacy-job rewrite: absence remains unknown, not invented zero
+timings or a reason to repeat model calls. New jobs checkpoint format-1 metadata
+before requests, on return/failure and at terminal completion using transactional
+updates of only the measurement field. Those writes do not create project revisions,
+activity or workspace dirtiness, and cannot overwrite concurrent terminal job state.
+Request entries describe adapter attempts, not proof of network/provider acceptance.
+After process death, retained `recording` state and null unfinished durations remain
+partial even if existing lease recovery marks the job interrupted. No automatic calls
+or timing reconstruction run on reopen. Finalized measurements cannot be rewritten.
+
+No source evidence is transformed, so no backup rewrite or ordered SQL migration is
+needed. Future/malformed metric envelopes reject job/export reads without overwriting
+stored payloads. Existing compatible completed work, checkpoints and spent attempts
+retain their original identities. Downgrades may ignore the optional local field;
+measurements are never required to recover work.
+
+Export is explicit, authenticated, same-origin and read-only: one to twenty distinct
+owned discovery jobs, SQL metadata projection, fixed safe section keys, report-local
+IDs and a 256,000-byte output cap. It excludes arbitrary diagnostic prose and original
+text/paths/identifiers rather than applying heuristic redaction. Missing historical
+measurements are null. Counts/durations can still disclose scale; UI/report warn users
+to review before sharing. See [diagnostic fields and limitations](discovery-efficiency.md#export-a-representative-discovery-run).
+
+Upgrade/recovery tests cover older jobs, repeated SQLite reopen, interrupted in-flight
+checkpoints and real expired-lease recovery, future-format rejection without writes,
+unchanged evidence/revisions, actual per-invocation requests across staged resume,
+no-call reuse, exact-load growth and portable exclusion. Privacy/API checks cover
+free text/arbitrary section keys, ownership, authentication, origin, duplicate IDs
+and selection bounds. Browser checks cover selection, download/privacy and export
+failure without starting discovery.
+
+Verified on Windows Node 22.23.3: full `npm test` (38 pretests / 633 main tests),
+final focused diagnostics checks, type check, UI build and focused workflow and
+specification browser checks. The full browser command remains blocked at the
+previously documented missing **Approve resolution** assertion (`browser-check.ts:1347`);
+the separate portable browser runner remains blocked by the duplicate **Open shared
+checkpoint** selector (`portable-browser-check.ts:37`). An initial diagnostics-panel
+Stop-button visibility regression was fixed by collapsing diagnostics below active
+controls and rerunning the broad check past that assertion. No live model calls.
+
 ## Graph-backed current-specification contexts (2026-10-22)
 
 Source formats: no-policy, `headroom-v1` and `staged-guardrails-v1` epic-review format 1.

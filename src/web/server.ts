@@ -210,6 +210,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
       const raw = await body(req);
+      if (action === "discovery-diagnostics") {
+        const input = z.object({ jobIDs: z.array(z.string().uuid()).min(1).max(20) }).strict().parse(raw);
+        json(res, 200, options.store.discoveryDiagnostics(id, input.jobIDs)); return;
+      }
       if (action === "execution-config") {
         const input = z.object({ revision, version: z.number().int().nonnegative(), config: executionConfigSchema }).strict().parse(raw);
         json(res, 200, implementation.configure(id, input.revision, input.config, input.version)); return;
