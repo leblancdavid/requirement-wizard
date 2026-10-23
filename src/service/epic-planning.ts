@@ -4,7 +4,7 @@ import type { Project, Job, Submission } from "../core/model.js";
 import type { planEpicReview } from "../core/epic-review.js";
 import { ContextBudgetError } from "../core/context.js";
 import { planningProgressSchema, type PlanningProgress } from "../core/discovery-diagnostics.js";
-import { epicPlanningCheckpointSchema, type EpicPlanningCheckpoint } from "../core/epic-planning-checkpoint.js";
+import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
 
 /** Bump on any scheduling/context/freshness change that could alter skip receipts.
  * Deliberately conservative: even irrelevant edits invalidate local CPU reuse.
@@ -25,10 +25,13 @@ export class PlanningTimeoutError extends Error {
 export async function prepareEpicReview(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[],
   options: { signal: AbortSignal; readRevision: (revision: number) => Project; onProgress: (value: PlanningProgress) => void;
     timeoutMs?: number; loadReceipts?: (inputKey: string) => Map<string, EpicPlanningCheckpoint>;
-    saveReceipt?: (inputKey: string, key: string, value: EpicPlanningCheckpoint) => void } ): Promise<EpicPlan> {
+    saveReceipt?: (inputKey: string, key: string, value: EpicPlanningCheckpoint) => void;
+    loadContexts?: (inputKey: string) => Map<string, EpicContextCheckpoint>;
+    saveContext?: (inputKey: string, key: string, value: EpicContextCheckpoint) => void } ): Promise<EpicPlan> {
   options.signal.throwIfAborted();
   const inputKey = epicPlanningInputKey(project, jobs, focusEpicID, submissions);
-  const data = { project, jobs, focusEpicID, submissions, resolved: options.loadReceipts?.(inputKey) ?? new Map() };
+  const data = { project, jobs, focusEpicID, submissions, resolved: options.loadReceipts?.(inputKey) ?? new Map(),
+    contexts: options.loadContexts?.(inputKey) ?? new Map() };
   const source = import.meta.url.endsWith(".ts");
   // Source runs need tsx's explicit import API in the worker. Packaged builds use
   // emitted JS directly and never depend on the dev-only TypeScript loader.
@@ -63,6 +66,11 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
             options.signal.throwIfAborted();
             options.saveReceipt?.(inputKey, message.key, epicPlanningCheckpointSchema.parse(message.value));
             report();
+          }
+          else if (message.type === "context-checkpoint") {
+            if (!message.key || !/^[a-f0-9]{64}$/.test(message.key)) throw new Error("Invalid intermediate planning context key.");
+            options.signal.throwIfAborted();
+            options.saveContext?.(inputKey, message.key, epicContextCheckpointSchema.parse(message.value) as EpicContextCheckpoint);
           }
           else if (message.type === "result") { report(); if (!settled) { settled = true; resolve(message.value as EpicPlan); } }
           else if (message.type === "revision") {

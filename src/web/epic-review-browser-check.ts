@@ -174,7 +174,9 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Oversized human evidence browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await review.click();
-  await expect(review).toBeEnabled();
+  // This no-inference fixture intentionally compacts/splits many exact human
+  // constraints. Wait for its terminal state, not Playwright's 5s UI default.
+  await expect(review).toBeEnabled({ timeout: 30_000 });
   await page.locator(".topbar .queue-trigger").click();
   await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("Gap exploration blocked: all");
   await expect(status).toContainText("no packages could be reviewed");

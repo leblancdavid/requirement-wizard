@@ -262,11 +262,15 @@ export class DiscoveryService {
         signal: controller.signal, readRevision: (revision) => this.store.get(projectID, revision),
         loadReceipts: (inputKey) => this.store.epicPlanningReceipts(projectID, inputKey),
         saveReceipt: (inputKey, key, value) => this.store.saveEpicPlanningReceipt(projectID, project.revision, inputKey, key, value),
+        loadContexts: (inputKey) => this.store.epicPlanningContexts(projectID, inputKey),
+        saveContext: (inputKey, key, value) => this.store.saveEpicPlanningContext(projectID, project.revision, inputKey, key, value),
         onProgress: (progress) => {
           controller.signal.throwIfAborted();
           if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
           measurement?.preparing(progress);
-          options.onProgress?.(`Preparing workflow evidence…\n${progress.phase === "indexing" ? "Indexing saved checks" : progress.phase === "history" ? "Verifying historical evidence" : progress.phase === "ready" ? "Working package prepared" : "Preparing exact package context"} · ${progress.examinedPackages} packages examined · ${progress.contextPreparations} context preparations · ${progress.reusedGroups ?? 0} saved local groups reused · ${Math.floor((measurement?.value.elapsedMs ?? 0) / 1000)}s elapsed. Local work only; no model request has started. Stop remains available.`);
+          const counts = progress.examinedStates;
+          const blockers = progress.blockerSummary;
+          options.onProgress?.(`Preparing workflow evidence…\n${progress.phase === "indexing" ? "Indexing saved checks" : progress.phase === "history" ? "Verifying historical evidence" : progress.phase === "ready" ? "Working package prepared" : "Preparing exact package context"} · ${progress.examinedPackages} packages examined${counts ? ` (${counts.reviewed} reviewed, ${counts.waiting} waiting, ${counts.blocked} blocked, ${counts.pending} eligible)` : ""} · ${progress.contextPreparations} context preparations · ${progress.reusedGroups ?? 0} saved local groups reused · ${progress.reusedContexts ?? 0} intermediate contexts reused · ${progress.reusedClosures ?? 0} exact-evidence renderings reused · ${Math.floor((measurement?.value.elapsedMs ?? 0) / 1000)}s elapsed. Local work only; no model request has started. Stop remains available.${blockers && counts?.blocked ? `\nExamined blockers: ${blockers.stagedTarget} target-size · ${blockers.stagedSeed} indivisible decision-size · ${blockers.stageLimit} batch-limit · ${blockers.contextLimit} context-limit · ${blockers.savedBlocker} saved evidence blockers · ${blockers.attemptLimit} attempt-limit · ${blockers.unknown} older causes unknown.` : ""}`);
         },
       }) : undefined;
       if (epicPlan) {

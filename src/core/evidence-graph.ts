@@ -66,6 +66,55 @@ export function evidenceGraph(project: Project) {
   };
   /** Reverse provenance candidates only, NOT a sufficient freshness/invalidation rule. */
   const dependents = (id: string) => (incoming.get(id) ?? []).filter((e) => e.kind !== "supersedes").map((e) => e.from);
-  return { project, records, outgoing, incoming, questionsByEvidence, linkedQuestions, epics, area, close, dependents };
+  const legacyRanks = new Map([...project.questions, ...project.requirements, ...project.sources].map((r, rank) => [r.id, rank]));
+  /** Same insertion order as the legacy question/requirement/source sweep, but
+   * visit each reachable record once instead of repeatedly scanning all records.
+   * An edge to an earlier position is processed in the next logical sweep. */
+  const closeLegacy = (ids: Set<string>, follow: (edge: EvidenceEdge) => boolean) => {
+    type Visit = { id: string; rank: number; sweep: number };
+    const heap: Visit[] = [];
+    const before = (a: Visit, b: Visit) => a.sweep < b.sweep || a.sweep === b.sweep && a.rank < b.rank;
+    const push = (value: Visit) => {
+      let at = heap.length; heap.push(value);
+      while (at) {
+        const parent = (at - 1) >>> 1;
+        if (!before(value, heap[parent]!)) break;
+        heap[at] = heap[parent]!; at = parent;
+      }
+      heap[at] = value;
+    };
+    const pop = () => {
+      const first = heap[0]!, last = heap.pop()!;
+      if (heap.length) {
+        let at = 0;
+        while (at * 2 + 1 < heap.length) {
+          let child = at * 2 + 1;
+          if (child + 1 < heap.length && before(heap[child + 1]!, heap[child]!)) child++;
+          if (!before(heap[child]!, last)) break;
+          heap[at] = heap[child]!; at = child;
+        }
+        heap[at] = last;
+      }
+      return first;
+    };
+    for (const id of ids) {
+      const rank = legacyRanks.get(id);
+      if (rank !== undefined) push({ id, rank, sweep: 0 });
+    }
+    let visitedRecords = 0, examinedEdges = 0;
+    while (heap.length) {
+      const visit = pop(); visitedRecords++;
+      for (const edge of outgoing.get(visit.id) ?? []) {
+        if (edge.kind === "supersedes") continue;
+        examinedEdges++;
+        if (ids.has(edge.to) || !follow(edge)) continue;
+        ids.add(edge.to);
+        const rank = legacyRanks.get(edge.to);
+        if (rank !== undefined) push({ id: edge.to, rank, sweep: visit.sweep + Number(rank < visit.rank) });
+      }
+    }
+    return { visitedRecords, examinedEdges };
+  };
+  return { project, records, outgoing, incoming, questionsByEvidence, linkedQuestions, epics, area, close, closeLegacy, dependents };
 }
 export type EvidenceGraph = ReturnType<typeof evidenceGraph>;

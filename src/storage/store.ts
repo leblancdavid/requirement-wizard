@@ -27,7 +27,7 @@ import { validateEpicStages, epicStagePublicationContext } from "../core/epic-st
 import { epicReviewBatches } from "../core/epic-review.js";
 import type { GapHistory } from "../core/gap-backlog.js";
 import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSource } from "../core/discovery-diagnostics.js";
-import { epicPlanningCheckpointSchema, type EpicPlanningCheckpoint } from "../core/epic-planning-checkpoint.js";
+import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
@@ -1037,7 +1037,7 @@ export class ProjectStore {
       if (this.get(projectID).revision !== expectedRevision) throw new StaleRevisionError();
       if (this.db.prepare("SELECT 1 FROM epic_planning_receipts WHERE project_id = ? AND format != 1").get(projectID))
         throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
-      // One input generation per project, capped at 4 MiB/2,000 root groups.
+      // One input generation per project, capped at 4 MiB/2,000 roots/subtrees.
       // This is disposable derived state, never original decisions or checks.
       this.db.prepare("DELETE FROM epic_planning_receipts WHERE project_id = ? AND input_key != ?").run(projectID, inputKey);
       const size = this.db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(length(CAST(payload AS BLOB))), 0) AS bytes FROM epic_planning_receipts WHERE project_id = ?")
@@ -1045,6 +1045,41 @@ export class ProjectStore {
       if (size.n >= 2000 || size.bytes + Buffer.byteLength(payload) > 4 * 1024 * 1024) return;
       this.db.prepare("INSERT INTO epic_planning_receipts VALUES (?, ?, ?, 1, ?) ON CONFLICT(project_id, group_key) DO NOTHING")
         .run(projectID, inputKey, groupKey, payload);
+    }).immediate();
+  }
+
+  epicPlanningContexts(projectID: string, inputKey: string): Map<string, EpicContextCheckpoint> {
+    if (this.db.prepare("SELECT 1 FROM epic_planning_contexts WHERE project_id = ? AND format != 1").get(projectID))
+      throw new Error("Unsupported intermediate planning context format. Saved work was not overwritten.");
+    const rows = this.db.prepare("SELECT context_key, payload FROM epic_planning_contexts WHERE project_id = ? AND input_key = ? ORDER BY rowid")
+      .all(projectID, inputKey) as { context_key: string; payload: string }[];
+    return new Map(rows.map((row) => [row.context_key,
+      epicContextCheckpointSchema.parse(JSON.parse(row.payload)) as EpicContextCheckpoint]));
+  }
+
+  saveEpicPlanningContext(projectID: string, expectedRevision: number, inputKey: string, contextKey: string, value: EpicContextCheckpoint) {
+    z.string().regex(/^[a-f0-9]{64}$/).parse(inputKey); z.string().regex(/^[a-f0-9]{64}$/).parse(contextKey);
+    const payload = JSON.stringify(epicContextCheckpointSchema.parse(value));
+    const bytes = Buffer.byteLength(payload), cap = 16 * 1024 * 1024;
+    this.db.transaction(() => {
+      const current = this.db.prepare("SELECT revision FROM projects WHERE id = ?").get(projectID) as { revision: number } | undefined;
+      if (current?.revision !== expectedRevision) throw new StaleRevisionError();
+      if (this.db.prepare("SELECT 1 FROM epic_planning_contexts WHERE project_id = ? AND format != 1").get(projectID))
+        throw new Error("Unsupported intermediate planning context format. Saved work was not overwritten.");
+      if (bytes > cap) return; // The computation still proceeds without caching.
+      this.db.prepare("DELETE FROM epic_planning_contexts WHERE project_id = ? AND input_key != ?").run(projectID, inputKey);
+      // FIFO retention prioritizes the unfinished tail over contexts from roots
+      // already covered by durable receipts. Eviction never removes evidence.
+      const rows = this.db.prepare("SELECT context_key, bytes FROM epic_planning_contexts WHERE project_id = ? ORDER BY rowid")
+        .all(projectID) as { context_key: string; bytes: number }[];
+      if (rows.some((row) => row.context_key === contextKey)) return;
+      let total = rows.reduce((sum, row) => sum + row.bytes, 0), count = rows.length;
+      for (const row of rows) {
+        if (count < 128 && total + bytes <= cap) break;
+        this.db.prepare("DELETE FROM epic_planning_contexts WHERE project_id = ? AND context_key = ?").run(projectID, row.context_key);
+        total -= row.bytes; count--;
+      }
+      this.db.prepare("INSERT INTO epic_planning_contexts VALUES (?, ?, ?, 1, ?, ?)").run(projectID, inputKey, contextKey, bytes, payload);
     }).immediate();
   }
 

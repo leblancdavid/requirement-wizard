@@ -5,7 +5,7 @@ import { decisionIdentity, executionSchemaVersion } from "../core/assessment-ide
 import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
 
-export const databaseSchemaVersion = 4;
+export const databaseSchemaVersion = 5;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -81,6 +81,12 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
     project_id TEXT NOT NULL REFERENCES projects(id), input_key TEXT NOT NULL,
     group_key TEXT NOT NULL, format INTEGER NOT NULL, payload TEXT NOT NULL,
     PRIMARY KEY (project_id, group_key)
+  );`);
+} }, { version: 5, name: "intermediate-local-contexts-v1", apply(db: Database.Database) {
+  db.exec(`CREATE TABLE IF NOT EXISTS epic_planning_contexts (
+    project_id TEXT NOT NULL REFERENCES projects(id), input_key TEXT NOT NULL,
+    context_key TEXT NOT NULL, format INTEGER NOT NULL, bytes INTEGER NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY (project_id, context_key)
   );`);
 } }];
 

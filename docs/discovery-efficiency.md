@@ -180,6 +180,106 @@ the exact supplied project's performance remain unqualified; no personal databas
 or live provider calls were used. The broad browser suite was not rerun for this
 follow-up (the earlier worker-isolation run's blocker is recorded above).
 
+### Intermediate preparation reuse and explainable progress (2026-10-22)
+
+Further supplied diagnostics showed progress from 72 to 116 examined packages:
+the second run reused 16 root groups but still performed 3,667 context preparations
+before its deadline. That establishes working coarse-grained continuation, not a
+complete performance fix or proof that an eligible package is near.
+
+Planning now saves completed recursive subtrees **inside** an unfinished root group,
+and memoizes exact context computations, including full size-overflow outcomes.
+An explicit retry can reuse a completed sibling and earlier staged partition probes
+instead of rebuilding the entire root. Success contexts are isolated copies; cached
+overflow manifests/messages retain their original exact blockers. Candidate review
+identities, guardrail order/partition and output validation remain unchanged. Existing
+root receipts remain reusable across this upgrade; the root-input digest is not
+invalidated by an equivalent computation strategy. Changed inputs still invalidate
+CPU reuse conservatively.
+
+Intermediate contexts are bounded to the recent 128 entries / 16 MiB in local SQLite
+per project/input generation; older entries can be recomputed. They contain private
+evidence text and are **not diagnostic/export artifacts**. Completed roots/subtrees
+share the existing 2,000-entry / 4 MiB receipt limit. A single indivisible computation
+can still time out, and evicted/unfinished work may repeat. This is not a guarantee
+that this user's exact project now finishes in one pass, or that repeated retries
+will discover gaps rather than eventually report waiting/blocked work.
+
+Preparation progress now labels its examined prefix as reviewed, waiting, blocked
+or eligible, and shows intermediate-context reuse. These are scheduling states, not
+new model reviews or whole-project totals. Diagnostics additionally expose fixed
+worker activities/timing buckets: saved-policy reconstruction/matching, new-package
+preparation, new staged partitioning, recursive splitting and catalog/other worker
+time. Nested work is counted exclusively (for example, saved staged-policy rebuilding
+belongs to saved-policy time). These are sampled worker wall times, not provider time
+or an exact breakdown of parent startup/SQLite work; a killed operation may leave a
+partial bucket. `preparedContexts` counts complete checkpointable computations,
+not necessarily persisted rows. Group counts may include both roots and subtrees.
+
+Long preparation logs can evict the original “Finding gaps” line from the bounded
+20-message queue history. The final outcome banner now also recognizes the typed
+saved workflow/gap report, so losing that initial message cannot hide its outcome.
+The two-minute preparation deadline, five-minute combined bound and six-minute lease
+are unchanged. There are no automatic retries or extra model allowances. See
+[schema-5 compatibility](migrations.md#intermediate-preparation-checkpoints-and-phase-diagnostics-2026-10-22).
+
+Verification: 57 pretests / 633 main tests, type checking, UI build, desktop emit,
+compiled-JavaScript worker startup/receipt/state smoke and the focused workflow
+browser runner passed. The focused browser test caught the outcome-banner regression
+described above; after the UI fix, its expensive no-inference blocker fixture uses
+an explicit bounded 30-second terminal-state wait rather than a 5-second UI default.
+The broad browser command remains blocked at **Approve resolution** in
+`src/web/browser-check.ts:1350`, before its portable/specification runners. Full
+packaged Electron execution and this user's exact project throughput remain
+unqualified. No personal database or live model calls were used.
+
+### Staging-cost optimization and blocker causes (2026-10-22)
+
+The next supplied diagnostic isolated the expensive path: about 99.5 seconds in
+staging and 17.7 seconds in splitting, with 164 packages examined (163 blocked,
+one reviewed, none eligible), 23 groups reused, and no model request. This is evidence
+of costly unsuccessful local staging, not a provider stall or proof of the exact
+blocker causes in those older cached groups.
+
+The staging algorithm now applies its **existing** exact target-only 54k gate before
+constructing the full-area seed catalog. An already-unfit target avoids a redundant
+catalog build. Successful targets still use the original seed order, deterministic
+bisection, compaction rules and batch cap. No human evidence is dropped and no
+monotonic-size assumption about different seed sets is made.
+
+Legacy contexts now compute closure with an indexed logical-sweep worklist. Unlike
+ordinary BFS, it preserves the exact old insertion order in the manifest, including
+backward links deferred to the next sweep. Each reachable record is processed once
+instead of repeatedly scanning entire project arrays. Supersession stays navigation,
+not an automatic evidence load; existing workspace/answer/decision filters remain.
+
+Different staged seeds often close to the **same exact evidence**. Their rendering
+and lossless compaction can now be shared when all task flags/target IDs and the final
+membership match. Caller-specific legacy included-ID order is restored. This is not
+semantic similarity, summary reuse or reuse across different targets or mutations.
+The ephemeral cache holds up to 64 results / 8 MiB, including exact overflow outcomes.
+`closureRenderAttempts` counts cache-miss rendering attempts and `reusedClosures`
+counts equivalent-rendering reuse; these are separate from full-context and
+root/subtree receipt counters. All existing persisted checkpoints remain compatible.
+
+Progress and exported diagnostics now retain an examined-prefix `blockerSummary`:
+target-size, indivisible decision-seed-size, context-limit, staged batch-limit,
+saved-evidence blockers, attempt-limit, and older unknown causes. Known maximum
+characters/minimum budget remain numeric; unavailable sizes stay null. Old receipts
+are not recomputed merely to fill these fields. Summaries survive interruption via
+the existing parent measurement checkpoints, though a currently unfinished package
+is not yet counted. These are local scheduling causes, not model-review outcomes or
+a whole-project inventory. See [compatibility details](migrations.md#legacy-order-staging-optimization-and-blocker-metadata-2026-10-22).
+
+Verification: all 60 pretests and 635 main tests passed. Type checking, UI build,
+desktop TypeScript emit, compiled-JavaScript worker/blocker smoke and focused
+workflow browser verification passed. Tests show fewer target preparations and
+reused renderings for equal closed sets, with exact reference output/identity parity;
+they do not establish a speedup or one-pass completion for the supplied project.
+The broad browser suite was not rerun for this slice (the preceding **Approve
+resolution** blocker remains unqualified). Full packaged Electron and exact-project
+throughput remain unqualified; no personal database or live provider calls were used.
+
 ### Export a representative discovery run
 
 1. Restart the updated app. New discovery and saved-answer follow-up jobs record

@@ -11,17 +11,24 @@ import type { PlanningProgress } from "../core/discovery-diagnostics.js";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve, join } from "node:path";
 import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import { contextPreparationIndex, planContext } from "../core/working-set.js";
-import type { EpicPlanningCheckpoint } from "../core/epic-planning-checkpoint.js";
+import type { EpicPlanningCheckpoint, EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
+import { epicReviewContext, stagedEpicReview, epicBatchKey } from "../core/epic-review.js";
+import { epicReviewSchema, type EpicReview } from "../core/epic-review-types.js";
+import { ContextBudgetError } from "../core/context.js";
+import { databaseSchemaVersion } from "../storage/migrations.js";
 
 const empty = () => analysisSchema.parse({ summary: "Planning fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
-function seed(store: ProjectStore, count = 24) {
+function seed(store: ProjectStore, count = 24, linkedNotes = 0) {
   let p = store.create("Bounded local planning", "Retain exact original decisions", { providerID: "openai", modelID: "fixture" });
   p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Recover failed orders", dependencies: [] }]);
+  for (let note = 0; note < linkedNotes; note++) p = store.note(p.id, p.revision,
+    Array.from({ length: 150 }, (_, n) => createHash("sha256").update(`Exact exception ${note}-${n}`).digest("hex")).join(""), "project");
   for (let at = 0; at < count; at += 8) {
     const j = store.beginJob(p.id, p.revision).job; store.claimJob(j.id, Date.now() + 60000);
     store.finishJob(j.id, { ...empty(), requirements: Array.from({ length: Math.min(8, count - at) }, (_, n) => ({ epicID: "orders",
-      statement: `Order behavior ${at + n}`, rationale: "Original idea", acceptance: [`Behavior ${at + n} is observable`], sourceIDs: [p.sources[0]!.id] })) });
+      statement: `Order behavior ${at + n}`, rationale: "Original idea", acceptance: [`Behavior ${at + n} is observable`], sourceIDs: p.sources.filter((s) => s.kind === "initial" || s.kind === "note").map((s) => s.id) })) });
     p = store.get(p.id);
   }
   return p;
@@ -216,7 +223,7 @@ test("v3 planning-cache migration is additive, rolls back on failure, retries an
   try {
     const store = new ProjectStore(path), p = seed(store); store.close();
     let db = new Database(path);
-    db.exec("DROP TABLE epic_planning_receipts; DELETE FROM migration_history WHERE version = 4; PRAGMA user_version = 3;");
+    db.exec("DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DELETE FROM migration_history WHERE version >= 4; PRAGMA user_version = 3;");
     const originals = db.prepare("SELECT * FROM revisions").all(), jobs = db.prepare("SELECT * FROM jobs").all();
     // Existing execution validation deliberately fails AFTER the table migration.
     db.prepare("INSERT INTO execution_state VALUES (?, 0, ?)").run(p.id, JSON.stringify({ schemaVersion: 999, version: 0, assessments: {}, delivered: {}, history: [] }));
@@ -229,7 +236,7 @@ test("v3 planning-cache migration is additive, rolls back on failure, retries an
       const upgraded = new ProjectStore(path); assert.deepEqual(upgraded.get(p.id), p); upgraded.close();
     }
     db = new Database(path);
-    assert.equal(db.pragma("user_version", { simple: true }), 4);
+    assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.deepEqual(db.prepare("SELECT * FROM revisions").all(), originals);
     assert.deepEqual(db.prepare("SELECT * FROM jobs").all(), jobs);
     assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history WHERE version = 4").get() as { n: number }).n, 1);
@@ -244,4 +251,251 @@ test("v3 planning-cache migration is additive, rolls back on failure, retries an
     } finally { reopened.close(); }
     db = new Database(path); assert.deepEqual(db.prepare("SELECT format, payload FROM epic_planning_receipts").all(), [{ format: 2, payload: '{"format":2}' }]); db.close();
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("intermediate contexts and resolved siblings survive interruption inside a root group without changing its blocked report", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "planning-subtree-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = seed(store, 6, 10), before = structuredClone(p);
+    let coldPreparations = 0;
+    const cold = planEpicReview(p, [], "orders", [], undefined, { firstPending: true, onPrepare: () => coldPreparations++ });
+    assert.equal(cold.report.blocked, 6); assert.equal(cold.task, undefined);
+    const controller = new AbortController(); let saved = 0;
+    await assert.rejects(prepareEpicReview(p, [], "orders", [], { signal: controller.signal, readRevision: () => p, onProgress() {},
+      saveContext: (input, key, value) => store.saveEpicPlanningContext(p.id, p.revision, input, key, value),
+      saveReceipt: (input, key, value) => { store.saveEpicPlanningReceipt(p.id, p.revision, input, key, value); saved++; controller.abort(); },
+    }), (error: unknown) => error instanceof Error && error.name === "AbortError");
+    assert.equal(saved, 1);
+    const input = epicPlanningInputKey(p, [], "orders", []);
+    const receipts = store.epicPlanningReceipts(p.id, input);
+    assert.equal(receipts.size, 1); assert.equal([...receipts.values()][0]!.tasks.length, 1, "Only a completed leaf, not its unfinished root, was saved");
+    assert.ok(store.epicPlanningContexts(p.id, input).size > 0);
+    store.close(); store = new ProjectStore(path);
+    const progress: PlanningProgress[] = [];
+    const resumed = await prepareEpicReview(p, [], "orders", [], { signal: new AbortController().signal, readRevision: () => p,
+      loadReceipts: (key) => store.epicPlanningReceipts(p.id, key), loadContexts: (key) => store.epicPlanningContexts(p.id, key),
+      saveReceipt: (input, key, value) => store.saveEpicPlanningReceipt(p.id, p.revision, input, key, value),
+      saveContext: (input, key, value) => store.saveEpicPlanningContext(p.id, p.revision, input, key, value),
+      onProgress: (value) => progress.push(value) });
+    assert.deepEqual(resumed.report, cold.report); assert.deepEqual(resumed.planningDecisions, cold.planningDecisions);
+    assert.equal(resumed.task, undefined);
+    const last = progress.at(-1)!;
+    assert.ok(last.reusedGroups! >= 1); assert.ok(last.reusedContexts! > 0);
+    assert.ok(last.contextPreparations < coldPreparations);
+    assert.deepEqual(last.examinedStates, { reviewed: 0, waiting: 0, blocked: 6, pending: 0 });
+    assert.ok(last.activityMs!.staging > 0); assert.ok(last.activityMs!.splitting > 0);
+    assert.ok(Object.values(last.activityMs!).every((value) => Number.isFinite(value) && value >= 0));
+    assert.deepEqual(store.get(p.id), before); assert.equal(store.jobs(p.id).length, 1);
+    assert.equal(store.epicPlanningContexts(p.id, epicPlanningInputKey({ ...p, summary: "changed" }, [], "orders", [])).size, 0);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("context memo preserves wire bytes, restores the live review identity alias, and replays exact overflow evidence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), review = structuredClone(planEpicReview(p, [], "orders").task!.review);
+    const contexts = new Map<string, EpicContextCheckpoint>();
+    const cold = epicReviewContext(p, review, [], false, undefined, undefined, undefined, undefined, { contexts });
+    const wire = JSON.stringify(cold.data), key = [...contexts.keys()][0]!;
+    (cold.data as Record<string, unknown>).fixtureMutation = "Must not leak into the checkpoint";
+    const warm = epicReviewContext(p, review, [], false, undefined, undefined, () => assert.fail("Cached context must not rebuild"), undefined, { contexts });
+    assert.equal(JSON.stringify(warm.data), wire); assert.equal(warm.manifest.epicReview, review);
+    assert.equal(contexts.get(key)!.outcome, "context");
+    const tooBig = seed(store, 1, 10), failed = new Map<string, EpicContextCheckpoint>();
+    const blockedReview = planEpicReview(tooBig, [], "orders").tasks[0]!.review;
+    let first: ContextBudgetError | undefined;
+    try { epicReviewContext(tooBig, blockedReview, [], false, undefined, undefined, undefined, undefined, { contexts: failed }); }
+    catch (error) { assert.ok(error instanceof ContextBudgetError); first = error; }
+    assert.ok(first);
+    assert.throws(() => epicReviewContext(tooBig, blockedReview, [], false, undefined, undefined,
+      () => assert.fail("Cached overflow must not rebuild"), undefined, { contexts: failed }),
+    (error: unknown) => error instanceof ContextBudgetError && error.message === first!.message
+      && JSON.stringify(error.manifest) === JSON.stringify(first!.manifest));
+  } finally { store.close(); }
+});
+
+test("schema-4 upgrade preserves existing root receipts; bounded intermediate cache rejects future formats and stale writes", () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "planning-context-upgrade-")), path = join(directory, "state.sqlite");
+  try {
+    const store = new ProjectStore(path), p = seed(store), input = epicPlanningInputKey(p, [], "orders", []);
+    const group = "a".repeat(64), receipt: EpicPlanningCheckpoint = { format: 1, tasks: [], decisions: { newPackage: 0, noCompatibleSavedPackage: 0, compatibleSavedPackage: 0 } };
+    store.saveEpicPlanningReceipt(p.id, p.revision, input, group, receipt); store.close();
+    let db = new Database(path);
+    db.exec("DROP TABLE epic_planning_contexts; DELETE FROM migration_history WHERE version = 5; PRAGMA user_version = 4;");
+    const originals = db.prepare("SELECT * FROM epic_planning_receipts").all();
+    db.prepare("INSERT INTO execution_state VALUES (?, 0, ?)").run(p.id, JSON.stringify({ schemaVersion: 999, version: 0, assessments: {}, delivered: {}, history: [] }));
+    db.close(); assert.throws(() => new ProjectStore(path), /Unsupported execution/);
+    db = new Database(path);
+    assert.equal(db.pragma("user_version", { simple: true }), 4);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'epic_planning_contexts'").get(), undefined);
+    assert.deepEqual(db.prepare("SELECT * FROM epic_planning_receipts").all(), originals);
+    db.prepare("DELETE FROM execution_state WHERE project_id = ?").run(p.id); db.close();
+    const upgraded = new ProjectStore(path);
+    try {
+      assert.deepEqual(upgraded.epicPlanningReceipts(p.id, input).get(group), receipt);
+      const context = planEpicReview(p, [], "orders").task!.context!;
+      const value: EpicContextCheckpoint = { format: 1, outcome: "context", context };
+      for (let at = 0; at < 130; at++) upgraded.saveEpicPlanningContext(p.id, p.revision, input, at.toString(16).padStart(64, "0"), value);
+      const kept = upgraded.epicPlanningContexts(p.id, input);
+      assert.equal(kept.size, 128); assert.equal(kept.has("0".repeat(64)), false);
+      assert.equal(JSON.stringify(kept.values().next().value!.outcome === "context" &&
+        (kept.values().next().value as Extract<EpicContextCheckpoint, { outcome: "context" }>).context.data), JSON.stringify(context.data));
+      upgraded.saveEpicPlanningContext(p.id, p.revision, input, group, { format: 1, outcome: "context",
+        context: { ...context, data: { fixture: "x".repeat(16 * 1024 * 1024) } } });
+      assert.equal(upgraded.epicPlanningContexts(p.id, input).has(group), false, "Oversized cache entries are not persisted");
+      const newer = upgraded.note(p.id, p.revision, "This newer input wins", "orders");
+      assert.throws(() => upgraded.saveEpicPlanningContext(p.id, p.revision, "b".repeat(64), group, value), /changed|stale/i);
+      assert.equal(upgraded.epicPlanningContexts(p.id, input).size, 128); assert.equal(upgraded.get(p.id).revision, newer.revision);
+    } finally { upgraded.close(); }
+    db = new Database(path);
+    db.prepare("UPDATE epic_planning_contexts SET format = 2, payload = ? WHERE context_key = ?").run('{"format":2}', "2".padStart(64, "0")); db.close();
+    const future = new ProjectStore(path);
+    try {
+      assert.throws(() => future.epicPlanningContexts(p.id, input), /Unsupported intermediate/);
+      assert.throws(() => future.saveEpicPlanningContext(p.id, future.get(p.id).revision, "b".repeat(64), group,
+        { format: 1, outcome: "budget", message: "fixture", manifest: planEpicReview(p, [], "orders").task!.context!.manifest }), /Unsupported intermediate/);
+      assert.deepEqual(future.epicPlanningReceipts(p.id, input).get(group), receipt);
+    } finally { future.close(); }
+    db = new Database(path);
+    assert.equal(db.pragma("user_version", { simple: true }), 5);
+    assert.deepEqual(db.prepare("SELECT * FROM epic_planning_receipts").all(), originals); db.close();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("preparation reports waiting packages and numeric phase costs without exposing evidence in diagnostics", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let p = seed(store, 12);
+    const question = store.beginJob(p.id, p.revision).job; store.claimJob(question.id, Date.now() + 60000);
+    store.finishJob(question.id, { ...empty(), questions: [{ epicID: "project", text: "Private unresolved shared decision?", whyItMatters: "Private explanation",
+      evidenceIDs: [p.sources[0]!.id],
+      options: [{ label: "First", consequence: "Private first consequence" }, { label: "Second", consequence: "Private second consequence" }] }] });
+    p = store.get(p.id);
+    const messages: string[] = [];
+    const job = await new DiscoveryService(store, { async analyze() { assert.fail("Waiting packages must not start inference"); } }).analyze(p.id, p.revision,
+      { gapMode: "epic", focusEpicID: "orders", onProgress: (message) => messages.push(message) });
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.ok(messages.some((message) => message.includes("2 waiting")));
+    const progress = job.discoveryMetrics!.planningProgress!;
+    assert.deepEqual(progress.examinedStates, { reviewed: 0, waiting: 2, blocked: 0, pending: 0 });
+    assert.ok(progress.activityMs!.savedPolicy > 0); assert.ok(progress.activityMs!.newPackage > 0);
+    assert.deepEqual(job.discoveryMetrics!.requests, []);
+    const exported = JSON.stringify(store.discoveryDiagnostics(p.id, [job.id]));
+    for (const forbidden of [p.id, p.name, ...p.requirements.map((r) => r.id), p.questions[0]!.id,
+      p.questions[0]!.text, "Private explanation", "Private first consequence"]) assert.equal(exported.includes(forbidden), false);
+    assert.ok(exported.includes("examinedStates")); assert.ok(exported.includes("activityMs"));
+  } finally { store.close(); }
+});
+
+// Frozen pre-optimization stage order/partition reference. It intentionally has
+// no index or closure-render cache and computes the full catalog before target.
+function referenceStages(project: ReturnType<typeof seed>, base: EpicReview, prepare?: () => void) {
+  const plain = { ...base, contextPolicy: "headroom-v1" as const }; delete plain.guardrailBatches;
+  let manifest;
+  try { manifest = epicReviewContext(project, plain, [], false, undefined, undefined, prepare).manifest; }
+  catch (error) { if (!(error instanceof ContextBudgetError)) throw error; manifest = error.manifest; }
+  const files = new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id));
+  const roots = manifest.includedIDs.filter((id) => !files.has(id) && !base.recordIDs.includes(id)).sort();
+  const review: EpicReview = { ...base, contextPolicy: "staged-guardrails-v1", guardrailBatches: [] };
+  const contexts: ReturnType<typeof epicReviewContext>[] = [];
+  const target = epicReviewContext(project, review, [], true, [], undefined, prepare);
+  if (target.manifest.characters > 54000) throw new ContextBudgetError({ ...target.manifest, budget: 54000 });
+  const split = (ids: string[]) => {
+    let context, overflow;
+    try { context = epicReviewContext(project, review, [], true, ids, undefined, prepare); }
+    catch (error) { if (!(error instanceof ContextBudgetError)) throw error; overflow = error; }
+    if ((!context || context.manifest.characters > 54000) && ids.length > 1) {
+      const middle = Math.ceil(ids.length / 2); split(ids.slice(0, middle)); split(ids.slice(middle)); return;
+    }
+    if (!context || context.manifest.characters > 54000) throw overflow ?? new ContextBudgetError({ ...context!.manifest, budget: 54000 });
+    if (contexts.length >= 16) throw new Error("Staged review needs more than sixteen exact decision batches; narrow the project/dependency scope. No evidence was dropped.");
+    review.guardrailBatches!.push(ids); contexts.push(context);
+  };
+  split(roots); return { review: epicReviewSchema.parse(review), contexts };
+}
+
+test("target-only staging preflight skips full catalog work with the same irreducible blocker", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1, 10);
+    const base: EpicReview = { format: 1, packageID: "fixture", inputKey: "a".repeat(64), kind: "workflow", epicID: "orders", epicIDs: ["orders"], recordIDs: [p.requirements[0]!.id] };
+    let oldCount = 0, newCount = 0, oldError: ContextBudgetError | undefined;
+    try { referenceStages(p, base, () => oldCount++); } catch (error) { assert.ok(error instanceof ContextBudgetError); oldError = error; }
+    assert.ok(oldError);
+    assert.throws(() => stagedEpicReview(p, base, () => newCount++, contextPreparationIndex(p)),
+      (error: unknown) => error instanceof ContextBudgetError && error.message === oldError!.message
+        && JSON.stringify(error.manifest) === JSON.stringify(oldError!.manifest));
+    assert.ok(newCount < oldCount, `${newCount} optimized preparations versus ${oldCount} reference preparations`);
+  } finally { store.close(); }
+});
+
+test("equivalent staged seed closures render once while preserving exact seed failure and successful batch identities", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 1);
+    const base: EpicReview = { format: 1, packageID: "fixture", inputKey: "a".repeat(64), kind: "workflow", epicID: "orders", epicIDs: ["orders"], recordIDs: [p.requirements[0]!.id] };
+    for (let at = 0; at < 8; at++) {
+      p.sources.push({ id: `decision-${at}`, kind: "note", epicID: "project", requirementID: `guard-${(at + 1) % 8}`,
+        text: Array.from({ length: 150 }, (_, n) => createHash("sha256").update(`Guardrail ${at}-${n}`).digest("hex")).join("") });
+      p.requirements.push({ id: `guard-${at}`, epicID: "project", statement: `Guardrail ${at}`, rationale: "Generated", status: "accepted",
+        sourceIDs: [`decision-${at}`], acceptance: ["Preserve the exact decision"] });
+    }
+    let misses = 0, hits = 0;
+    const preparation = contextPreparationIndex(p, undefined, (reused) => { if (reused) hits++; else misses++; });
+    let expected: ContextBudgetError | undefined;
+    try { referenceStages(p, base); } catch (error) { assert.ok(error instanceof ContextBudgetError); expected = error; }
+    assert.ok(expected);
+    assert.throws(() => stagedEpicReview(p, base, undefined, preparation), (error: unknown) => error instanceof ContextBudgetError
+      && error.message === expected!.message && JSON.stringify(error.manifest) === JSON.stringify(expected!.manifest));
+    assert.equal(misses, 2, "Only the target and one full linked closure need rendering");
+    assert.ok(hits >= 3, `Repeated bisection reused ${hits} exact closures`);
+    let progress: PlanningProgress | undefined;
+    await prepareEpicReview(p, [], "orders", [], { signal: new AbortController().signal, readRevision: () => p,
+      onProgress: (value) => { progress = value; } });
+    assert.equal(progress!.blockerSummary!.stagedSeed, 1);
+    assert.ok(progress!.reusedClosures! >= 3);
+    // Remove the cross-links: staging now fits in multiple distinct exact batches.
+    for (const source of p.sources) delete source.requirementID;
+    for (const requirement of p.requirements.slice(1)) requirement.sourceIDs = [p.sources[0]!.id];
+    const old = referenceStages(p, base), optimized = stagedEpicReview(p, base, undefined, contextPreparationIndex(p));
+    assert.ok(old.contexts.length > 1);
+    assert.deepEqual(optimized.review, old.review);
+    assert.deepEqual(optimized.contexts, old.contexts);
+    assert.equal(epicBatchKey(optimized.contexts), epicBatchKey(old.contexts));
+  } finally { store.close(); }
+});
+
+test("blocker summaries remain available after interruption, distinguish size causes, and keep legacy causes unknown", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 6, 10), controller = new AbortController();
+    const progress: PlanningProgress[] = [], receipts = new Map<string, EpicPlanningCheckpoint>();
+    await assert.rejects(prepareEpicReview(p, [], "orders", [], { signal: controller.signal, readRevision: () => p,
+      onProgress: (value) => progress.push(value),
+      saveReceipt: (_input, key, value) => { receipts.set(key, value); controller.abort(); },
+    }), (error: unknown) => error instanceof Error && error.name === "AbortError");
+    const blocked = progress.at(-1)!.blockerSummary!;
+    assert.equal(blocked.stagedTarget, 1); assert.equal(blocked.unknown, 0);
+    assert.ok(blocked.largestCharacters! > blocked.smallestBudget!);
+    // Additive metadata must not invalidate older completed CPU receipts.
+    for (const value of receipts.values()) for (const task of value.tasks) delete task.blocker;
+    const summaries: NonNullable<PlanningProgress["blockerSummary"]>[] = [];
+    planEpicReview(p, [], "orders", [], undefined, { firstPending: true, resolved: receipts,
+      onPackage: (_count, _states, summary) => summaries.push(summary) });
+    assert.equal(summaries.at(-1)!.unknown, 1); assert.equal(summaries.at(-1)!.stagedTarget, 5);
+    const raw = JSON.stringify(progress);
+    for (const privateValue of [p.id, p.name, p.sources[0]!.id, p.requirements[0]!.statement]) assert.equal(raw.includes(privateValue), false);
+    assert.ok(raw.includes("blockerSummary"));
+    const stop = new AbortController();
+    const job = await new DiscoveryService(store, { async analyze() { assert.fail("Blocked preparation cannot request a model"); } }).analyze(p.id, p.revision,
+      { gapMode: "epic", focusEpicID: "orders", signal: stop.signal,
+        onProgress: (message) => { if (message.includes("Examined blockers: 1 target-size")) stop.abort(); } });
+    assert.equal(job.status, "cancelled"); assert.deepEqual(job.discoveryMetrics!.requests, []);
+    const diagnostic = store.discoveryDiagnostics(p.id, [job.id]);
+    assert.equal(diagnostic.runs[0]!.measurements!.planningProgress!.blockerSummary!.stagedTarget, 1);
+    assert.equal(JSON.stringify(diagnostic).includes(p.requirements[0]!.statement), false);
+  } finally { store.close(); }
 });

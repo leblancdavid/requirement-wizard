@@ -13,9 +13,20 @@ export const diagnosticContextSchema = z.object({ characters: count, budget: cou
   traversal: z.object({ visitedRecords: count, examinedEdges: count, missingRecords: count }).strict().nullable(),
 }).strict();
 export const planningDecisionsSchema = z.object({ newPackage: count, noCompatibleSavedPackage: count, compatibleSavedPackage: count }).strict();
+export const planningActivitySchema = z.enum(["catalog", "saved-policy", "staging", "splitting", "new-package"]);
+export type PlanningActivity = z.infer<typeof planningActivitySchema>;
+export const planningBlockersSchema = z.object({ contextLimit: count, stagedTarget: count, stagedSeed: count,
+  stageLimit: count, savedBlocker: count, attemptLimit: count, unknown: count,
+  largestCharacters: count.nullable(), smallestBudget: count.nullable() }).strict();
+export type PlanningBlockers = z.infer<typeof planningBlockersSchema>;
 export const planningProgressSchema = z.object({ format: z.literal(1), phase: z.enum(["indexing", "package", "context", "history", "ready"]),
   examinedPackages: count, contextPreparations: count, checkpoints: count, revisionsLoaded: count,
-  reusedGroups: count.optional(), resolvedGroups: count.optional() }).strict();
+  reusedGroups: count.optional(), resolvedGroups: count.optional(), reusedContexts: count.optional(), preparedContexts: count.optional(),
+  activity: planningActivitySchema.optional(),
+  activityMs: z.object({ catalog: duration, savedPolicy: duration, staging: duration, splitting: duration, newPackage: duration }).strict().optional(),
+  examinedStates: z.object({ reviewed: count, waiting: count, blocked: count, pending: count }).strict().optional(),
+  blockerSummary: planningBlockersSchema.optional(), closureRenderAttempts: count.optional(), reusedClosures: count.optional(),
+}).strict();
 export type PlanningProgress = z.infer<typeof planningProgressSchema>;
 export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.enum(["recording", "finished"]),
   elapsedMs: duration, planningMs: duration.nullable(),

@@ -3,6 +3,7 @@ import type { Project } from "./model.js";
 import { currentDecisionProjection, reviewSnapshot } from "./current-decisions.js";
 import { gapInstructions, type GapLens } from "./gap-types.js";
 import { evidenceGraph, type EvidenceGraph } from "./evidence-graph.js";
+import { createHash } from "node:crypto";
 
 export type ContextTask = {
   focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; budget?: number;
@@ -181,7 +182,9 @@ export function shareRecordStructure(data: unknown, additionalRecordFields: stri
 }
 
 /** Invocation-local only: callers must not mutate this project until planning ends. */
-export function contextPreparationIndex(project: Project) {
+type RenderedClosure = { pack: ContextPack } | { manifest: ContextPack["manifest"]; message: string };
+export function contextPreparationIndex(project: Project, graph = evidenceGraph(project), onClosure?: (reused: boolean) => void) {
+  if (graph.project !== project) throw new Error("Evidence graph belongs to a different project snapshot.");
   const requirements = new Map(project.requirements.map((r) => [r.id, r]));
   const snapshotReferences = new Map<string, { requirementID: string; decision: string; addendum: string }>();
   for (const source of project.sources) {
@@ -192,7 +195,8 @@ export function contextPreparationIndex(project: Project) {
     snapshotReferences.set(source.id, { requirementID: requirement.id, decision: snapshot.decision, addendum: snapshot.addendum });
   }
   const allRecords = [...project.sources, ...project.questions, ...project.requirements, ...project.research];
-  return { project, decisions: currentDecisionProjection(project), snapshotReferences, allRecords,
+  return { project, graph, onClosure, stagedClosures: new Map<string, RenderedClosure & { bytes: number }>(), stagedClosureBytes: 0,
+    decisions: currentDecisionProjection(project), snapshotReferences, allRecords,
     recordIDs: new Set(allRecords.map((r) => r.id)), sources: new Map(project.sources.map((s) => [s.id, s])),
     questionAreas: new Map(project.questions.map((q) => [q.id, q.epicID])),
     requirementAreas: new Map(project.requirements.map((r) => [r.id, r.epicID])),
@@ -330,6 +334,19 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
       traversal = { visitedRecords: measured.visitedRecords, examinedEdges: measured.examinedEdges, missingRecords: measured.missingIDs.length };
       return;
     }
+    if (preparation) {
+      preparation.graph.closeLegacy(ids, (edge) => {
+        const record = preparation.graph.records.get(edge.from);
+        if (edge.kind === "supports" && decisions?.omitted.has(edge.to) && !taskIDs.has(edge.to)) return false;
+        if (edge.kind !== "supports" && edge.kind !== "motivates") return true;
+        if (!workspaceIDs.has(edge.to)) return true;
+        if (edge.kind === "motivates" && record && "options" in record && record.status === "answered"
+          && !taskIDs.has(record.id) && !(record.sourceID && taskIDs.has(record.sourceID))) return false;
+        if (edge.kind === "supports" && backgroundAccepted.has(edge.from)) return false;
+        return !task.deferWorkspaceEvidence || taskIDs.has(edge.to);
+      });
+      return;
+    }
     // Legacy ordering is retained for exact raw-wire checkpoint reconstruction.
     let changed = true;
     while (changed) {
@@ -364,6 +381,26 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
     }
   };
   closeEvidence(included);
+
+  // Staged seed lists can differ while closing to exactly the same evidence.
+  // Below this point only their presence (staged mode) and the closed set matter.
+  // Keep task flags/targets/order exact; restore each caller's legacy ID order.
+  const { stagedGuardrailIDs: _seeds, ...renderTask } = task;
+  const closureKey = preparation && task.stagedGuardrailIDs && !task.currentSpecification && task.isolatedTask && task.gapExploration
+    ? createHash("sha256").update(JSON.stringify([renderTask, [...included].sort()])).digest("hex") : undefined;
+  if (closureKey) {
+    const cached = preparation!.stagedClosures.get(closureKey);
+    if (cached) {
+      preparation!.onClosure?.(true);
+      if ("pack" in cached) {
+        const pack = structuredClone(cached.pack); pack.manifest.includedIDs = [...included]; return pack;
+      }
+      const error = new ContextBudgetError({ ...structuredClone(cached.manifest), includedIDs: [...included] });
+      error.message = cached.message; throw error;
+    }
+    preparation!.onClosure?.(false);
+  }
+  const finish = (): ContextPack => {
 
   const taskRequirementSourceIDs = new Set(project.requirements.filter((r) => taskRequirementIDs.has(r.id)).flatMap((r) => r.sourceIDs));
   const protectedQuestionIDs = new Set(project.questions.filter((q) => taskIDs.has(q.id)
@@ -646,4 +683,23 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
     if (candidate.manifest.characters <= budget) { for (const id of next) included.add(id); result = candidate; }
   }
   return result;
+  };
+  try {
+    const result = finish();
+    if (closureKey) remember({ pack: result });
+    return result;
+  } catch (error) {
+    if (closureKey && error instanceof ContextBudgetError) remember({ manifest: error.manifest, message: error.message });
+    throw error;
+  }
+  function remember(value: RenderedClosure) {
+    const bytes = Buffer.byteLength(JSON.stringify(value)), cap = 8 * 1024 * 1024;
+    if (bytes > cap) return;
+    const cache = preparation!;
+    cache.stagedClosures.set(closureKey!, { ...structuredClone(value), bytes }); cache.stagedClosureBytes += bytes;
+    while (cache.stagedClosures.size > 64 || cache.stagedClosureBytes > cap) {
+      const key = cache.stagedClosures.keys().next().value!;
+      cache.stagedClosureBytes -= cache.stagedClosures.get(key)!.bytes; cache.stagedClosures.delete(key);
+    }
+  }
 }

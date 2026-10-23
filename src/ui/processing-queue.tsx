@@ -38,6 +38,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const [task = "Preparing discovery…", ...stage] = (progress.at(-1) ?? "Preparing discovery…").split("\n");
   const failed = lastJob && ["failed", "stale", "interrupted"].includes(lastJob.status);
   const gapOutcome = !active && !refinementProgress && progress.length > 0 && (lastJob?.context?.questionTarget !== undefined
+    || !!lastJob?.epicReviewReport || !!lastJob?.gapReport
     || progress.some((message) => message.startsWith("Finding gaps ·") || message.startsWith("Question target reached:")));
   const outcomeMessage = !active && (refinementProgress || gapOutcome) ? progress.at(-1) : undefined;
   const jobDiagnostic = !active && failed ? lastJob.diagnostic : undefined;

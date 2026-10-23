@@ -107,6 +107,22 @@ saved local groups were reused. Changes to planner inputs invalidate CPU reuse,
 without discarding earlier model checks. See
 [preparation details](discovery-efficiency.md#responsive-incremental-preparation-2026-10-22).
 
+Preparation now also shows reviewed/waiting/blocked/eligible counts for the examined
+prefix and reuse of intermediate contexts. Completed split siblings and exact staged
+context probes can survive interruption inside an unfinished group. These are local
+planning checkpoints, not new model reviews. Existing root checkpoints are preserved
+by the schema-5 upgrade. See [intermediate reuse](discovery-efficiency.md#intermediate-preparation-reuse-and-explainable-progress-2026-10-22)
+for cache bounds and the new timing diagnostics. Final gap outcome banners recognize
+saved typed reports even after long preparation evicts the initial log message.
+
+Staging now checks its existing target-only size gate before building the full
+decision catalog, and reuses rendering only for exactly equal evidence closures
+with identical task flags. Preparation progress/exported diagnostics distinguish
+target-size, indivisible decision-size, batch-limit, context-limit, saved-evidence
+and attempt-limit blockers; causes absent from older saved receipts remain unknown.
+These counts cover the examined prefix and remain available after interruption.
+See [staging optimization](discovery-efficiency.md#staging-cost-optimization-and-blocker-causes-2026-10-22).
+
 The queue's **Resume processing / Process saved responses** action routes through
 current server state: unfinished responses receive finite isolated follow-up; otherwise
 Resume uses workflow discovery like **Discover missing decisions**, not legacy individual

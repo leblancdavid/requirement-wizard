@@ -7,7 +7,8 @@ import { decisionAvailability } from "./decision-availability.js";
 import { retrievalEvidenceBasis, validateGapFinal } from "./gap-retrieval.js";
 import { epicReviewDiagnostic, epicReviewSchema, type EpicReview, type EpicReviewReport } from "./epic-review-types.js";
 import { evidenceGraph, type EvidenceGraph } from "./evidence-graph.js";
-import type { EpicPlanningCheckpoint } from "./epic-planning-checkpoint.js";
+import type { EpicPlanningCheckpoint, EpicContextCheckpoint, EpicPlanningBlocker } from "./epic-planning-checkpoint.js";
+import type { PlanningActivity, PlanningBlockers } from "./discovery-diagnostics.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -26,14 +27,18 @@ export function validateEpicReviewFinal(project: Project, context: ContextPack, 
   if (outside) throw new Error(`Cannot add proposals to an area outside this round's context: ${JSON.stringify(outside)}. Allowed area IDs: ${JSON.stringify(context.manifest.epicIDs)}. No proposals applied; retry the review to request a corrected response.`);
 }
 type Record = Project["requirements"][number] | Project["questions"][number] | Project["sources"][number];
-export type EpicReviewTask = { review: EpicReview; context?: ContextPack; contextCharacters?: number; batches?: ContextPack[]; reason?: string; state: "pending" | "reviewed" | "waiting" | "blocked"; prior?: Job };
+export type EpicReviewTask = { review: EpicReview; context?: ContextPack; contextCharacters?: number; batches?: ContextPack[]; reason?: string; blocker?: EpicPlanningBlocker; state: "pending" | "reviewed" | "waiting" | "blocked"; prior?: Job };
 type Candidate = { review: EpicReview; context?: ContextPack; batches?: ContextPack[]; batchKey?: string; error?: ContextBudgetError };
 export type EpicPlanningOptions = {
   firstPending?: boolean;
   /** Invocation-local only, including retries to load immutable historical revisions. */
   cache?: Map<string, Candidate>;
-  onPackage?: (examined: number) => void;
+  onPackage?: (examined: number, states: { reviewed: number; waiting: number; blocked: number; pending: number }, blockers: PlanningBlockers) => void;
   onPrepare?: () => void;
+  onActivity?: (activity: PlanningActivity) => void;
+  contexts?: Map<string, EpicContextCheckpoint>;
+  onContext?: (key: string, value: EpicContextCheckpoint, reused: boolean) => void;
+  onClosure?: (reused: boolean) => void;
   /** Exact-input-bound root-group receipts. Non-pending tasks only. */
   resolved?: Map<string, EpicPlanningCheckpoint>;
   onResolved?: (key: string, value: EpicPlanningCheckpoint, reused: boolean) => void;
@@ -60,7 +65,38 @@ function groups(project: Project, records: Record[], size: number): Record[][] {
   return [...batches, ...records.filter((r) => "options" in r).sort((a, b) => a.id.localeCompare(b.id)).map((r) => [r])];
 }
 
-export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false, guardrailIDs?: string[], index?: EvidenceGraph, onPrepare?: () => void, preparation?: ContextPreparationIndex): ContextPack {
+type ContextMemo = Pick<EpicPlanningOptions, "contexts" | "onContext">;
+export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false, guardrailIDs?: string[], index?: EvidenceGraph, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo): ContextPack {
+  if (!memo?.contexts) return computeEpicReviewContext(project, review, extraIDs, final, guardrailIDs, index, onPrepare, preparation);
+  const key = hash(["epic-context-computation-v1", project.id, project.revision, review, extraIDs, final, guardrailIDs]);
+  const cached = memo.contexts.get(key);
+  if (cached) {
+    memo.contexts.delete(key); memo.contexts.set(key, cached);
+    memo.onContext?.(key, cached, true);
+    if (cached.outcome === "context") {
+      const context = structuredClone(cached.context);
+      context.manifest.epicReview = review; // Restore the live identity alias used by cold construction.
+      return context;
+    }
+    const error = new ContextBudgetError(structuredClone(cached.manifest)); error.message = cached.message; throw error;
+  }
+  const remember = (value: EpicContextCheckpoint) => {
+    const copy = structuredClone(value);
+    memo.contexts!.set(key, copy);
+    if (memo.contexts!.size > 128) memo.contexts!.delete(memo.contexts!.keys().next().value!);
+    memo.onContext?.(key, copy, false);
+  };
+  let context: ContextPack;
+  try { context = computeEpicReviewContext(project, review, extraIDs, final, guardrailIDs, index, onPrepare, preparation); }
+  catch (error) {
+    if (error instanceof ContextBudgetError) remember({ format: 1, outcome: "budget", manifest: error.manifest, message: error.message });
+    throw error;
+  }
+  remember({ format: 1, outcome: "context", context });
+  return context;
+}
+
+function computeEpicReviewContext(project: Project, review: EpicReview, extraIDs: string[], final: boolean, guardrailIDs?: string[], index?: EvidenceGraph, onPrepare?: () => void, preparation?: ContextPreparationIndex): ContextPack {
   if (review.contextPolicy === "staged-guardrails-v1" && !guardrailIDs) guardrailIDs = review.guardrailBatches![0]!;
   const optimized = !!review.contextPolicy;
   const currentSpecification = review.contextPolicy === "current-spec-v1";
@@ -162,27 +198,45 @@ export function epicReviewContext(project: Project, review: EpicReview, extraIDs
 }
 
 /** Deterministic exact seed partition. Evidence links remain indivisible, never sliced or summarized. */
-export function stagedEpicReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex): { review: EpicReview; contexts: ContextPack[] } {
+class StagedBudgetError extends ContextBudgetError {
+  constructor(readonly stage: "target" | "seed", manifest: ContextPack["manifest"], message?: string) {
+    super(manifest); if (message !== undefined) this.message = message;
+  }
+}
+class StagedBatchLimitError extends Error {
+  constructor() { super("Staged review needs more than sixteen exact decision batches; narrow the project/dependency scope. No evidence was dropped."); }
+}
+export function stagedEpicReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo): { review: EpicReview; contexts: ContextPack[] } {
+  const review: EpicReview = { ...base, contextPolicy: "staged-guardrails-v1", guardrailBatches: [] };
+  // The exact target must fit even with no optional decision seeds. Prove this
+  // before constructing the potentially much larger full-area seed catalog.
+  try {
+    const target = epicReviewContext(project, review, [], true, [], undefined, onPrepare, preparation, memo);
+    if (target.manifest.characters > 54000) throw new ContextBudgetError({ ...target.manifest, budget: 54000 });
+  } catch (error) {
+    if (!(error instanceof ContextBudgetError)) throw error;
+    throw new StagedBudgetError("target", error.manifest, error.message);
+  }
   const plain = { ...base, contextPolicy: "headroom-v1" as const }; delete plain.guardrailBatches;
   let manifest: ContextPack["manifest"];
-  try { manifest = epicReviewContext(project, plain, [], false, undefined, undefined, onPrepare, preparation).manifest; }
+  try { manifest = epicReviewContext(project, plain, [], false, undefined, undefined, onPrepare, preparation, memo).manifest; }
   catch (error) { if (!(error instanceof ContextBudgetError)) throw error; manifest = error.manifest; }
   const workspaces = new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id));
   const roots = manifest.includedIDs.filter((id) => !workspaces.has(id) && !base.recordIDs.includes(id)).sort();
-  const review: EpicReview = { ...base, contextPolicy: "staged-guardrails-v1", guardrailBatches: [] };
   const contexts: ContextPack[] = [];
-  const target = epicReviewContext(project, review, [], true, [], undefined, onPrepare, preparation);
-  if (target.manifest.characters > 54000) throw new ContextBudgetError({ ...target.manifest, budget: 54000 });
   const split = (ids: string[]) => {
     let context: ContextPack | undefined, overflow: ContextBudgetError | undefined;
-    try { context = epicReviewContext(project, review, [], true, ids, undefined, onPrepare, preparation); }
+    try { context = epicReviewContext(project, review, [], true, ids, undefined, onPrepare, preparation, memo); }
     catch (error) { if (!(error instanceof ContextBudgetError)) throw error; overflow = error; }
     // Reserve 16k within the 72k target for draft proposals and staged instructions.
     if ((!context || context.manifest.characters > 54000) && ids.length > 1) {
       const middle = Math.ceil(ids.length / 2); split(ids.slice(0, middle)); split(ids.slice(middle)); return;
     }
-    if (!context || context.manifest.characters > 54000) throw overflow ?? new ContextBudgetError({ ...context!.manifest, budget: 54000 });
-    if (contexts.length >= 16) throw new Error("Staged review needs more than sixteen exact decision batches; narrow the project/dependency scope. No evidence was dropped.");
+    if (!context || context.manifest.characters > 54000) {
+      const error = overflow ?? new ContextBudgetError({ ...context!.manifest, budget: 54000 });
+      throw new StagedBudgetError("seed", error.manifest, error.message);
+    }
+    if (contexts.length >= 16) throw new StagedBatchLimitError();
     review.guardrailBatches!.push(ids); contexts.push(context);
   };
   split(roots);
@@ -197,14 +251,37 @@ export const epicBatchKey = (contexts: ContextPack[]) => hash(contexts.map((c) =
 
 /** Explicit epic selection or deterministic epic-by-epic order; workflow packages precede boundary passes. */
 export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: string, submissions: Submission[] = [], readRevision?: (revision: number) => Project, options: EpicPlanningOptions = {}) {
+  let activity: PlanningActivity = "catalog";
+  options.onActivity?.(activity);
+  const during = <T>(next: PlanningActivity, work: () => T): T => {
+    const previous = activity; activity = next; options.onActivity?.(activity);
+    try { return work(); } finally { activity = previous; options.onActivity?.(activity); }
+  };
   const active = project.epics.filter((e) => !e.archived);
   if (focusEpicID && !active.some((e) => e.id === focusEpicID)) throw new Error("Focused epic does not exist.");
   // This index lives only for this synchronous plan, never across project mutations.
   const graph = evidenceGraph(project);
-  const preparation = contextPreparationIndex(project);
+  const preparation = contextPreparationIndex(project, graph, options.onClosure);
   const evidence = gapEvidence(project, graph);
   const requirementIDs = new Set(project.requirements.map((r) => r.id));
   const tasks: EpicReviewTask[] = [];
+  const blockerSummary = (): PlanningBlockers => {
+    const result: PlanningBlockers = { contextLimit: 0, stagedTarget: 0, stagedSeed: 0, stageLimit: 0,
+      savedBlocker: 0, attemptLimit: 0, unknown: 0, largestCharacters: null, smallestBudget: null };
+    const fields = { "context-limit": "contextLimit", "staged-target": "stagedTarget", "staged-seed": "stagedSeed",
+      "stage-limit": "stageLimit", "saved-blocker": "savedBlocker", "attempt-limit": "attemptLimit" } as const;
+    for (const task of tasks) if (task.state === "blocked") {
+      if (!task.blocker) { result.unknown++; continue; }
+      result[fields[task.blocker.kind]]++;
+      if (task.blocker.characters !== undefined) result.largestCharacters = Math.max(result.largestCharacters ?? 0, task.blocker.characters);
+      if (task.blocker.budget !== undefined) result.smallestBudget = Math.min(result.smallestBudget ?? Infinity, task.blocker.budget);
+    }
+    return result;
+  };
+  const reportProgress = () => options.onPackage?.(tasks.length, {
+    reviewed: tasks.filter((t) => t.state === "reviewed").length, waiting: tasks.filter((t) => t.state === "waiting").length,
+    blocked: tasks.filter((t) => t.state === "blocked").length, pending: tasks.filter((t) => t.state === "pending").length,
+  }, blockerSummary());
   const planningDecisions = { newPackage: 0, noCompatibleSavedPackage: 0, compatibleSavedPackage: 0 };
   const scheduledPackageIDs = new Set<string>();
   const scheduledGroupKeys = new Set<string>();
@@ -227,11 +304,12 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
         research: project.research.filter((r) => epicIDs.includes(r.epicID)) }) });
     let context: ContextPack | undefined, batches: ContextPack[] | undefined, batchKey: string | undefined, error: ContextBudgetError | undefined;
     try {
-      const staged = contextPolicy === "staged-guardrails-v1" ? stagedEpicReview(project, review, options.onPrepare, preparation) : undefined;
+      const staged = contextPolicy === "staged-guardrails-v1" ? during(activity === "saved-policy" ? "saved-policy" : "staging",
+        () => stagedEpicReview(project, review, options.onPrepare, preparation, options)) : undefined;
       if (staged) review = staged.review;
       batches = staged?.contexts;
       batchKey = batches ? epicBatchKey(batches) : undefined;
-      context = batches?.[0] ?? epicReviewContext(project, review, [], false, undefined, graph, options.onPrepare, preparation);
+      context = batches?.[0] ?? epicReviewContext(project, review, [], false, undefined, graph, options.onPrepare, preparation, options);
       const withoutIdentity = { ...context, manifest: { ...context.manifest } };
       delete withoutIdentity.manifest.epicReview;
       review.inputKey = hash({ semantic: review.inputKey, exact: batchKey ?? retrievalEvidenceBasis(withoutIdentity).key });
@@ -247,16 +325,29 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     const stage = j.retrievalWork?.stages[0];
     const extra = stage && "retrieveEvidence" in stage.request ? stage.request.retrieveEvidence.recordIDs : [];
     try {
-      const current = extra.length ? epicReviewContext(project, review, extra, true, undefined, graph, options.onPrepare, preparation) : context;
+      const current = extra.length ? epicReviewContext(project, review, extra, true, undefined, graph, options.onPrepare, preparation, options) : context;
       if (j.retrievalWork?.final) return j.retrievalWork.final.evidenceBasis?.key === retrievalEvidenceBasis(current).key;
       if (!extra.length || j.expectedRevision === project.revision) return true;
       if (!readRevision) return true;
-      return retrievalEvidenceBasis(epicReviewContext(readRevision(j.expectedRevision), review, extra, true, undefined, undefined, options.onPrepare)).key === retrievalEvidenceBasis(current).key;
+      return retrievalEvidenceBasis(epicReviewContext(readRevision(j.expectedRevision), review, extra, true, undefined, undefined, options.onPrepare, undefined, options)).key === retrievalEvidenceBasis(current).key;
     } catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
   };
   const add = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[]) => {
+    // Subtree receipts use a separate key domain. A completed sibling can survive
+    // a timeout in the next sibling without pretending the root group completed.
+    const key = hash(["subtree-v1", epicID, epicIDs, kind, records.map((r) => r.id)]);
     if (!records.length || foundPending) return;
-    options.onPackage?.(tasks.length);
+    const cached = options.resolved?.get(key);
+    if (cached && cached.tasks.every((task) => !scheduledPackageIDs.has(task.review.packageID))) {
+      replay(cached); reportProgress(); options.onResolved?.(key, cached, true); return;
+    }
+    const start = tasks.length, before = { ...planningDecisions };
+    addUncached(epicID, epicIDs, kind, records);
+    if (!foundPending) checkpoint(key, start, before);
+  };
+  const addUncached = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[]) => {
+    if (!records.length || foundPending) return;
+    reportProgress();
     const recordSet = new Set(records.map((r) => r.id));
     const history = jobs.slice().reverse().filter((j) => {
       const saved = j.context?.epicReview;
@@ -267,15 +358,15 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     // Reconstruct each saved policy before changing representation or grouping.
     // Preserve compatible legacy splits, completed calls and spent allowances.
     for (const j of history.filter((j) => j.context!.epicReview!.recordIDs.length === records.length)) {
-      const saved = build(epicID, epicIDs, kind, records, j.context!.epicReview!.contextPolicy);
-      if (matches(j, saved)) { candidate = saved; break; }
+      const saved = during("saved-policy", () => build(epicID, epicIDs, kind, records, j.context!.epicReview!.contextPolicy));
+      if (during("saved-policy", () => matches(j, saved))) { candidate = saved; break; }
     }
     const preserved = !!candidate;
     if (!candidate) {
       const children = new Map<string, Record[]>();
       for (const j of history.filter((j) => j.context!.epicReview!.recordIDs.length < records.length)) {
         const ids = new Set(j.context!.epicReview!.recordIDs), subset = records.filter((r) => ids.has(r.id));
-        if (matches(j, build(epicID, epicIDs, kind, subset, j.context!.epicReview!.contextPolicy))) {
+        if (during("saved-policy", () => matches(j, build(epicID, epicIDs, kind, subset, j.context!.epicReview!.contextPolicy)))) {
           children.set(j.context!.epicReview!.packageID, subset);
         }
       }
@@ -296,6 +387,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     let { review, context, error } = candidate;
     const recordIDs = review.recordIDs;
     let reason: string | undefined;
+    let stageLimit = false;
     if (!preserved && (error || context!.manifest.characters > epicContextTarget)) {
       // Shared decisions should not fragment a workflow into one call chain per
       // record. First stage the intact group; split targets only if its own exact
@@ -304,7 +396,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       try { staged = build(epicID, epicIDs, kind, records, "staged-guardrails-v1"); }
       catch (cause) {
         if (!(cause instanceof Error) || !cause.message.startsWith("Staged review needs")) throw cause;
-        stageFailure = cause.message;
+        stageFailure = cause.message; stageLimit = true;
       }
       if (staged?.context) {
         candidate = staged; ({ review, context, error } = candidate);
@@ -315,12 +407,13 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
             const splitLeft = left.length >= right.length && left.length > 1;
             const split = splitLeft ? left : right, fixed = splitLeft ? right : left;
             const middle = Math.ceil(split.length / 2);
-            for (const half of [split.slice(0, middle), split.slice(middle)]) add(epicID, epicIDs, kind, [...fixed, ...half]);
+            for (const half of [split.slice(0, middle), split.slice(middle)]) during("splitting", () => add(epicID, epicIDs, kind, [...fixed, ...half]));
             return;
           }
         } else if (kind === "workflow" && records.length > 1) {
           const middle = Math.ceil(records.length / 2);
-          add(epicID, epicIDs, kind, records.slice(0, middle)); add(epicID, epicIDs, kind, records.slice(middle)); return;
+          during("splitting", () => add(epicID, epicIDs, kind, records.slice(0, middle)));
+          during("splitting", () => add(epicID, epicIDs, kind, records.slice(middle))); return;
         }
         if (staged) {
           candidate = staged;
@@ -329,7 +422,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
         } else reason = stageFailure;
       }
     }
-    const matching = jobs.filter((j) => matches(j, candidate!));
+    const matching = during("saved-policy", () => jobs.filter((j) => matches(j, candidate!)));
     const completed = matching.some((j) => j.status === "completed" && !!j.result);
     const prior = matching.filter((j) => (["failed", "cancelled", "interrupted", "stale"].includes(j.status)
       || j.status === "completed" && !j.result && (j.retrievalWork?.epicStages || j.epicReviewReport?.blockers.some((b) => b.packageID === review.packageID)))
@@ -357,10 +450,35 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     scheduledPackageIDs.add(review.packageID);
     planningDecisions[preserved ? "compatibleSavedPackage" : history.length ? "noCompatibleSavedPackage" : "newPackage"]++;
     const state = completed ? "reviewed" : reason || blocked ? "blocked" : waiting ? "waiting" : "pending";
+    const blocker: EpicPlanningBlocker | undefined = state !== "blocked" ? undefined
+      : stageLimit ? { kind: "stage-limit" }
+      : error ? { kind: error instanceof StagedBudgetError ? error.stage === "target" ? "staged-target" : "staged-seed" : "context-limit",
+        characters: error.manifest.characters, budget: error.manifest.budget }
+      : blocked ? { kind: (prior?.retrievalWork?.attempts ?? 0) >= 3 ? "attempt-limit" : "saved-blocker" }
+      : undefined;
     tasks.push({ review, context, batches: candidate.batches, prior, reason: reason ?? (blocked ? prior?.epicReviewReport?.blockers.find((b) => b.packageID === review.packageID)?.reason
-      ?? "Saved evidence blocker or three spent attempts; unchanged packages are not retried automatically." : undefined),
-      state });
+       ?? "Saved evidence blocker or three spent attempts; unchanged packages are not retried automatically." : undefined),
+       ...(blocker ? { blocker } : {}), state });
     if (options.firstPending && state === "pending") foundPending = true;
+    reportProgress();
+  };
+  const replay = (cached: EpicPlanningCheckpoint) => {
+    for (const task of cached.tasks) {
+      if (scheduledPackageIDs.has(task.review.packageID)) continue;
+      tasks.push(task); scheduledPackageIDs.add(task.review.packageID);
+    }
+    for (const field of Object.keys(planningDecisions) as (keyof typeof planningDecisions)[]) planningDecisions[field] += cached.decisions[field];
+  };
+  const checkpoint = (key: string, start: number, before: typeof planningDecisions) => {
+    const value: EpicPlanningCheckpoint = { format: 1, tasks: tasks.slice(start).map((task) => ({
+      review: task.review, state: task.state as "reviewed" | "waiting" | "blocked",
+      ...(task.reason !== undefined ? { reason: task.reason } : {}),
+      ...(task.blocker ? { blocker: task.blocker } : {}),
+      ...((task.context?.manifest.characters ?? task.contextCharacters) !== undefined ? { contextCharacters: task.context?.manifest.characters ?? task.contextCharacters } : {}),
+    })), decisions: { newPackage: planningDecisions.newPackage - before.newPackage,
+      noCompatibleSavedPackage: planningDecisions.noCompatibleSavedPackage - before.noCompatibleSavedPackage,
+      compatibleSavedPackage: planningDecisions.compatibleSavedPackage - before.compatibleSavedPackage } };
+    options.resolved?.set(key, value); options.onResolved?.(key, value, false);
   };
   const schedule = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[]) => {
     if (foundPending || !records.length) return;
@@ -369,29 +487,16 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     scheduledGroupKeys.add(key);
     const cached = options.resolved?.get(key);
     if (cached) {
-      for (const task of cached.tasks) {
-        if (scheduledPackageIDs.has(task.review.packageID)) continue;
-        tasks.push(task); scheduledPackageIDs.add(task.review.packageID);
-      }
-      for (const field of Object.keys(planningDecisions) as (keyof typeof planningDecisions)[]) planningDecisions[field] += cached.decisions[field];
-      options.onPackage?.(tasks.length);
+      replay(cached); reportProgress();
       options.onResolved?.(key, cached, true);
       return;
     }
     const start = tasks.length, before = { ...planningDecisions };
-    add(epicID, epicIDs, kind, records);
+    during("new-package", () => addUncached(epicID, epicIDs, kind, records));
     // Only completed local scheduling may be reused. A partially split root, an
     // exception, or an eligible pending package must never become a skip receipt.
     if (foundPending) return;
-    const value: EpicPlanningCheckpoint = { format: 1, tasks: tasks.slice(start).map((task) => ({
-      review: task.review, state: task.state as "reviewed" | "waiting" | "blocked",
-      ...(task.reason !== undefined ? { reason: task.reason } : {}),
-      ...(task.context ? { contextCharacters: task.context.manifest.characters } : {}),
-    })), decisions: { newPackage: planningDecisions.newPackage - before.newPackage,
-      noCompatibleSavedPackage: planningDecisions.noCompatibleSavedPackage - before.noCompatibleSavedPackage,
-      compatibleSavedPackage: planningDecisions.compatibleSavedPackage - before.compatibleSavedPackage } };
-    options.resolved?.set(key, value);
-    options.onResolved?.(key, value, false);
+    checkpoint(key, start, before);
   };
   const selected = active.filter((e) => !focusEpicID || e.id === focusEpicID);
   for (const epic of selected) {

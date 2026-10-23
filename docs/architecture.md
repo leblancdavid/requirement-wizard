@@ -33,6 +33,20 @@ implemented under `src/`. See [decisions.md](decisions.md),
   pending contexts/model-stage evidence are never inferred from CPU checkpoints.
   Snapshot-local context indexes share immutable approval/decision derivations.
   See [continuation](discovery-efficiency.md#exact-input-local-planning-continuation-2026-10-22).
+- Schema-5 `epic_planning_contexts` extends exact-input CPU reuse to intermediate
+  context/overflow results; recursive resolved subtrees use separate receipt keys.
+  Cached contexts are copied and their live review identity alias restored before
+  use. Both caches remain local-only, bounded and distinct from model checkpoints.
+  Worker diagnostics track exclusive sampled activity time and prefix scheduling
+  states; they never export cached evidence bodies. See
+  [intermediate reuse](discovery-efficiency.md#intermediate-preparation-reuse-and-explainable-progress-2026-10-22).
+- `evidenceGraph.closeLegacy` preserves exact legacy sweep insertion order using an
+  indexed worklist. Snapshot-local staged render reuse keys all task flags/targets
+  and exact closed membership, restoring each caller's manifest ID order. Staging's
+  existing target-only gate runs before full catalog preparation. Optional numeric
+  blocker summaries survive interrupted planning without reconstructing older
+  compatible receipts just for telemetry. See
+  [staging optimization](discovery-efficiency.md#staging-cost-optimization-and-blocker-causes-2026-10-22).
 - `src/core/evidence-graph.ts`: derived, invocation-local typed forward/reverse
   provenance index and queue traversal. New `current-spec-v1` workflow contexts use
   exact graph closure and proactive generated-background projection; compatible saved

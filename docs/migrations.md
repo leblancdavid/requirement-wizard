@@ -19,6 +19,122 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Legacy-order staging optimization and blocker metadata (2026-10-22)
+
+Source/target: SQLite schema 5 and existing format-1 planning receipts/progress.
+There is no SQL migration or rewrite of project/job history, completed model stages,
+assessment identities or stored contexts. Root input digest `resolved-prefix-v1`,
+root/subtree keys, intermediate context keys and all model/checkpoint fingerprints
+remain unchanged: this is an exact-computation optimization, not a policy change.
+Existing compatible CPU receipts are reused rather than forcing completed planning
+or model work to repeat. Downgrading to older strict parsers after new additive
+metadata has been saved is not qualified.
+
+The existing staged target-only 54,000-character gate is evaluated before computing
+the full-area seed catalog. The gate, compaction choices, exact blocker message,
+partition seed order and 16-batch ceiling are unchanged; this only avoids catalog
+work on a path that already must fail under the original staged contract. No size
+inequality is inferred from raw text lengths or from a different evidence superset.
+
+Legacy context closure uses an indexed priority worklist with logical sweep/record
+positions. It reproduces the old question/requirement/source scan's insertion order,
+edge filters, cycles, missing references and ignored supersession edges, while
+visiting each reachable record once. The current-spec graph policy remains separate.
+Staged rendering/compaction may be reused only for identical task flags/targets and
+exact closed evidence membership in one immutable snapshot. Each caller's included-ID
+order is restored. The invocation-local cache is capped at 64 entries / 8 MiB of
+serialized values and never becomes a persisted evidence authority or exported cache.
+
+Format-1 receipt tasks optionally add `blocker` with a fixed cause enum and known
+numeric size/budget. New format-1 diagnostic progress optionally adds `blockerSummary`,
+`closureRenderAttempts` and `reusedClosures`. Causes distinguish staged target size,
+indivisible seed size, context limit, staged batch ceiling, retained evidence blockers
+and spent attempts. Older cached blockers without structured cause stay `unknown`;
+the app does not parse arbitrary old prose, invent sizes or rebuild compatible work
+solely to populate telemetry. Unknown sizes remain null. Parent-saved metrics retain
+the examined-prefix summaries on timeout/cancellation; no evidence text, IDs, paths
+or arbitrary diagnostic prose is added to exports.
+
+Tests compare exact legacy insertion order on 80 shuffled cyclic/filtered fixtures,
+wire contexts against the old scan, linear record visits on a 1,000-record reverse
+chain, original staged target/seed blockers, and unchanged successful partition/wire/
+batch evidence keys against a frozen pre-optimization staging implementation. They
+also cover reduced target preparations, repeated-render avoidance, interrupted-job
+summary export/privacy, and reuse of older receipts with unknown causes. Existing
+schema-4/5 rollback/reopen and staged model-check recovery tests remain applicable.
+See [current staging behavior and verification](discovery-efficiency.md#staging-cost-optimization-and-blocker-causes-2026-10-22).
+
+Verification: 60 pretests and 635 main tests passed, including a final pretest rerun
+after strengthening the seed-cause check. Type checking, UI build, desktop emit,
+compiled-JavaScript worker/blocker smoke and focused workflow browser checks passed.
+The broad browser suite was not rerun for this slice; its preceding **Approve
+resolution** failure remains unqualified. Full Electron packaging and actual
+throughput on the supplied project remain unqualified. No personal database or
+live provider inference was used; synthetic fixtures establish structural savings
+and exact-output compatibility, not an end-to-end speedup claim for that project.
+
+## Intermediate preparation checkpoints and phase diagnostics (2026-10-22)
+
+Source: SQLite schema 4, including existing format-1 root-group receipts. Target:
+schema 5, ordered transactional migration `intermediate-local-contexts-v1`, adding
+`epic_planning_contexts` only. Existing receipt bytes, project/revision/job payloads,
+assessments, completed stages and spent attempts are preserved. No reset, model
+replay or backup rewrite is needed. Startup does not run inference. Migration failure
+rolls back the new table, migration history and `user_version` together; reopening
+retries safely. Older app versions reject schema 5 rather than downgrade it.
+
+The existing complete-input digest `resolved-prefix-v1` and original root-group keys
+remain unchanged because scheduling, exact wire contexts, model/checkpoint identities
+and freshness semantics are unchanged. Completed recursive subtrees now share the
+receipt table under a separate `subtree-v1` key domain. Only fully resolved
+reviewed/waiting/blocked subtrees are saved; an interrupted parent or pending subtree
+cannot become a skip receipt. Counts retain their original report basis. Existing
+root receipts keep working without redoing their completed local computation.
+
+Successful exact context computations and complete `ContextBudgetError` outcomes may
+be checkpointed under `epic-context-computation-v1` keys containing revision, review
+identity, guardrail seed order, final-response flag and explicit-load IDs. These keys
+are additionally bound to the complete project/history/submission/scope digest.
+Changed inputs cannot reuse contexts. Cached contexts are copied before use and
+their live review identity alias is restored; staged batches retain their original
+partition, finalized identity and exact evidence basis. This is computational reuse,
+not new model-review evidence or a larger call allowance. Later independent output,
+revision and publication checks remain in force.
+
+The new table holds at most 128 entries / 16 MiB of serialized payload per project,
+for one input generation, retaining the recently computed tail. Byte accounting is
+stored separately so eviction does not repeatedly decode context bodies. Writes use
+an expected-revision guard and commit atomically with eviction. Oversized entries
+are not persisted; computation continues. Unknown future envelope formats reject
+validated reads/writes without replacing saved rows. Context bodies can contain exact
+private requirement/evidence text: they stay in local SQLite and are never included
+in portable projections, workspace artifacts or metadata-only diagnostics. Eviction
+or a cache miss only causes local recomputation, never deletion of original evidence.
+
+Format-1 progress gains optional `examinedStates`, `activity`, `activityMs`,
+`preparedContexts` and `reusedContexts`. The fixed allowlisted numeric fields leave
+older measurements readable and absent values unknown. Worker elapsed-time buckets
+are exclusive sampled wall time, not pure CPU time or a complete parent-side planning
+total; an interrupted current operation can be only partially measured. Prepared
+context counts denote checkpointable computations, not proof of disk persistence or
+model acceptance. Group counters now include completed subtrees as well as roots.
+
+Tests exercise schema-4 rollback/retry, original root receipt preservation, repeated
+reopen, stale writes, bounded eviction, oversized entries, future formats, partial-root
+interruption with retained siblings, exact context/overflow reconstruction, phase/state
+diagnostic privacy and lower preparation counts on retry. See
+[current behavior and verification](discovery-efficiency.md#intermediate-preparation-reuse-and-explainable-progress-2026-10-22).
+
+Verification: all 57 pretests and 633 main tests passed. Type checking, UI build,
+desktop TypeScript emit, compiled-JavaScript worker startup/receipt/state smoke and
+focused workflow browser checks passed. The focused runner initially exposed the
+evicted-log outcome-banner regression; it passes with typed-report recognition and
+a bounded 30-second wait for its deliberately expensive no-inference fixture.
+The broad browser command still stops at the missing **Approve resolution** assertion
+in `src/web/browser-check.ts:1350`; its portable/specification runners did not execute.
+No personal database or live provider calls were used. Full packaged Electron and
+the supplied project's actual throughput remain unqualified.
+
 ## Exact-input local planning continuation (2026-10-22)
 
 Source: SQLite schema 3. Target: schema 4, ordered migration

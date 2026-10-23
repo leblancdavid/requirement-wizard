@@ -3,7 +3,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import { evidenceGraph } from "./evidence-graph.js";
 import { ProjectStore } from "../storage/store.js";
-import { planContext } from "./working-set.js";
+import { planContext, contextPreparationIndex } from "./working-set.js";
 import { gapEvidence } from "./gap-backlog.js";
 import { retrievalEvidenceBasis } from "./gap-retrieval.js";
 
@@ -102,5 +102,63 @@ test("indexed gap identity matches the pre-graph serialized evidence contract", 
     const scope = digest({ guardrails: records, dependencies: [{ id: epic.id, purpose: epic.purpose, archived: epic.archived, dependencies: [] }], snapshotID: null });
     const expected = digest({ compatibility: "gap-evidence-v1", scope, records, missingIDs: ["missing"] });
     assert.equal(gapEvidence(p)(r).inputKey, expected);
+  } finally { store.close(); }
+});
+
+test("indexed legacy closure matches exact sweep insertion order across shuffled cyclic graphs and filtered edges", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let state = 3123;
+    const random = (size: number) => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state % size; };
+    for (let trial = 0; trial < 80; trial++) {
+      const p = store.create(`Legacy order ${trial}`, "Root", { providerID: "openai", modelID: "fixture" });
+      const ids = Array.from({ length: 30 }, (_, n) => `record-${n}`);
+      for (let at = 0; at < 10; at++) {
+        p.questions.push({ id: ids[at]!, epicID: "project", text: "Question", whyItMatters: "Explanation", status: "answered",
+          sourceID: ids[20 + random(10)], evidenceIDs: [ids[random(30)]!, "missing"], options: [{ label: "Yes", consequence: "Keep" }, { label: "No", consequence: "Remove" }] });
+        p.requirements.push({ id: ids[10 + at]!, epicID: "project", statement: "Requirement", rationale: "Explanation", status: "proposed",
+          acceptance: ["Observable"], sourceIDs: [ids[random(30)]!, ids[random(30)]!] });
+        p.sources.push({ id: ids[20 + at]!, epicID: "project", kind: "answer", text: "Answer", questionID: ids[random(10)],
+          requirementID: ids[10 + random(10)], supersedes: "missing-history" });
+      }
+      if (trial % 2) p.questions.reverse(); if (trial % 3) p.requirements.reverse(); if (trial % 5) p.sources.reverse();
+      const graph = evidenceGraph(p), seeds = [ids[random(30)]!, ids[random(30)]!, "unresolved"];
+      const expected = new Set(seeds), actual = new Set(seeds);
+      const follow = (edge: { from: string; to: string }) => (edge.from.length + edge.to.length + trial) % 7 !== 0;
+      let changed = true;
+      while (changed) {
+        const size = expected.size;
+        const add = (from: string, to: string) => { if (follow({ from, to })) expected.add(to); };
+        for (const q of p.questions) if (expected.has(q.id)) {
+          if (q.sourceID) add(q.id, q.sourceID); for (const id of q.evidenceIDs ?? []) add(q.id, id);
+        }
+        for (const r of p.requirements) if (expected.has(r.id)) for (const id of r.sourceIDs) add(r.id, id);
+        for (const s of p.sources) if (expected.has(s.id)) {
+          if (s.questionID) add(s.id, s.questionID); if (s.requirementID) add(s.id, s.requirementID);
+        }
+        changed = expected.size !== size;
+      }
+      const stats = graph.closeLegacy(actual, follow);
+      assert.deepEqual([...actual], [...expected], `Exact legacy order, trial ${trial}`);
+      assert.ok(stats.visitedRecords <= p.questions.length + p.requirements.length + p.sources.length);
+      assert.equal(actual.has("missing-history"), false);
+      // The actual context planner, including omission/encoding flags, must also
+      // preserve wire bytes and every manifest ID's order against the old sweep.
+      const task = { isolatedTask: true, gapExploration: true, recordIDs: [p.requirements[0]!.id],
+        stagedGuardrailIDs: [p.questions[0]!.id], deferWorkspaceEvidence: !!(trial % 2), compactReviewSnapshots: !!(trial % 3) };
+      assert.deepEqual(planContext(p, task, undefined, contextPreparationIndex(p, graph)), planContext(p, task));
+    }
+  } finally { store.close(); }
+});
+
+test("legacy-order indexed traversal visits a reverse chain once rather than rescanning the entire project", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = store.create("Reverse legacy chain", "Root", { providerID: "openai", modelID: "fixture" });
+    for (let at = 999; at >= 0; at--) p.requirements.push({ id: `r-${at}`, epicID: "project", statement: "Step", rationale: "Why",
+      status: "proposed", acceptance: ["Observable"], sourceIDs: [at === 999 ? "missing" : `r-${at + 1}`] });
+    const graph = evidenceGraph(p), actual = new Set(["r-0"]), stats = graph.closeLegacy(actual, () => true);
+    assert.equal(stats.visitedRecords, 1000); assert.equal(stats.examinedEdges, 1000);
+    assert.deepEqual([...actual], [...Array.from({ length: 1000 }, (_, n) => `r-${n}`), "missing"]);
   } finally { store.close(); }
 });
