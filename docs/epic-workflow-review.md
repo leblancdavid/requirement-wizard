@@ -67,9 +67,15 @@ deferred; a missing indispensable file fact blocks rather than being guessed.
 Each base batch must fit **54,000 characters**. A bounded draft pool (12,000 characters,
 at most five questions/ten requirements) and staged instructions must fit within
 **72,000 characters** for every actual request; the underlying 96k ceiling is unchanged.
-An indivisible target/evidence chain above the staged base allowance, or a partition
-requiring more than sixteen batches, still blocks explicitly. This is a conservative
-reserved-buffer policy, not a promise that arbitrary evidence graphs can be split.
+The original `staged-guardrails-v1` policy retains these limits for saved work.
+New otherwise blocked indivisible leaves may use `staged-headroom-v2`, after the
+ordinary splitting/preferred-72k strategies. V2 measures exact evidence, the largest
+stage envelope and the full existing 12,000-character draft allowance together
+against the unchanged 96,000-character ceiling. Every actual request is measured
+again; above-72k use is explicit. Evidence that cannot fit with this reserve, or a
+partition requiring more than sixteen batches, still blocks. Saved v1 stages are
+not relabelled or replayed as v2; completed calls and spent attempts remain intact.
+See [compatibility and recovery](migrations.md#staged-headroom-v2-and-local-eligibility-upgrade-2026-10-22).
 
 There are two passes: discover drafts against every batch, then validate the complete
 draft pool against **every** batch. A validation response may select only unchanged
@@ -87,13 +93,16 @@ resuming and independently at storage publication. Publication's citation author
 is explicitly the union of completed exact batches, **not** a claim all those records
 were in one request. Storage rejects incomplete or tampered publication scopes.
 
-Each stage has three attempts across retries; up to six requests run per package
-invocation. A longer package pauses with a saved diagnostic and no published drafts;
-the current job is recorded as failed/paused, **not** evidence blocked or reviewed.
-Choose **Explore next gaps** again to resume. Startup/reload never starts calls.
-The existing queue can visit up to ten packages/fifteen minutes per action; six is
-not a global click-wide allowance. Sixteen batches imply at most 32 successful stages
-and 96 cumulative attempts per package. Reports distinguish current-stage attempts
+Each stage has three attempts across retries. One explicit action continues a staged
+package automatically through up to **32 requests or fifteen minutes**, including
+preparation; it no longer pauses every six successful calls. Stop remains available.
+An intentional budget stop records **Paused—progress saved**, not failed analysis,
+evidence blocked or reviewed. Explicit Resume continues unfinished stages. Startup
+never starts calls; reloading a live browser does not create a second worker.
+The existing queue can visit up to ten packages/fifteen minutes per action; 32 is
+per package, not a global click-wide allowance. Sixteen batches imply at most 32 successful stages
+and 96 cumulative attempts per package. Failures stop rather than automatically retry.
+Reports distinguish current-stage attempts
 from cumulative attempts and show partial drafting/checking progress. Research,
 search/paging and extra evidence-load requests are unsupported in this policy;
 an explicit research selection is rejected, not silently switched off.

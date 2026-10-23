@@ -6,10 +6,13 @@ export const epicReviewSchema = z.object({
   epicID: z.string().min(1), kind: z.enum(["workflow", "boundary"]),
   recordIDs: z.array(z.string().min(1)).min(1).max(6),
   epicIDs: z.array(z.string().min(1)).min(1).max(2),
-  contextPolicy: z.enum(["headroom-v1", "staged-guardrails-v1", "current-spec-v1"]).optional(),
+  contextPolicy: z.enum(["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "current-spec-v1"]).optional(),
   guardrailBatches: z.array(z.array(z.string().min(1)).max(10000)).min(1).max(16).optional(),
-}).strict().refine((r) => (r.contextPolicy === "staged-guardrails-v1") === !!r.guardrailBatches, "Staged reviews require explicit guardrail batches.");
+}).strict().refine((r) => isStagedPolicy(r.contextPolicy) === !!r.guardrailBatches, "Staged reviews require explicit guardrail batches.");
 export type EpicReview = z.infer<typeof epicReviewSchema>;
+export function isStagedPolicy(policy: string | undefined): policy is "staged-guardrails-v1" | "staged-headroom-v2" {
+  return policy === "staged-guardrails-v1" || policy === "staged-headroom-v2";
+}
 export const epicContextBudgetSchema = z.object({
   format: z.literal(1), target: z.literal(72000), hardLimit: z.literal(96000),
   characters: z.number().int().nonnegative(), headroom: z.number().int().nonnegative(),

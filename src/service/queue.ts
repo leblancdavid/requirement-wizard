@@ -4,6 +4,7 @@ import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
 import { planContext } from "../core/working-set.js";
 import { ContextBudgetError } from "../core/context.js";
+import { refinementEvidenceRecords } from "../core/refinement-context.js";
 import { refinementCheckCurrent, resolutionPairEligible } from "./refinement-tasks.js";
 import { auditApprovedRequirements } from "../core/similarity.js";
 import { refinementIsStale, resolutionContextMatches, resolutionTaskForAnswer } from "../core/resolution.js";
@@ -229,6 +230,7 @@ export class DiscoveryQueue {
         report(`Checking duplicates/conflicts after your response · pair ${index + 1} of ${receipt.pairs.length}. Discovery is already saved; fixes still require approval.`);
         const job = await this.service.analyze(item.projectID, current.revision, { signal: controller.signal, refinementOnly: true,
           refinementPair: pair.requirementIDs, includeUnapproved: true, resolutionTriggerSourceIDs: receipt.triggerSourceIDs,
+          savedOverlapSubmissionID: item.id,
           research: false, onProgress: report, onJob: (job) => { pair.jobID = job.id; item.jobID = job.id; save(); } });
         if (job.status !== "completed") throw new Error(job.diagnostic ?? `Targeted resolution ${job.status}.`);
         if (job.result?.resolutionCheck?.outcome === "blocked") throw new Error(job.result.resolutionCheck.explanation);
@@ -425,7 +427,8 @@ export class DiscoveryQueue {
             if (!epicID) throw new Error("A submitted question is no longer available. Review the retained response.");
             return epicID;
           })])],
-          recordIDs: [...(pair ?? []), ...items.flatMap((s) => [s.appliedSourceID!, ...(s.answerScope?.requirementIDs ?? []), ...(s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : [])])],
+           recordIDs: [...(pair ?? []), ...items.flatMap((s) => [s.appliedSourceID!, ...(s.answerScope?.requirementIDs ?? []), ...(s.input.type === "answer" ? [s.input.questionID] : s.input.type === "review" ? [s.input.requirementID] : [])])],
+           supportingRecordIDs: pair ? refinementEvidenceRecords(project, pair) : undefined,
           };
           if (!pair) for (const candidate of items.flatMap((item) => reconciliationCandidates(project, item, this.service.store.submissions(id)))) {
             if (planned.recordIDs.includes(candidate)) continue;

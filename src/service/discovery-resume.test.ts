@@ -9,6 +9,7 @@ import { DiscoveryQueue } from "./queue.js";
 import { startApp } from "../web/server.js";
 import type { Analysis } from "../core/model.js";
 import { epicBatchKey, epicReviewBatches, planEpicReview } from "../core/epic-review.js";
+import Database from "better-sqlite3";
 
 const empty = (): Analysis => ({ summary: "Resume fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 function seed(store: ProjectStore) {
@@ -73,7 +74,7 @@ test("finite response processing cannot fall through to legacy discovery when it
   } finally { await queue?.close(); store.close(); }
 });
 
-test("browser staged Resume after SQLite reopen retains completed calls and spent attempts", async () => {
+test("browser staged Resume upgrades a legacy six-request pause after SQLite reopen without replay", async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "browser-resume-")), path = join(directory, "projects.sqlite");
   let store = new ProjectStore(path), queue: DiscoveryQueue | undefined;
@@ -88,13 +89,21 @@ test("browser staged Resume after SQLite reopen retains completed calls and spen
       const label = `${stage.phase}-${stage.batch}`; assert.ok(!calls.includes(label), "Completed calls must not repeat"); calls.push(label);
       return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
     } };
-    queue = new DiscoveryQueue(new DiscoveryService(store, adapter));
+    queue = new DiscoveryQueue(new DiscoveryService(store, adapter, { stagedLimits: { requests: 6, durationMs: 900000 } }));
     queue.resumeBrowser(p.id, { focusEpicID: "orders", questionTarget: 5, research: false }); await idle(queue, p.id);
     assert.equal(calls.length, 6); const paused = store.jobs(p.id).at(-1)!;
-    assert.equal(paused.status, "failed"); assert.equal(paused.retrievalWork!.epicStages!.receipts.length, 6);
+    assert.equal(paused.status, "interrupted"); assert.equal(paused.retrievalWork!.epicStages!.receipts.length, 6);
     assert.equal(paused.retrievalWork!.epicStages!.planKey, epicBatchKey(epicReviewBatches(p, paused.context!.epicReview!)), "Prepared batches must retain their reconstructible exact basis");
     assert.deepEqual(store.get(p.id), p);
-    await queue.close(); store.close(); store = new ProjectStore(path);
+    await queue.close(); store.close();
+    // Historical format: intentional six-call pauses were stored as failures,
+    // without per-action scheduling metadata. Preserve that exact old job.
+    paused.status = "failed";
+    delete paused.retrievalWork!.stagedRun;
+    paused.diagnostic = "Staged review paused after six requests in this package attempt. No drafts published.";
+    const raw = new Database(path);
+    raw.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(paused), paused.id); raw.close();
+    store = new ProjectStore(path);
     queue = new DiscoveryQueue(new DiscoveryService(store, adapter));
     assert.equal(calls.length, 6, "Startup alone must not repeat model work");
     assert.deepEqual(store.getJob(paused.id), paused);

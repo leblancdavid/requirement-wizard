@@ -19,6 +19,207 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Continuous bounded staged actions (2026-10-23)
+
+Source/target: SQLite schema 5, unchanged workflow/stage semantic formats and keys.
+Format-1 retrieval work optionally adds strict `stagedRun: {format: 1, requestLimit,
+durationMs, paused?}`. Production defaults are 32 requests/fifteen minutes per
+explicit staged action; a bounded internal dependency override permits shorter
+test budgets, not larger production allowances. Diagnostic format 1 now accepts up
+to 32 measured requests. No SQL migration, evidence rewrite or model-call reset.
+Unknown future staged-run formats reject reads; downgrade to older strict readers
+after saving new metadata or more than six measured requests is not qualified.
+
+Existing six-request jobs (including their old failed status/diagnostic and absent
+run marker) remain exact saved history. Explicit retry reconstructs compatible
+stages under the original evidence policy, then starts a fresh action allowance;
+it does not reset the current stage's spent attempts. The original three-attempt
+stage limit, sixteen-batch ceiling and exact publication checks stay unchanged.
+No inference starts on app reopen. Completed response/model/check identities,
+assessments and delivery evidence are unaffected.
+
+Workflow jobs reserve sixteen-minute leases before planning; staged execution's
+fifteen-minute deadline includes preparation, with the existing two-minute planner
+bound unchanged. Ordinary non-staged execution keeps five minutes. The queue still
+caps a user action at ten packages/fifteen minutes. Stop/failure/cancellation never
+automatically retries. Intentional request/time budget stops atomically verify live
+lease and revision, release the lease, retain work as `interrupted`, and save a
+pause marker. A stale project wins over pause publication. An in-flight timed-out
+call remains a spent attempt, not a successful stage. UI/Activity display the pause
+without labelling it failed. Portable continuation retains the new run metadata
+through the existing validated retrieval-work envelope.
+
+Tests complete a 32-stage package in one job and export all 32 measurements, simulate
+a fifteen-minute deadline with a spent in-flight attempt, resume only unfinished
+stages, round-trip a paused checkpoint portably, and reopen a legacy failed six-call
+job with no startup calls/replay. Existing cancellation, stale, malformed, exhausted
+attempt and publication-recovery tests remain applicable. No personal database or
+live provider calls are used; the change improves unattended progression, not
+provider speed, request count or guaranteed completion within fifteen minutes.
+
+Verification: final `npm test` passed 69 pretests and 646 main tests. The final
+future-run-format assertion/time-budget test also passed separately. Type checking,
+desktop TypeScript emit, UI build and focused workflow browser tests passed. The
+browser fixture observes a live job continue past six stages after reload without
+a second click, checks budget-pause wording, and resumes its saved checkpoint
+without replay. Initial browser checks exposed missing live progress/run-budget
+projection; both are corrected. Full `npm run test:browser` was run and still stops
+at the existing missing **Approve resolution** assertion in
+`src/web/browser-check.ts:1350`; the later chained portable/specification browser
+runners did not run. Exact-user throughput, live subscription behavior and packaged
+Electron execution remain unqualified.
+
+## Saved staged-policy batch-ceiling recovery (2026-10-23)
+
+Source/target: unchanged SQLite schema 5, format-1 workflow reviews/stages and local
+planning receipts. No SQL/JSON migration, fingerprint change or payload rewrite.
+The planner now retains a typed sixteen-batch overflow as an invocation-local
+candidate failure, alongside (not disguised as) context-size failures. Saved root
+and saved-child policy probes treat it as non-matching instead of aborting the
+whole worker. Repeated historical jobs reuse that exact local failure. New work
+continues through the existing splitting/v1/v2 selection rules; genuinely unfit
+leaves still produce `stage-limit` blockers and independent packages can continue.
+Unexpected errors still propagate. The sixteen-batch ceiling is not raised.
+
+Existing completed model work, partial stage receipts, spent attempts, exact policy
+markers and immutable failed jobs remain untouched. Compatibility still requires
+current exact evidence to match the saved policy/plan key. Changed guardrails are
+not permission to relabel old calls as a new v2 plan; unchanged compatible work
+continues to reuse its original identity. Existing `resolved-prefix-v1` root/subtree
+receipts and context cache keys stay valid. The new failure cache is ephemeral,
+not an exported/persisted semantic authority. Previously aborted preparations have
+no resolved receipt to upgrade; explicit retry now reaches a valid next candidate
+or an honest blocker without deleting data. Startup never invokes a model.
+
+Regression tests retain a real paused v1 job with six successful stages in SQLite,
+grow exact guardrails until v1 exceeds sixteen batches while v2 still fits, reopen,
+and verify synchronous plus owned-worker selection without changing the old job.
+The same fixture exercises saved-child probes and repeated historical candidates.
+A separate fixture exceeds even v2, checks explicit blocker/progress reporting,
+continues to an independent feature and verifies unexpected exceptions are not
+swallowed. No personal database edits or live model calls are used.
+
+Verification: 69 pretests and all 644 main tests passed, including the owned-worker
+and SQLite-reopen regression. The final independent-blocker fixture rerun also
+passed after simplifying its setup. Type checking, desktop TypeScript emit, UI
+build, focused workflow browser regressions and `git diff --check` passed.
+Exact supplied-project throughput, live-provider behavior
+and full packaged Electron execution remain unqualified. The broad browser suite
+was not rerun for this slice.
+
+## Exact refinement supporting-evidence preflight (2026-10-23)
+
+Source/target: SQLite schema 5 and unchanged project/job/submission/portable JSON
+formats. No persisted evidence or history is rewritten. `refinement-context.ts`
+enumerates the target requirement(s) and all their direct source links as exact
+supporting records. Service planning pins them separately from task targets, and
+checks completeness before inference. Queued resolution-answer preflight also pins
+both requirements' sources. Publication independently runs the same completeness
+assertion, retaining citation validation and atomic rollback.
+
+This fixes a reproduced mismatch: an old plain approval owned by a background
+requirement could be omitted by current-decision projection even when another
+requirement in the exact pair still directly cited it. The model could return a
+resolution that storage then correctly rejected for missing supporting detail.
+Directly supporting historical evidence now remains exact regardless of its owner;
+inclusion does not authorize superseded evidence as a current decision/citation.
+Truly missing saved source records fail locally rather than being fabricated or
+silently removed. Incomplete-context diagnostics identify bounded missing IDs,
+never source prose; metadata diagnostic exports still exclude these messages/IDs.
+
+Existing semantic refinement/pair fingerprints, original task-target IDs and
+completed-check reuse remain unchanged. Supporting evidence already belongs to
+those targets' saved provenance. Failed jobs remain dated history; explicit retry
+uses newly prepared complete evidence. Completed originating responses and completed
+pair checks are not replayed/reset. A previously rejected proposal is not silently
+published under a new evidence set. Existing size ceilings remain: newly pinned
+evidence can block before inference rather than consume a predictably unpublishable
+call. No automatic startup calls, reverse migration or schema bump is needed.
+
+The disk-backed upgrade test constructs the cross-owned superseded approval using
+normal store operations, reproduces legacy omitted context and failed publication,
+reopens, completes a new fully grounded pair proposal, then reopens again while
+preserving original sources/requirements, failed job bytes and semantic identity.
+Additional preflight tests cover missing requirements/sources and incomplete context;
+existing citation, cancellation/stale, completed-response/pair reuse and 144k tests
+remain passing. All 60 focused refinement/recovery tests, 69 pretests and 642 main
+tests passed, along with type checking, desktop TypeScript emit, UI build and the
+focused workflow browser runner (regression coverage, not a live overlap-proposal
+qualification). The final raw-source preservation assertion also passed separately.
+The broad browser suite was not rerun. Exact user data, packaged Electron and live
+provider behavior are unqualified; no personal database edits or live inference
+were performed.
+
+## Saved-response overlap allowance parity (2026-10-23)
+
+Source/target: SQLite schema 5, existing project/job/submission/portable formats.
+No schema migration or payload rewrite. Pending `overlapFollowup` receipts already
+identify the completed response job, exact trigger sources, and unfinished pairs.
+The queue now passes an internal submission reference; the service validates that
+durable provenance before allowing the same 144,000-character mandatory-only
+fallback already available to the original single-response follow-up. Ordinary
+refinement, manual pair checks, workflow discovery and question help retain their
+existing limits. No optional refill or truncation is introduced. The allowance
+does not authorize review changes or attach the original submission as a new batch.
+
+Old 96k-blocked pairs resume explicitly using their existing receipts; completed
+response jobs and completed pair checks are never relabelled or replayed. Original
+IDs, human evidence, failed jobs, assessment/check identities and completed work
+remain intact. Existing pair freshness, lease, cancellation and checkpoint CAS rules
+continue to apply. Startup does not run inference. Future receipt formats retain
+existing fail-closed parsing. No new model-attempt grant or automatic retry is added.
+Above-144k evidence still blocks before dispatch; larger input is not a provider
+capacity guarantee. Older binaries may re-block pending large pairs but need no
+reverse data transformation.
+
+Tests exercise an actual old-policy 96k blocker saved to SQLite, repeated open,
+explicit retry with one overlap call and no repeated completed-response call,
+unchanged original evidence/jobs, invalid receipt provenance, cancellation, stale
+results, malformed output, and above-144k blocking. Existing successful-pair reuse,
+interrupted publication recovery, future formats and cross-worker CAS tests remain.
+No personal database edits or live provider calls are part of this change.
+
+Verification: all 25 incremental-resolution tests passed, including the disk-backed
+upgrade case. The final full `npm test` rerun passed all 69 pretests and 640 main
+tests. Type checking, desktop TypeScript emit, UI build and focused epic
+browser checks passed. That browser runner covers workflow/recovery regressions,
+not the new large-overlap queue fixture; the latter is verified at the service/SQLite
+level. Exact-user-project/live-provider behavior and packaged Electron execution
+remain unqualified. The broad browser suite was not rerun for this slice.
+
+## Staged headroom v2 and local eligibility upgrade (2026-10-22)
+
+Source/target: SQLite schema 5, format-1 review/checkpoint JSON. No SQL schema
+migration or project/history rewrite is needed. New `staged-headroom-v2` reviews
+have distinct input fingerprints and require an explicit matching
+`retrievalWork.epicStages.contextPolicy`. Legacy `staged-guardrails-v1` stages,
+including those without a protocol marker, reconstruct unchanged under v1; they
+are never relabelled v2. Compatible completions, partial responses, unpublished
+finals and exhausted attempts retain their original evidence and allowance.
+
+V2 is a fallback only for otherwise blocked indivisible workflow/boundary leaves,
+after existing staging and preferred-72k splitting. Planning measures exact evidence
+plus the largest stage envelope and the entire existing 12,000-character draft
+allowance against 96,000 characters. Actual requests are independently measured
+against that unchanged hard ceiling; no human evidence is truncated or summarized.
+
+The complete-input digest `resolved-prefix-v1`, root/subtree/context cache keys and
+old context bytes remain valid. Format-1 CPU receipts optionally add
+`planningPolicy: staged-headroom-v2`. Old receipts containing local size/unknown
+blockers are reconsidered lazily; reviewed/waiting and saved-blocker/attempt-limit
+receipts remain reusable. Re-evaluated resolved receipts replace their previous
+payload transactionally under expected-revision checks and existing cache bounds.
+Interruption rolls back replacement; reopen/retry is safe. A pending candidate
+cannot become a skip receipt. This never grants model attempts or deletes history.
+Unsupported future policy markers reject reads/writes before cache replacement.
+Downgrade to older strict JSON readers after saving v2 work is not qualified.
+
+Upgrade coverage includes SQLite reopen/resume without replay, spent validation
+attempts, exhausted stages, portable continuation round-trip, exact 96,000/96,001
+boundaries, stale/cancelled/malformed/oversized responses, and transactional receipt
+failure/retry/future-marker protection. See
+[verification and limits](discovery-efficiency.md#staged-headroom-fallback-2026-10-22).
+
 ## Legacy-order staging optimization and blocker metadata (2026-10-22)
 
 Source/target: SQLite schema 5 and existing format-1 planning receipts/progress.

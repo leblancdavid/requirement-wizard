@@ -34,7 +34,7 @@ export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.
   planningProgress: planningProgressSchema.optional(),
   initialContext: diagnosticContextSchema.nullable(),
   requests: z.array(z.object({ durationMs: duration.nullable(), outcome: z.enum(["in-flight", "returned", "failed", "cancelled"]),
-    response: z.enum(["analysis", "search", "load", "blocked", "other"]).nullable(), context: diagnosticContextSchema }).strict()).max(6),
+    response: z.enum(["analysis", "search", "load", "blocked", "other"]).nullable(), context: diagnosticContextSchema }).strict()).max(32),
 }).strict();
 export type DiscoveryMetrics = z.infer<typeof discoveryMetricsSchema>;
 
@@ -75,7 +75,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
       return { id: `run-${index + 1}`, revision: count.parse(row.revision),
         status: z.enum(["pending", "running", "completed", "failed", "cancelled", "interrupted", "stale"]).parse(row.status),
         package: row.packageID ? packages.get(row.packageID)! : null,
-        policy: ["headroom-v1", "staged-guardrails-v1", "current-spec-v1"].includes(row.policy ?? "") ? row.policy : null,
+        policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "current-spec-v1"].includes(row.policy ?? "") ? row.policy : null,
         measurements: metrics,
         timing: metrics ? { initialPlanningMs: metrics.planningMs, adapterRequestMs: adapterMs,
           otherLocalMs: metrics.state === "finished" && metrics.planningMs !== null && adapterMs !== null

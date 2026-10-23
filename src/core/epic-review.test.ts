@@ -6,10 +6,10 @@ import Database from "better-sqlite3";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { DiscoveryQueue } from "../service/queue.js";
-import { epicReviewContext, epicReviewBatches, planEpicReview, validateEpicReviewFinal } from "./epic-review.js";
+import { epicReviewContext, epicReviewBatches, planEpicReview, stagedEpicReview, validateEpicReviewFinal } from "./epic-review.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, validateEpicStages } from "./epic-stages.js";
 import { ContextBudgetError } from "./context.js";
-import { validateRetrieval } from "./gap-retrieval.js";
+import { validateRetrieval, retrievalWorkSchema } from "./gap-retrieval.js";
 import { epicReviewDiagnostic, epicReviewReportSchema } from "./epic-review-types.js";
 import { gapBacklog } from "./gap-backlog.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
@@ -24,6 +24,11 @@ import { createHash } from "node:crypto";
 import { gapEvidence } from "./gap-backlog.js";
 import { retrievalContextKey, retrievalEvidenceBasis } from "./gap-retrieval.js";
 import type { EpicReview } from "./epic-review-types.js";
+import { prepareEpicReview } from "../service/epic-planning.js";
+import { stagedRunDurationMs } from "./epic-run.js";
+import { continuationState, decodePortable } from "../storage/portable.js";
+import { renderWorkspace } from "../storage/workspace.js";
+import { emptyExecution } from "./execution.js";
 
 const empty = (): Analysis => ({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 function seed(store: ProjectStore, count = 8) {
@@ -51,6 +56,88 @@ function sharedHeavy(store: ProjectStore) {
     `Exact global decision ${i}\r\n` + Array.from({ length: 64 }, (_, n) => digest(`global-${i}-${n}`)).join(""), "project");
   return p;
 }
+
+function addStageLimitGuardrails(store: ProjectStore, p: Project, count = 80) {
+  for (let i = 0; i < count; i++) p = store.note(p.id, p.revision,
+    Array.from({ length: 150 }, (_, n) => digest(`stage-ceiling-${i}-${n}`)).join(""), "project");
+  return p;
+}
+
+test("saved staged root and child policies exceeding sixteen batches do not abort planning; original stages survive reopen", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "saved-stage-ceiling-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    let p = sharedHeavy(store);
+    const paused = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      assert.equal(context.manifest.epicReview!.contextPolicy, "staged-guardrails-v1");
+      return (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview.phase === "discover"
+        ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+    } }, { stagedLimits: { requests: 6, durationMs: 900000 } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.match(paused.diagnostic!, /Paused—progress saved/);
+    assert.equal(paused.retrievalWork!.epicStages!.receipts.length, 6);
+    const saved = structuredClone(store.getJob(paused.id));
+    p = addStageLimitGuardrails(store, store.get(p.id));
+    assert.throws(() => stagedEpicReview(p, saved.context!.epicReview!), /more than sixteen/);
+    assert.ok(stagedEpicReview(p, { ...saved.context!.epicReview!, contextPolicy: "staged-headroom-v2" }).contexts.length <= 16);
+    store.close(); store = new ProjectStore(path);
+    let preparations = 0;
+    const options = { onPrepare: () => { preparations++; } };
+    const history = store.epicReviewHistory(p.id);
+    const plan = planEpicReview(p, history, "orders", [], undefined, options);
+    assert.equal(plan.task!.state, "pending"); assert.equal(plan.task!.review.contextPolicy, "staged-headroom-v2");
+    assert.notEqual(plan.task!.review.inputKey, saved.context!.epicReview!.inputKey);
+    assert.equal(plan.task!.prior, undefined, "Changed evidence cannot relabel/replay old stages as a new plan");
+    const worker = await prepareEpicReview(p, history, "orders", [], { signal: new AbortController().signal,
+      readRevision: (revision) => store.get(p.id, revision), onProgress() {} });
+    assert.deepEqual(worker.task!.review, plan.task!.review);
+    const once = preparations; preparations = 0;
+    const repeated = planEpicReview(p, [saved, { ...saved, id: "second-historical-job" }, { ...saved, id: "third-historical-job" }], "orders", [], undefined, options);
+    assert.equal(preparations, once, "Repeated saved policies must reuse the deterministic batch-limit failure");
+    assert.deepEqual(repeated.task!.review, plan.task!.review);
+    // A newly grouped sibling makes the saved single-record job a child probe.
+    const childProject = structuredClone(p), target = childProject.requirements.find((r) => r.epicID === "orders")!;
+    childProject.requirements.push({ ...target, id: "new-orders-sibling", statement: "Keep a separate recovery scenario" });
+    const children = planEpicReview(childProject, history, "orders");
+    assert.ok(children.tasks.some((t) => t.state === "pending"));
+    assert.deepEqual(store.getJob(saved.id), saved); assert.deepEqual(store.get(p.id), p);
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.getJob(saved.id), saved);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("current stage-limit blockers remain explicit and do not prevent independent package planning or hide unexpected errors", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let p = seed(store, 1);
+    const base = planEpicReview(p, [], "orders").task!.review;
+    p = addStageLimitGuardrails(store, p, 160);
+    const before = structuredClone(p);
+    // Use real current target identities; a historic probe only needs its saved
+    // policy to be reconstructed before it can be proved incompatible.
+    const target = p.requirements.find((r) => r.epicID === "orders")!;
+    const savedReview = { ...base, recordIDs: [target.id], contextPolicy: "staged-headroom-v2" as const, guardrailBatches: [[]] };
+    const history = [{ id: "historical-ceiling", projectID: p.id, expectedRevision: p.revision - 1, model: p.model, status: "failed" as const,
+      leaseUntil: null, context: { revision: p.revision - 1, focusEpicID: "orders", budget: 96000, characters: 0, includedIDs: [], omittedIDs: [], epicReview: savedReview } }];
+    const phases: number[] = [];
+    const blocked = planEpicReview(p, history, "orders", [], undefined, { onPackage: (count) => phases.push(count) });
+    assert.equal(blocked.task, undefined); assert.ok(blocked.report.blocked >= 1);
+    assert.equal(blocked.tasks[0]!.blocker!.kind, "stage-limit");
+    assert.match(blocked.report.blockers[0]!.reason, /more than sixteen/); assert.ok(phases.includes(1));
+    // An unrelated feature does not inherit another feature's large guardrails.
+    const independent = structuredClone(p);
+    independent.epics.push({ id: "independent", title: "Independent", purpose: "Separate decisions", dependencies: [], archived: false });
+    independent.epics.push({ id: "guardrails", title: "Guardrails", purpose: "Order-only decisions", dependencies: [], archived: false });
+    independent.epics.find((e) => e.id === "orders")!.dependencies.push("guardrails");
+    independent.sources = independent.sources.map((s) => s.kind === "note" ? { ...s, epicID: "guardrails" } : s);
+    independent.requirements.push({ ...target, id: "independent-target", epicID: "independent", statement: "Keep independent behavior" });
+    const continued = planEpicReview(independent, history, undefined, [], undefined, { firstPending: true });
+    assert.ok(continued.report.blocked > 0); assert.equal(continued.task!.review.epicID, "independent");
+    assert.equal(continued.report.planningPartial, true);
+    assert.throws(() => planEpicReview(p, history, "orders", [], undefined, { onPrepare() { throw new Error("Unexpected preparation failure"); } }), /Unexpected preparation failure/);
+    assert.deepEqual(p, before);
+  } finally { store.close(); }
+});
 
 test("guardrail verdicts only remove exact drafts; duplicate/out-of-range indexes and oversized pools reject", () => {
   const store = new ProjectStore(":memory:");
@@ -86,7 +173,58 @@ test("oversized shared decisions become exact bounded stages, with no missing ro
   } finally { store.close(); }
 });
 
-test("staged drafts remain unpublished across the six-request pause, resume without replay, and are checked against later decisions", async () => {
+test("one explicit staged action completes thirty-two stages without six-request pauses and measures every request", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = addStageLimitGuardrails(store, seed(store, 1)), seen = new Set<string>();
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number } }).stagedGuardrailReview;
+      const key = `${stage.phase}-${stage.batch}`;
+      assert.ok(!seen.has(key)); seen.add(key);
+      assert.deepEqual(store.get(p.id), p, "Drafts stay unpublished throughout the run");
+      return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+    } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(result.status, "completed", result.diagnostic);
+    assert.equal(seen.size, 32); assert.equal(result.retrievalWork!.epicStages!.receipts.length, 32);
+    assert.equal(result.discoveryMetrics!.requests.length, 32);
+    assert.equal(store.discoveryDiagnostics(p.id, [result.id]).runs[0]!.measurements!.requests.length, 32);
+    assert.equal(result.retrievalWork!.stagedRun!.requestLimit, 32);
+    assert.equal(result.retrievalWork!.stagedRun!.paused, undefined);
+  } finally { store.close(); }
+});
+
+test("staged time budget pauses without failure, retains an in-flight attempt and resumes only unfinished stages", async (t) => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = sharedHeavy(store); let calls = 0;
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+    const paused = await new DiscoveryService(store, { async analyze() {
+      if (++calls === 3) t.mock.timers.tick(stagedRunDurationMs);
+      return empty();
+    } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    t.mock.timers.reset();
+    assert.equal(paused.status, "interrupted", paused.diagnostic);
+    assert.equal(paused.retrievalWork!.stagedRun!.paused, "time-limit");
+    assert.equal(paused.retrievalWork!.epicStages!.receipts.length, 2);
+    assert.equal(paused.retrievalWork!.attempts, 1); assert.equal(paused.leaseUntil, null);
+    assert.match(paused.diagnostic!, /Paused—progress saved/); assert.deepEqual(store.get(p.id), p);
+    const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [paused], [], (revision) => store.get(p.id, revision))), p.model);
+    assert.deepEqual(portable.continuation.jobs[0]!.retrievalWork, paused.retrievalWork);
+    const future = structuredClone(paused.retrievalWork!) as unknown as { stagedRun: { format: number } };
+    future.stagedRun.format = 2;
+    assert.equal(retrievalWorkSchema.safeParse(future).success, false, "Unsupported future run metadata must not be silently stripped");
+    const finished = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number } }).stagedGuardrailReview;
+      assert.ok(stage.phase !== "discover" || stage.batch >= 3, "Completed discovery stages must not replay");
+      return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+    } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+    assert.equal(finished.status, "completed", finished.diagnostic);
+    assert.equal(finished.retrievalWork!.epicStages!.receipts[2]!.attempts, 2);
+    assert.deepEqual(store.getJob(paused.id), paused);
+  } finally { t.mock.timers.reset(); store.close(); }
+});
+
+test("staged drafts remain unpublished across an explicit action-budget pause, resume without replay, and are checked against later decisions", async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "epic-stages-")), path = join(directory, "projects.sqlite");
   let store = new ProjectStore(path);
@@ -101,8 +239,8 @@ test("staged drafts remain unpublished across the six-request pause, resume with
       return { ...empty(), questions: stage.batch === 1 ? [{ text: "Should a failed submission retain its receipt?", whyItMatters: "Recovery",
         evidenceIDs: [target.id], options: [{ label: "Keep", consequence: "Retain it" }, { label: "Discard", consequence: "Remove it" }] }] : [] };
     } };
-    let job = await new DiscoveryService(store, adapter).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
-    assert.equal(job.status, "failed", job.diagnostic); assert.match(job.diagnostic!, /paused after six requests/);
+    let job = await new DiscoveryService(store, adapter, { stagedLimits: { requests: 6, durationMs: 900000 } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(job.status, "interrupted", job.diagnostic); assert.match(job.diagnostic!, /Paused—progress saved/);
     assert.equal(job.retrievalWork!.epicStages!.receipts.length, 6);
     assert.equal(job.discoveryMetrics!.requests.length, 6, "Only this invocation's actual requests are measured");
     assert.ok(job.discoveryMetrics!.requests.every((request) => request.durationMs !== null));
@@ -186,9 +324,9 @@ test("staged publication resumes a saved final without calls and storage rejects
       if (stage.phase === "validate") return { guardrailVerdict: { keepQuestions: stage.draft.questions.map((_, i) => i), keepRequirements: [] } };
       return { ...empty(), questions: stage.batch === 1 ? [{ text: "Which recovery receipt should be visible?", whyItMatters: "Observable recovery",
         evidenceIDs: [target.id], options: [{ label: "Original", consequence: "Retain original" }, { label: "New", consequence: "New receipt" }] }] : [] };
-    } });
+    } }, { stagedLimits: { requests: 6, durationMs: 900000 } });
     const partial = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
-    assert.match(partial.diagnostic!, /paused/);
+    assert.match(partial.diagnostic!, /Paused/);
     const forged = store.beginJob(p.id, p.revision).job; store.claimJob(forged.id, Date.now() + 60000);
     store.checkpointRetrieval(forged.id, partial.retrievalWork!, partial.context!);
     assert.throws(() => store.finishJob(forged.id, partial.retrievalWork!.epicStages!.candidates), /Partial staged/);

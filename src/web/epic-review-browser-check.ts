@@ -8,6 +8,7 @@ import { ProjectStore } from "../storage/store.js";
 import { analysisSchema } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
+import { DiscoveryService } from "../service/discovery.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -27,14 +28,31 @@ const before = structuredClone(project), errors: string[] = [];
 let calls = 0;
 let targetCalls = 0;
 let stagedCalls = 0;
+let releaseStaged!: () => void;
+const stagedGate = new Promise<void>((resolve) => { releaseStaged = resolve; });
+let headroomCalls = 0;
 const connections: Connections = {
   async accounts() { return []; }, async models() { return [{ id: "fixture", name: "Fixture" }]; },
   async beginLogin() { throw new Error("No live sign-in"); }, loginStatus() { throw new Error("No live sign-in"); }, cancelLogin() {},
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {},
 };
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(_p, { context }) {
+  if (_p.name === "Budget pause browser") {
+    const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number } }).stagedGuardrailReview;
+    assert.ok(stage.phase !== "discover" || stage.batch > 1, "Saved stage must not replay");
+    return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+  }
+  if (_p.name === "Headroom fallback browser") {
+    headroomCalls++;
+    assert.equal(context.manifest.epicReview!.contextPolicy, "staged-headroom-v2");
+    assert.ok(context.manifest.characters > 72000 && context.manifest.characters <= 96000);
+    assert.equal(context.manifest.epicContextBudget!.aboveTarget, true);
+    const stage = (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview;
+    return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+  }
   if (_p.name === "Staged decision browser") {
     stagedCalls++;
+    if (stagedCalls === 7) await stagedGate;
     assert.ok(context.manifest.characters <= 72000);
     const stage = (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview;
     return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
@@ -196,23 +214,66 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Staged decision browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
-  await review.click(); await expect(review).toBeEnabled();
-  await expect.poll(() => stagedCalls).toBe(6);
-  const pausedStageJob = structuredClone(store.jobs(stagedProject.id).at(-1)!);
-  assert.deepEqual(store.get(stagedProject.id), stagedProject, "Paused drafts must not publish");
+  await review.click();
+  await expect.poll(() => stagedCalls).toBe(7);
+  const runningStageJob = structuredClone(store.jobs(stagedProject.id).at(-1)!);
+  assert.equal(runningStageJob.status, "running");
+  assert.deepEqual(store.get(stagedProject.id), stagedProject, "In-flight drafts must not publish");
   await page.locator(".topbar .queue-trigger").click();
   await expect(status.getByLabel("Staged decision review", { exact: true })).toContainText("6 / 8 stages saved");
   await expect(status).toContainText("Drafts stay unpublished");
+  await expect(status).toContainText("up to 32 requests or 15 minutes");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-staged-mobile.png"), fullPage: true });
-  await page.reload(); assert.equal(stagedCalls, 6, "Reload never starts paid work");
+  await page.reload(); assert.equal(stagedCalls, 7, "Reload does not start a second worker");
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
-  await page.locator(".queue-header").getByRole("button", { name: "Resume processing", exact: true }).click();
+  releaseStaged();
   await expect(review).toBeEnabled();
   await expect.poll(() => stagedCalls).toBe(8);
-  assert.deepEqual(store.getJob(pausedStageJob.id), pausedStageJob, "Queue Resume preserves the original staged job and its spent calls");
+  assert.equal(store.getJob(runningStageJob.id).status, "completed", "One click continues beyond six calls in the same job");
   assert.ok(store.jobs(stagedProject.id).some((job) => job.result && job.retrievalWork?.epicStages?.phase === "complete"));
+  let pausedProject = store.create("Budget pause browser", "Keep exact review checkpoints", { providerID: "openai", modelID: "fixture" });
+  pausedProject = store.organize(pausedProject.id, pausedProject.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Retain progress", dependencies: [] }]);
+  for (let i = 0; i < 30; i++) pausedProject = store.note(pausedProject.id, pausedProject.revision,
+    Array.from({ length: 64 }, (_, n) => createHash("sha256").update(`pause-browser-${i}-${n}`).digest("hex")).join(""), "project");
+  const pauseSeed = store.beginJob(pausedProject.id, pausedProject.revision).job; store.claimJob(pauseSeed.id, Date.now() + 60000);
+  store.finishJob(pauseSeed.id, { ...empty(), requirements: [{ epicID: "orders", statement: "Retain paused order evidence", rationale: "Original idea", sourceIDs: [pausedProject.sources[0]!.id], acceptance: ["Saved stages survive a pause"] }] });
+  pausedProject = store.get(pausedProject.id);
+  const paused = await new DiscoveryService(store, { async analyze() { return empty(); } }, { stagedLimits: { requests: 1, durationMs: 900000 } })
+    .analyze(pausedProject.id, pausedProject.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+  assert.equal(paused.status, "interrupted"); store.pauseQueue(pausedProject.id, true);
+  await page.reload();
+  await (await workspaceMenu(page)).getByRole("button", { name: /Budget pause browser/ }).click();
+  await page.getByLabel("Filter by feature").selectOption("orders");
+  await page.locator(".topbar .queue-trigger").click();
+  const pauseDialog = page.getByRole("dialog", { name: "Processing & queue" });
+  await expect(pauseDialog).toContainText("Paused—progress saved");
+  await expect(pauseDialog.getByText(/^Last round (failed|interrupted):/)).toHaveCount(0);
+  await pauseDialog.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Resume processing", exact: true }).click();
+  await expect.poll(() => store.jobs(pausedProject.id).at(-1)?.status).toBe("completed");
+  assert.deepEqual(store.getJob(paused.id), paused);
+  let headroomProject = store.create("Headroom fallback browser", "Keep every linked decision exact", { providerID: "openai", modelID: "fixture" });
+  headroomProject = store.organize(headroomProject.id, headroomProject.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Review exact decisions", dependencies: [] }]);
+  for (let i = 0; i < 8; i++) headroomProject = store.note(headroomProject.id, headroomProject.revision,
+    Array.from({ length: 150 }, (_, n) => createHash("sha256").update(`headroom-browser-${i}-${n}`).digest("hex")).join(""), "project");
+  const headroomSeed = store.beginJob(headroomProject.id, headroomProject.revision).job; store.claimJob(headroomSeed.id, Date.now() + 60000);
+  store.finishJob(headroomSeed.id, { ...empty(), requirements: [{ epicID: "orders", statement: "Preserve the full linked order contract", rationale: "Original idea",
+    sourceIDs: headroomProject.sources.map((source) => source.id), acceptance: ["Every exact linked decision is retained"] }] });
+  headroomProject = store.get(headroomProject.id);
+  await page.reload();
+  await (await workspaceMenu(page)).getByRole("button", { name: /Headroom fallback browser/ }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  await page.getByLabel("Filter by feature").selectOption("orders");
+  await review.click(); await expect(review).toBeEnabled({ timeout: 30_000 });
+  assert.equal(headroomCalls, 2);
+  await page.locator(".topbar .queue-trigger").click();
+  await expect(status).toContainText("above target");
+  assert.ok(store.jobs(headroomProject.id).some((job) => job.context?.epicReview?.contextPolicy === "staged-headroom-v2"
+    && job.retrievalWork?.epicStages?.phase === "complete" && job.retrievalWork.epicStages.contextPolicy === "staged-headroom-v2"));
+  assert.deepEqual(store.get(headroomProject.id).sources, headroomProject.sources);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   let failedProject = store.create("Failed gap outcome browser", "Exercise one failed gap outcome", { providerID: "openai", modelID: "fixture" });
   failedProject = store.note(failedProject.id, failedProject.revision, "Clarify order retry behavior", "project");
   await page.reload();
@@ -228,6 +289,6 @@ try {
   assert.equal(dialogText.split(diagnostic).length - 1, 1, "A failed round repeated in progress is shown only once");
   await expect(page.getByText(/^Last round failed:/)).toHaveCount(0);
   assert.deepEqual(errors, []);
-  console.log("Epic review browser check passed: diagnostic selection/download/privacy/failure, selected epic, blocker routing, staged pause/resume, no-call reuse, reload and mobile layout; no live model calls.");
+  console.log("Epic review browser check passed: diagnostic privacy/failure, selected epic, blockers, one-click staged continuation beyond six calls, v2 fallback, no-call reuse, reload and mobile layout; no live model calls.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-epic-review-failure")); throw error; }
-finally { await browser?.close(); await app.close(); store.close(); }
+finally { releaseStaged(); await browser?.close(); await app.close(); store.close(); }

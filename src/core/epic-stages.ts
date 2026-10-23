@@ -1,13 +1,12 @@
 import { createHash } from "node:crypto";
 import { analysisSchema, type Analysis, type Project } from "./model.js";
-import { ContextBudgetError, type ContextPack } from "./context.js";
+import type { ContextPack } from "./context.js";
 import { epicBatchKey, epicReviewBatches, stagedEpicReview, validateEpicReviewFinal } from "./epic-review.js";
-import { guardrailVerdictSchema, type EpicReview } from "./epic-review-types.js";
+import { guardrailVerdictSchema, isStagedPolicy, type EpicReview } from "./epic-review-types.js";
 import { retrievalEvidenceBasis, epicStagesSchema, type EpicStages } from "./gap-retrieval.js";
+import { emptyEpicDraft, epicStageContext } from "./epic-stage-context.js";
+export { emptyEpicDraft, epicStageContext } from "./epic-stage-context.js";
 
-export const emptyEpicDraft = (): Analysis => analysisSchema.parse({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [],
-  questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [],
-  scopeAssessment: { confidence: "low", explanation: "Global scope unchanged." } });
 const key = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const proposalKey = (value: object) => {
   const { localID: _, ...record } = value as { localID?: string };
@@ -44,28 +43,15 @@ export function applyGuardrailVerdict(draft: Analysis, raw: unknown): Analysis {
     requirements: draft.requirements.filter((_, i) => verdict.keepRequirements.includes(i)) };
 }
 
-export function epicStageContext(base: ContextPack, work: EpicStages): ContextPack {
-  const context = structuredClone(base);
-  context.data = { ...(context.data as object), stagedGuardrailReview: {
-    format: 1, phase: work.phase, batch: Math.min(work.nextBatch + 1, work.batches), batches: work.batches,
-    draft: work.candidates,
-    instruction: work.phase === "discover"
-      ? "Review the exact target against ONLY this exact decision batch. Return ordinary analysis with new consequential draft gaps, avoiding the displayed drafts. At most five questions and ten requirements TOTAL across drafts and additions. Drafts are AI proposals, not evidence or decisions; do not cite them or infer omitted preferences. Other shared decisions are checked separately. No retirement, updates, research, search or loads: reviewBlocked for indispensable missing facts. Nothing publishes until every discovery and validation batch finishes."
-      : "CHECK ONLY: return ONLY {guardrailVerdict:{keepQuestions:[zero-based draft indexes],keepRequirements:[zero-based draft indexes]}} or reviewBlocked. Keep a proposal only if this batch does not already answer it, duplicate it or contradict its premises. Remove unsupported/answered/conflicting proposals; do not rewrite, add or renumber before selecting. Earlier drafts are AI proposals, never authoritative evidence. Their original citations were validated when generated; unseen citations do not mean their contents are in this batch. Check compatibility with the exact target and this batch only; indispensable missing information must block, not be guessed. No search, loads, analysis or changes. All batches must check the surviving exact proposals before publication.",
-  } };
-  context.manifest.characters = JSON.stringify(context.data).length;
-  if (context.manifest.characters > 72000) throw new ContextBudgetError({ ...context.manifest, budget: 72000 });
-  const characters = context.manifest.characters, headroom = 96000 - characters;
-  context.manifest.epicContextBudget = { format: 1, target: 72000, hardLimit: 96000, characters, headroom, evidenceReserve: Math.min(24000, headroom), aboveTarget: false };
-  return context;
-}
-
 /** Reconstruct all saved transitions independently before resuming or publishing. */
 export function validateEpicStages(project: Project, review: EpicReview, work: EpicStages, contexts = epicReviewBatches(project, review)): Analysis {
   epicStagesSchema.parse(work);
+  if ((review.contextPolicy === "staged-headroom-v2" && work.contextPolicy !== "staged-headroom-v2")
+    || work.contextPolicy !== undefined && work.contextPolicy !== review.contextPolicy)
+    throw new Error("Staged checkpoint policy does not match its saved protocol. Original stages were not relabelled or overwritten.");
   const canonical = stagedEpicReview(project, review);
   if (JSON.stringify(review.guardrailBatches) !== JSON.stringify(canonical.review.guardrailBatches)) throw new Error("Staged batch plan omits or regroups mandatory decisions; saved evidence was not overwritten.");
-  if (review.contextPolicy !== "staged-guardrails-v1" || work.planKey !== epicBatchKey(contexts) || work.batches !== contexts.length) throw new Error("Staged exact evidence changed; retain dated checkpoints, do not replay them as current.");
+  if (!isStagedPolicy(review.contextPolicy) || work.planKey !== epicBatchKey(contexts) || work.batches !== contexts.length) throw new Error("Staged exact evidence changed; retain dated checkpoints, do not replay them as current.");
   let draft = emptyEpicDraft();
   for (const receipt of work.receipts) {
     const base = contexts[receipt.batch]!;

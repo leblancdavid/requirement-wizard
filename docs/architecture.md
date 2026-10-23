@@ -47,6 +47,24 @@ implemented under `src/`. See [decisions.md](decisions.md),
   blocker summaries survive interrupted planning without reconstructing older
   compatible receipts just for telemetry. See
   [staging optimization](discovery-efficiency.md#staging-cost-optimization-and-blocker-causes-2026-10-22).
+- `src/core/epic-stage-context.ts`: shared stage-envelope measurement and request
+  construction. Versioned `staged-headroom-v2` opens otherwise blocked indivisible
+  leaves using the existing 96k ceiling with a full 12k draft reserve. Original v1
+  checkpoints reconstruct unchanged; policy-bound fingerprints/protocol markers
+  prevent relabelling. CPU-only blocker eligibility upgrades lazily without resetting
+  model attempts. See [compatibility](migrations.md#staged-headroom-v2-and-local-eligibility-upgrade-2026-10-22).
+- Saved staged-policy sixteen-batch overflows are typed, invocation-local candidate
+  failures, not fatal worker errors. Both root and child compatibility probes can
+  continue normal selection; true over-limit leaves remain explicit blockers.
+  Original stages/identities remain untouched. See
+  [recovery](migrations.md#saved-staged-policy-batch-ceiling-recovery-2026-10-23).
+- `src/core/epic-run.ts` defines a staged action's 32-request/fifteen-minute bound.
+  Workflow jobs reserve a sixteen-minute lease (one-minute cleanup margin); ordinary
+  non-staged calls retain their five-minute execution deadline. Staged execution
+  replaces that deadline with the remaining fifteen-minute allowance, including
+  preparation, and honors the outer queue deadline/Stop. Budget pauses atomically
+  retain checkpoints as interrupted work with versioned `stagedRun` metadata, not
+  completed checks or failures. See [compatibility](migrations.md#continuous-bounded-staged-actions-2026-10-23).
 - `src/core/evidence-graph.ts`: derived, invocation-local typed forward/reverse
   provenance index and queue traversal. New `current-spec-v1` workflow contexts use
   exact graph closure and proactive generated-background projection; compatible saved
@@ -602,6 +620,23 @@ Optional reconciliation candidates cannot use the larger allowance, and related-
 hints are not added to expanded packages. No optional records or navigation are
 refilled. This is an application input cap, not a guarantee of a provider's model
 context capacity. Evidence above the final cap still blocks before inference.
+
+Receipt-backed duplicate/conflict checks after a saved response now share that
+144k mandatory-only fallback. `DiscoveryQueue.runOverlapFollowup` supplies an
+internal submission reference; `DiscoveryService` verifies the pending pair,
+exact triggers and completed originating response job before opting in. It does
+not treat the overlap check as a new submission batch or authorize review changes.
+Ordinary refinement retains its 96k bound. Existing semantic keys/checkpoints stay
+unchanged; original completed responses never replay merely to retry a large pair.
+See [upgrade behavior](migrations.md#saved-response-overlap-allowance-parity-2026-10-23).
+
+`src/core/refinement-context.ts` pins every target requirement's direct source links
+as supporting records before inference, even when a linked historical approval is
+owned by a background requirement. Task-target identities remain separate and
+unchanged. The service and publication boundary both assert complete detailed target
+evidence; historical inclusion never grants current citation authority. Missing
+records block locally, and incomplete-context errors identify bounded missing IDs.
+See [compatibility](migrations.md#exact-refinement-supporting-evidence-preflight-2026-10-23).
 
 The durable backlog ledger is existing SQLite jobs, not a second source of project truth.
 `gapExploration.check` records format 1, `gap-evidence-v1`, lens and an input hash. Hashes

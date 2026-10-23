@@ -8,6 +8,7 @@ import type { ContextPack } from "./context.js";
  * Pending work is deliberately excluded: it always gets a fresh exact context.
  */
 export const epicPlanningCheckpointSchema = z.object({ format: z.literal(1),
+  planningPolicy: z.literal("staged-headroom-v2").optional(),
   tasks: z.array(z.object({ review: epicReviewSchema, state: z.enum(["reviewed", "waiting", "blocked"]),
     reason: z.string().optional(), contextCharacters: z.number().int().nonnegative().optional(),
     blocker: z.object({ kind: z.enum(["context-limit", "staged-target", "staged-seed", "stage-limit", "saved-blocker", "attempt-limit"]),
@@ -17,6 +18,13 @@ export const epicPlanningCheckpointSchema = z.object({ format: z.literal(1),
 }).strict();
 export type EpicPlanningCheckpoint = z.infer<typeof epicPlanningCheckpointSchema>;
 export type EpicPlanningBlocker = NonNullable<EpicPlanningCheckpoint["tasks"][number]["blocker"]>;
+/** Reconsider only local eligibility, never delete/reclassify model evidence.
+ * Old unknown blockers are replanned conservatively; saved model history is
+ * reconstructed before the new policy can be selected. */
+export function reusablePlanningCheckpoint(value: EpicPlanningCheckpoint) {
+  return value.planningPolicy === "staged-headroom-v2" || !value.tasks.some((task) => task.state === "blocked"
+    && task.blocker?.kind !== "saved-blocker" && task.blocker?.kind !== "attempt-limit");
+}
 
 const manifestSchema = z.object({ revision: z.number().int().positive(), focusEpicID: z.string().nullable(),
   characters: z.number().int().nonnegative(), budget: z.number().int().positive(),

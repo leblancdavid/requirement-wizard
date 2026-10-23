@@ -49,8 +49,10 @@ records are reviewed together across behavior, recovery and acceptance, with exa
 linked evidence prepared locally and no model-driven search/paging. Select a feature
 or work epic by epic; dependency-boundary packages follow. Existing saved checks are
 preserved separately. Oversized shared decisions can use checkpointed exact batches:
-draft gaps publish only after every batch checks them. Long packages pause after six
-requests per package attempt; Discover missing decisions resumes saved stages without replay.
+draft gaps publish only after every batch checks them. One action continues staged
+packages automatically, up to 32 requests per package within a fifteen-minute action.
+Stop saves progress; budget stops say **Paused—progress saved**. Explicit Resume keeps
+completed stages without replay; app restart never starts calls automatically.
 See [epic workflow review](docs/epic-workflow-review.md) for
 bounded packages, blockers, recovery and verification limits.
 New workflow reviews use a [graph-backed current-specification context](docs/discovery-efficiency.md)

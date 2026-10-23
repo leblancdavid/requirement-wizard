@@ -21,9 +21,10 @@ import { planIncrementalResolution } from "../core/incremental-resolution.js";
 import { answerScopeSchema, decisionBasisSchema, overlapFollowupSchema, pendingChangesSchema, requirementEvidenceIDs, reviewActionSchema, type AnswerScope } from "../core/model.js";
 import { answerScopeMatches, captureAnswerScope, validateScopedAnswerResult } from "../core/input-scope.js";
 import { gapCheckSchema, gapReportSchema, type GapReport } from "../core/gap-types.js";
-import { epicContextBudgetSchema, epicReviewSchema, epicReviewReportSchema, type EpicReviewReport } from "../core/epic-review-types.js";
+import { epicContextBudgetSchema, epicReviewSchema, epicReviewReportSchema, isStagedPolicy, type EpicReviewReport } from "../core/epic-review-types.js";
 import { retrievalAllowanceSchema, retrievalWorkSchema, retrievalEvidenceBasis, retrievalContextKey, type RetrievalWork } from "../core/gap-retrieval.js";
 import { validateEpicStages, epicStagePublicationContext } from "../core/epic-stages.js";
+import { assertRefinementEvidence } from "../core/refinement-context.js";
 import { epicReviewBatches } from "../core/epic-review.js";
 import type { GapHistory } from "../core/gap-backlog.js";
 import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSource } from "../core/discovery-diagnostics.js";
@@ -53,7 +54,11 @@ function readStoredJob(payload: string): Job {
   if (job.context?.epicContextBudget !== undefined) epicContextBudgetSchema.parse(job.context.epicContextBudget);
   if (job.epicReviewReport !== undefined) epicReviewReportSchema.parse(job.epicReviewReport);
   if (job.retrievalWork !== undefined) retrievalWorkSchema.parse(job.retrievalWork);
-  if (job.retrievalWork?.epicStages && job.context?.epicReview?.contextPolicy !== "staged-guardrails-v1") throw new Error("Staged checkpoints require their saved staged context policy; original work was not overwritten.");
+  if (job.retrievalWork?.epicStages && !isStagedPolicy(job.context?.epicReview?.contextPolicy)) throw new Error("Staged checkpoints require their saved staged context policy; original work was not overwritten.");
+  if (job.retrievalWork?.epicStages && ((job.context?.epicReview?.contextPolicy === "staged-headroom-v2"
+    && job.retrievalWork.epicStages.contextPolicy !== "staged-headroom-v2") || job.retrievalWork.epicStages.contextPolicy !== undefined
+    && job.retrievalWork.epicStages.contextPolicy !== job.context?.epicReview?.contextPolicy))
+    throw new Error("Staged checkpoint policy does not match its saved protocol. Original work was not overwritten.");
   if (job.context?.decisionProjection !== undefined) z.object({ format: z.literal(1), omittedReviewSourceIDs: z.array(z.string()), retainedReviewNoteSourceIDs: z.array(z.string()), projectedReceiptSourceIDs: z.array(z.string()).optional() }).strict().parse(job.context.decisionProjection);
   return job;
 }
@@ -1027,6 +1032,11 @@ export class ProjectStore {
     const rows = this.db.prepare("SELECT input_key, group_key, format, payload FROM epic_planning_receipts WHERE project_id = ?")
       .all(projectID) as { input_key: string; group_key: string; format: number; payload: string }[];
     if (rows.some((row) => row.format !== 1)) throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
+    for (const row of rows) {
+      const value = JSON.parse(row.payload) as { format?: unknown; planningPolicy?: unknown };
+      if (value.format !== 1 || value.planningPolicy !== undefined && value.planningPolicy !== "staged-headroom-v2")
+        throw new Error("Unsupported local planning receipt policy. Saved work was not overwritten.");
+    }
     return new Map(rows.filter((row) => row.input_key === inputKey).map((row) => [row.group_key, epicPlanningCheckpointSchema.parse(JSON.parse(row.payload))]));
   }
 
@@ -1037,13 +1047,20 @@ export class ProjectStore {
       if (this.get(projectID).revision !== expectedRevision) throw new StaleRevisionError();
       if (this.db.prepare("SELECT 1 FROM epic_planning_receipts WHERE project_id = ? AND format != 1").get(projectID))
         throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
+      if (this.db.prepare(`SELECT 1 FROM epic_planning_receipts WHERE project_id = ? AND
+        (COALESCE(json_extract(payload, '$.format'), 0) != 1 OR
+        (json_type(payload, '$.planningPolicy') IS NOT NULL AND json_extract(payload, '$.planningPolicy') IS NOT 'staged-headroom-v2'))`).get(projectID))
+        throw new Error("Unsupported local planning receipt policy. Saved work was not overwritten.");
       // One input generation per project, capped at 4 MiB/2,000 roots/subtrees.
       // This is disposable derived state, never original decisions or checks.
       this.db.prepare("DELETE FROM epic_planning_receipts WHERE project_id = ? AND input_key != ?").run(projectID, inputKey);
       const size = this.db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(length(CAST(payload AS BLOB))), 0) AS bytes FROM epic_planning_receipts WHERE project_id = ?")
         .get(projectID) as { n: number; bytes: number };
-      if (size.n >= 2000 || size.bytes + Buffer.byteLength(payload) > 4 * 1024 * 1024) return;
-      this.db.prepare("INSERT INTO epic_planning_receipts VALUES (?, ?, ?, 1, ?) ON CONFLICT(project_id, group_key) DO NOTHING")
+      const previous = this.db.prepare("SELECT payload, length(CAST(payload AS BLOB)) AS bytes FROM epic_planning_receipts WHERE project_id = ? AND group_key = ?")
+        .get(projectID, groupKey) as { payload: string; bytes: number } | undefined;
+      if (previous) epicPlanningCheckpointSchema.parse(JSON.parse(previous.payload));
+      if ((!previous && size.n >= 2000) || size.bytes - (previous?.bytes ?? 0) + Buffer.byteLength(payload) > 4 * 1024 * 1024) return;
+      this.db.prepare("INSERT INTO epic_planning_receipts VALUES (?, ?, ?, 1, ?) ON CONFLICT(project_id, group_key) DO UPDATE SET payload = excluded.payload")
         .run(projectID, inputKey, groupKey, payload);
     }).immediate();
   }
@@ -1318,7 +1335,7 @@ export class ProjectStore {
             for (const record of [...result.questions, ...result.requirements]) record.epicID ??= job.context.focusEpicID ?? "project";
           }
           if (job.context?.epicReview) {
-            if (job.context.epicReview.contextPolicy === "staged-guardrails-v1") {
+            if (isStagedPolicy(job.context.epicReview.contextPolicy)) {
               const staged = job.retrievalWork?.epicStages;
               if (!staged || staged.phase !== "complete" || !job.retrievalWork?.final) throw new Error("Partial staged decision review cannot publish proposals.");
               const batches = epicReviewBatches(project, job.context.epicReview);
@@ -1366,11 +1383,9 @@ export class ProjectStore {
             if (pair && !proposal.resolution) throw new Error("Pair tasks must propose an explicit resolution, not independent cleanup.");
             validateResolutionEvidence(project, proposal, job.context?.includedIDs);
             if (job.context?.refinementTarget && proposal.requirementID !== job.context.refinementTarget.requirementID) throw new Error("Refinement cannot change a requirement outside its individual task.");
-            const target = project.requirements.find((r) => r.id === proposal.requirementID);
-            if (!job.context?.includedIDs.includes(proposal.requirementID) || target?.sourceIDs.some((sourceID) => !job.context!.includedIDs.includes(sourceID))) throw new Error("Refinement requires the detailed requirement and all supporting evidence.");
+            assertRefinementEvidence(project, [proposal.requirementID], job.context?.includedIDs ?? []);
             if (proposal.resolution) {
-              const related = project.requirements.find((r) => r.id === proposal.resolution!.relatedRequirementID);
-              if (!related || !job.context?.includedIDs.includes(related.id) || [...related.sourceIDs, ...proposal.resolution.evidenceIDs].some((id) => !job.context!.includedIDs.includes(id))) throw new Error("Resolution requires both detailed requirements and all supporting evidence.");
+              assertRefinementEvidence(project, [proposal.requirementID, proposal.resolution.relatedRequirementID], job.context?.includedIDs ?? []);
             }
           }
           const authorized = (sourceID: string, changes = false) => reviews.some((s) => s.appliedSourceID === sourceID && s.input.type === "review" && (!changes || s.input.action !== "changes-requested" && !!s.input.note.trim()) &&
@@ -1488,6 +1503,24 @@ export class ProjectStore {
       job.leaseUntil = null;
       this.saveJob(job);
       return job;
+    }).immediate();
+  }
+
+  /** Intentional action-budget stop, not failed analysis or a completed review. */
+  pauseEpicReview(id: string, reason: "request-limit" | "time-limit"): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()
+        || !job.retrievalWork?.epicStages || !job.retrievalWork.stagedRun) throw new Error("Staged review worker is no longer live; saved progress was retained.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) {
+        job.status = "stale"; job.diagnostic = "Project changed while analysis was running; saved stages were not published.";
+      } else {
+        job.status = "interrupted";
+        job.retrievalWork.stagedRun.paused = reason;
+        job.retrievalWork = retrievalWorkSchema.parse(job.retrievalWork);
+        job.diagnostic = `Paused—progress saved: staged review reached this action's ${reason === "request-limit" ? `${job.retrievalWork.stagedRun!.requestLimit}-request` : "time"} budget. Drafts remain unpublished. Resume discovery to continue unfinished stages; completed calls will not repeat.`;
+      }
+      job.leaseUntil = null; this.saveJob(job); return job;
     }).immediate();
   }
 

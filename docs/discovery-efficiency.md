@@ -84,6 +84,106 @@ still stops at its existing missing **Approve resolution** assertion. The focuse
 browser check includes Resume after reload and unchanged original staged-job evidence;
 the SQLite test exercises restart without automatic inference. No live model calls.
 
+### Staged headroom fallback (2026-10-22)
+
+Supplied diagnostics examined 234 packages, with 233 blocked, including 68 newly
+measured staged-seed blockers and two staged-target blockers. The largest known
+blocked context was 71,887 characters against the old 54,000-character staged gate.
+This identifies a policy constraint, not evidence that the user's entire project
+will now finish preparation or produce new gaps.
+
+New `staged-headroom-v2` opens otherwise blocked indivisible leaves only. Ordinary
+splitting and the preferred 72k path retain priority; old v1 stages retain their
+54k base gate and 72k actual-stage ceiling. V2 measures the largest discover/check/
+complete envelope together with exact evidence and the full existing 12k draft
+reserve against the unchanged 96k application-context ceiling. Every actual request
+is measured again, including instructions and current drafts. Reduced headroom is
+explicit; this is not a provider-token or full runtime-overhead guarantee.
+
+Saved stages carry policy provenance and v2 has distinct review fingerprints.
+Compatible completed calls and spent attempts reconstruct under their original
+policy. Old CPU-only local size/unknown blockers are automatically reconsidered
+without invalidating reviewed/waiting work or resetting model allowances. See
+[upgrade/recovery details](migrations.md#staged-headroom-v2-and-local-eligibility-upgrade-2026-10-22).
+
+Restart the updated app normally and use **Resume discovery** (or **Explore next
+gaps** when no input remains). Do not reset project data or delete cached jobs.
+Startup itself never starts model calls. Indivisible evidence plus the reserve can
+still exceed 96k, and the existing preparation deadline/batch/attempt limits remain.
+
+Verification: the full main suite passed 635 tests; the final pretest rerun passed
+all 69 tests. A normal Node compiled-JavaScript worker smoke prepared an 82,467-character
+v2 stage without a TypeScript loader. (An initial stdin invocation failed because
+`--input-type=module` was inherited by the file-based worker; the file-entry smoke
+passed.) Type checking, desktop TypeScript emit, UI build and focused workflow browser tests
+passed, including v1 pause/resume and above-target v2 completion. No personal database
+or live provider calls were used. Exact-project throughput, live provider behavior
+and full packaged Electron execution remain unqualified. The broader browser suite
+was not rerun; its earlier **Approve resolution** blocker remains unresolved.
+
+### Saved-answer overlap checks (2026-10-23)
+
+Saved-response processing is separate from staged gap discovery. Each queued answer
+already has a 144k mandatory-only fallback, but its automatic duplicate/conflict
+checks previously stopped at 96k. A synthetic reproduction completed the response
+at 111,107/144,000 characters, then blocked its pair at 111,390/96,000 with no pair
+request. Resume retained the completed response but retried the same oversized check.
+
+Only receipt-validated saved-response pairs now share the existing 144k fallback.
+Original answers, completed response jobs and completed pair checks remain saved;
+explicit Resume retries unfinished work, not the completed response. Ordinary
+refinement and staged gap budgets remain unchanged. Diagnostics selection still
+excludes refinement jobs; failure messages distinguish the saved response from its
+unfinished check. See [compatibility and tests](migrations.md#saved-response-overlap-allowance-parity-2026-10-23).
+
+### Refinement evidence completeness (2026-10-23)
+
+A follow-on failure reached model inference but rejected a returned resolution for
+missing detailed supporting evidence. A synthetic regression reproduces this when
+one pair requirement cites an old approval owned by a background requirement: the
+background decision projection omitted it, but publication required the original link.
+Exact direct source links are now pinned as supporting records for both pair targets
+(and individual refinement), with a completeness check before inference and again at
+publication. No safeguard or citation rule is weakened; superseded evidence remains
+historical, not authority for a new decision. Existing successful-check identities
+and completed answer calls remain intact. This avoids a reproduced class of wasted
+model calls, not a claim that all live resolution failures are fixed. See
+[upgrade tests and limits](migrations.md#exact-refinement-supporting-evidence-preflight-2026-10-23).
+
+### Saved-policy batch-ceiling recovery (2026-10-23)
+
+Supplied diagnostics stopped in about four seconds with zero model requests and
+zero examined packages, during saved-policy reconstruction. A saved staged policy
+could throw its sixteen-batch error before the planner reached its normal fallback/
+blocker handling. This was a planner-wide abort, not evidence that every project
+package required more than sixteen batches.
+
+The typed overflow is now cached as a local failed compatibility candidate for both
+saved roots and children. Normal policy selection can continue; true stage-limit
+blockers are counted without preventing independent eligible work. Other errors
+still fail visibly. This does not increase context, batch, lease or model-attempt
+allowances, and does not replay/relabel old stages after changed decisions. See
+[compatibility and regression fixtures](migrations.md#saved-staged-policy-batch-ceiling-recovery-2026-10-23).
+
+### Continuous bounded staged actions (2026-10-23)
+
+The six-request pause was reliable checkpointing exposed as repetitive user work:
+a 26-stage package needed five explicit actions even with no model errors. Staged
+packages now continue in the same job up to 32 requests or fifteen minutes including
+preparation. The existing queue-wide fifteen-minute/ten-package limits still apply.
+Stop, exact checkpoints, three attempts per stage, context limits and publication
+only after all batches remain. Real failures stop; there is no automatic error retry
+or post-restart inference. This removes repeated resumes, not repeated evidence or
+the cost of a multi-batch review.
+
+Format-1 `retrievalWork.stagedRun` records each action's limits and optional budget
+pause reason. Intentional stops retain `interrupted` storage status and display
+**Paused—progress saved**, not failed analysis. A new action clears only its own
+run-budget marker, never saved stage attempts/responses. Old six-request jobs remain
+unchanged and resume compatible work under the new scheduling allowance. Metadata
+diagnostics now retain all requests up to 32 rather than failing at the seventh.
+See [upgrade and verification](migrations.md#continuous-bounded-staged-actions-2026-10-23).
+
 ## Measurement
 
 ### Responsive, incremental preparation (2026-10-22)

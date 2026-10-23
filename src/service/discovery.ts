@@ -12,15 +12,17 @@ import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
 import { epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages } from "../core/epic-stages.js";
-import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema } from "../core/epic-review-types.js";
+import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { refinementContextKey } from "./refinement-tasks.js";
+import { refinementEvidenceRecords, assertRefinementEvidence } from "../core/refinement-context.js";
 import { pairQuestions, resolutionContextKey } from "../core/resolution.js";
 import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanWindowTimeout, scanLeaseDuration } from "./scan-batches.js";
 import { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { prepareEpicReview } from "./epic-planning.js";
+import { stagedRunRequestLimit, stagedRunDurationMs, stagedRunLeaseMs } from "../core/epic-run.js";
 
 export interface DiscoveryAdapter {
   clarify?(project: Project, request: QuestionHelpRequest, options: DiscoveryOptions): Promise<unknown>;
@@ -53,7 +55,10 @@ function schemaDiagnostic(error: z.ZodError): string {
 /** Shared application boundary. No model or storage operations belong in UI components. */
 export class DiscoveryService {
   constructor(readonly store: ProjectStore, private readonly adapter: DiscoveryAdapter,
-    private readonly navigation: { searchEvidence?: typeof searchSavedEvidence } = {}) {}
+    private readonly navigation: { searchEvidence?: typeof searchSavedEvidence; stagedLimits?: { requests: number; durationMs: number } } = {}) {
+    if (navigation.stagedLimits) z.object({ requests: z.number().int().min(1).max(stagedRunRequestLimit),
+      durationMs: z.number().int().min(1).max(stagedRunDurationMs) }).strict().parse(navigation.stagedLimits);
+  }
 
   requiresInitialization(projectID: string) {
     const project = this.store.get(projectID);
@@ -211,7 +216,7 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
     if (options.questionTarget !== undefined) {
@@ -223,15 +228,30 @@ export class DiscoveryService {
     if (options.gapMode && (options.helpRequest || options.refinementOnly || options.recordIDs?.length || options.submissionIDs?.length
       || options.isolatedTask || options.requiredEpicIDs?.length || options.continueGapJobID || options.savedEvidencePolicy !== undefined)) throw new Error("Epic review requires a separate manual exploration, without legacy retrieval or submission options.");
     if (!options.helpRequest) this.assertCanDiscover(projectID);
+    // Internal queue capability, not ordinary refinement or review authorization.
+    // Re-read durable provenance on every retry; never trust a caller's size flag.
+    if (options.savedOverlapSubmissionID !== undefined) {
+      const item = this.store.submissions(projectID).find((s) => s.id === options.savedOverlapSubmissionID);
+      const receipt = item?.overlapFollowup;
+      const root = receipt && this.store.getJob(receipt.discoveryJobID);
+      const pair = options.refinementPair;
+      if (!item?.applied || item.conflict || !item.appliedSourceID || receipt?.state !== "pending"
+        || !root || root.status !== "completed" || root.projectID !== projectID || !root.context?.submissionIDs?.includes(item.id)
+        || !receipt.triggerSourceIDs.includes(item.appliedSourceID) || !options.refinementOnly || !pair
+        || options.helpRequest || options.gapMode || options.submissionIDs?.length || options.continueGapJobID
+        || !receipt.pairs.some((p) => p.status === "pending" && p.requirementIDs.length === pair.length && p.requirementIDs.every((id) => pair.includes(id)))
+        || JSON.stringify(options.resolutionTriggerSourceIDs) !== JSON.stringify(receipt.triggerSourceIDs))
+        throw new Error("Saved overlap allowance requires its pending pair and completed response receipt. No saved work was changed.");
+    }
     const continuationSource = options.continueGapJobID ? this.assertGapContinuation(projectID, expectedRevision, options.continueGapJobID) : undefined;
     if (continuationSource && (options.helpRequest || options.refinementOnly || options.recordIDs?.length || options.submissionIDs?.length
       || options.requiredEpicIDs?.length || options.isolatedTask || options.savedEvidencePolicy !== undefined || options.research !== undefined || options.focusEpicID !== undefined)) {
       throw new Error("Continue exploration retains its saved task, model, research permission and search policy; other discovery options are not accepted.");
     }
     const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest);
-    // Startup, discovery, and inference have a combined five-minute bound.
-    // The longer lease permits a short recovery/cleanup window without stealing live work.
-    this.store.claimJob(job.id, Date.now() + 360_000);
+    // Ordinary calls retain five minutes. Staged packages may continue within a
+    // fifteen-minute action, including preparation, with a one-minute lease margin.
+    this.store.claimJob(job.id, Date.now() + (options.gapMode ? stagedRunLeaseMs : 360_000));
     const measurement = !options.helpRequest && !options.refinementOnly
       ? new DiscoveryMeasurement((value) => this.store.saveDiscoveryMetrics(job.id, value)) : undefined;
     const completeMeasurement = (result: Job): Job => {
@@ -242,7 +262,10 @@ export class DiscoveryService {
     const controller = new AbortController();
     const abort = () => controller.abort();
     options.signal?.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(abort, 300_000);
+    const started = Date.now();
+    let timedOut = false, stagedRun = false;
+    const timeout = () => { timedOut = true; abort(); };
+    let timer = setTimeout(timeout, 300_000);
     const refinementTarget = options.refinementOnly && !options.refinementPair ? project.requirements.find((r) => options.recordIDs?.length
       ? options.recordIDs.includes(r.id) : !options.focusEpicID || r.epicID === options.focusEpicID) : undefined;
     try {
@@ -254,6 +277,8 @@ export class DiscoveryService {
       if (triggerSourceIDs.length > 8 || triggerSourceIDs.some((id) => !project.sources.some((s) => s.id === id))) throw new Error("Resolution trigger evidence is missing or exceeds its bound.");
       if (options.refinementOnly && !refinementTarget && !pair) throw new Error("No requirement available for refinement in this scope.");
       const linkedQuestions = pair ? pairQuestions(project, pair) : [];
+      const refinementRecords = pair ? refinementEvidenceRecords(project, pair)
+        : refinementTarget ? refinementEvidenceRecords(project, [refinementTarget.id]) : undefined;
       const pairRecords = pair ? [...pair, ...triggerSourceIDs, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
       const generalExploration = !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
@@ -289,9 +314,11 @@ export class DiscoveryService {
         : planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
         requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
         recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
+        supportingRecordIDs: refinementRecords,
         isolatedTask: options.refinementOnly || options.isolatedTask,
-        submissionFollowup: options.isolatedTask && options.submissionIDs?.length === 1,
+        submissionFollowup: !!options.savedOverlapSubmissionID || options.isolatedTask && options.submissionIDs?.length === 1,
         budget: 48000, expandMandatory: true });
+      if (pair || refinementTarget) assertRefinementEvidence(project, pair ?? [refinementTarget!.id], context.manifest.includedIDs);
       if (continuationSource?.gapReport) context.gapReport = structuredClone(continuationSource.gapReport);
       context.manifest.submissionIDs = options.submissionIDs;
       context.manifest.refinementOnly = options.refinementOnly;
@@ -317,9 +344,9 @@ export class DiscoveryService {
       context.manifest.reviewChangeSourceIDs = batchReviews
         .filter((item) => item.input.type === "review" && item.input.action !== "changes-requested" && !!item.input.note.trim())
         .map((item) => item.appliedSourceID!);
-      if (context.manifest.partial) options.onProgress?.(`Using a smaller task working set (${context.manifest.characters.toLocaleString("en-US")} characters); ${context.manifest.epicReview?.contextPolicy === "staged-guardrails-v1" ? "exact target and one decision batch retained; other mandatory decisions are checked separately before publication" : "exact human guardrails retained"}. Whole-area assessments are deferred.`);
+      if (context.manifest.partial) options.onProgress?.(`Using a smaller task working set (${context.manifest.characters.toLocaleString("en-US")} characters); ${isStagedPolicy(context.manifest.epicReview?.contextPolicy) ? "exact target and one decision batch retained; other mandatory decisions are checked separately before publication" : "exact human guardrails retained"}. Whole-area assessments are deferred.`);
       if (context.manifest.version === "tasks-v7") options.onProgress?.("Omitted generated background rationales and unselected historical option explanations to fit the hard context bound. Exact human input, requirement wording/scenarios and selected-option consequences are retained.");
-      if (context.manifest.budget > 48000) options.onProgress?.(`Mandatory evidence requires ${context.manifest.characters.toLocaleString("en-US")} characters; using the bounded 96,000-character fallback after task planning. Exact human evidence is retained; no optional detail was added.`);
+      if (context.manifest.budget > 48000) options.onProgress?.(`Mandatory evidence requires ${context.manifest.characters.toLocaleString("en-US")} characters; using the bounded ${context.manifest.budget.toLocaleString("en-US")}-character fallback after task planning. Exact human evidence is retained; no optional detail was added.`);
       if (context.manifest.compaction) options.onProgress?.(`Context overhead reduced from ${context.manifest.compaction.originalCharacters.toLocaleString("en-US")} to ${context.manifest.characters.toLocaleString("en-US")} characters; exact decisions and evidence retained.`);
       this.store.attachContext(job.id, context.manifest);
       measurement?.planned(context, epicPlan?.planningDecisions);
@@ -374,20 +401,30 @@ export class DiscoveryService {
           this.store.attachEpicReviewReport(job.id, reviewReport);
           throw new Error(`Epic workflow review needs evidence: ${reason} No proposals applied. Saved stages retained; this unchanged package is blocked, not reviewed.`);
         };
-        if (review.contextPolicy === "staged-guardrails-v1") {
+        if (isStagedPolicy(review.contextPolicy)) {
           if (adapterOptions.research) throw new Error("Staged decision review does not support research. Retry with research disabled; no provider or mode was silently changed.");
           const batches = epicPlan.task.batches ?? epicReviewBatches(project, review);
           const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
+            ...(review.contextPolicy === "staged-headroom-v2" ? { contextPolicy: "staged-headroom-v2" as const } : {}),
             phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
           validateEpicStages(project, review, staged, batches);
+          stagedRun = true;
+          const limits = this.navigation.stagedLimits ?? { requests: stagedRunRequestLimit, durationMs: stagedRunDurationMs };
+          work.stagedRun = { format: 1, requestLimit: limits.requests, durationMs: limits.durationMs };
+          clearTimeout(timer);
+          timer = setTimeout(timeout, Math.max(0, started + limits.durationMs - Date.now()));
           if (work.stages.length || work.continuation) throw new Error("Staged decision review cannot reuse ordinary navigation work.");
           let callsThisRun = 0;
           while (staged.phase !== "complete") {
             controller.signal.throwIfAborted();
             context = epicStageContext(batches[staged.nextBatch]!, staged);
+            if (review.contextPolicy === "staged-headroom-v2") report(`Staged headroom policy v2: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters including stage instructions and current drafts. ${context.manifest.characters > 72000 ? "Above the 72,000-character preferred target; reduced headroom is explicit." : "Within the preferred target."} Exact evidence is unchanged; planning reserved the full 12,000-character draft allowance.`);
             checkpoint();
             if (work.attempts >= 3) return block("Three attempts spent on this exact decision stage. Earlier completed stages remain saved; unchanged work will not retry automatically.");
-            if (callsThisRun >= 6) throw new Error("Staged review paused after six requests in this package attempt. No drafts published. Explore next gaps to resume saved stages; completed calls will not repeat.");
+            if (callsThisRun >= limits.requests || Date.now() - started >= limits.durationMs) {
+              const reason = callsThisRun >= limits.requests ? "request-limit" : "time-limit";
+              return completeMeasurement(this.store.pauseEpicReview(job.id, reason));
+            }
             report(`Staged decision review: ${staged.phase === "discover" ? "drafting" : "checking drafts"}, batch ${staged.nextBatch + 1} of ${staged.batches}. ${staged.receipts.length} stages saved; no proposals publish before every batch is checked.`);
             work.attempts++; callsThisRun++; checkpoint();
             const raw = await requestModel(context);
@@ -605,6 +642,9 @@ export class DiscoveryService {
       report("Checking returned proposals and references before saving…");
       return completeMeasurement(options.helpRequest ? this.store.finishHelp(job.id, output) : this.store.finishJob(job.id, output));
     } catch (error) {
+      if (stagedRun && controller.signal.aborted && (timedOut || options.signal?.reason?.name === "TimeoutError")) {
+        return completeMeasurement(this.store.pauseEpicReview(job.id, "time-limit"));
+      }
       if (error instanceof GapBacklogIdle) {
         if (controller.signal.aborted) {
           this.store.attachGapReport(job.id, error.report);
@@ -624,11 +664,13 @@ export class DiscoveryService {
       }
       const cancelled = controller.signal.aborted;
       const retainedAttempts = this.store.getJob(job.id).retrievalWork?.attempts ?? 0;
+      const overlapDiagnostic = options.savedOverlapSubmissionID
+        ? "Your response was already processed and saved. Its duplicate/conflict follow-up did not complete; resume retries the unfinished check, not the completed response. " : "";
       this.store.failJob(job.id, cancelled ? "cancelled" : error instanceof StaleRevisionError ? "stale" : "failed",
-        cancelled ? "Request cancelled or timed out. Human input was preserved." :
+        overlapDiagnostic + (cancelled ? "Request cancelled or timed out. Human input was preserved." :
           error instanceof z.ZodError ? schemaDiagnostic(error) : safeMessage(error instanceof ContextBudgetError && retainedAttempts
             ? error.message.replace("No model call was made", "No additional request was made for the oversized stage; earlier attempts and saved stages are retained")
-            : error instanceof Error ? error.message : error));
+            : error instanceof Error ? error.message : error)));
       return completeMeasurement(this.store.getJob(job.id));
     } finally {
       measurement?.finish();

@@ -140,6 +140,15 @@ Stored sources and decisions are unchanged. After restarting the updated app, us
 the retained response's retry action rather than submitting it again. Retry replans
 locally before any model call; this does not guarantee every oversized project fits.
 
+Duplicate/conflict checks following an already saved response also receive the
+144,000-character mandatory-only fallback when backed by their saved pending-pair
+receipt. This fixes a mismatch where the response could finish at 111k but its
+automatic check failed at 96k. Restart and **Resume processing** retries unfinished
+checks without repeating completed response calls or re-entering answers. Ordinary
+manual refinement keeps its existing bound. Failure messages now explicitly identify
+the already saved response versus the unfinished check; evidence above 144k still
+blocks without truncation. See [compatibility](migrations.md#saved-response-overlap-allowance-parity-2026-10-23).
+
 If a single saved-response follow-up still exceeds 96,000 characters after the
 existing compaction passes, it can now use a final **144,000-character mandatory-only
 allowance**. Required human evidence remains intact; optional reconciliation candidates
@@ -666,16 +675,21 @@ When shared project/dependency decisions exceed the normal package target, new w
 can now use **staged decision review**. Exact guardrails are split into bounded
 batches; drafts are checked against every batch before any questions/requirements
 publish. Processing & queue shows drafting/checking progress, saved stage counts and
-total attempts. Actual staged contexts remain below 72k characters, including drafts.
+total attempts. Saved v1 staged contexts retain their 72k ceiling, including drafts.
+New otherwise blocked indivisible leaves can use `staged-headroom-v2`: exact evidence,
+stage instructions and the full 12k draft reserve must fit the existing 96k ceiling.
+Above-72k requests show reduced headroom explicitly. Old stages/attempts remain intact;
+old local size blockers are reconsidered on explicit Resume without resetting data.
 An indivisible oversized evidence chain still blocks explicitly; nothing is silently
 summarized or deleted.
 
-A package pauses after six requests in one invocation, with a failed/paused job
-diagnostic (not a completed review or an evidence blocker). Click **Explore next gaps**
-again to resume its saved stages; restart/reload never starts model calls or repeats
-completed stages. This can require more model calls than the old single-request
-path. The six-request bound is per package invocation, not per entire queue action;
-existing ten-package/fifteen-minute queue limits remain. Staged review does not
+One click now continues a staged package through up to **32 requests or fifteen
+minutes**, instead of pausing every six calls. **Stop** preserves saved stages.
+Intentional budget stops show **Paused—progress saved**, not failed analysis; Resume
+continues unfinished stages. Restart never starts calls, and reloading during a live
+run does not start a second worker. This removes babysitting, not model-call cost:
+a sixteen-batch package still needs 32 successful stages. The request bound is per
+package; existing ten-package/fifteen-minute queue-action limits remain. Staged review does not
 support research or extra file loads; indispensable missing facts block, and enabled
 research is explicitly rejected. Compatible saved reviews keep their old policy.
 

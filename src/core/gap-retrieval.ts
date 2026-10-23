@@ -8,6 +8,7 @@ import { ContextBudgetError } from "./context.js";
 import { planContext } from "./working-set.js";
 import { searchEvidenceSchema, savedEvidenceSearchSchema, savedEvidencePolicySchema } from "./gap-navigation.js";
 import { guardrailVerdictSchema } from "./epic-review-types.js";
+import { stagedRunRequestLimit, stagedRunDurationMs } from "./epic-run.js";
 
 export const retrievalRequestSchema = z.object({ retrieveEvidence: z.object({ format: z.literal(1),
   recordIDs: z.array(z.string().min(1).max(200)).min(1).max(8), reason: z.string().min(1).max(600),
@@ -23,6 +24,7 @@ export const retrievalAllowanceSchema = z.object({ format: z.literal(1), attempt
 export type RetrievalAllowance = z.infer<typeof retrievalAllowanceSchema>;
 export const epicStagesSchema = z.object({
   format: z.literal(1), planKey: z.string().regex(/^[a-f0-9]{64}$/), batches: z.number().int().min(1).max(16),
+  contextPolicy: z.enum(["staged-guardrails-v1", "staged-headroom-v2"]).optional(),
   phase: z.enum(["discover", "validate", "complete"]), nextBatch: z.number().int().min(0).max(16),
   candidates: analysisSchema,
   receipts: z.array(z.object({ phase: z.enum(["discover", "validate"]), batch: z.number().int().min(0).max(15),
@@ -41,6 +43,8 @@ export const epicStagesSchema = z.object({
 export type EpicStages = z.infer<typeof epicStagesSchema>;
 export const retrievalWorkSchema = z.object({ format: z.literal(1),
   epicStages: epicStagesSchema.optional(),
+  stagedRun: z.object({ format: z.literal(1), requestLimit: z.number().int().min(1).max(stagedRunRequestLimit),
+    durationMs: z.number().int().min(1).max(stagedRunDurationMs), paused: z.enum(["request-limit", "time-limit"]).optional() }).strict().optional(),
   continuation: continuationReceiptSchema.optional(),
   requestedPolicy: savedEvidencePolicySchema.optional(),
   research: z.boolean(),
@@ -65,6 +69,8 @@ export const retrievalWorkSchema = z.object({ format: z.literal(1),
   final: z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), output: analysisSchema,
     revision: z.number().int().positive().optional(), evidenceBasis: evidenceBasisSchema.optional() }).strict().optional(),
 }).strict().superRefine((work, ctx) => {
+  if (work.stagedRun && !work.epicStages)
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Staged run metadata requires staged work." });
   if (work.epicStages && (work.stages.length || work.continuation || work.research || work.final && work.epicStages.phase !== "complete")) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Staged epic work cannot mix navigation, research or premature publication." });
   }

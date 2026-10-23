@@ -13,9 +13,15 @@ import { discoveryPrompt } from "../runtime/discovery.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { SubmissionOverlapStatus } from "../ui/submission-overlap.js";
+import { createHash } from "node:crypto";
 
 const empty = (): Analysis => ({ summary: "Reports", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 const resolution = (outcome: "distinct" | "blocked" = "distinct"): Analysis => ({ ...empty(), resolutionCheck: { format: 1, outcome, explanation: outcome === "blocked" ? "Clarification is blocked until existing questions are answered" : "Different policy scopes" } });
+function largeGuardrails(store: ProjectStore, p: Project, count = 11) {
+  for (let i = 0; i < count; i++) p = store.note(p.id, p.revision,
+    Array.from({ length: 150 }, (_, n) => createHash("sha256").update(`overlap-guardrail-${i}-${n}`).digest("hex")).join(""), "project");
+  return p;
+}
 function seed(store: ProjectStore, count = 2) {
   let p = store.create("Reports", "Preserve explicitly reviewed report access rules", { providerID: "openai", modelID: "fixture" });
   const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
@@ -253,6 +259,91 @@ test("legacy completed submissions keep their status without new follow-up or st
   } finally { store.close(); }
 });
 
+test("legacy 96k overlap blocker reopens and retries at 144k without repeating its completed response or rewriting evidence", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "reqwizit-overlap-upgrade-")), path = join(folder, "projects.sqlite");
+  let store = new ProjectStore(path), queue: DiscoveryQueue | undefined;
+  try {
+    const p = largeGuardrails(store, seed(store));
+    const row = store.enqueue(p.id, { id: crypto.randomUUID(), auto: false, research: false, input: reviewInput(p) });
+    store.applyQueued(p.id);
+    const root = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      assert.equal(context.manifest.budget, 144000);
+      return { ...empty(), reviewResponses: context.manifest.reviewSourceIDs!.map((sourceID) => ({ sourceID, text: "Original response retained" })) };
+    } }).analyze(p.id, store.get(p.id).revision, { isolatedTask: true, recordIDs: [p.requirements[0]!.id, store.submissions(p.id)[0]!.appliedSourceID!], submissionIDs: [row.id] });
+    assert.equal(root.status, "completed", root.diagnostic);
+    const item = store.submissions(p.id)[0]!, receipt = structuredClone(item.overlapFollowup!);
+    assert.equal(receipt.state, "pending");
+    const pair = receipt.pairs[0]!;
+    const old = await new DiscoveryService(store, { async analyze() { assert.fail("Ordinary pair cannot use larger allowance"); } })
+      .analyze(p.id, store.get(p.id).revision, { refinementOnly: true, refinementPair: pair.requirementIDs, includeUnapproved: true, resolutionTriggerSourceIDs: receipt.triggerSourceIDs });
+    assert.equal(old.status, "failed"); assert.equal(old.context!.budget, 96000);
+    assert.ok(old.context!.characters > 96000 && old.context!.characters < 144000);
+    item.status = "needs-attention"; item.jobID = old.id; item.diagnostic = old.diagnostic; item.overlapFollowup!.pairs[0]!.jobID = old.id; store.saveSubmission(item);
+    const snapshot = store.get(p.id), savedRoot = store.getJob(root.id), savedOld = store.getJob(old.id);
+    store.close(); store = new ProjectStore(path);
+    let calls = 0;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_p, { context }) {
+      calls++; assert.ok(context.manifest.refinementPair); assert.equal(context.manifest.budget, 144000);
+      assert.ok(context.manifest.characters > 96000 && context.manifest.characters <= 144000);
+      assert.equal(context.manifest.submissionIDs, undefined, "Overlap allowance cannot authorize response publication");
+      for (const source of snapshot.sources) assert.ok(context.manifest.includedIDs.includes(source.id));
+      return resolution();
+    } }));
+    assert.equal(calls, 0);
+    const service = new DiscoveryService(store, { async analyze() { assert.fail("Invalid provenance must not call a model"); } });
+    await assert.rejects(service.analyze(p.id, snapshot.revision, { refinementOnly: true, refinementPair: pair.requirementIDs,
+      savedOverlapSubmissionID: row.id, resolutionTriggerSourceIDs: [] }), /completed response receipt/);
+    queue.resumeBrowser(p.id); await idle(queue, p.id);
+    assert.equal(calls, 1); assert.equal(store.submissions(p.id)[0]!.status, "completed");
+    assert.equal(store.submissions(p.id)[0]!.response, "Original response retained");
+    assert.deepEqual(store.get(p.id).sources, snapshot.sources); assert.deepEqual(store.get(p.id).requirements, snapshot.requirements);
+    assert.deepEqual(store.getJob(root.id), savedRoot); assert.deepEqual(store.getJob(old.id), savedOld);
+    await queue.close(); queue = undefined; store.close(); store = new ProjectStore(path);
+    assert.equal(store.submissions(p.id)[0]!.status, "completed");
+    assert.deepEqual(store.getJob(root.id), savedRoot);
+  } finally { await queue?.close(); store.close(); rmSync(folder, { recursive: true, force: true }); }
+});
+
+for (const outcome of ["cancelled", "stale", "malformed"] as const) test(`expanded saved overlap ${outcome} preserves the completed response and exact human evidence`, async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    const p = largeGuardrails(store, seed(store)); let roots = 0, pairs = 0, pairSnapshot: Project | undefined;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, { context }) {
+      if (!context.manifest.refinementPair) { roots++; return { ...empty(), reviewResponses: context.manifest.reviewSourceIDs!.map((sourceID) => ({ sourceID, text: "Saved response" })) }; }
+      pairs++; pairSnapshot = structuredClone(snapshot); assert.equal(context.manifest.budget, 144000);
+      if (outcome === "cancelled") queue!.stop(p.id);
+      if (outcome === "stale") store.note(p.id, snapshot.revision, "New human constraint wins", "project");
+      return outcome === "malformed" ? { summary: 42 } : resolution();
+    } }));
+    submit(queue, p, reviewInput(p)); await idle(queue, p.id);
+    const item = store.submissions(p.id)[0]!;
+    assert.equal(roots, 1); assert.equal(pairs, 1); assert.equal(item.status, "needs-attention");
+    assert.equal(item.overlapFollowup!.state, "pending");
+    assert.equal(store.getJob(item.overlapFollowup!.discoveryJobID).status, "completed");
+    assert.match(item.diagnostic!, /Discovery and human input were saved/);
+    for (const source of p.sources) assert.deepEqual(store.get(p.id).sources.find((s) => s.id === source.id), source);
+    assert.deepEqual(store.get(p.id).requirements, pairSnapshot!.requirements);
+    assert.match(store.jobs(p.id).at(-1)!.diagnostic!, outcome === "stale" ? /Project changed/ : /response was already processed and saved/);
+  } finally { await queue?.close(); store.close(); }
+});
+
+test("saved overlap above 144k remains blocked before inference without replaying the completed response", async () => {
+  const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
+  try {
+    const p = seed(store), item = store.enqueue(p.id, { id: crypto.randomUUID(), auto: false, research: false, input: reviewInput(p) });
+    store.applyQueued(p.id);
+    const root = await new DiscoveryService(store, { async analyze(_p, { context }) { return { ...empty(), reviewResponses: context.manifest.reviewSourceIDs!.map((sourceID) => ({ sourceID, text: "Saved" })) }; } })
+      .analyze(p.id, store.get(p.id).revision, { isolatedTask: true, recordIDs: [p.requirements[0]!.id], submissionIDs: [item.id] });
+    const current = largeGuardrails(store, store.get(p.id), 16);
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Oversized overlap must not dispatch"); } }));
+    queue.resumeBrowser(p.id); await idle(queue, p.id);
+    const saved = store.submissions(p.id)[0]!;
+    assert.equal(saved.status, "needs-attention"); assert.equal(saved.overlapFollowup!.state, "pending");
+    assert.equal(store.getJob(root.id).status, "completed");
+    assert.match(saved.diagnostic!, /144,000/); assert.deepEqual(store.get(p.id), current);
+  } finally { await queue?.close(); store.close(); }
+});
+
 test("trigger provenance outside pair areas stales on correction, while redundant trigger IDs retain v1 check identity", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -371,7 +462,7 @@ test("oversized pair evidence blocks inference after saved discovery without dro
     let p = seed(store);
     p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "reports-a", title: "A", purpose: "Reports A", dependencies: [] }, { type: "upsert", epicID: "reports-b", title: "B", purpose: "Reports B", dependencies: [] },
       ...p.requirements.map((r, i) => ({ type: "move" as const, recordID: r.id, epicID: i ? "reports-b" : "reports-a" }))]);
-    for (let i = 0; i < 10; i++) p = store.note(p.id, p.revision, String.fromCharCode(65 + i).repeat(11000), i < 5 ? "reports-a" : "reports-b");
+    for (let i = 0; i < 14; i++) p = store.note(p.id, p.revision, String.fromCharCode(65 + i).repeat(11000), i < 7 ? "reports-a" : "reports-b");
     let roots = 0, checks = 0;
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_snapshot, options) {
       if (options.context.manifest.refinementPair) { checks++; return resolution(); }

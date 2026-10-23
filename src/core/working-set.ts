@@ -11,7 +11,7 @@ export type ContextTask = {
   expandMandatory?: boolean;
   /** One queued submission: detailed target/evidence plus explicit guardrails. */
   isolatedTask?: boolean;
-  /** Explicit saved-response retry may use a larger mandatory-only input cap. */
+  /** Saved response or receipt-validated overlap check: larger mandatory-only cap. */
   submissionFollowup?: boolean;
   /** Bounded general gap exploration, not follow-up on a human submission. */
   gapExploration?: boolean;

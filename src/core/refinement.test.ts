@@ -23,6 +23,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
+import { refinementEvidenceRecords, assertRefinementEvidence } from "./refinement-context.js";
 
 const empty = (): Analysis => ({ summary: "Game", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 async function seed(store: ProjectStore) {
@@ -258,6 +259,73 @@ function resolutionProposal(p: Project, pair: [string, string]): NonNullable<Ana
   return { requirementID: target!.id, statement: "Guests can access private reports under the explicitly approved policies", rationale: "One observable behavior preserves both approved scenarios", acceptance: [...target!.acceptance, ...other!.acceptance], reason: "Consolidate redundant wording without losing scenarios",
     resolution: { format: 1, relatedRequirementID: other!.id, basis: "duplicate", evidenceIDs: [p.sources[0]!.id], change: { type: "consolidate" } } };
 }
+
+function crossOwnedApprovalPair(store: ProjectStore) {
+  let p = approvedPair(store, 1);
+  const backgroundID = p.requirements[0]!.id;
+  p = store.review(p.id, p.revision, backgroundID, "accepted", "");
+  const shared = p.sources.at(-1)!;
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { ...empty(), requirements: [
+    { statement: "Guests can inspect report policies", rationale: "Explicit access intent", sourceIDs: [p.sources[0]!.id], acceptance: ["Report policies are visible"], epicID: "inbox" },
+    { statement: "Guests can inspect approved report access", rationale: "Approved background access", sourceIDs: [p.sources[0]!.id, shared.id], acceptance: ["Approved report access is visible"], epicID: "inbox" },
+  ] });
+  p = store.get(p.id);
+  for (const r of p.requirements.slice(1)) p = store.review(p.id, p.revision, r.id, "accepted", "");
+  // A later plain approval makes the shared source projectable for its owner,
+  // but it remains an exact supporting link of the related pair requirement.
+  p = store.review(p.id, p.revision, backgroundID, "accepted", "");
+  return { p, shared, pair: p.requirements.slice(1).map((r) => r.id) as [string, string] };
+}
+
+test("cross-owned historical approval is pinned before pair inference; legacy failed publication reopens without changing completed checks or evidence", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "reqwizit-pair-evidence-upgrade-")), path = join(folder, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const { p, shared, pair } = crossOwnedApprovalPair(store), before = structuredClone(p);
+    const oldContext = planContext(p, { recordIDs: pair, requiredEpicIDs: ["inbox"], isolatedTask: true, expandMandatory: true });
+    assert.ok(!oldContext.manifest.includedIDs.includes(shared.id), "Reproduce original omitted cross-owned approval");
+    const old = store.beginJob(p.id, p.revision).job; store.claimJob(old.id, Date.now() + 60000);
+    oldContext.manifest.refinementOnly = true;
+    oldContext.manifest.refinementPair = { requirementIDs: pair, contextKey: resolutionContextKey(p, pair) };
+    store.attachContext(old.id, oldContext.manifest);
+    assert.throws(() => store.finishJob(old.id, { ...empty(), resolutionCheck: { format: 1, outcome: "proposal", explanation: "Preserve both scenarios" }, refinements: [resolutionProposal(p, pair)] }), /Resolution requires both detailed requirements and all supporting evidence/);
+    store.failJob(old.id, "failed", "Legacy incomplete-evidence publication");
+    const savedOld = store.getJob(old.id), semanticKey = resolutionContextKey(p, pair);
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.get(p.id), before); assert.deepEqual(store.getJob(old.id), savedOld);
+    let calls = 0;
+    const result = await new DiscoveryService(store, { async analyze(snapshot, { context }) {
+      calls++;
+      assertRefinementEvidence(snapshot, pair, context.manifest.includedIDs);
+      assert.ok(context.manifest.includedIDs.includes(shared.id));
+      assert.equal((context.data as { sources: { id: string; text: unknown }[] }).sources.find((s) => s.id === shared.id)!.text, shared.text);
+      assert.ok(!resolutionEvidenceIDs(snapshot, "duplicate", context.manifest.includedIDs).includes(shared.id), "Historical inclusion does not authorize a superseded citation");
+      return { ...empty(), resolutionCheck: { format: 1, outcome: "proposal", explanation: "Preserve both scenarios" }, refinements: [resolutionProposal(snapshot, pair)] };
+    } }).analyze(p.id, p.revision, { refinementOnly: true, refinementPair: pair });
+    assert.equal(result.status, "completed", result.diagnostic); assert.equal(calls, 1);
+    assert.deepEqual(store.get(p.id).requirements, before.requirements); assert.deepEqual(store.get(p.id).sources, before.sources);
+    assert.equal(resolutionContextKey(store.get(p.id), pair), semanticKey);
+    assert.deepEqual(store.getJob(old.id), savedOld);
+    const completed = store.getJob(result.id);
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.getJob(result.id), completed); assert.deepEqual(store.getJob(old.id), savedOld);
+  } finally { store.close(); rmSync(folder, { recursive: true, force: true }); }
+});
+
+test("refinement evidence preflight rejects missing targets/sources and publication still rejects incomplete context", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, pair, shared } = crossOwnedApprovalPair(store);
+    const records = refinementEvidenceRecords(p, pair);
+    assert.ok(records.includes(shared.id)); assert.deepEqual(p, store.get(p.id));
+    assert.throws(() => assertRefinementEvidence(p, pair, records.filter((id) => id !== shared.id)), /required records absent.*first missing IDs/);
+    assert.throws(() => refinementEvidenceRecords(p, ["missing-target"]), /Missing requirement/);
+    const broken = structuredClone(p); broken.sources = broken.sources.filter((s) => s.id !== shared.id);
+    assert.throws(() => refinementEvidenceRecords(broken, pair), /links missing source/);
+    assert.deepEqual(store.get(p.id), p, "Do not repair stored evidence to make a context fit");
+  } finally { store.close(); }
+});
 
 test("human duplicate removal uses current records without AI, preserves survivor/history and rejects stale or invalid decisions", async () => {
   const directory = mkdtempSync(join(tmpdir(), "reqwizit-duplicate-"));

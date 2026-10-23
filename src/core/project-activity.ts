@@ -82,7 +82,7 @@ export function submissionActivity(item: Submission, project: Project): ProjectA
 export function jobActivity(job: Job, project?: Project): ProjectActivity | undefined {
   if (!["failed", "cancelled", "interrupted", "stale"].includes(job.status)) return;
   const focus = job.context?.focusEpicID ?? (job.helpRequest ? project?.questions.find((q) => q.id === job.helpRequest!.questionID)?.epicID : undefined);
-  return { id: `job:${job.id}:${job.status}`, revision: job.expectedRevision, type: "problems", title: `${job.helpRequest ? "Question help" : job.kind === "scan" ? "Workspace scan" : "Discovery"} ${job.status}`,
+  return { id: `job:${job.id}:${job.status}`, revision: job.expectedRevision, type: "problems", title: `${job.helpRequest ? "Question help" : job.kind === "scan" ? "Workspace scan" : "Discovery"} ${job.retrievalWork?.stagedRun?.paused ? "paused—progress saved" : job.status}`,
     summary: job.diagnostic ?? "Work stopped; saved input is retained.", reason: `Job ${job.id} · ${job.status}`, highlight: true, changes: [],
     features: focus ? [{ id: focus, title: project?.epics.find((e) => e.id === focus)?.title ?? focus }] : [] };
 }
