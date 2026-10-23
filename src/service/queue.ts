@@ -13,6 +13,7 @@ import { decisionAvailability } from "../core/decision-availability.js";
 import { reconciliationCandidates } from "../core/review-completion.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import type { SavedEvidencePolicy } from "../core/gap-navigation.js";
+import { coverage } from "../core/coverage.js";
 
 type Work = { controller: AbortController; promise: Promise<void> };
 
@@ -74,6 +75,42 @@ export class DiscoveryQueue {
   isActive(id: string) { return this.active.has(id) || this.service.store.discoveryActive(id); }
   progress(id: string) { return this.messages.get(id) ?? []; }
   refinementProgress(id: string) { return this.refinementRuns.get(id) ?? null; }
+  refreshDefinition(id: string, revision: number, focusEpicID?: string) {
+    this.service.store.assertNoExecution(id);
+    this.service.store.acknowledgeExpiredExecution(id);
+    this.service.assertCanDiscover(id);
+    if (this.closing || this.isActive(id)) throw new OperationConflictError("This project already has active work or is closing.");
+    const project = this.service.store.get(id);
+    if (project.revision !== revision) throw new Error("Project changed. Refresh it before retrying.");
+    if (focusEpicID && !project.epics.some((e) => e.id === focusEpicID && !e.archived)) throw new Error("Focused epic does not exist.");
+    const resolved = resolvedReviewAttempts(project, this.service.store.submissions(id));
+    if (this.service.store.submissions(id).some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status))) throw new OperationConflictError("Process saved responses before refreshing definition coverage so the assessment includes your latest decisions.");
+    const areas = coverage(project).epics.filter((e) => (!focusEpicID || e.epicID === focusEpicID) && (e.epicID !== "inbox" ||
+      [...project.requirements, ...project.questions, ...project.research, ...project.sources.filter((s) => s.kind === "note")].some((r) => r.epicID === "inbox")));
+    this.service.store.pauseQueue(id, true);
+    const controller = new AbortController();
+    const progress: string[] = []; this.messages.set(id, progress); this.refinementRuns.delete(id);
+    const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
+    const timer = setTimeout(() => controller.abort(), 900_000);
+    const promise = Promise.resolve().then(async () => {
+      let refreshed = 0, blocked = 0, reused = 0;
+      for (const area of areas) {
+        controller.signal.throwIfAborted();
+        const snapshot = this.service.store.get(id);
+        const current = coverage(snapshot).epics.find((e) => e.epicID === area.epicID);
+        if (current?.assessed && !current.stale) { reused++; continue; }
+        if (refreshed + blocked >= 10) { report("Paused: ten-area assessment action limit reached. Refresh definition coverage again to continue unfinished areas; current assessments are reused."); break; }
+        report(`Assessing definition: ${snapshot.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID}. Complete current area only; no specification changes or gap discovery.`);
+        const job = await this.service.analyze(id, snapshot.revision, { definitionEpicID: area.epicID, signal: controller.signal, onProgress: report });
+        if (job.status === "completed") refreshed++;
+        else { blocked++; report(`Definition assessment unfinished: ${job.diagnostic ?? job.status}`); }
+        if (["cancelled", "stale", "interrupted"].includes(job.status)) break;
+      }
+      report(`Definition refresh: ${refreshed} areas refreshed · ${reused} current assessments reused · ${blocked} unfinished. Unassessed or outdated areas remain unknown; this does not certify readiness.`);
+    }).catch((error) => report(controller.signal.aborted ? "Definition refresh stopped; completed area assessments are saved. Refresh explicitly to continue without repeating current areas." : safeMessage(error instanceof Error ? error.message : error)))
+      .finally(() => { clearTimeout(timer); this.active.delete(id); });
+    this.active.set(id, { controller, promise });
+  }
   scan(id: string, revision: number, resumeJobID?: string) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
@@ -144,6 +181,10 @@ export class DiscoveryQueue {
     const resolved = resolvedReviewAttempts(project, submissions);
     const unfinished = submissions.some((s) => !s.archivedAt && !resolved.has(s.id)
       && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
+    const last = this.service.store.jobs(id).at(-1);
+    if (!unfinished && last?.context?.definitionAssessment && ["interrupted", "cancelled", "failed", "stale"].includes(last.status)) {
+      this.refreshDefinition(id, project.revision, options.focusEpicID ?? last.context.definitionAssessment.epicID); return;
+    }
     this.resume(id, unfinished
       ? { research: options.research, focusEpicID: options.focusEpicID, processOnly: true }
       : { ...options, gapMode: "epic" });

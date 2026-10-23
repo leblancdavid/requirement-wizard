@@ -25,7 +25,7 @@ export class DiscoveryMeasurement {
       const raw = await run();
       request.outcome = "returned";
       request.response = raw && typeof raw === "object" ? "retrieveEvidence" in raw ? "load" : "searchEvidence" in raw ? "search"
-        : "reviewBlocked" in raw ? "blocked" : "summary" in raw || "guardrailVerdict" in raw ? "analysis" : "other" : "other";
+        : "reviewBlocked" in raw || "definitionBlocked" in raw ? "blocked" : "summary" in raw || "guardrailVerdict" in raw || "definitionVerdict" in raw ? "analysis" : "other" : "other";
       return raw;
     } catch (error) { request.outcome = signal.aborted ? "cancelled" : "failed"; throw error; }
     finally { request.durationMs = performance.now() - start; this.checkpoint(); }

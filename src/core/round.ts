@@ -3,6 +3,7 @@ import { proposeRefinements } from "./refinement.js";
 import { proposalSimilarityWarnings } from "./similarity.js";
 import { validConcepts, validateAnalysisReferences, type Project, type Analysis, type ResearchEvidence } from "./model.js";
 import { applyPendingChanges } from "./pending-changes.js";
+import { definitionInputKey } from "./definition-identity.js";
 
 /** Only identical epic declarations can be collapsed without guessing reference intent. */
 function prepareAliases(project: Project, result: Analysis): Analysis {
@@ -181,7 +182,8 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
       const question = project.questions.find((item) => item.id === id);
       return question ? [[id, question.sourceID ?? null]] : [];
     }));
-    project.assessments.push({ ...input, epicID, checks, atRevision: project.revision + 1, answerVersions });
+    project.assessments.push({ ...input, epicID, checks, atRevision: project.revision + 1, answerVersions,
+      inputBasis: { format: 1, key: definitionInputKey(project, epicID, checks.flatMap((c) => c.evidenceIDs)) } });
   }
   project.scopeAssessment = result.scopeAssessment ?? null;
   return aliases;

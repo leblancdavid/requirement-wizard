@@ -11,6 +11,7 @@ import { LazyDetails } from "./lazy-details.js";
 import type { RefinementProgress } from "../core/refinement.js";
 import { refinementActivity } from "./refinement-progress.js";
 import { GapExplorationStatus } from "./gap-status.js";
+import { DefinitionProgress } from "./definition-progress.js";
 import { GapContinuation } from "./gap-continuation.js";
 import { AttentionInbox, attentionGroups } from "./attention.js";
 import { DiscoveryDiagnostics } from "./discovery-diagnostics.js";
@@ -41,7 +42,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
     || !!lastJob?.epicReviewReport || !!lastJob?.gapReport
     || progress.some((message) => message.startsWith("Finding gaps ·") || message.startsWith("Question target reached:")));
   const outcomeMessage = !active && (refinementProgress || gapOutcome) ? progress.at(-1) : undefined;
-  const jobDiagnostic = !active && failed ? lastJob.diagnostic : undefined;
+  const jobDiagnostic = !active && failed && !lastJob.context?.definitionAssessment ? lastJob.diagnostic : undefined;
   const running = activities.filter((item) => item.active);
   const recent = activities.filter((item) => !item.active);
   const working = active || running.length > 0;
@@ -57,7 +58,11 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const liveStage = running[0]?.stage ?? refinement?.label ?? stage.join(" ");
    const canResume = !active && (paused || waiting.length > 0 || saved.length > 0)
      && (!continuationAvailable || waiting.length > 0 || saved.length > 0);
-   const resumeLabel = paused ? "Resume processing" : "Process saved responses";
+    const resumeLabel = paused ? "Resume processing" : "Process saved responses";
+    const hasUnfinishedInput = submissions.some((s) => !s.archivedAt && !resolvedAttempts.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
+    const definitionResume = !hasUnfinishedInput && lastJob?.context?.definitionAssessment && ["interrupted", "cancelled", "failed", "stale"].includes(lastJob.status);
+    const resumeScope = definitionResume && scope === "All project areas"
+      ? `${project.epics.find((e) => e.id === lastJob!.context!.definitionAssessment!.epicID)?.title ?? "Saved area"} (saved definition assessment)` : scope;
    const canDiscover = !working && !canResume && !continuationAvailable;
 
   function items(entries: Submission[]) {
@@ -84,7 +89,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
         <span className="queue-chevron" aria-hidden="true">▾</span>
         {working && <ActivityBar label={refinement && !running.length ? refinement.label : "Background task progress"} completed={taskCount === 1 ? active ? completed : running[0]?.completed : undefined} total={taskCount === 1 ? active ? total : running[0]?.total : undefined} />}
       </button>
-      {active && <button className="secondary queue-header-action" disabled={stopDisabled} onClick={stop}>Stop discovery</button>}
+      {active && <button className="secondary queue-header-action" disabled={stopDisabled} onClick={stop}>{lastJob?.context?.definitionAssessment ? "Stop assessment" : "Stop discovery"}</button>}
       {canResume && <button className="secondary queue-header-action" disabled={disabled} onClick={resume} aria-description={`Processing scope: ${scope}`}>{resumeLabel}</button>}
       {canDiscover && <button className="primary queue-header-action" disabled={disabled} onClick={discover} title="Staged packages continue automatically: up to 32 requests per package within the 15-minute action. Stop saves progress." aria-description={`Find missing decisions and ask follow-up questions. Scope: ${scope}. Up to 32 requests per staged package within the 15-minute action; Stop saves progress.`}>Discover missing decisions</button>}
       {!working && !canResume && continuationAvailable && <button className="secondary queue-header-action" disabled={disabled} onClick={() => setOpen(true)}>Continue exploration</button>}
@@ -94,16 +99,17 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
         {error && error !== outcomeMessage && error !== jobDiagnostic && <p role="alert" className="job-error">{error}</p>}
         <p>All project areas · Discovery, scans, implementation, verification, delivery and question help. Each queued response receives its own follow-up.</p>
         {running.map((item) => <section key={item.id} aria-label={item.title}><h3>{item.title}</h3><span className="badge">{item.status}</span><ActivityFeedback label={item.stage ?? item.title} completed={item.completed} total={item.total} />{item.detail && <p>{item.detail}</p>}{item.stop && <button className="secondary" disabled={stopDisabled} onClick={() => stopActivity(item.stop!)}>Stop {item.title === "Question help" ? "question help" : "implementation"}</button>}</section>)}
-        {active && <section aria-label="Current task"><h3>{refinement?.headline ?? task}</h3><ActivityFeedback label={refinement?.label ?? (stage.join(" ") || task)} completed={completed} total={total} />{refinement && <><p>{task}{stage.length ? ` · ${stage.join(" ")}` : ""}</p><p>Progress covers this run only, with up to 20 overlap checks followed by unfinished wording checks. Ineligible work is skipped; further overlaps may remain. Proposed changes still need your approval.</p></>}<button className="secondary" disabled={stopDisabled} onClick={stop}>Stop</button>{!processing.length && !refinement && <p>The active round is exploring existing project information; queued responses join the next round.</p>}</section>}
+        {active && <section aria-label="Current task"><h3>{refinement?.headline ?? task}</h3><ActivityFeedback label={refinement?.label ?? (stage.join(" ") || task)} completed={completed} total={total} />{refinement && <><p>{task}{stage.length ? ` · ${stage.join(" ")}` : ""}</p><p>Progress covers this run only, with up to 20 overlap checks followed by unfinished wording checks. Ineligible work is skipped; further overlaps may remain. Proposed changes still need your approval.</p></>}<button className="secondary" disabled={stopDisabled} onClick={stop}>Stop</button>{!processing.length && !refinement && <p>{lastJob?.context?.definitionAssessment ? "This round is assessing saved definition evidence; it cannot generate questions or change the specification." : "The active round is exploring existing project information; queued responses join the next round."}</p>}</section>}
         {!active && refinement && <section aria-label="Refinement outcome"><h3>{refinement.headline}</h3><p>{refinement.label}</p><p>{progress.at(-1)}</p></section>}
         {gapOutcome && <section aria-label="Gap scan outcome"><h3>Gap scan outcome</h3><p role={lastJob?.retrievalWork?.stagedRun?.paused ? "status" : jobDiagnostic === outcomeMessage ? "alert" : undefined}>{outcomeMessage}</p></section>}
          {jobDiagnostic && jobDiagnostic !== outcomeMessage && <p role={lastJob!.retrievalWork?.stagedRun?.paused ? "status" : "alert"} className={lastJob!.retrievalWork?.stagedRun?.paused ? undefined : "job-error"}>{lastJob!.retrievalWork?.stagedRun?.paused ? "" : `Last ${lastJob!.kind === "scan" ? "scan" : "round"} ${lastJob!.status}: `}{jobDiagnostic}</p>}
          {!active && lastJob && continueExploration && <GapContinuation key={lastJob.id} job={lastJob} available={continuationAvailable} disabled={disabled} continueExploration={continueExploration} />}
-           {lastJob && (!active || !!lastJob.epicReviewReport?.stagedProgress) && (lastJob.gapReport || lastJob.epicReviewReport) && <GapExplorationStatus job={lastJob} project={project} />}
-        {paused && !active && <p role="status">Discovery is paused. Saved submissions are retained.</p>}
+            {lastJob && (!active || !!lastJob.epicReviewReport?.stagedProgress) && (lastJob.gapReport || lastJob.epicReviewReport) && <GapExplorationStatus job={lastJob} project={project} />}
+            {lastJob?.context?.definitionAssessment && <DefinitionProgress job={lastJob} project={project} />}
+        {paused && !active && <p role="status">{lastJob?.definitionWork?.paused ? "Definition assessment is paused. Completed evidence stages are retained; Resume processing continues assessment." : "Discovery is paused. Saved submissions are retained."}</p>}
         {executionWaiting && !paused && waiting.length > 0 && <p role="status">Responses are saved and waiting for assessment or implementation to finish. Automatic follow-up resumes afterward for responses submitted with automatic processing enabled.</p>}
         {blocked.length > 0 && <p role="status">Context preflight stopped {blocked.length} {blocked.length === 1 ? "response" : "responses"} before starting an AI batch. Review that feature's cross-cutting notes and dependency scope in Project map, or split its work, then resume to recheck. The saved answers and approvals remain intact.</p>}
-        {canResume && <div className="queue-actions"><p><strong>Processing scope:</strong> {scope}.{scope !== "All project areas" ? " Other areas remain pending." : ""} Change the feature filter in the workspace to choose a different scope.</p><button className="secondary" disabled={disabled} onClick={resume}>{resumeLabel}</button></div>}
+        {canResume && <div className="queue-actions"><p><strong>Processing scope:</strong> {resumeScope}.{resumeScope !== "All project areas" ? " Other areas remain pending." : ""} Change the feature filter in the workspace to choose a different scope.</p><button className="secondary" disabled={disabled} onClick={resume}>{resumeLabel}</button></div>}
         {!submissions.length && <p>No responses submitted yet.</p>}
         {exportDiagnostics && <LazyDetails summary={<>Discovery diagnostics</>}>{() => <DiscoveryDiagnostics jobs={jobs} load={exportDiagnostics} />}</LazyDetails>}
         {recent.length > 0 && <LazyDetails summary={<>Recent background work · {recent.length}</>}>{() => recent.map((item) => <article className="queue-item" key={item.id}><h3>{item.title} · {item.status}</h3>{item.stage && <p className={["failed", "blocked", "interrupted", "stale"].includes(item.status) ? "job-error" : undefined}>{item.stage}</p>}{item.detail && <p>{item.detail}</p>}</article>)}</LazyDetails>}

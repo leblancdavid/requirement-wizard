@@ -17,5 +17,7 @@
 .progress-epics li > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
 .local-code-progress { margin-top: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--soft); }
 .definition-assessment { margin-top: 12px; }
+.progress-dialog .definition-refresh { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; max-width: 100%; margin-top: 12px; padding: 10px 16px; border: 1px solid var(--accent); border-radius: 7px; font-weight: 600; white-space: normal; overflow-wrap: anywhere; text-align: center; }
+@media (max-width: 540px) { .progress-dialog .definition-refresh { width: 100%; } }
 .definition-check { margin: 10px 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; }
 .definition-check p, .definition-assessment > p { margin: 10px 0; overflow-wrap: anywhere; }

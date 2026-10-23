@@ -20,8 +20,10 @@ export const assessmentSchema = z.object({
   epicID: z.string(), confidence: z.enum(["low", "medium", "high"]), explanation: text,
   checks: z.array(checkSchema).max(9), atRevision: z.number().int().positive(),
   answerVersions: z.record(z.string().nullable()).default({}),
+  inputBasis: z.object({ format: z.literal(1), key: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
+  stagedReview: z.object({ format: z.literal(1), batches: z.number().int().min(1).max(16), policy: z.literal("exact-batches-v1") }).strict().optional(),
 });
-export const assessmentProposal = assessmentSchema.omit({ atRevision: true, answerVersions: true }).strict();
+export const assessmentProposal = assessmentSchema.omit({ atRevision: true, answerVersions: true, inputBasis: true, stagedReview: true }).strict();
 export const organizationSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("upsert"), epicID: z.string(), title: text, purpose: text, dependencies: z.array(z.string()).max(20) }).strict(),
   z.object({ type: z.literal("move"), recordID: z.string(), epicID: z.string() }).strict(),

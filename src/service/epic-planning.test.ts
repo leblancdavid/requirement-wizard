@@ -609,7 +609,7 @@ test("old CPU size blockers are reconsidered without resetting data, and newly u
         assert.deepEqual(store.epicPlanningReceipts(p.id, input).get(group), legacy, "A pending package cannot become a resolved receipt");
       } else {
         assert.equal(first.task, undefined); assert.equal(first.report.blocked, 1);
-        assert.equal(store.epicPlanningReceipts(p.id, input).get(group)!.planningPolicy, "staged-headroom-v2");
+        assert.equal(store.epicPlanningReceipts(p.id, input).get(group)!.planningPolicy, "staged-current-spec-v3");
         let last: PlanningProgress | undefined;
         await prepareEpicReview(p, [], "orders", [], { ...options, onProgress: (value) => { last = value; } });
         assert.equal(last!.contextPreparations, 0); assert.equal(last!.reusedGroups, 1);

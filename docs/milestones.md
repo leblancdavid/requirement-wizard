@@ -155,6 +155,15 @@ and whole-area assessments. Websearch and
 adversarial tool-budget/permission checks still need live qualification. Full scenario
 review, conflict resolution, release baselines, and readiness gates remain pending.
 
+2026-10-23: explicit complete-current-area definition refresh, relevant-input
+freshness and separate discovery blocker reporting are implemented. Near-limit
+workflow v3 retains exact evidence with a smaller draft reserve; original policies
+and completed calls remain reusable. A follow-up adds resumable whole-area exact
+evidence batches with complete per-batch verification before publication; indivisible
+records, over-sixteen-batch areas and indispensable missing evidence still block;
+this does not complete readiness/baseline or exhaustive impact-analysis work. See
+[definition coverage](definition-coverage.md) for bounds and upgrade behavior.
+
 Next-gap scalability foundation: general discovery after initial interpretation now
 uses a durable evidence-keyed workflow/failure/acceptance backlog and read-only current-
 decision projection. Compatible checks survive unrelated changes/restarts; exact human

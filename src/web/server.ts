@@ -293,6 +293,13 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         queue.resumeBrowser(id, input);
         json(res, 202, { started: true }); return;
       }
+      if (action === "refresh-definition") {
+        if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
+        const input = z.object({ revision, focusEpicID: z.string().min(1).max(200).optional() }).strict().parse(raw);
+        if (project.revision !== input.revision) throw new StaleRevisionError();
+        queue.refreshDefinition(id, input.revision, input.focusEpicID);
+        json(res, 202, { started: true }); return;
+      }
       if (action === "analyze") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
         const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional(), savedEvidencePolicy: savedEvidencePolicySchema.optional(), gapMode: z.literal("epic").optional(), questionTarget: z.number().int().min(1).max(50).optional() }).strict().parse(raw);

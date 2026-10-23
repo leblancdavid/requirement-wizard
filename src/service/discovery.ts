@@ -11,6 +11,9 @@ import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSch
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
 import { epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
+import { definitionContext } from "../core/definition-assessment.js";
+import { definitionInputKey } from "../core/definition-identity.js";
+import { runDefinitionStages, DefinitionEvidenceBlocked } from "./definition-stages.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages } from "../core/epic-stages.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
@@ -216,9 +219,13 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
+    if (options.definitionEpicID !== undefined) z.string().min(1).max(200).parse(options.definitionEpicID);
+    if (options.definitionEpicID !== undefined && (options.gapMode || options.helpRequest || options.refinementOnly || options.recordIDs?.length
+      || options.submissionIDs?.length || options.continueGapJobID || options.questionTarget !== undefined || options.research
+      || options.savedEvidencePolicy || options.requiredEpicIDs?.length || options.isolatedTask || options.savedOverlapSubmissionID)) throw new Error("Definition assessment requires a separate assessment-only action.");
     if (options.questionTarget !== undefined) {
       z.number().int().min(1).max(50).parse(options.questionTarget);
       if (options.helpRequest || options.refinementOnly || options.recordIDs?.length || options.submissionIDs?.length || options.continueGapJobID) throw new Error("Question targets require manual gap exploration.");
@@ -251,7 +258,7 @@ export class DiscoveryService {
     const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest);
     // Ordinary calls retain five minutes. Staged packages may continue within a
     // fifteen-minute action, including preparation, with a one-minute lease margin.
-    this.store.claimJob(job.id, Date.now() + (options.gapMode ? stagedRunLeaseMs : 360_000));
+    this.store.claimJob(job.id, Date.now() + (options.gapMode || options.definitionEpicID ? stagedRunLeaseMs : 360_000));
     const measurement = !options.helpRequest && !options.refinementOnly
       ? new DiscoveryMeasurement((value) => this.store.saveDiscoveryMetrics(job.id, value)) : undefined;
     const completeMeasurement = (result: Job): Job => {
@@ -270,6 +277,23 @@ export class DiscoveryService {
       ? options.recordIDs.includes(r.id) : !options.focusEpicID || r.epicID === options.focusEpicID) : undefined;
     try {
       options.onJob?.(job);
+      let definition: ContextPack | undefined;
+      if (options.definitionEpicID) {
+        if (this.store.definitionHistory(project.id, options.definitionEpicID, definitionInputKey(project, options.definitionEpicID)).length) {
+          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, stagedRunDurationMs - (Date.now() - started)));
+          return completeMeasurement(await runDefinitionStages(this.store, this.adapter, project, job, options.definitionEpicID,
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: this.navigation.stagedLimits }));
+        }
+        try { definition = definitionContext(project, options.definitionEpicID); }
+        catch (error) {
+          if (!(error instanceof ContextBudgetError)) throw error;
+          this.store.attachContext(job.id, error.manifest);
+          options.onProgress?.("The complete area exceeds one request. Preparing exact evidence batches; no assessment has been published and no evidence will be truncated.");
+          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, stagedRunDurationMs - (Date.now() - started)));
+          return completeMeasurement(await runDefinitionStages(this.store, this.adapter, project, job, options.definitionEpicID,
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: this.navigation.stagedLimits }));
+        }
+      }
       const question = options.helpRequest ? project.questions.find((q) => q.id === options.helpRequest!.questionID)! : undefined;
       const pair = options.refinementPair;
       if (pair && (!options.refinementOnly || options.helpRequest || new Set(pair).size !== 2 || pair.some((id) => !project.requirements.some((r) => r.id === id && (options.includeUnapproved ? r.status !== "rejected" : r.status === "accepted") && project.epics.some((e) => e.id === r.epicID && !e.archived))))) throw new Error("Resolution tasks require two eligible active requirements in a refinement-only pass.");
@@ -280,7 +304,7 @@ export class DiscoveryService {
       const refinementRecords = pair ? refinementEvidenceRecords(project, pair)
         : refinementTarget ? refinementEvidenceRecords(project, [refinementTarget.id]) : undefined;
       const pairRecords = pair ? [...pair, ...triggerSourceIDs, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
-      const generalExploration = !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
+      const generalExploration = !options.definitionEpicID && !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
       if (options.gapMode) options.onProgress?.("Preparing workflow evidence…\nIndexing saved checks locally. No model request has started; Stop remains available.");
       const epicPlan = options.gapMode ? await prepareEpicReview(project, this.store.epicReviewHistory(projectID), options.focusEpicID, this.store.submissions(projectID), {
@@ -307,7 +331,8 @@ export class DiscoveryService {
         options.onProgress?.("No pending epic packages: review saved blockers or answer waiting decisions. No model request made.");
         return completeMeasurement(this.store.attachEpicReviewReport(job.id, epicPlan.report, true));
       }
-      let context = options.helpRequest ? questionHelpContext(project, options.helpRequest, options.helpRequest.action === "define" ? [] : this.store.jobs(projectID))
+      let context = definition ? definition
+        : options.helpRequest ? questionHelpContext(project, options.helpRequest, options.helpRequest.action === "define" ? [] : this.store.jobs(projectID))
         : continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
         : epicPlan?.task?.context ? epicPlan.task.context
         : generalExploration ? planGapContext(project, this.store.gapHistory(projectID), options.focusEpicID, (revision) => this.store.get(projectID, revision))
@@ -331,7 +356,7 @@ export class DiscoveryService {
       }
       if (pair) context.manifest.refinementPair = { requirementIDs: pair, contextKey: resolutionContextKey(project, pair, triggerSourceIDs),
         ...(options.includeUnapproved ? { includeUnapproved: true } : {}), ...(triggerSourceIDs.length ? { triggerSourceIDs } : {}) };
-      if (!options.helpRequest && !options.refinementOnly && !epicPlan && context.manifest.budget <= 96000) addRelatedRecordHints(project, context);
+      if (!options.definitionEpicID && !options.helpRequest && !options.refinementOnly && !epicPlan && context.manifest.budget <= 96000) addRelatedRecordHints(project, context);
       if (refinementTarget) context.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
       // Detailed context can include historical reviews. Only the job's current
       // submission batch authorizes review follow-up, matching publication checks.
@@ -405,7 +430,7 @@ export class DiscoveryService {
           if (adapterOptions.research) throw new Error("Staged decision review does not support research. Retry with research disabled; no provider or mode was silently changed.");
           const batches = epicPlan.task.batches ?? epicReviewBatches(project, review);
           const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
-            ...(review.contextPolicy === "staged-headroom-v2" ? { contextPolicy: "staged-headroom-v2" as const } : {}),
+            ...(review.contextPolicy === "staged-headroom-v2" || review.contextPolicy === "staged-current-spec-v3" ? { contextPolicy: review.contextPolicy } : {}),
             phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
           validateEpicStages(project, review, staged, batches);
           stagedRun = true;
@@ -419,6 +444,7 @@ export class DiscoveryService {
             controller.signal.throwIfAborted();
             context = epicStageContext(batches[staged.nextBatch]!, staged);
             if (review.contextPolicy === "staged-headroom-v2") report(`Staged headroom policy v2: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters including stage instructions and current drafts. ${context.manifest.characters > 72000 ? "Above the 72,000-character preferred target; reduced headroom is explicit." : "Within the preferred target."} Exact evidence is unchanged; planning reserved the full 12,000-character draft allowance.`);
+            if (review.contextPolicy === "staged-current-spec-v3") report(`Near-limit current-spec policy v3: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Exact human evidence is retained; draft proposal capacity is bounded to 8,000 characters instead of 12,000. Fewer concise proposals may be returned; no evidence or drafts are silently truncated.`);
             checkpoint();
             if (work.attempts >= 3) return block("Three attempts spent on this exact decision stage. Earlier completed stages remain saved; unchanged work will not retry automatically.");
             if (callsThisRun >= limits.requests || Date.now() - started >= limits.durationMs) {
@@ -642,6 +668,10 @@ export class DiscoveryService {
       report("Checking returned proposals and references before saving…");
       return completeMeasurement(options.helpRequest ? this.store.finishHelp(job.id, output) : this.store.finishJob(job.id, output));
     } catch (error) {
+      if (options.definitionEpicID && error instanceof DefinitionEvidenceBlocked && !controller.signal.aborted) {
+        return completeMeasurement(this.store.blockDefinition(job.id, error.message));
+      }
+      if (options.definitionEpicID && timedOut && this.store.getJob(job.id).definitionWork) return completeMeasurement(this.store.pauseDefinition(job.id, "time-limit"));
       if (stagedRun && controller.signal.aborted && (timedOut || options.signal?.reason?.name === "TimeoutError")) {
         return completeMeasurement(this.store.pauseEpicReview(job.id, "time-limit"));
       }

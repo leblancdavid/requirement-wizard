@@ -93,6 +93,27 @@ this focused check is not a claim that every legacy browser flow passed.
 
 ## Saved-response context blockers
 
+For **Assessment outdated**, use **Overall progress → Refresh definition coverage**
+rather than repeated gap discovery. It is shown as an accent-filled button;
+per-area refresh actions use outlined buttons.
+Both have a 44px minimum target, visible keyboard focus and full-width mobile layout.
+This styling-only change does not affect saved data, freshness or model-call behavior.
+Verified with type checking, UI build and the focused workflow browser runner,
+including computed button styling, keyboard focus and mobile layout. The full
+browser command still stops at the known **Approve resolution** assertion; no
+live model calls were used.
+Definition freshness now follows relevant saved inputs;
+the dialog shows assessment status separately from saved discovery package/blocker
+counts. Refreshes assess whole current areas without changing the specification,
+reuse current areas and use resumable exact batches when an area exceeds 96k. All
+batches are read, then every batch checks the accumulated findings before publication.
+Single-record/stage-limit/missing-evidence blockers remain explicit; partial findings
+never make coverage current. Paused/cancelled assessment Resume stays on assessment,
+not gap discovery. A near-limit staged workflow
+fallback trades draft capacity (8k rather than 12k) for exact evidence headroom; old
+checkpoints retain their original policies. See [definition coverage](definition-coverage.md)
+and the [migration ledger](migrations.md#definition-coverage-freshness-and-near-limit-staging-2026-10-23).
+
 Workflow startup now reports **Preparing workflow evidence…** before a model request,
 with local preparation counts and elapsed time. Expensive initial preparation runs
 in an owned CPU worker so the API, **Stop**, and deadline remain responsive. It stops

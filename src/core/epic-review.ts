@@ -10,7 +10,7 @@ import { evidenceGraph, type EvidenceGraph } from "./evidence-graph.js";
 import type { EpicPlanningCheckpoint, EpicContextCheckpoint, EpicPlanningBlocker } from "./epic-planning-checkpoint.js";
 import type { PlanningActivity, PlanningBlockers } from "./discovery-diagnostics.js";
 import { reusablePlanningCheckpoint } from "./epic-planning-checkpoint.js";
-import { reservedStageCharacters } from "./epic-stage-context.js";
+import { reservedStageCharacters, epicDraftLimit } from "./epic-stage-context.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -101,7 +101,7 @@ export function epicReviewContext(project: Project, review: EpicReview, extraIDs
 function computeEpicReviewContext(project: Project, review: EpicReview, extraIDs: string[], final: boolean, guardrailIDs?: string[], index?: EvidenceGraph, onPrepare?: () => void, preparation?: ContextPreparationIndex): ContextPack {
   if (isStagedPolicy(review.contextPolicy) && !guardrailIDs) guardrailIDs = review.guardrailBatches![0]!;
   const optimized = !!review.contextPolicy;
-  const currentSpecification = review.contextPolicy === "current-spec-v1";
+  const currentSpecification = review.contextPolicy === "current-spec-v1" || review.contextPolicy === "staged-current-spec-v3";
   const graph = currentSpecification ? index ?? evidenceGraph(project) : undefined;
   const task = { focusEpicID: review.epicID, requiredEpicIDs: review.epicIDs,
     recordIDs: [...new Set([...review.recordIDs, ...extraIDs])], isolatedTask: true, gapExploration: true,
@@ -211,16 +211,17 @@ class StagedBatchLimitError extends Error {
 export function stagedEpicReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo): { review: EpicReview; contexts: ContextPack[] } {
   const policy = isStagedPolicy(base.contextPolicy) ? base.contextPolicy : "staged-guardrails-v1";
   const review: EpicReview = { ...base, contextPolicy: policy, guardrailBatches: [] };
-  const limit = policy === "staged-headroom-v2" ? 96000 : 54000;
-  const size = (context: ContextPack) => policy === "staged-headroom-v2" ? reservedStageCharacters(context) : context.manifest.characters;
+  const headroom = policy !== "staged-guardrails-v1";
+  const limit = headroom ? 96000 : 54000;
+  const size = (context: ContextPack) => headroom ? reservedStageCharacters(context) : context.manifest.characters;
   const oversized = (context: ContextPack, characters: number) => {
-    if (policy !== "staged-headroom-v2") return new ContextBudgetError({ ...context.manifest, budget: limit });
+    if (!headroom) return new ContextBudgetError({ ...context.manifest, budget: limit });
     const manifest = { ...context.manifest, characters, budget: limit,
       sectionCharacters: { ...context.manifest.sectionCharacters, stagedEnvelopeReserve: characters - context.manifest.characters },
-      selectionReason: `${context.manifest.selectionReason} Includes the full 12,000-character draft reserve and largest stage envelope.` };
+      selectionReason: `${context.manifest.selectionReason} Includes the full ${epicDraftLimit(context).toLocaleString("en-US")}-character draft reserve and largest stage envelope.` };
     delete manifest.epicContextBudget;
     const error = new ContextBudgetError(manifest);
-    error.message = `Staged headroom review cannot fit exact evidence plus the 12,000-character draft reserve and stage instructions. ${error.message}`;
+    error.message = `Staged headroom review cannot fit exact evidence plus the ${epicDraftLimit(context).toLocaleString("en-US")}-character draft reserve and stage instructions. ${error.message}`;
     return error;
   };
   // The exact target must fit even with no optional decision seeds. Prove this
@@ -233,7 +234,7 @@ export function stagedEpicReview(project: Project, base: EpicReview, onPrepare?:
     if (!(error instanceof ContextBudgetError)) throw error;
     throw new StagedBudgetError("target", error.manifest, error.message);
   }
-  const plain = { ...base, contextPolicy: "headroom-v1" as const }; delete plain.guardrailBatches;
+  const plain = { ...base, contextPolicy: policy === "staged-current-spec-v3" ? "current-spec-v1" as const : "headroom-v1" as const }; delete plain.guardrailBatches;
   let manifest: ContextPack["manifest"];
   try { manifest = epicReviewContext(project, plain, [], false, undefined, undefined, onPrepare, preparation, memo).manifest; }
   catch (error) { if (!(error instanceof ContextBudgetError)) throw error; manifest = error.manifest; }
@@ -330,7 +331,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       const withoutIdentity = { ...context, manifest: { ...context.manifest } };
       delete withoutIdentity.manifest.epicReview;
       review.inputKey = hash({ semantic: review.inputKey, exact: batchKey ?? retrievalEvidenceBasis(withoutIdentity).key,
-        ...(contextPolicy === "staged-headroom-v2" ? { contextPolicy } : {}) });
+        ...(contextPolicy === "staged-headroom-v2" || contextPolicy === "staged-current-spec-v3" ? { contextPolicy } : {}) });
       if (staged) for (const batch of batches!) batch.manifest.epicReview = review;
     }
     catch (cause) {
@@ -347,7 +348,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   const matches = (j: Job, candidate: Candidate) => {
     const { review, context } = candidate;
     if (!context || j.context?.epicReview?.packageID !== review.packageID || j.context.epicReview.inputKey !== review.inputKey) return false;
-    if ((review.contextPolicy === "staged-headroom-v2" || j.context.epicReview.contextPolicy === "staged-headroom-v2")
+    if ((["staged-headroom-v2", "staged-current-spec-v3"].includes(review.contextPolicy ?? "") || ["staged-headroom-v2", "staged-current-spec-v3"].includes(j.context.epicReview.contextPolicy ?? ""))
       && j.context.epicReview.contextPolicy !== review.contextPolicy) return false;
     if (isStagedPolicy(review.contextPolicy)) return j.retrievalWork?.epicStages?.planKey === candidate.batchKey;
     const stage = j.retrievalWork?.stages[0];
@@ -426,7 +427,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       // that can still be divided into ordinary <=72k packages.
       const splittable = kind === "workflow" ? records.length > 1 : records.length > 2
         && epicIDs.every((id) => records.some((record) => record.epicID === id));
-      const policies = splittable ? ["staged-guardrails-v1"] as const : ["staged-guardrails-v1", "staged-headroom-v2"] as const;
+      const policies = splittable ? ["staged-guardrails-v1"] as const : ["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3"] as const;
       for (const policy of policies) {
         staged = build(epicID, epicIDs, kind, records, policy);
         stageFailure = staged.batchLimit?.message; stageLimit = !!staged.batchLimit;
@@ -505,7 +506,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     for (const field of Object.keys(planningDecisions) as (keyof typeof planningDecisions)[]) planningDecisions[field] += cached.decisions[field];
   };
   const checkpoint = (key: string, start: number, before: typeof planningDecisions) => {
-    const value: EpicPlanningCheckpoint = { format: 1, planningPolicy: "staged-headroom-v2", tasks: tasks.slice(start).map((task) => ({
+    const value: EpicPlanningCheckpoint = { format: 1, planningPolicy: "staged-current-spec-v3", tasks: tasks.slice(start).map((task) => ({
       review: task.review, state: task.state as "reviewed" | "waiting" | "blocked",
       ...(task.reason !== undefined ? { reason: task.reason } : {}),
       ...(task.blocker ? { blocker: task.blocker } : {}),

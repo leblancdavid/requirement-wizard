@@ -6,7 +6,7 @@ const duration = z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER);
 // Never export arbitrary dictionary keys: even a field name can contain private text.
 export const diagnosticSections = ["sources", "questions", "requirements", "research", "recordIndex", "epicMap", "focusedEpics",
   "currentDecisions", "submissionScope", "sharedText", "identifierTable", "recordTables", "epicWorkflowReview",
-  "stagedGuardrailReview", "omittedBackgroundExplanations", "reviewSnapshotEncoding", "previousInterpretation"] as const;
+  "stagedGuardrailReview", "definitionStage", "omittedBackgroundExplanations", "reviewSnapshotEncoding", "previousInterpretation"] as const;
 const sectionsSchema = z.object(Object.fromEntries(diagnosticSections.map((key) => [key, count.optional()]))).strict();
 export const diagnosticContextSchema = z.object({ characters: count, budget: count, includedRecords: count,
   omittedRecords: count, areas: count.nullable(), sections: sectionsSchema,
@@ -63,7 +63,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
   const packages = new Map<string, string>();
   return { format: 1 as const, kind: "reqwizit-discovery-diagnostics" as const,
     privacy: "Metadata only. No project/record/job IDs, names, paths, prompts, answers, responses, credentials or diagnostic prose. Counts and durations can still reveal project scale; review before sharing.",
-    limitations: "Missing measurements are null, never zero. Recording-state measurements are partial, not a complete run total. Requests are adapter attempts checkpointed before dispatch, not proof of provider acceptance. Request time includes startup/tools/provider work, not pure inference. Context characters exclude runtime prompt/schema overhead and are not tokens. Saved context may be a staged publication union; request contexts describe actual app inputs. Saved attempts may span earlier runs; measured requests belong only to this run. Freshness reasons describe local matching, not semantic proof. Response categories precede validation. No timestamps or model/account identifiers are exported.",
+    limitations: "Missing measurements are null, never zero. Recording-state measurements are partial, not a complete run total. Requests are adapter attempts checkpointed before dispatch, not proof of provider acceptance. Request time includes startup/tools/provider work, not pure inference. Context characters exclude runtime prompt/schema overhead and are not tokens. Saved context may be a staged publication union; request contexts describe actual app inputs. Saved attempts may span earlier runs; measured requests belong only to this run. savedWork.completedBatches counts completed stage receipts (reading/discovery plus verification), not distinct evidence batches. Freshness reasons describe local matching, not semantic proof. Response categories precede validation. No timestamps or model/account identifiers are exported.",
     runs: rows.map((row, index) => {
       const metrics = row.metrics === null ? null : discoveryMetricsSchema.parse(JSON.parse(row.metrics));
       const adapterMs = metrics?.state === "finished" && metrics.requests.every((request) => request.durationMs !== null)
@@ -75,7 +75,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
       return { id: `run-${index + 1}`, revision: count.parse(row.revision),
         status: z.enum(["pending", "running", "completed", "failed", "cancelled", "interrupted", "stale"]).parse(row.status),
         package: row.packageID ? packages.get(row.packageID)! : null,
-        policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "current-spec-v1"].includes(row.policy ?? "") ? row.policy : null,
+        policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "definition-exact-batches-v1", "current-spec-v1"].includes(row.policy ?? "") ? row.policy : null,
         measurements: metrics,
         timing: metrics ? { initialPlanningMs: metrics.planningMs, adapterRequestMs: adapterMs,
           otherLocalMs: metrics.state === "finished" && metrics.planningMs !== null && adapterMs !== null

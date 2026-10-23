@@ -469,7 +469,9 @@ try {
   await headerProgress.click();
   const progressDialog = page.getByRole("dialog", { name: "Project progress", exact: true });
   await expect(progressDialog).toBeVisible();
-  await expect(progressDialog.locator(".progress-stage")).toHaveCount(5);
+  await expect(progressDialog.locator(".progress-stage")).toHaveCount(7);
+  await expect(progressDialog.getByRole("region", { name: "Definition assessment refresh", exact: true })).toBeVisible();
+  await expect(progressDialog.getByRole("region", { name: "Discovery review status", exact: true })).toBeVisible();
   await expect(progressDialog.getByRole("region", { name: "Questions answered", exact: true })).toContainText("0 / 3 (0%)");
   await expect(progressDialog.getByRole("region", { name: "Local implementation", exact: true })).toBeVisible();
   for (const stage of ["Definition coverage", "Specification decisions", "Verified delivery to main"]) {

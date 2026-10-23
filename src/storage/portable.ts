@@ -5,6 +5,9 @@ import { emptyExecution, executionConfigSchema, assessmentOutputSchema, type Exe
 import { executionSchemaVersion, canonicalJSON } from "../core/assessment-identity.js";
 import { implementationPlanningSchema } from "../core/implementation-planning.js";
 import { retrievalWorkSchema } from "../core/gap-retrieval.js";
+import { definitionWorkSchema } from "../core/definition-stages.js";
+import { definitionTaskSchema } from "../core/definition-assessment.js";
+import { definitionInputKey } from "../core/definition-identity.js";
 
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 export const portableDigest = (value: unknown) => createHash("sha256").update(canonicalJSON(value)).digest("hex");
@@ -26,20 +29,30 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   const linked = new Set(waiting.flatMap((s) => [s.jobID, s.overlapFollowup?.discoveryJobID, ...s.overlapFollowup?.pairs.map((p) => p.jobID) ?? []]).filter(Boolean));
   const selected = new Map<string, Job>();
   const requirements = new Map(project.requirements.map((r) => [r.id, r]));
+  const definitionKeys = new Map<string, string>();
+  const definitionIdentity = (job: Job) => job.definitionWork && JSON.stringify([job.definitionWork.policy, job.definitionWork.epicID, job.definitionWork.inputKey, job.definitionWork.planKey]);
+  const completedDefinitions = new Set(jobs.filter((j) => j.status === "completed" && j.result && j.definitionWork).map(definitionIdentity));
   for (const job of jobs) {
     if (job.helpRequest) continue;
     const context = job.context;
+    if (job.definitionWork && !linked.has(job.id)) {
+      const work = job.definitionWork;
+      let currentKey = definitionKeys.get(work.epicID);
+      if (!currentKey) { currentKey = definitionInputKey(project, work.epicID); definitionKeys.set(work.epicID, currentKey); }
+      // Keep the current semantic receipt ledger, not obsolete/repeated attempts.
+      if (work.inputKey !== currentKey || job.status !== "completed" && completedDefinitions.has(definitionIdentity(job))) continue;
+    }
     const target = context?.refinementTarget, current = target && requirements.get(target.requirementID);
     // The existing reuse predicate rejects these before looking at history. Their
     // resulting accepted/dismissed proposals already live in the current project;
     // obsolete checks are not necessary continuation state.
     if (job.status === "completed" && target && (!current || target.fingerprint !== reviewFingerprint(current)) && !linked.has(job.id)) continue;
     const useful = job.gapReport || job.epicReviewReport || context?.refinementOnly || context?.gapExploration || context?.epicReview
-      || job.retrievalWork || job.scanWork && job.status !== "completed" || linked.has(job.id)
+      || job.retrievalWork || job.definitionWork || job.scanWork && job.status !== "completed" || linked.has(job.id)
       || ["pending", "running"].includes(job.status);
     if (!useful) continue;
     const key = linked.has(job.id) ? job.id : JSON.stringify([job.kind, context?.refinementPair ?? context?.refinementTarget ?? context?.gapExploration?.check
-      ?? context?.epicReview ?? job.gapReport ?? job.epicReviewReport ?? job.id, job.status === "completed"]);
+      ?? context?.epicReview ?? definitionIdentity(job) ?? job.gapReport ?? job.epicReviewReport ?? job.id, job.status === "completed"]);
     const copy = structuredClone(job);
     copy.model = withoutAccount(copy.model);
     delete copy.sessionID; delete copy.telemetry; delete copy.diagnostic; delete copy.discoveryMetrics;
@@ -198,15 +211,18 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
   kind: z.literal("scan").optional(), result: analysisSchema.optional(), researchEvidence: z.array(researchEvidenceSchema).optional(),
   portableReceipt: z.literal(1).optional(),
   context: z.object({ revision: z.number().int().positive(), focusEpicID: z.string().nullable(), characters: z.number().nonnegative(), budget: z.number().nonnegative(),
-    includedIDs: z.array(z.string()), omittedIDs: z.array(z.string()) }).passthrough().optional(),
+    includedIDs: z.array(z.string()), omittedIDs: z.array(z.string()), definitionAssessment: definitionTaskSchema.optional() }).passthrough().optional(),
   retrievalWork: retrievalWorkSchema.optional(), gapReport: z.unknown().optional(), epicReviewReport: z.unknown().optional(),
+  definitionWork: definitionWorkSchema.optional(), definitionBlock: z.object({ format: z.literal(1), reason: z.string().min(1).max(1200) }).strict().optional(),
   scan: z.object({ workspaceKey: z.literal("portable"), snapshot: projectSchema.shape.scans.removeDefault().element, sources: projectSchema.shape.sources }).strict().optional(),
   scanWork: z.object({ version: z.literal(1), bindingID: z.literal("portable"), resumedFrom: z.string().optional(), batches: z.array(z.object({
     excerpts: z.array(z.object({ sourceID: z.string(), start: z.number().int().nonnegative(), end: z.number().int().positive() }).strict()),
     depth: z.number().int().min(0).max(4), attempts: z.number().int().min(0), timedOut: z.boolean().optional(), output: scanAnalysisSchema.optional(),
   }).strict()) }).strict().optional(),
   scanProgress: z.object({ completed: z.number().int().nonnegative(), total: z.number().int().nonnegative(), capturedAt: z.string(), resumable: z.boolean() }).strict().optional(),
-}).strict();
+}).strict().refine((job) => !job.definitionWork || job.context?.definitionAssessment?.staged?.planKey === job.definitionWork.planKey
+  && job.context.definitionAssessment.epicID === job.definitionWork.epicID && job.context.definitionAssessment.inputKey === job.definitionWork.inputKey,
+"Definition continuation must retain its original exact staged task identity.");
 
 export type PortableProject = { project: Project; execution: ExecutionState; continuation: Continuation; snapshots: () => Generator<Project> };
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {

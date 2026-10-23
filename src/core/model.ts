@@ -287,6 +287,7 @@ export type Job = {
     gapExploration?: { targetRecordID: string; check?: z.infer<typeof gapCheckSchema> };
     gapRetrieval?: boolean;
     epicReview?: import("./epic-review-types.js").EpicReview;
+    definitionAssessment?: { format: 1; epicID: string; inputKey: string; staged?: { policy: "exact-batches-v1"; planKey: string } };
     decisionProjection?: { format: 1; omittedReviewSourceIDs: string[]; retainedReviewNoteSourceIDs: string[]; projectedReceiptSourceIDs?: string[] };
     refinementOnly?: boolean;
     /** Soft stopping target; a completed package may exceed it. */
@@ -309,6 +310,8 @@ export type Job = {
   retrievalWork?: import("./gap-retrieval.js").RetrievalWork;
   scan?: { workspaceKey: string; snapshot: Project["scans"][number]; sources: Project["sources"] };
   scanWork?: ScanWork;
+  definitionWork?: import("./definition-stages.js").DefinitionWork;
+  definitionBlock?: { format: 1; reason: string };
   /** Browser-safe checkpoint summary; batch outputs remain in the local store. */
   scanProgress?: { completed: number; total: number; capturedAt: string; resumable: boolean };
 };

@@ -19,6 +19,116 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Exact-batch whole-area assessment continuation (2026-10-23 follow-up)
+
+Source/target: SQLite schema 5 and definition input-basis format 1 unchanged. Existing
+single-context assessments, scores, dates and histories remain valid; they are not
+invalidated just because a larger-area workflow is now supported. Existing failed
+145k/96k jobs remain unchanged history. An explicit refresh locally prepares the
+previously blocked evidence as a complete exact-record partition before inference.
+
+New optional strict format-1 `job.definitionWork` uses policy `exact-batches-v1`:
+area/input and partition identities, exact batch membership, current spent attempts,
+bounded completed receipts, optional pause/block reason and continuation origin.
+Each receipt binds its exact request/draft hash and validated response to original
+job/provider/model provenance. No credential, account identifier or runtime session
+is added. Context `definitionAssessment.staged` binds the same policy/plan identity.
+New saved assessments optionally include strict format-1 `stagedReview` method/
+batch metadata, not a new assessment score or freshness policy. Model proposals
+cannot assign that metadata.
+
+Checkpoint/pause/block/publication writes are transactional, live-lease and expected-
+revision checked. Publication independently reconstructs the complete partition,
+replays every exact receipt/draft, rejects partial/future/mismatched/blocked work and
+requires every verification batch. A late verdict can only reduce coverage or raise
+importance; no positive upgrade is permitted during verification. Confidence caps
+at medium for the explicit cross-batch reasoning limitation. Earlier assessment
+evidence stays unchanged until the final transaction succeeds.
+
+Explicit retry reuses the saved partition and spent attempts before choosing a new
+representation; unrelated revisions alone do not reset calls. A final checkpoint
+survives publication failure and can publish with zero further calls. Cancellation,
+request/time budget pauses and app restart retain completed receipts. Exhausted
+stages and unchanged model evidence blockers do not grant fresh attempts. Relevant
+input changes retain previous dated work but cannot certify a current assessment.
+New work can use the genuinely changed input basis.
+
+Portable continuation carries current definition work as a self-contained receipt
+ledger and necessary snapshots, with schema/identity validation before adoption.
+It deduplicates repeated attempts by area/input/partition identity and retains the
+completed ledger instead of its earlier partial copies. Obsolete input generations
+stay local history, not portable activity archives. Completed semantic stage hashes
+and original model provenance remain available; runtime sessions, metrics and
+runtime diagnostics are excluded. Necessary semantic missing-evidence reasons stay
+with blocked checkpoints so import cannot silently replay a blocked call.
+Future work/task/method formats reject without overwriting
+original rows. Downgrade after new metadata has been saved remains unqualified.
+
+Tests cover a synthetic evidence set larger than the reported 145,769 characters,
+bounded exact batches, no partial publication, late contradictions, unchanged source
+evidence, cancellation/staleness, spent/exhausted attempts, explicit evidence blockers,
+SQLite/portable resume, original receipt provenance, final-publication recovery and
+future-format rejection without overwrites. A focused browser fixture observes a
+saved first stage through reload, then complete assessment and mobile status. The
+user's exact saved project and live-model semantic usefulness remain unverified.
+
+Verification: type check/UI build, 91 pretests and 647 main tests passed on Windows
+Node 22.23.3, including staged workspace adoption on a different local account and
+completed-ledger deduplication. Portable/specification browser runners also passed.
+The workflow browser runner passed with saved-stage reload and large-area publication. The full
+browser command remains blocked by the previously documented **Approve resolution**
+assertion. No live inference or modification of the user's saved database.
+
+## Definition coverage freshness and near-limit staging (2026-10-23)
+
+Source/target: SQLite schema 5 unchanged. Saved definition assessments optionally
+add strict `inputBasis: {format: 1, key: <SHA-256>}` for `definition-inputs-v1`.
+Model proposals cannot supply this field. The engine/renderer use the same pinned
+browser-compatible SHA-256 implementation; no human text is stored in the digest or
+exported as diagnostics. Freshness metadata is omitted from inference contexts.
+Assessment timestamps/revisions, checks, IDs, answer versions and histories remain
+unchanged. This does not migrate implementation assessments or delivery evidence.
+
+Legacy projection is lazy and read-only: load the original `atRevision` snapshot,
+verify that its assessment matches the saved assessment, then fingerprint THAT
+snapshot and its cited evidence. Compare against current relevant inputs. Never
+fingerprint today's decisions on an old assessment's behalf. Missing/unverifiable
+original snapshots retain conservative revision freshness, not manufactured
+provenance. Reopening repeats the same calculation safely; no startup calls, eager
+history rewrites or CAS increments. The next normal expected-revision transaction
+persists the additive basis. Failure before that transaction leaves original bytes
+intact; previous revisions remain recoverable. Future basis formats reject reads
+without overwriting them. Portable project records retain the optional basis;
+legacy portable snapshots can supply the original evidence for the same projection.
+
+New assessment-only jobs add strict format-1 `context.definitionAssessment` with
+area/input identity. Publication independently requires complete current area
+records, one nine-dimension assessment, detailed citations and no specification
+edits, plus the existing live lease/expected-revision checks. Ordinary/partial gap
+jobs gain no new authority. Current assessments can be reused without repeat calls.
+
+Workflow/stage schemas additionally recognize `staged-current-spec-v3`. It has a
+policy-bound current-spec representation and 8k draft cap/reserve; v1/v2 retain
+their original 12k reserve and identities. Saved work is reconstructed first under
+its original policy, never relabelled or given fresh attempts. Only otherwise
+blocked indivisible new leaves try v3. CPU checkpoint `planningPolicy` also admits
+v3: older size/batch-limit eligibility receipts replan, while completed/waiting and
+saved-model/attempt-limit receipts remain reusable. Replacements remain bounded,
+revision-checked and transactional. Future CPU/stage policies reject without cache
+replacement. Downgrading after new-format records are saved is not qualified.
+
+Upgrade tests cover original-snapshot current/stale projection, unchanged historical
+bytes, repeated reopen, next-write persistence and future-basis rejection. Existing
+CPU receipt transaction/rollback/future-policy tests remain; new v3 tests exercise
+SQLite restart and portable checkpoint round-trip with no stage replay, unchanged
+source evidence and completed-check reuse. Actual-user recovery and live model
+semantic quality remain unverified. See [definition coverage](definition-coverage.md).
+
+Verification: type check/UI build, 79 pretests and 646 main tests, focused workflow,
+portable and specification browser runners passed on Windows Node 22.23.3. The full
+browser command remains blocked by its previously documented **Approve resolution**
+assertion. No personal project was migrated or live model call made during checks.
+
 ## Continuous bounded staged actions (2026-10-23)
 
 Source/target: SQLite schema 5, unchanged workflow/stage semantic formats and keys.

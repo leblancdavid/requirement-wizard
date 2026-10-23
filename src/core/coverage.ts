@@ -1,5 +1,6 @@
 import { dimensions, dimensionLabels } from "./epics.js";
 import type { Project } from "./model.js";
+import { definitionInputKey } from "./definition-identity.js";
 
 export function coverage(project: Project) {
   const superseded = new Set(project.sources.flatMap((item) => item.supersedes ? [item.supersedes] : []));
@@ -43,7 +44,9 @@ export function coverage(project: Project) {
     const openQuestions = project.questions.filter((item) => item.epicID === epic.id && ["pending", "deferred", "delegated"].includes(item.status)).length;
     const criticalGaps = checks.filter((item) => item.importance === "critical" && !["defined", "not-applicable"].includes(item.status)).length;
     return { epicID: epic.id, percent: total ? Math.round(100 * earned / total) : 0,
-      assessed: !!assessment, stale: !assessment || assessment.atRevision !== project.revision,
+      assessed: !!assessment, stale: !assessment || (assessment.inputBasis
+        ? assessment.inputBasis.key !== definitionInputKey(project, epic.id, assessment.checks.flatMap((c) => c.evidenceIDs))
+        : assessment.atRevision !== project.revision),
       confidence: assessment?.confidence ?? "low", explanation: assessment?.explanation ?? "Discover this area to identify its requirements and gaps.",
       checks, criticalGaps, openQuestions };
   });

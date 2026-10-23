@@ -4,7 +4,7 @@ import type { ContextPack } from "./context.js";
 import { epicBatchKey, epicReviewBatches, stagedEpicReview, validateEpicReviewFinal } from "./epic-review.js";
 import { guardrailVerdictSchema, isStagedPolicy, type EpicReview } from "./epic-review-types.js";
 import { retrievalEvidenceBasis, epicStagesSchema, type EpicStages } from "./gap-retrieval.js";
-import { emptyEpicDraft, epicStageContext } from "./epic-stage-context.js";
+import { emptyEpicDraft, epicStageContext, epicDraftLimit } from "./epic-stage-context.js";
 export { emptyEpicDraft, epicStageContext } from "./epic-stage-context.js";
 
 const key = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -29,7 +29,7 @@ export function mergeEpicDraft(project: Project, context: ContextPack, draft: An
       next.requirements.push(normalized);
     }
   }
-  if (JSON.stringify(next).length > 12000) throw new Error("Staged draft exceeds its 12,000-character reserve; no proposals were published or silently truncated. Narrow the review scope.");
+  if (JSON.stringify(next).length > epicDraftLimit(context)) throw new Error(`Staged draft exceeds its ${epicDraftLimit(context).toLocaleString("en-US")}-character reserve; no proposals were published or silently truncated. Narrow the review scope.`);
   return analysisSchema.parse(next);
 }
 
@@ -46,7 +46,7 @@ export function applyGuardrailVerdict(draft: Analysis, raw: unknown): Analysis {
 /** Reconstruct all saved transitions independently before resuming or publishing. */
 export function validateEpicStages(project: Project, review: EpicReview, work: EpicStages, contexts = epicReviewBatches(project, review)): Analysis {
   epicStagesSchema.parse(work);
-  if ((review.contextPolicy === "staged-headroom-v2" && work.contextPolicy !== "staged-headroom-v2")
+  if ((["staged-headroom-v2", "staged-current-spec-v3"].includes(review.contextPolicy ?? "") && work.contextPolicy !== review.contextPolicy)
     || work.contextPolicy !== undefined && work.contextPolicy !== review.contextPolicy)
     throw new Error("Staged checkpoint policy does not match its saved protocol. Original stages were not relabelled or overwritten.");
   const canonical = stagedEpicReview(project, review);

@@ -13,6 +13,9 @@ import { continuationState, decodePortable, portableDigest } from "./portable.js
 import { dirname, join } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
+import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionTaskSchema, validateDefinitionAssessment } from "../core/definition-assessment.js";
+import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { applySpecificationUpdates } from "../core/specification.js";
 import { specificationUpdatesSchema } from "../core/model.js";
 import { wordingKey } from "../core/similarity.js";
@@ -51,12 +54,18 @@ function readStoredJob(payload: string): Job {
   if (job.context?.gapExploration?.check !== undefined) gapCheckSchema.parse(job.context.gapExploration.check);
   if (job.gapReport !== undefined) gapReportSchema.parse(job.gapReport);
   if (job.context?.epicReview !== undefined) epicReviewSchema.parse(job.context.epicReview);
+  if (job.context?.definitionAssessment !== undefined) definitionTaskSchema.parse(job.context.definitionAssessment);
+  if (job.definitionWork !== undefined) {
+    const work = definitionWorkSchema.parse(job.definitionWork), task = job.context?.definitionAssessment;
+    if (task?.epicID !== work.epicID || task.inputKey !== work.inputKey || task.staged?.planKey !== work.planKey) throw new Error("Definition checkpoint does not match its saved task policy; original evidence was not overwritten.");
+  }
+  if (job.definitionBlock !== undefined) z.object({ format: z.literal(1), reason: z.string().min(1).max(1200) }).strict().parse(job.definitionBlock);
   if (job.context?.epicContextBudget !== undefined) epicContextBudgetSchema.parse(job.context.epicContextBudget);
   if (job.epicReviewReport !== undefined) epicReviewReportSchema.parse(job.epicReviewReport);
   if (job.retrievalWork !== undefined) retrievalWorkSchema.parse(job.retrievalWork);
   if (job.retrievalWork?.epicStages && !isStagedPolicy(job.context?.epicReview?.contextPolicy)) throw new Error("Staged checkpoints require their saved staged context policy; original work was not overwritten.");
-  if (job.retrievalWork?.epicStages && ((job.context?.epicReview?.contextPolicy === "staged-headroom-v2"
-    && job.retrievalWork.epicStages.contextPolicy !== "staged-headroom-v2") || job.retrievalWork.epicStages.contextPolicy !== undefined
+  if (job.retrievalWork?.epicStages && ((["staged-headroom-v2", "staged-current-spec-v3"].includes(job.context?.epicReview?.contextPolicy ?? "")
+    && job.retrievalWork.epicStages.contextPolicy !== job.context?.epicReview?.contextPolicy) || job.retrievalWork.epicStages.contextPolicy !== undefined
     && job.retrievalWork.epicStages.contextPolicy !== job.context?.epicReview?.contextPolicy))
     throw new Error("Staged checkpoint policy does not match its saved protocol. Original work was not overwritten.");
   if (job.context?.decisionProjection !== undefined) z.object({ format: z.literal(1), omittedReviewSourceIDs: z.array(z.string()), retainedReviewNoteSourceIDs: z.array(z.string()), projectedReceiptSourceIDs: z.array(z.string()).optional() }).strict().parse(job.context.decisionProjection);
@@ -682,7 +691,22 @@ export class ProjectStore {
       ? this.db.prepare("SELECT payload FROM projects WHERE id = ?").get(id)
       : this.db.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(id, revision)) as { payload: string } | undefined;
     if (!row) throw new Error("Project or revision not found.");
-    return projectSchema.parse(JSON.parse(row.payload));
+    const project = projectSchema.parse(JSON.parse(row.payload));
+    // Lazy forward projection from the original saved assessment snapshot. Never
+    // fingerprint today's decisions as though an old model had reviewed them.
+    // History remains byte-for-byte unchanged; the next ordinary write persists
+    // this additive basis. Missing historical snapshots stay conservatively stale.
+    for (const assessment of project.assessments) if (!assessment.inputBasis) {
+      const original = assessment.atRevision === project.revision ? project : (() => {
+        const saved = this.db.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(id, assessment.atRevision) as { payload: string } | undefined;
+        return saved ? projectSchema.parse(JSON.parse(saved.payload)) : undefined;
+      })();
+      const savedAssessment = original?.assessments.find((a) => a.epicID === assessment.epicID);
+      if (original && savedAssessment && JSON.stringify({ ...savedAssessment, inputBasis: undefined }) === JSON.stringify({ ...assessment, inputBasis: undefined })) {
+        assessment.inputBasis = { format: 1, key: definitionInputKey(original, assessment.epicID, assessment.checks.flatMap((c) => c.evidenceIDs)) };
+      }
+    }
+    return project;
   }
 
   list(): Array<{ id: string; name: string; revision: number }> {
@@ -900,13 +924,15 @@ export class ProjectStore {
     const ids = z.array(z.string().uuid()).min(1).max(20).refine((items) => new Set(items).size === items.length).parse(input);
     const rows = this.db.prepare(`SELECT id, json_extract(payload, '$.expectedRevision') AS revision,
       json_extract(payload, '$.status') AS status, json_extract(payload, '$.discoveryMetrics') AS metrics,
-      json_extract(payload, '$.context.epicReview.packageID') AS packageID, json_extract(payload, '$.context.epicReview.contextPolicy') AS policy,
+      COALESCE(json_extract(payload, '$.context.epicReview.packageID'), json_extract(payload, '$.definitionWork.planKey')) AS packageID,
+      CASE WHEN json_type(payload, '$.definitionWork') IS NOT NULL THEN 'definition-exact-batches-v1' ELSE json_extract(payload, '$.context.epicReview.contextPolicy') END AS policy,
       json_extract(payload, '$.context.characters') AS characters, json_extract(payload, '$.context.budget') AS budget,
       json_array_length(payload, '$.context.includedIDs') AS included, json_array_length(payload, '$.context.omittedIDs') AS omitted,
       json_array_length(payload, '$.context.epicIDs') AS areas, json_extract(payload, '$.context.sectionCharacters') AS sections,
-      json_array_length(payload, '$.retrievalWork.stages') AS stages, json_extract(payload, '$.retrievalWork.attempts') AS savedAttempts,
+      json_array_length(payload, '$.retrievalWork.stages') AS stages, COALESCE(json_extract(payload, '$.retrievalWork.attempts'), json_extract(payload, '$.definitionWork.attempts')) AS savedAttempts,
       json_extract(payload, '$.retrievalWork.reuse.stages') AS reusedStages, json_extract(payload, '$.retrievalWork.reuse.final') AS reusedFinal,
-      json_extract(payload, '$.retrievalWork.epicStages.batches') AS stagedBatches, json_array_length(payload, '$.retrievalWork.epicStages.receipts') AS stagedCompleted,
+      COALESCE(json_extract(payload, '$.retrievalWork.epicStages.batches'), json_array_length(payload, '$.definitionWork.batches')) AS stagedBatches,
+      COALESCE(json_array_length(payload, '$.retrievalWork.epicStages.receipts'), json_array_length(payload, '$.definitionWork.receipts')) AS stagedCompleted,
       COALESCE(json_extract(payload, '$.epicReviewReport.reviewed'), json_extract(payload, '$.gapReport.checked')) AS reviewed,
       COALESCE(json_extract(payload, '$.epicReviewReport.pending'), json_extract(payload, '$.gapReport.pending')) AS pending,
       COALESCE(json_extract(payload, '$.epicReviewReport.waiting'), json_extract(payload, '$.gapReport.waiting')) AS waiting,
@@ -1034,7 +1060,7 @@ export class ProjectStore {
     if (rows.some((row) => row.format !== 1)) throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
     for (const row of rows) {
       const value = JSON.parse(row.payload) as { format?: unknown; planningPolicy?: unknown };
-      if (value.format !== 1 || value.planningPolicy !== undefined && value.planningPolicy !== "staged-headroom-v2")
+      if (value.format !== 1 || value.planningPolicy !== undefined && (typeof value.planningPolicy !== "string" || !["staged-headroom-v2", "staged-current-spec-v3"].includes(value.planningPolicy)))
         throw new Error("Unsupported local planning receipt policy. Saved work was not overwritten.");
     }
     return new Map(rows.filter((row) => row.input_key === inputKey).map((row) => [row.group_key, epicPlanningCheckpointSchema.parse(JSON.parse(row.payload))]));
@@ -1049,7 +1075,7 @@ export class ProjectStore {
         throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
       if (this.db.prepare(`SELECT 1 FROM epic_planning_receipts WHERE project_id = ? AND
         (COALESCE(json_extract(payload, '$.format'), 0) != 1 OR
-        (json_type(payload, '$.planningPolicy') IS NOT NULL AND json_extract(payload, '$.planningPolicy') IS NOT 'staged-headroom-v2'))`).get(projectID))
+        (json_type(payload, '$.planningPolicy') IS NOT NULL AND json_extract(payload, '$.planningPolicy') NOT IN ('staged-headroom-v2', 'staged-current-spec-v3')))` ).get(projectID))
         throw new Error("Unsupported local planning receipt policy. Saved work was not overwritten.");
       // One input generation per project, capped at 4 MiB/2,000 roots/subtrees.
       // This is disposable derived state, never original decisions or checks.
@@ -1328,6 +1354,20 @@ export class ProjectStore {
         job.diagnostic = "Project changed while analysis was running; result was not applied.";
       } else {
         this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
+          if (job.context?.definitionAssessment) {
+            const verified = job.definitionWork ? completedDefinitionAssessment(project, job.definitionWork) : undefined;
+            if (verified && JSON.stringify(verified) !== JSON.stringify(result)) throw new Error("Definition publication does not match its verified staged result.");
+            const assessment = verified ? verified.assessments![0]! : validateDefinitionAssessment(project, job.context, result);
+            const checks = assessment.checks;
+            project.assessments = project.assessments.filter((a) => a.epicID !== assessment.epicID);
+            project.assessments.push({ ...assessment, atRevision: project.revision + 1,
+              answerVersions: Object.fromEntries(checks.flatMap((c) => c.evidenceIDs).flatMap((id) => {
+                const q = project.questions.find((q) => q.id === id); return q ? [[id, q.sourceID ?? null]] : [];
+              })), inputBasis: { format: 1, key: definitionInputKey(project, assessment.epicID, checks.flatMap((c) => c.evidenceIDs)) },
+              ...(job.definitionWork ? { stagedReview: { format: 1 as const, policy: "exact-batches-v1" as const, batches: job.definitionWork.batches.length } } : {}) });
+            project.roundChanges = [`Definition assessment refreshed: ${project.epics.find((e) => e.id === assessment.epicID)?.title ?? assessment.epicID}. Specification unchanged.`];
+            return;
+          }
           const before = structuredClone(project);
           if (job.context?.gapExploration?.check || job.context?.epicReview) {
             // Older/deterministic adapters may omit the optional area field.
@@ -1503,6 +1543,42 @@ export class ProjectStore {
       job.leaseUntil = null;
       this.saveJob(job);
       return job;
+    }).immediate();
+  }
+
+  definitionHistory(projectID: string, epicID: string, inputKey: string): Job[] {
+    return (this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND json_extract(payload, '$.definitionWork.epicID') = ?
+      AND json_extract(payload, '$.definitionWork.inputKey') = ? ORDER BY rowid DESC LIMIT 20`).all(projectID, epicID, inputKey) as { payload: string }[]).map((row) => readStoredJob(row.payload));
+  }
+
+  checkpointDefinition(id: string, input: DefinitionWork, context: NonNullable<Job["context"]>) {
+    this.db.transaction(() => {
+      const job = this.getJob(id), work = definitionWorkSchema.parse(input);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Definition worker is no longer live; saved work retained.");
+      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (context.definitionAssessment?.staged?.planKey !== work.planKey) throw new Error("Definition checkpoint requires its saved exact plan.");
+      job.definitionWork = work; job.context = context; this.saveJob(job);
+    }).immediate();
+  }
+
+  blockDefinition(id: string, reason: string): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Definition worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      job.status = "failed"; job.definitionBlock = { format: 1, reason: reason.slice(0, 1200) }; job.diagnostic = `Evidence blocked: ${job.definitionBlock.reason}`;
+      job.leaseUntil = null; this.saveJob(job); return job;
+    }).immediate();
+  }
+
+  pauseDefinition(id: string, reason: "request-limit" | "time-limit"): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now() || !job.definitionWork) throw new Error("Definition worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      job.status = "interrupted"; job.definitionWork.paused = reason;
+      job.diagnostic = "Paused—definition progress saved. Refresh definition coverage to continue unfinished evidence batches without repeating completed calls.";
+      job.leaseUntil = null; this.saveJob(job); return job;
     }).immediate();
   }
 

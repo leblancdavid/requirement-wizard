@@ -68,7 +68,9 @@ export function buildContext(project: Project, focusEpicID?: string, budget = 48
       ...project.requirements.map((item) => ({ id: item.id, epicID: item.epicID, status: item.status, label: item.statement.slice(0, 180) }))].slice(-100),
     indexLimit: "Recent 100 record labels only; labels may be excerpts. Full evidence exists only in the working set. Other areas require focused discovery.",
     pendingOrganization: project.organizationReviews.filter((item) => item.status === "pending"),
-    assessments: project.assessments.filter((item) => selected.has(item.epicID)),
+    // Freshness bases are local bookkeeping, never model evidence. Replaying the
+    // exact identity would duplicate the entire assessed evidence in this prompt.
+    assessments: project.assessments.filter((item) => selected.has(item.epicID)).map(({ inputBasis: _, ...assessment }) => assessment),
     limitations: omittedIDs.length ? "Other records are indexed only. Do not claim to have reviewed them or cite evidence not in this working set. Request a focused round for full detail." : "All current working records included; historical retired records may be omitted.",
   };
   let data: typeof fullData & { contextCompaction?: NonNullable<ContextPack["manifest"]["compaction"]> & { explanation: string } } = fullData;

@@ -38,6 +38,12 @@ zero. Unassessed areas have unknown gaps; outdated critical flags are separate f
 current gaps. Expand an area's definition assessment in the breakdown for category
 explanations and linked evidence. Local code findings do not earn main-delivery credit.
 Review requirements and coverage evidence without entering IDs.
+Use **Overall progress → Refresh definition coverage** for a complete current-area
+assessment, separate from gap discovery. Relevant evidence changes—not every project
+revision—make it outdated. The dialog also separates discovery blockers from assessed
+definition gaps. Large areas use resumable exact evidence batches; indivisible
+evidence and stage-limit blockers stay explicitly unfinished. See
+[definition coverage](docs/definition-coverage.md) for bounds and upgrade behavior.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 **Discover missing decisions** (in Design or the idle top process bar) reviews related workflows and their declared dependency
 boundaries. The compact **Questions ready** input configures how many unanswered questions to

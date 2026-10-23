@@ -6,6 +6,23 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/core/definition-identity.ts` and `definition-assessment.ts`: relevance-bound
+  definition freshness and complete-current-area assessment-only context/publication
+  rules, separate from workflow gaps and implementation assessment. Original-snapshot
+  legacy projection is read-only until the next ordinary store transaction. The
+  progress dialog/API/queue expose an explicit bounded refresh and separate saved
+  discovery blockers. Versioned staged-current-spec v3 trades draft capacity for
+  exact evidence without changing older checkpoints. See
+  [definition coverage](definition-coverage.md) and [migrations](migrations.md).
+- `src/core/definition-stages.ts` / `src/service/definition-stages.ts`: versioned
+  complete exact-record partition, bounded assessment draft and per-batch verification
+  protocol for oversized areas. Store publication independently replays all request/
+  response identities; checkpointed work retains spent attempts, origin and model
+  provenance through SQLite/portable continuation. The queue, progress dialog and
+  processing drawer show unpublished stage counts and explicit blocked/paused states.
+  Existing single-context assessment identities remain unchanged. See
+  [large-area assessment](definition-coverage.md#large-area-assessment-and-continuation-follow-up-2026-10-23).
+
 - `src/core/specification.ts`: current-input-bound automatic specification activation
   and revision, exact target/context checks and reviewable exceptions. The store applies
   optional version-1 update envelopes within existing job/revision transactions;

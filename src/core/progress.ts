@@ -7,11 +7,11 @@ export type LocalAssessmentCounts = {
   total: number; assessed: number; complete: number; partial: number; missing: number; unknown: number;
   notAssessed: number; stale: number; completePercent: number;
 };
-export type ProgressScore = { percent: number; status: string; detail: string; localAssessment?: LocalAssessmentCounts; assessmentState?: "current" | "outdated" | "unassessed" };
+export type ProgressScore = { percent: number; status: string; detail: string; localAssessment?: LocalAssessmentCounts; assessmentState?: "current" | "outdated" | "unassessed" | "incomplete" };
 
 /** Missing or old coverage is not a finding that no definition work was done. */
 export function progressLabel(score: ProgressScore): string {
-  return score.assessmentState === "unassessed" ? "Not assessed" : score.assessmentState === "outdated" ? "Assessment outdated" : `${score.percent}%`;
+  return score.assessmentState === "unassessed" ? "Not assessed" : score.assessmentState === "outdated" ? "Assessment outdated" : score.assessmentState === "incomplete" ? "Assessment incomplete" : `${score.percent}%`;
 }
 
 /** Presentation only: old findings remain evidence, not claims about current gaps. */
@@ -84,10 +84,10 @@ export function projectProgress(project: Project, execution: ExecutionEvaluation
   };
   const stages: ProgressStage[] = [
     { id: "definition", title: "Definition coverage", percent: definition.percent,
-      assessmentState: !definition.epics.some((e) => e.assessed) ? "unassessed" : definition.stale ? "outdated" : "current",
+       assessmentState: !definitionAreas.some((e) => e.assessed) ? "unassessed" : definitionAreas.some((e) => e.assessed && e.stale) ? "outdated" : definition.stale ? "incomplete" : "current",
       status: definition.stale ? "Definition assessment incomplete" : definition.criticalGaps || definition.openQuestions ? "Gaps remaining" : "Assessed",
       detail: definitionAssessmentDetail(definitionAreas),
-      explanation: "Assesses specification detail, not code or the fraction of questions answered. Critical gaps count unresolved critical categories, not individual missing requirements. Not assessed means no saved whole-area assessment; gaps are unknown. Outdated findings may no longer apply. Any project revision currently makes older assessments outdated, and smaller discovery passes do not refresh them. No open questions recorded does not mean no unresolved decisions. Expand an area to inspect its categories, explanations and evidence. The overall estimate still uses saved coverage, with unassessed areas counted as zero.",
+       explanation: "Assesses specification detail, not code or the fraction of questions answered. Critical gaps count unresolved critical categories, not individual missing requirements. Not assessed means no saved whole-area assessment; gaps are unknown. Outdated findings may no longer apply. Relevant area, project-wide, dependency or linked evidence changes make assessments outdated; discovery checks alone do not refresh them. Use Refresh definition coverage for a complete current-area assessment. No open questions recorded does not mean no unresolved decisions. Expand an area to inspect its categories, explanations and evidence. The overall estimate still uses saved coverage, with unassessed areas counted as zero.",
       epics: definitionAreas.map((score) => ({
          epicID: score.epicID, title: active.find((e) => e.id === score.epicID)?.title ?? score.epicID, percent: score.percent,
          assessmentState: !score.assessed ? "unassessed" : score.stale ? "outdated" : "current",

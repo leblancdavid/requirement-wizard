@@ -74,6 +74,16 @@ test("definition summary separates current gaps, previous flags and unknown area
   assert.equal(JSON.stringify(project), before);
 });
 
+test("current completed areas plus unassessed areas are incomplete, not mislabeled outdated", () => {
+  const project = fixture();
+  project.epics.push({ id: "runtime", title: "Runtime", purpose: "Startup", dependencies: [], archived: false });
+  project.assessments.push({ epicID: "runtime", atRevision: project.revision, confidence: "medium", explanation: "Current runtime evidence", checks: [], answerVersions: {} });
+  const stage = projectProgress(project, emptyExecution()).stages[0]!;
+  assert.equal(stage.assessmentState, "incomplete"); assert.equal(progressLabel(stage), "Assessment incomplete");
+  assert.match(stage.detail, /1 current · 0 outdated · 1 not assessed/);
+  assert.equal(stage.epics.find((e) => e.epicID === "runtime")!.assessmentState, "current");
+});
+
 test("stage totals use current active scope, reviewed decisions, and actual main delivery", () => {
   const project = fixture(), state = emptyExecution();
   project.epics.push({ ...project.epics[0]!, id: "archived", archived: true });

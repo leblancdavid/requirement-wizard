@@ -316,6 +316,13 @@ No live provider calls or browser checks were run for this service/prompt-only f
 
 ## Verification and remaining work
 
+2026-10-23 follow-up: the progress dialog now provides a separate whole-current-area
+definition refresh and relevance-based freshness. Workflow review itself still
+cannot publish coverage assessments. Otherwise blocked indivisible leaves can try
+the versioned current-spec v3 policy with an explicit 8k draft reserve; compatible
+older work keeps its original limits. See [definition coverage](definition-coverage.md)
+for tradeoffs, recovery and remaining whole-area size limits.
+
 Staged shared-decision verification (2026-10-22): type checking, `npm test` (28
 pretests / 626 main tests), UI build and the focused epic browser check passed on
 Windows Node 22.23.3. The new tests cover intact grouped targets with distributed

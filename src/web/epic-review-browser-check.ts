@@ -9,6 +9,8 @@ import { analysisSchema } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { DiscoveryService } from "../service/discovery.js";
+import { dimensions } from "../core/epics.js";
+import { coverage } from "../core/coverage.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -31,12 +33,30 @@ let stagedCalls = 0;
 let releaseStaged!: () => void;
 const stagedGate = new Promise<void>((resolve) => { releaseStaged = resolve; });
 let headroomCalls = 0;
+let assessmentCalls = 0;
+let largeAssessmentCalls = 0;
+let releaseLarge!: () => void;
+const largeGate = new Promise<void>((resolve) => { releaseLarge = resolve; });
 const connections: Connections = {
   async accounts() { return []; }, async models() { return [{ id: "fixture", name: "Fixture" }]; },
   async beginLogin() { throw new Error("No live sign-in"); }, loginStatus() { throw new Error("No live sign-in"); }, cancelLogin() {},
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {},
 };
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(_p, { context }) {
+  if (context.manifest.definitionAssessment) {
+    if (context.manifest.definitionAssessment.staged) {
+      largeAssessmentCalls++;
+      if (largeAssessmentCalls === 2) await largeGate;
+      assert.ok(context.manifest.characters <= 96000);
+      const phase = (context.data as { definitionStage: { phase: string } }).definitionStage.phase;
+      if (phase === "verify") return { definitionVerdict: [] };
+      return { ...empty(), assessments: [{ epicID: context.manifest.definitionAssessment.epicID, confidence: "medium", explanation: "Exact evidence read in bounded batches; not a readiness guarantee.",
+        checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "partial", explanation: "Consequential decisions may remain.", evidenceIDs: [context.manifest.includedIDs[0]!] })) }] };
+    }
+    assessmentCalls++;
+    return { ...empty(), assessments: [{ epicID: context.manifest.definitionAssessment.epicID, confidence: "medium", explanation: "Current exact area evidence, not completeness proof.",
+      checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "partial", explanation: "Consequential choices may remain.", evidenceIDs: [_p.sources[0]!.id] })) }] };
+  }
   if (_p.name === "Budget pause browser") {
     const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number } }).stagedGuardrailReview;
     assert.ok(stage.phase !== "discover" || stage.batch > 1, "Saved stage must not replay");
@@ -150,6 +170,35 @@ try {
   await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-review-mobile.png"), fullPage: true });
   assert.deepEqual(store.get(project.id).requirements, before.requirements); assert.deepEqual(store.get(project.id).sources, before.sources);
   assert.deepEqual(store.getJob(blocked.id), blocked); assert.deepEqual(errors, []);
+  await page.getByRole("button", { name: "Close processing queue" }).click();
+  await page.setViewportSize({ width: 1280, height: 960 });
+  await page.locator(".progress-trigger").click();
+  const overview = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await expect(overview.getByRole("region", { name: "Discovery review status", exact: true })).toContainText("Discovery is incomplete");
+  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("does not refresh");
+  const refreshCoverage = overview.getByRole("button", { name: "Refresh definition coverage", exact: true });
+  const refreshAppearance = await refreshCoverage.evaluate((button) => {
+    const style = getComputedStyle(button);
+    return { background: style.backgroundColor, border: style.borderTopStyle, borderWidth: parseFloat(style.borderTopWidth), height: button.getBoundingClientRect().height };
+  });
+  assert.notEqual(refreshAppearance.background, "rgba(0, 0, 0, 0)");
+  assert.equal(refreshAppearance.border, "solid"); assert.ok(refreshAppearance.borderWidth >= 1); assert.ok(refreshAppearance.height >= 44);
+  await refreshCoverage.focus(); await page.keyboard.press("Tab"); await page.keyboard.press("Shift+Tab");
+  await expect(refreshCoverage).toBeFocused();
+  assert.notEqual(await refreshCoverage.evaluate((button) => getComputedStyle(button).outlineStyle), "none", "Keyboard focus must remain visible");
+  await refreshCoverage.click();
+  await expect.poll(() => coverage(store.get(project.id)).stale).toBe(false);
+  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("3 current");
+  assert.equal(assessmentCalls, 3); assert.equal(calls, 2, "Assessment refresh cannot silently discover gaps");
+  assert.deepEqual(store.get(project.id).requirements, before.requirements); assert.deepEqual(store.get(project.id).sources, before.sources);
+  await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
+  await expect(overview.getByRole("button", { name: "Refresh definition coverage", exact: true })).toBeEnabled();
+  assert.equal(assessmentCalls, 3, "Current areas do not repeat model calls");
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: resolve(".reqwizit-state/browser-definition-progress.png"), fullPage: true });
+  await page.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.reload(); assert.equal(assessmentCalls, 3, "Reload cannot start assessment inference");
   let targetProject = store.create("Epic question target browser", "Inspect independent order workflows", { providerID: "openai", modelID: "fixture" });
   targetProject = store.organize(targetProject.id, targetProject.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Independent workflows", dependencies: [] }]);
   for (let offset = 0; offset < 24; offset += 8) {
@@ -288,7 +337,35 @@ try {
   const dialogText = await page.getByRole("dialog", { name: "Processing & queue" }).innerText();
   assert.equal(dialogText.split(diagnostic).length - 1, 1, "A failed round repeated in progress is shown only once");
   await expect(page.getByText(/^Last round failed:/)).toHaveCount(0);
+  let large = store.create("Large definition browser", "Retain original startup and build decisions", { providerID: "openai", modelID: "fixture" });
+  large = store.organize(large.id, large.revision, [{ type: "upsert", epicID: "runtime", title: "Runtime startup and build compatibility", purpose: "Preserve observable startup compatibility", dependencies: [] }]);
+  for (let i = 0; i < 15; i++) large = store.note(large.id, large.revision, Array.from({ length: 160 }, (_, n) => createHash("sha256").update(`definition-${i}-${n}`).digest("hex")).join(""), "project");
+  const initial = store.beginJob(large.id, large.revision).job; store.claimJob(initial.id, Date.now() + 60000);
+  store.finishJob(initial.id, { ...empty(), requirements: [{ epicID: "runtime", statement: "Preserve startup compatibility", rationale: "Human constraints", acceptance: ["Startup honors saved decisions"], sourceIDs: large.sources.map((s) => s.id) }] }); large = store.get(large.id);
+  await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Large definition browser/ }).click();
+  await page.locator(".progress-trigger").click();
+  await overview.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) }).locator(":scope > summary").click();
+  const refreshRuntime = overview.getByRole("button", { name: "Refresh definition: Runtime startup and build compatibility", exact: true });
+  assert.equal(await refreshRuntime.evaluate((button) => getComputedStyle(button).borderTopStyle), "solid", "Area refresh must also look like a button");
+  assert.ok(await refreshRuntime.evaluate((button) => button.getBoundingClientRect().height >= 44));
+  await refreshRuntime.click();
+  await expect.poll(() => largeAssessmentCalls).toBe(2);
+  const batchProgress = overview.getByRole("region", { name: "Definition assessment progress", exact: true });
+  await expect(batchProgress).toContainText("1 /"); await expect(batchProgress).toContainText("Partial findings are not published");
+  assert.deepEqual(store.get(large.id).assessments, []);
+  await page.reload(); await page.locator(".progress-trigger").click();
+  await expect(batchProgress).toContainText("1 /"); assert.equal(largeAssessmentCalls, 2, "Reload does not repeat a saved batch or start another model request");
+  releaseLarge();
+  await expect.poll(() => coverage(store.get(large.id)).epics.find((e) => e.epicID === "runtime")?.stale).toBe(false);
+  await expect(batchProgress).toContainText("All batches read and findings checked against every batch");
+  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("1 current · 0 outdated · 1 not assessed");
+  await expect(overview.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) }).locator(":scope > summary")).toContainText("Assessment incomplete");
+  assert.deepEqual(store.get(large.id).sources, large.sources);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: resolve(".reqwizit-state/browser-definition-staged.png"), fullPage: true });
+  const completedCalls = largeAssessmentCalls; await page.reload(); assert.equal(largeAssessmentCalls, completedCalls);
   assert.deepEqual(errors, []);
-  console.log("Epic review browser check passed: diagnostic privacy/failure, selected epic, blockers, one-click staged continuation beyond six calls, v2 fallback, no-call reuse, reload and mobile layout; no live model calls.");
+  console.log("Epic review browser check passed: diagnostic privacy/failure, selected epic, blockers, separate definition refresh/status, one-click staged continuation beyond six calls, v2 fallback, no-call reuse, reload and mobile layout; no live model calls.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-epic-review-failure")); throw error; }
-finally { releaseStaged(); await browser?.close(); await app.close(); store.close(); }
+finally { releaseStaged(); releaseLarge(); await browser?.close(); await app.close(); store.close(); }

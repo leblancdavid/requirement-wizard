@@ -11,6 +11,7 @@ export function DefinitionAssessment({ area, project }: { area: ReturnType<typeo
     <summary>Inspect definition assessment</summary>
     <p>{area.stale ? "Outdated assessment: these are previous findings, not confirmed current gaps." : "Current whole-area assessment; this does not certify completeness."}{saved ? ` Assessed at revision ${saved.atRevision}; current revision ${project.revision}.` : ""}</p>
     <p>{area.explanation}</p>
+    {saved?.stagedReview && <p>Staged exact-evidence assessment: {saved.stagedReview.batches} batches read, then findings checked against every batch. No evidence was truncated. Confidence is capped at medium because independent batch checks cannot prove every cross-batch relationship. Unknown or unresolved decisions remain explicit.</p>}
     {area.checks.map((check) => <details className="definition-check" key={check.dimension}>
       <summary>{check.label} · {check.importance} · {statusLabels[check.status]}</summary>
       {check.importance === "critical" && !["defined", "not-applicable"].includes(check.status) && <p>{area.stale ? "Previously flagged critical area — needs rechecking." : "Critical area needs clarification."}</p>}
@@ -22,7 +23,7 @@ export function DefinitionAssessment({ area, project }: { area: ReturnType<typeo
         const question = project.questions.find((q) => q.id === id);
         const research = project.research.find((r) => r.id === id);
         return <blockquote className="evidence" key={id}>
-          <small>{source ? `Human ${source.kind}` : requirement ? `Requirement · ${requirement.status}` : question ? `Question · ${question.status}` : research ? "Research finding" : "Evidence unavailable"} · {id}</small>
+          <small>{source ? source.kind === "workspace" ? "Captured workspace evidence" : `Human ${source.kind}` : requirement ? `Requirement · ${requirement.status}` : question ? `Question · ${question.status}` : research ? "Research finding" : "Evidence unavailable"} · {id}</small>
           <p>{source?.text ?? requirement?.statement ?? question?.text ?? research?.finding ?? "This linked record is unavailable."}</p>
           {research && <a href={research.url} target="_blank" rel="noreferrer">Open source ↗</a>}
         </blockquote>;
