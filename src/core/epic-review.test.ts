@@ -553,7 +553,7 @@ test("targeted epic review continues past three grounded questions in the same e
         options: [{ label: "Keep", consequence: "Preserve behavior" }, { label: "Change", consequence: "Revise behavior" }] })) };
     } }));
     queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 10, research: false });
-    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setTimeout(resolve, 20));
     assert.equal(queue.isActive(p.id), false);
     assert.equal(store.get(p.id).questions.length, 12, queue.progress(p.id).join("\n"));
     assert.equal(reviewed.size, 24);
@@ -575,7 +575,7 @@ test("targeted review saves an evidence blocker and continues independent packag
         options: [{ label: "Retry", consequence: "Attempt recovery" }, { label: "Stop", consequence: "Request intervention" }] }] };
     } }));
     queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 1 });
-    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setTimeout(resolve, 20));
     assert.equal(queue.isActive(p.id), false);
     assert.equal(calls, 2, queue.progress(p.id).join("\n"));
     assert.equal(store.get(p.id).questions.length, 1);
@@ -603,7 +603,7 @@ for (const mode of ["blocked", "failure", "malformed", "cancelled"] as const) te
       return { reviewBlocked: { reason: "Missing exact factual evidence." } };
     } }));
     queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 1 });
-    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setTimeout(resolve, 20));
     assert.equal(queue.isActive(p.id), false);
     assert.deepEqual(store.get(p.id), p);
     assert.equal(calls, mode === "blocked" ? packageCount : 1, queue.progress(p.id).join("\n"));
@@ -620,7 +620,7 @@ test("evidence-blocked continuation does not exceed the ten-package run ceiling"
     const p = seed(store, 70); let calls = 0;
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { calls++; return { reviewBlocked: { reason: "Missing exact external contract." } }; } }));
     queue.resume(p.id, { gapMode: "epic", focusEpicID: "orders", questionTarget: 1 });
-    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setTimeout(resolve, 20));
     assert.equal(queue.isActive(p.id), false); assert.equal(calls, 10);
     assert.match(queue.progress(p.id).join("\n"), /stopped after 10 packages/);
     assert.ok(planEpicReview(p, store.jobs(p.id), "orders").task, "Independent pending work must not be called reviewed or blocked by the run ceiling");
@@ -937,7 +937,7 @@ test("all size-blocked packages stop without inference and show an actionable fa
     p = store.review(p.id, p.revision, rule.id, "accepted", "");
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Locally blocked evidence must not call the model"); } }));
     queue.resume(p.id, { gapMode: "epic", questionTarget: 5 });
-    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setTimeout(resolve, 20));
     assert.equal(queue.isActive(p.id), false);
     assert.match(queue.progress(p.id).join("\n"), /Gap exploration blocked: all \d+ packages/);
     const job = store.jobs(p.id).at(-1)!;

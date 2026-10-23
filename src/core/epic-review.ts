@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import type { Analysis, Job, Project, Submission } from "./model.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
-import { planContext } from "./working-set.js";
+import { planContext, contextPreparationIndex, type ContextPreparationIndex } from "./working-set.js";
 import { gapEvidence } from "./gap-backlog.js";
 import { decisionAvailability } from "./decision-availability.js";
 import { retrievalEvidenceBasis, validateGapFinal } from "./gap-retrieval.js";
 import { epicReviewDiagnostic, epicReviewSchema, type EpicReview, type EpicReviewReport } from "./epic-review-types.js";
 import { evidenceGraph, type EvidenceGraph } from "./evidence-graph.js";
+import type { EpicPlanningCheckpoint } from "./epic-planning-checkpoint.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -25,7 +26,18 @@ export function validateEpicReviewFinal(project: Project, context: ContextPack, 
   if (outside) throw new Error(`Cannot add proposals to an area outside this round's context: ${JSON.stringify(outside)}. Allowed area IDs: ${JSON.stringify(context.manifest.epicIDs)}. No proposals applied; retry the review to request a corrected response.`);
 }
 type Record = Project["requirements"][number] | Project["questions"][number] | Project["sources"][number];
-export type EpicReviewTask = { review: EpicReview; context?: ContextPack; reason?: string; state: "pending" | "reviewed" | "waiting" | "blocked"; prior?: Job };
+export type EpicReviewTask = { review: EpicReview; context?: ContextPack; contextCharacters?: number; batches?: ContextPack[]; reason?: string; state: "pending" | "reviewed" | "waiting" | "blocked"; prior?: Job };
+type Candidate = { review: EpicReview; context?: ContextPack; batches?: ContextPack[]; batchKey?: string; error?: ContextBudgetError };
+export type EpicPlanningOptions = {
+  firstPending?: boolean;
+  /** Invocation-local only, including retries to load immutable historical revisions. */
+  cache?: Map<string, Candidate>;
+  onPackage?: (examined: number) => void;
+  onPrepare?: () => void;
+  /** Exact-input-bound root-group receipts. Non-pending tasks only. */
+  resolved?: Map<string, EpicPlanningCheckpoint>;
+  onResolved?: (key: string, value: EpicPlanningCheckpoint, reused: boolean) => void;
+};
 
 /** Keep unanswered questions out of work grouping: they must not displace independent
  * requirements into new, waiting packages after each result publishes. */
@@ -48,7 +60,7 @@ function groups(project: Project, records: Record[], size: number): Record[][] {
   return [...batches, ...records.filter((r) => "options" in r).sort((a, b) => a.id.localeCompare(b.id)).map((r) => [r])];
 }
 
-export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false, guardrailIDs?: string[], index?: EvidenceGraph): ContextPack {
+export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false, guardrailIDs?: string[], index?: EvidenceGraph, onPrepare?: () => void, preparation?: ContextPreparationIndex): ContextPack {
   if (review.contextPolicy === "staged-guardrails-v1" && !guardrailIDs) guardrailIDs = review.guardrailBatches![0]!;
   const optimized = !!review.contextPolicy;
   const currentSpecification = review.contextPolicy === "current-spec-v1";
@@ -58,11 +70,12 @@ export function epicReviewContext(project: Project, review: EpicReview, extraIDs
     supportingRecordIDs: project.questions.filter((q) => q.status !== "retired" && q.evidenceIDs?.some((id) => review.recordIDs.includes(id))).map((q) => q.id),
     expandMandatory: true, ...(guardrailIDs ? { stagedGuardrailIDs: guardrailIDs } : {}) };
   const prepare = (deferredWorkspace = false, compactReviewSnapshots = false, compactWorkflowInstructions = false): ContextPack => {
+    onPrepare?.();
     const context = planContext(project, { ...task, ...(deferredWorkspace ? { deferWorkspaceEvidence: true } : {}),
       ...(compactReviewSnapshots ? { compactReviewSnapshots: true } : {}),
       ...(compactWorkflowInstructions ? { compactWorkflowInstructions: true } : {}),
       ...(optimized ? { preferCompactEvidence: true } : {}),
-      ...(currentSpecification ? { currentSpecification: true } : {}) }, graph);
+      ...(currentSpecification ? { currentSpecification: true } : {}) }, graph, preparation);
     // No project-wide search. Deferred links grant navigation, not evidence authority.
     context.manifest.epicReview = review;
     context.data = { ...(context.data as object),
@@ -149,20 +162,20 @@ export function epicReviewContext(project: Project, review: EpicReview, extraIDs
 }
 
 /** Deterministic exact seed partition. Evidence links remain indivisible, never sliced or summarized. */
-export function stagedEpicReview(project: Project, base: EpicReview): { review: EpicReview; contexts: ContextPack[] } {
+export function stagedEpicReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex): { review: EpicReview; contexts: ContextPack[] } {
   const plain = { ...base, contextPolicy: "headroom-v1" as const }; delete plain.guardrailBatches;
   let manifest: ContextPack["manifest"];
-  try { manifest = epicReviewContext(project, plain).manifest; }
+  try { manifest = epicReviewContext(project, plain, [], false, undefined, undefined, onPrepare, preparation).manifest; }
   catch (error) { if (!(error instanceof ContextBudgetError)) throw error; manifest = error.manifest; }
   const workspaces = new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id));
   const roots = manifest.includedIDs.filter((id) => !workspaces.has(id) && !base.recordIDs.includes(id)).sort();
   const review: EpicReview = { ...base, contextPolicy: "staged-guardrails-v1", guardrailBatches: [] };
   const contexts: ContextPack[] = [];
-  const target = epicReviewContext(project, review, [], true, []);
+  const target = epicReviewContext(project, review, [], true, [], undefined, onPrepare, preparation);
   if (target.manifest.characters > 54000) throw new ContextBudgetError({ ...target.manifest, budget: 54000 });
   const split = (ids: string[]) => {
     let context: ContextPack | undefined, overflow: ContextBudgetError | undefined;
-    try { context = epicReviewContext(project, review, [], true, ids); }
+    try { context = epicReviewContext(project, review, [], true, ids, undefined, onPrepare, preparation); }
     catch (error) { if (!(error instanceof ContextBudgetError)) throw error; overflow = error; }
     // Reserve 16k within the 72k target for draft proposals and staged instructions.
     if ((!context || context.manifest.characters > 54000) && ids.length > 1) {
@@ -183,21 +196,23 @@ export function epicReviewBatches(project: Project, review: EpicReview): Context
 export const epicBatchKey = (contexts: ContextPack[]) => hash(contexts.map((c) => retrievalEvidenceBasis(c).key));
 
 /** Explicit epic selection or deterministic epic-by-epic order; workflow packages precede boundary passes. */
-export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: string, submissions: Submission[] = [], readRevision?: (revision: number) => Project) {
+export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: string, submissions: Submission[] = [], readRevision?: (revision: number) => Project, options: EpicPlanningOptions = {}) {
   const active = project.epics.filter((e) => !e.archived);
   if (focusEpicID && !active.some((e) => e.id === focusEpicID)) throw new Error("Focused epic does not exist.");
   // This index lives only for this synchronous plan, never across project mutations.
   const graph = evidenceGraph(project);
+  const preparation = contextPreparationIndex(project);
   const evidence = gapEvidence(project, graph);
   const requirementIDs = new Set(project.requirements.map((r) => r.id));
   const tasks: EpicReviewTask[] = [];
   const planningDecisions = { newPackage: 0, noCompatibleSavedPackage: 0, compatibleSavedPackage: 0 };
   const scheduledPackageIDs = new Set<string>();
+  const scheduledGroupKeys = new Set<string>();
   const recordsFor = (id: string): Record[] => [...project.requirements.filter((r) => r.status !== "rejected"),
     ...project.questions.filter((q) => q.status !== "retired" && q.status !== "answered"),
     ...project.sources.filter((s) => s.kind === "note")].filter((r) => r.epicID === id);
-  type Candidate = { review: EpicReview; context?: ContextPack; error?: ContextBudgetError };
-  const candidates = new Map<string, Candidate>();
+  let foundPending = false;
+  const candidates = options.cache ?? new Map<string, Candidate>();
   const build = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[], contextPolicy?: EpicReview["contextPolicy"]): Candidate => {
     const recordIDs = records.map((r) => r.id).sort();
     const cacheKey = JSON.stringify([epicID, epicIDs, kind, recordIDs, contextPolicy]);
@@ -210,35 +225,38 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
         epics: project.epics.filter((e) => epicIDs.includes(e.id)).map((e) => ({ id: e.id, purpose: e.purpose, dependencies: e.dependencies })),
         // Research is not part of the legacy gap key. Retain conservative freshness here.
         research: project.research.filter((r) => epicIDs.includes(r.epicID)) }) });
-    let context: ContextPack | undefined, error: ContextBudgetError | undefined;
+    let context: ContextPack | undefined, batches: ContextPack[] | undefined, batchKey: string | undefined, error: ContextBudgetError | undefined;
     try {
-      const staged = contextPolicy === "staged-guardrails-v1" ? stagedEpicReview(project, review) : undefined;
+      const staged = contextPolicy === "staged-guardrails-v1" ? stagedEpicReview(project, review, options.onPrepare, preparation) : undefined;
       if (staged) review = staged.review;
-      context = staged?.contexts[0] ?? epicReviewContext(project, review, [], false, undefined, graph);
+      batches = staged?.contexts;
+      batchKey = batches ? epicBatchKey(batches) : undefined;
+      context = batches?.[0] ?? epicReviewContext(project, review, [], false, undefined, graph, options.onPrepare, preparation);
       const withoutIdentity = { ...context, manifest: { ...context.manifest } };
       delete withoutIdentity.manifest.epicReview;
-      review.inputKey = hash({ semantic: review.inputKey, exact: staged ? epicBatchKey(staged.contexts) : retrievalEvidenceBasis(withoutIdentity).key });
-      if (staged) context.manifest.epicReview = review;
+      review.inputKey = hash({ semantic: review.inputKey, exact: batchKey ?? retrievalEvidenceBasis(withoutIdentity).key });
+      if (staged) for (const batch of batches!) batch.manifest.epicReview = review;
     }
     catch (cause) { if (!(cause instanceof ContextBudgetError)) throw cause; error = cause; }
-    const candidate = { review, context, error }; candidates.set(cacheKey, candidate); return candidate;
+    const candidate = { review, context, batches, batchKey, error }; candidates.set(cacheKey, candidate); return candidate;
   };
   const matches = (j: Job, candidate: Candidate) => {
     const { review, context } = candidate;
     if (!context || j.context?.epicReview?.packageID !== review.packageID || j.context.epicReview.inputKey !== review.inputKey) return false;
-    if (review.contextPolicy === "staged-guardrails-v1") return j.retrievalWork?.epicStages?.planKey === epicBatchKey(epicReviewBatches(project, review));
+    if (review.contextPolicy === "staged-guardrails-v1") return j.retrievalWork?.epicStages?.planKey === candidate.batchKey;
     const stage = j.retrievalWork?.stages[0];
     const extra = stage && "retrieveEvidence" in stage.request ? stage.request.retrieveEvidence.recordIDs : [];
     try {
-      const current = extra.length ? epicReviewContext(project, review, extra, true, undefined, graph) : context;
+      const current = extra.length ? epicReviewContext(project, review, extra, true, undefined, graph, options.onPrepare, preparation) : context;
       if (j.retrievalWork?.final) return j.retrievalWork.final.evidenceBasis?.key === retrievalEvidenceBasis(current).key;
       if (!extra.length || j.expectedRevision === project.revision) return true;
       if (!readRevision) return true;
-      return retrievalEvidenceBasis(epicReviewContext(readRevision(j.expectedRevision), review, extra, true)).key === retrievalEvidenceBasis(current).key;
+      return retrievalEvidenceBasis(epicReviewContext(readRevision(j.expectedRevision), review, extra, true, undefined, undefined, options.onPrepare)).key === retrievalEvidenceBasis(current).key;
     } catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
   };
   const add = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[]) => {
-    if (!records.length) return;
+    if (!records.length || foundPending) return;
+    options.onPackage?.(tasks.length);
     const recordSet = new Set(records.map((r) => r.id));
     const history = jobs.slice().reverse().filter((j) => {
       const saved = j.context?.epicReview;
@@ -338,20 +356,55 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     if (scheduledPackageIDs.has(review.packageID)) return;
     scheduledPackageIDs.add(review.packageID);
     planningDecisions[preserved ? "compatibleSavedPackage" : history.length ? "noCompatibleSavedPackage" : "newPackage"]++;
-    tasks.push({ review, context, prior, reason: reason ?? (blocked ? prior?.epicReviewReport?.blockers.find((b) => b.packageID === review.packageID)?.reason
+    const state = completed ? "reviewed" : reason || blocked ? "blocked" : waiting ? "waiting" : "pending";
+    tasks.push({ review, context, batches: candidate.batches, prior, reason: reason ?? (blocked ? prior?.epicReviewReport?.blockers.find((b) => b.packageID === review.packageID)?.reason
       ?? "Saved evidence blocker or three spent attempts; unchanged packages are not retried automatically." : undefined),
-      state: completed ? "reviewed" : reason || blocked ? "blocked" : waiting ? "waiting" : "pending" });
+      state });
+    if (options.firstPending && state === "pending") foundPending = true;
+  };
+  const schedule = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[]) => {
+    if (foundPending || !records.length) return;
+    const key = hash([epicID, epicIDs, kind, records.map((r) => r.id)]);
+    if (scheduledGroupKeys.has(key)) return;
+    scheduledGroupKeys.add(key);
+    const cached = options.resolved?.get(key);
+    if (cached) {
+      for (const task of cached.tasks) {
+        if (scheduledPackageIDs.has(task.review.packageID)) continue;
+        tasks.push(task); scheduledPackageIDs.add(task.review.packageID);
+      }
+      for (const field of Object.keys(planningDecisions) as (keyof typeof planningDecisions)[]) planningDecisions[field] += cached.decisions[field];
+      options.onPackage?.(tasks.length);
+      options.onResolved?.(key, cached, true);
+      return;
+    }
+    const start = tasks.length, before = { ...planningDecisions };
+    add(epicID, epicIDs, kind, records);
+    // Only completed local scheduling may be reused. A partially split root, an
+    // exception, or an eligible pending package must never become a skip receipt.
+    if (foundPending) return;
+    const value: EpicPlanningCheckpoint = { format: 1, tasks: tasks.slice(start).map((task) => ({
+      review: task.review, state: task.state as "reviewed" | "waiting" | "blocked",
+      ...(task.reason !== undefined ? { reason: task.reason } : {}),
+      ...(task.context ? { contextCharacters: task.context.manifest.characters } : {}),
+    })), decisions: { newPackage: planningDecisions.newPackage - before.newPackage,
+      noCompatibleSavedPackage: planningDecisions.noCompatibleSavedPackage - before.noCompatibleSavedPackage,
+      compatibleSavedPackage: planningDecisions.compatibleSavedPackage - before.compatibleSavedPackage } };
+    options.resolved?.set(key, value);
+    options.onResolved?.(key, value, false);
   };
   const selected = active.filter((e) => !focusEpicID || e.id === focusEpicID);
   for (const epic of selected) {
+    if (foundPending) break;
     const records = recordsFor(epic.id);
     const initial = project.sources.find((s) => s.kind === "initial");
     if (!records.length && initial && (!["project", "inbox"].includes(epic.id) || focusEpicID === epic.id)
       && !project.requirements.some((r) => r.epicID === epic.id)) records.push(initial);
-    for (const batch of groups(project, records, 6)) add(epic.id, [epic.id], "workflow", batch);
+    for (const batch of groups(project, records, 6)) { if (foundPending) break; schedule(epic.id, [epic.id], "workflow", batch); }
   }
   const edges = new Set<string>();
   for (const epic of active) for (const dependency of epic.dependencies) {
+    if (foundPending) break;
     if (!active.some((e) => e.id === dependency) || focusEpicID && epic.id !== focusEpicID && dependency !== focusEpicID) continue;
     const edge = `${epic.id}:${dependency}`; if (edges.has(edge)) continue; edges.add(edge);
     // Question-only counterparts would shift the stable boundary pairing and block
@@ -359,16 +412,17 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     const left = groups(project, recordsFor(epic.id).filter((r) => !("options" in r)), 3), right = groups(project, recordsFor(dependency).filter((r) => !("options" in r)), 3);
     // Cover each side's records with a bounded counterpart, not a Cartesian product/completeness claim.
     if (left.length && right.length) for (let i = 0; i < Math.max(left.length, right.length); i++) {
-      add(epic.id, [epic.id, dependency], "boundary", [...left[i % left.length]!, ...right[i % right.length]!]);
+      schedule(epic.id, [epic.id, dependency], "boundary", [...left[i % left.length]!, ...right[i % right.length]!]);
     }
   }
   const report: EpicReviewReport = { format: 1, total: tasks.length,
+    ...(foundPending ? { planningPartial: true as const } : {}),
     reviewed: tasks.filter((t) => t.state === "reviewed").length, pending: tasks.filter((t) => t.state === "pending").length,
     waiting: tasks.filter((t) => t.state === "waiting").length, blocked: tasks.filter((t) => t.state === "blocked").length,
     modelCalls: 0, blockers: tasks.filter((t) => t.state === "blocked").slice(0, 20).map((t) => ({ packageID: t.review.packageID, epicID: t.review.epicID, reason: epicReviewDiagnostic(t.reason!) })),
     contextBudget: { target: epicContextTarget, hardLimit: epicContextLimit,
-      largestPackage: tasks.reduce((largest, t) => Math.max(largest, t.context?.manifest.characters ?? 0), 0),
-      aboveTarget: tasks.filter((t) => t.context && t.context.manifest.characters > epicContextTarget).length },
+      largestPackage: tasks.reduce((largest, t) => Math.max(largest, t.context?.manifest.characters ?? t.contextCharacters ?? 0), 0),
+      aboveTarget: tasks.filter((t) => (t.context?.manifest.characters ?? t.contextCharacters ?? 0) > epicContextTarget).length },
     explanation: "Revision-linked candidate workflow packages, followed by declared dependency-boundary passes. Reviews are bounded evidence checks, not specification completeness or implementation verification. Unrelated omitted history and all possible cross-epic record pairs are not reviewed. Legacy record/lens checks remain separate." };
   return { task: tasks.find((t) => t.state === "pending"), report, tasks, planningDecisions };
 }

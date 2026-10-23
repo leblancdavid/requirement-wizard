@@ -39,18 +39,18 @@ current gaps. Expand an area's definition assessment in the breakdown for catego
 explanations and linked evidence. Local code findings do not earn main-delivery credit.
 Review requirements and coverage evidence without entering IDs.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
-**Design → Explore next gaps** reviews related workflows and their declared dependency
+**Discover missing decisions** (in Design or the idle top process bar) reviews related workflows and their declared dependency
 boundaries. The compact **Questions ready** input configures how many unanswered questions to
 keep ready (1–50, default 5). Gap exploration continues through bounded packages,
 showing results as they save. The target is a stopping threshold, not a quota or
 hard cap: useful questions from the final package are kept even above the target.
-This is the single Design-only discovery action: related
+Both buttons start the same discovery action: related
 records are reviewed together across behavior, recovery and acceptance, with exact
 linked evidence prepared locally and no model-driven search/paging. Select a feature
 or work epic by epic; dependency-boundary packages follow. Existing saved checks are
 preserved separately. Oversized shared decisions can use checkpointed exact batches:
 draft gaps publish only after every batch checks them. Long packages pause after six
-requests per package attempt; Explore next gaps resumes saved stages without replay.
+requests per package attempt; Discover missing decisions resumes saved stages without replay.
 See [epic workflow review](docs/epic-workflow-review.md) for
 bounded packages, blockers, recovery and verification limits.
 New workflow reviews use a [graph-backed current-specification context](docs/discovery-efficiency.md)
@@ -60,9 +60,13 @@ human history saved and compatible completed reviews reusable. Benchmark locally
 To investigate a real run, use **Processing & queue → Export discovery diagnostics**.
 New runs record bounded timings/context counts; older timings remain unknown. Review
 the metadata-only JSON before sharing; original text, paths and credentials are excluded.
-Queue **Resume discovery** now stays on workflow discovery when no human input is
+Queue **Resume processing** stays on workflow discovery when no human input is
 waiting; saved responses are processed separately without falling back to legacy
 gap checks. Compatible saved workflow stages and spent attempts are preserved.
+Workflow startup prepares only through the next eligible package in an owned CPU
+worker. **Preparing workflow evidence…** shows progress before inference; initial
+preparation can be stopped and has a two-minute deadline. Partial package counts are
+labelled explicitly rather than presented as a whole-project assessment.
 Gap discovery can request additional exact saved evidence in up to three bounded stages,
 retaining human constraints and checkpointing completed calls for explicit retry. Navigation
 hints cannot support citations; oversized evidence blocks rather than silently truncating it.

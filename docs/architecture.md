@@ -21,6 +21,18 @@ implemented under `src/`. See [decisions.md](decisions.md),
   no prose/credentials/paths or original identifiers enter the file. Metrics do not
   affect project revisions, evidence identities or portable continuation. See
   [diagnostics](discovery-efficiency.md#export-a-representative-discovery-run).
+- `src/service/epic-planning.ts` / `epic-planning-worker.ts`: owned CPU preparation
+  worker with parent-controlled cancellation/deadline, on-demand immutable revision
+  reads and local progress pulses. Workflow service planning stops at the first
+  eligible package; reports explicitly mark examined-prefix counts. Saved exact
+  context policies and model/checkpoint identities remain unchanged. The worker has
+  no storage/provider ownership. See [preparation](discovery-efficiency.md#responsive-incremental-preparation-2026-10-22).
+- `src/core/epic-planning-checkpoint.ts` and schema-4 `epic_planning_receipts`:
+  exact-input-bound, non-pending local scheduling receipts. The parent persists
+  completed root groups so explicit retries can skip resolved context reconstruction;
+  pending contexts/model-stage evidence are never inferred from CPU checkpoints.
+  Snapshot-local context indexes share immutable approval/decision derivations.
+  See [continuation](discovery-efficiency.md#exact-input-local-planning-continuation-2026-10-22).
 - `src/core/evidence-graph.ts`: derived, invocation-local typed forward/reverse
   provenance index and queue traversal. New `current-spec-v1` workflow contexts use
   exact graph closure and proactive generated-background projection; compatible saved

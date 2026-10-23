@@ -62,15 +62,27 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Epic review browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
-  const review = page.getByRole("button", { name: "Explore next gaps →", exact: true });
+  const review = page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions", exact: true });
+  const headerDiscovery = page.locator(".queue-header").getByRole("button", { name: "Discover missing decisions", exact: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(headerDiscovery).toBeInViewport();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.setViewportSize({ width: 1280, height: 960 });
   await expect(page.getByRole("button", { name: "Review next epic workflow", exact: true })).toHaveCount(0);
   for (const tab of [/^Specification/, /^Project map/, /^Activity/]) {
     await page.getByRole("tab", { name: tab }).click();
     await expect(review).toHaveCount(0);
+    await expect(headerDiscovery).toBeVisible();
+    await expect(headerDiscovery).toHaveAttribute("aria-description", /Scope:.*Orders/i);
     await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveCount(0);
   }
   await page.getByRole("tab", { name: /^Design/ }).click();
-  await expect(review).toBeVisible(); await review.click();
+  await expect(review).toBeVisible();
+  await expect(page.locator(".discovery-hint")).toContainText("Find missing decisions");
+  await page.getByRole("tab", { name: /^Specification/ }).click();
+  await headerDiscovery.click();
+  await expect.poll(() => calls).toBe(2);
+  await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(review).toBeEnabled();
   await expect.poll(() => calls).toBe(2);
   const blocked = structuredClone(store.jobs(project.id).find((job) => job.context?.epicReview && !job.result && job.epicReviewReport?.blocked === 1)!);
@@ -194,7 +206,7 @@ try {
   await page.reload(); assert.equal(stagedCalls, 6, "Reload never starts paid work");
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
-  await page.locator(".queue-header").getByRole("button", { name: "Resume discovery", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Resume processing", exact: true }).click();
   await expect(review).toBeEnabled();
   await expect.poll(() => stagedCalls).toBe(8);
   assert.deepEqual(store.getJob(pausedStageJob.id), pausedStageJob, "Queue Resume preserves the original staged job and its spent calls");

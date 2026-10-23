@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import type { ContextPack } from "../core/context.js";
-import { contextDiagnostics, type DiscoveryMetrics } from "../core/discovery-diagnostics.js";
+import { contextDiagnostics, type DiscoveryMetrics, type PlanningProgress } from "../core/discovery-diagnostics.js";
 
 /** Bounded metadata only. Saved before inference so interruption cannot look like zero calls. */
 export class DiscoveryMeasurement {
@@ -9,6 +9,7 @@ export class DiscoveryMeasurement {
   private readonly started = performance.now();
   constructor(private readonly save: (value: DiscoveryMetrics) => void) { this.checkpoint(); }
   private checkpoint() { this.value.elapsedMs = performance.now() - this.started; this.save(this.value); }
+  preparing(progress: PlanningProgress) { this.value.planningProgress = progress; this.checkpoint(); }
   planned(context?: ContextPack, decisions?: DiscoveryMetrics["planningDecisions"]) {
     if (this.value.planningMs !== null) return; // Later evidence-load failures are not initial planning.
     this.value.planningMs = performance.now() - this.started;

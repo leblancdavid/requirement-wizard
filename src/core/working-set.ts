@@ -180,14 +180,38 @@ export function shareRecordStructure(data: unknown, additionalRecordFields: stri
   } }, tables, rows };
 }
 
+/** Invocation-local only: callers must not mutate this project until planning ends. */
+export function contextPreparationIndex(project: Project) {
+  const requirements = new Map(project.requirements.map((r) => [r.id, r]));
+  const snapshotReferences = new Map<string, { requirementID: string; decision: string; addendum: string }>();
+  for (const source of project.sources) {
+    if (!source.requirementID) continue;
+    const snapshot = reviewSnapshot(source), requirement = requirements.get(source.requirementID);
+    if (!snapshot || !requirement || snapshot.statement !== requirement.statement
+      || JSON.stringify(snapshot.acceptance) !== JSON.stringify(requirement.acceptance)) continue;
+    snapshotReferences.set(source.id, { requirementID: requirement.id, decision: snapshot.decision, addendum: snapshot.addendum });
+  }
+  const allRecords = [...project.sources, ...project.questions, ...project.requirements, ...project.research];
+  return { project, decisions: currentDecisionProjection(project), snapshotReferences, allRecords,
+    recordIDs: new Set(allRecords.map((r) => r.id)), sources: new Map(project.sources.map((s) => [s.id, s])),
+    questionAreas: new Map(project.questions.map((q) => [q.id, q.epicID])),
+    requirementAreas: new Map(project.requirements.map((r) => [r.id, r.epicID])),
+    superseded: new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : [])),
+    workspaceIDs: new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id)) };
+}
+export type ContextPreparationIndex = ReturnType<typeof contextPreparationIndex>;
+
 /** Plan locally before inference. Exact human guardrails are never summarized away. */
-export function planContext(project: Project, task: ContextTask = {}, graph?: EvidenceGraph): ContextPack {
+export function planContext(project: Project, task: ContextTask = {}, graph?: EvidenceGraph, preparation?: ContextPreparationIndex): ContextPack {
   if (graph && graph.project !== project) throw new Error("Evidence graph belongs to a different project snapshot.");
+  if (preparation && preparation.project !== project) throw new Error("Context preparation index belongs to a different project snapshot.");
   const budget = task.budget ?? 48000;
-  const decisions = task.gapExploration || task.isolatedTask ? currentDecisionProjection(project) : undefined;
-  const superseded = new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
-  const questionAreas = new Map(project.questions.map((q) => [q.id, q.epicID]));
-  const requirementAreas = new Map(project.requirements.map((r) => [r.id, r.epicID]));
+  const projection = task.gapExploration || task.isolatedTask ? preparation?.decisions ?? currentDecisionProjection(project) : undefined;
+  // Submission protection below mutates the working projection, never the shared index.
+  const decisions = projection && !task.gapExploration ? { ...projection, omitted: new Map(projection.omitted), receipts: new Map(projection.receipts) } : projection;
+  const superseded = preparation?.superseded ?? new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
+  const questionAreas = preparation?.questionAreas ?? new Map(project.questions.map((q) => [q.id, q.epicID]));
+  const requirementAreas = preparation?.requirementAreas ?? new Map(project.requirements.map((r) => [r.id, r.epicID]));
   // Answers/reviews follow their owning record after epic moves; their immutable
   // source record still carries the area it had when the human submitted it.
   const sourceArea = (source: Project["sources"][number]) =>
@@ -214,8 +238,9 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
 
   const active = project.epics.filter((e) => !e.archived);
   const taskIDs = new Set(task.recordIDs ?? []);
-  const allRecords = [...project.sources, ...project.questions, ...project.requirements, ...project.research];
-  for (const id of [...taskIDs, ...task.supportingRecordIDs ?? [], ...task.stagedGuardrailIDs ?? []]) if (!allRecords.some((r) => r.id === id)) throw new Error(`Context task record ${id} no longer exists.`);
+  const allRecords = preparation?.allRecords ?? [...project.sources, ...project.questions, ...project.requirements, ...project.research];
+  const recordIDs = preparation?.recordIDs ?? new Set(allRecords.map((r) => r.id));
+  for (const id of [...taskIDs, ...task.supportingRecordIDs ?? [], ...task.stagedGuardrailIDs ?? []]) if (!recordIDs.has(id)) throw new Error(`Context task record ${id} no longer exists.`);
   const focus = task.focusEpicID ?? task.requiredEpicIDs?.[0]
     ?? allRecords.find((r) => taskIDs.has(r.id))?.epicID
     ?? project.questions.find((q) => q.status === "pending")?.epicID
@@ -233,7 +258,7 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
 
   if (task.stagedGuardrailIDs && (!task.isolatedTask || !task.gapExploration)) throw new Error("Staged guardrails require an isolated gap review.");
   const included = new Set([...taskIDs, ...task.supportingRecordIDs ?? [], ...task.stagedGuardrailIDs ?? []]);
-  const workspaceIDs = new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id));
+  const workspaceIDs = preparation?.workspaceIDs ?? new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id));
   // Loading a shared file for a gap task does not request every requirement
   // citing that file. Keep the file itself exact in included, but do not use it
   // as a submission-style trigger for unrelated downstream requirements.
@@ -340,12 +365,13 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
   };
   closeEvidence(included);
 
+  const taskRequirementSourceIDs = new Set(project.requirements.filter((r) => taskRequirementIDs.has(r.id)).flatMap((r) => r.sourceIDs));
   const protectedQuestionIDs = new Set(project.questions.filter((q) => taskIDs.has(q.id)
     || !!q.sourceID && taskIDs.has(q.sourceID)
-    || project.requirements.some((r) => taskRequirementIDs.has(r.id)
-      && r.sourceIDs.some((id) => id === q.id || id === q.sourceID))).map((q) => q.id));
-  const snapshotReferences = new Map<string, { requirementID: string; decision: string; addendum: string }>();
-  if (task.compactReviewSnapshots) {
+    || taskRequirementSourceIDs.has(q.id) || !!q.sourceID && taskRequirementSourceIDs.has(q.sourceID)).map((q) => q.id));
+  const snapshotReferences = task.compactReviewSnapshots && preparation ? preparation.snapshotReferences
+    : new Map<string, { requirementID: string; decision: string; addendum: string }>();
+  if (task.compactReviewSnapshots && !preparation) {
     const requirements = new Map(project.requirements.map((r) => [r.id, r]));
     for (const source of project.sources) {
       if (!source.requirementID) continue;
@@ -364,7 +390,8 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
       // only when discovery would otherwise exceed its hard fallback bound.
       const { concepts: _, whyItMatters, ...evidence } = q;
       if (omitBackgroundExplanations && q.status === "answered" && !protectedQuestionIDs.has(q.id)) {
-        const answer = project.sources.find((s) => s.id === q.sourceID && s.kind === "answer" && !superseded.has(s.id));
+        const candidate = preparation ? preparation.sources.get(q.sourceID ?? "") : project.sources.find((s) => s.id === q.sourceID);
+        const answer = candidate?.kind === "answer" && !superseded.has(candidate.id) ? candidate : undefined;
         const matches = q.options.flatMap((option, index) => answer && option.label.trim() === answer.text.trim() ? [index] : []);
         // Freeform/index-only/ambiguous answers retain every consequence. Only
         // exact unique label choices establish which generated alternatives lost.

@@ -60,7 +60,7 @@ test("question-target scans publish successive packages and keep final-package o
           ...(options.context.manifest.epicReview ? { epicID: options.context.manifest.epicReview.epicID, evidenceIDs: options.context.manifest.epicReview.recordIDs } : {}) })) };
       } }));
       queue.resume(p.id, { questionTarget: 5, research: false, gapMode });
-      for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+      for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setTimeout(resolve, 20));
       assert.equal(queue.isActive(p.id), false);
       assert.equal(calls, initial >= 5 ? 0 : initial === 4 ? 1 : 2, queue.progress(p.id).join("\n"));
       assert.equal(store.get(p.id).questions.length, initial >= 5 ? initial : initial === 4 ? 7 : 6);
@@ -88,7 +88,7 @@ test("question-target scans stop on exhaustion, failure and cancellation without
         return empty();
       } }));
       queue.resume(p.id, { questionTarget: 50, research: false });
-      for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+      for (let i = 0; i < 1000 && queue.isActive(p.id); i++) await new Promise<void>((resolve) => setTimeout(resolve, 20));
       assert.equal(queue.isActive(p.id), false);
       assert.equal(store.get(p.id).questions.length, outcome === "empty" ? 0 : outcome === "budget" ? 10 : 1);
       assert.ok(calls > 0 && calls <= 10);

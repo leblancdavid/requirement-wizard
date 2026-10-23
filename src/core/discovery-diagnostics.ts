@@ -13,9 +13,14 @@ export const diagnosticContextSchema = z.object({ characters: count, budget: cou
   traversal: z.object({ visitedRecords: count, examinedEdges: count, missingRecords: count }).strict().nullable(),
 }).strict();
 export const planningDecisionsSchema = z.object({ newPackage: count, noCompatibleSavedPackage: count, compatibleSavedPackage: count }).strict();
+export const planningProgressSchema = z.object({ format: z.literal(1), phase: z.enum(["indexing", "package", "context", "history", "ready"]),
+  examinedPackages: count, contextPreparations: count, checkpoints: count, revisionsLoaded: count,
+  reusedGroups: count.optional(), resolvedGroups: count.optional() }).strict();
+export type PlanningProgress = z.infer<typeof planningProgressSchema>;
 export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.enum(["recording", "finished"]),
   elapsedMs: duration, planningMs: duration.nullable(),
   planningDecisions: planningDecisionsSchema.nullable(),
+  planningProgress: planningProgressSchema.optional(),
   initialContext: diagnosticContextSchema.nullable(),
   requests: z.array(z.object({ durationMs: duration.nullable(), outcome: z.enum(["in-flight", "returned", "failed", "cancelled"]),
     response: z.enum(["analysis", "search", "load", "blocked", "other"]).nullable(), context: diagnosticContextSchema }).strict()).max(6),
@@ -39,6 +44,7 @@ export type DiagnosticSource = {
   areas: number | null; sections: string | null; stages: number | null; savedAttempts: number | null;
   reusedStages: number | null; reusedFinal: number | null; stagedBatches: number | null; stagedCompleted: number | null;
   reviewed: number | null; pending: number | null; waiting: number | null; blocked: number | null;
+  planningPartial: number | null;
 };
 const nullableCount = (value: number | null) => value === null ? null : count.parse(value);
 export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
@@ -49,7 +55,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
     limitations: "Missing measurements are null, never zero. Recording-state measurements are partial, not a complete run total. Requests are adapter attempts checkpointed before dispatch, not proof of provider acceptance. Request time includes startup/tools/provider work, not pure inference. Context characters exclude runtime prompt/schema overhead and are not tokens. Saved context may be a staged publication union; request contexts describe actual app inputs. Saved attempts may span earlier runs; measured requests belong only to this run. Freshness reasons describe local matching, not semantic proof. Response categories precede validation. No timestamps or model/account identifiers are exported.",
     runs: rows.map((row, index) => {
       const metrics = row.metrics === null ? null : discoveryMetricsSchema.parse(JSON.parse(row.metrics));
-      const adapterMs = metrics && metrics.requests.every((request) => request.durationMs !== null)
+      const adapterMs = metrics?.state === "finished" && metrics.requests.every((request) => request.durationMs !== null)
         ? metrics.requests.reduce((sum, request) => sum + request.durationMs!, 0) : null;
       if (row.packageID && !packages.has(row.packageID)) packages.set(row.packageID, `package-${packages.size + 1}`);
       const sections: Record<string, number> = {};
@@ -67,7 +73,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
           omittedRecords: nullableCount(row.omitted), areas: nullableCount(row.areas), sections },
         savedWork: { navigationStages: nullableCount(row.stages), attempts: nullableCount(row.savedAttempts), reusedStages: nullableCount(row.reusedStages),
           reusedFinal: row.reusedFinal === null ? null : !!row.reusedFinal, stagedBatches: nullableCount(row.stagedBatches), completedBatches: nullableCount(row.stagedCompleted) },
-        backlog: { reviewed: nullableCount(row.reviewed), pending: nullableCount(row.pending), waiting: nullableCount(row.waiting), blocked: nullableCount(row.blocked) } };
+        backlog: { scope: row.planningPartial === 1 ? "examined-prefix" : "saved-scope", reviewed: nullableCount(row.reviewed), pending: nullableCount(row.pending), waiting: nullableCount(row.waiting), blocked: nullableCount(row.blocked) } };
     }) };
 }
 export type DiscoveryDiagnosticReport = ReturnType<typeof discoveryDiagnosticReport>;

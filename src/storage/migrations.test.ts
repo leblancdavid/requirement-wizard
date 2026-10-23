@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ProjectStore } from "./store.js";
-import { upgradeExecutionPayload } from "./migrations.js";
+import { upgradeExecutionPayload, databaseSchemaVersion } from "./migrations.js";
 import { assessmentContextFingerprint, requirementTaskContext } from "../core/execution-context.js";
 import { legacyAssessmentSkillDocument } from "./fixtures/assessment-skill-v1.js";
 import { assessmentCompatibility, canonicalJSON } from "../core/assessment-identity.js";
@@ -39,7 +39,7 @@ function fixture() {
   store.saveExecution(project.id, state);
   store.close();
   const db = new Database(path);
-  db.exec("DROP TABLE project_activity; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;");
+  db.exec("DROP TABLE project_activity; DROP TABLE epic_planning_receipts; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;");
   const raw = JSON.parse(JSON.stringify(state)); delete raw.schemaVersion;
   const payload = JSON.stringify(raw);
   db.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(payload, project.id);
@@ -69,9 +69,9 @@ test("legacy execution migration preserves evidence, delivery, original payload 
     const reopened = new ProjectStore(f.path);
     assert.deepEqual(reopened.execution(f.project.id), upgraded); reopened.close();
     const db = new Database(f.path);
-    assert.equal(db.pragma("user_version", { simple: true }), 3);
+    assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.deepEqual(db.prepare("SELECT payload FROM execution_migration_backups").all(), [{ payload: f.payload }]);
-    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history").get() as { n: number }).n, 2);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history").get() as { n: number }).n, 3);
     db.close();
   } finally { rmSync(f.directory, { recursive: true, force: true }); }
 });

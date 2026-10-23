@@ -15,10 +15,10 @@ test("item errors show saved diagnostics and distinguish follow-up retry from de
   assert.match(conflict, /role="alert"/);
   assert.match(conflict, /Answer the linked clarification/);
   assert.match(renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, error: "" })), /Answer the linked clarification/);
-  assert.ok(!conflict.includes("Resume discovery"));
+  assert.ok(!conflict.includes("Resume processing"));
   submission.conflict = false; submission.applied = true;
   const failed = renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, resume: () => {} }));
-  assert.match(failed, /Resume discovery/);
+  assert.match(failed, /Resume processing/);
   assert.match(failed, /without submitting it again/);
   submission.status = "completed";
   assert.equal(renderToStaticMarkup(createElement(ItemProcessingNotice, { submission })), "");

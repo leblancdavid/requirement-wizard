@@ -86,6 +86,100 @@ the SQLite test exercises restart without automatic inference. No live model cal
 
 ## Measurement
 
+### Responsive, incremental preparation (2026-10-22)
+
+Workflow discovery now prepares only through the **first eligible package** rather
+than building every package's exact context before the first request. The catalog
+order, saved-policy reconstruction, split/boundary preservation and exact evidence
+identities remain unchanged. A report marked `planningPartial: true` covers only the
+examined prefix; neither the UI nor diagnostic backlog totals describe unseen packages
+as checked, blocked or complete. With no eligible package, planning still examines the
+remaining scope to establish the no-call outcome, subject to the preparation deadline.
+
+Expensive initial context preparation runs in one owned CPU worker, separate from the
+loopback API/service event loop. The parent can serve snapshots, accept **Stop**, run
+deadline timers and terminate even an indivisible synchronous compaction. The worker
+owns no database, provider, credentials or OpenCode server. Historical revision data
+is requested from the parent only when needed for exact compatibility checks; an
+invocation-local cache avoids rebuilding already prepared candidates during that read.
+Prepared staged batches and their exact basis are reused instead of needlessly
+rebuilding every batch for each saved-match comparison.
+
+Before any model request, Processing & queue shows **Preparing workflow evidence…**,
+with preparation counts and elapsed seconds. Local format-1 diagnostics optionally
+add `planningProgress` (phase, examined-prefix count, context preparations, checkpoint
+sequence and historical-revision count). Latest progress/elapsed time is saved roughly
+every 500ms, plus initial/first-context/final boundaries. These are diagnostic progress
+checkpoints, not completed analysis or a resumable computation cursor. Explicit retry
+can redo local preparation; completed model stages and spent attempts remain intact.
+Interrupted `recording` measurements now export an unknown adapter-time total rather
+than a misleading zero completed-run total. Per-request entries remain unchanged.
+
+Initial preparation has a **two-minute parent-owned deadline** within the existing
+five-minute combined discovery bound and six-minute lease. No longer lease or extra
+model allowance is granted. Stop/deadline/stale-input failure terminates only the owned
+planning worker and preserves original evidence. A deadline explains that preparation
+stopped without model inference; choosing a narrower feature may be necessary. Startup
+never resumes calls automatically, and an old lease-expired job is not fabricated into
+a completed plan.
+
+This slice isolates initial workflow planning, not every local operation in the app.
+Initial SQLite reads/snapshot transfer, later explicit evidence-load preparation and
+independent publication-time validations retain their existing implementation. It is
+not a promise that arbitrary human evidence fits, that a whole project plans within
+two minutes, or that the user's interrupted run has been reproduced exactly. Source
+runs use the dev TypeScript loader explicitly in the worker; emitted desktop code
+uses the emitted JavaScript worker without requiring that loader.
+
+Verification: all 49 pretests and 633 main tests passed, along with type checking,
+UI build, desktop TypeScript emit and the focused epic-workflow browser check.
+A normal Node compiled-JavaScript smoke check verified worker startup without a
+TypeScript loader; this does not qualify full packaged Electron execution. The
+broader browser command stopped at the missing **Approve resolution** assertion in
+`src/web/browser-check.ts:1347`, before its portable/specification runners. The user's
+exact stalled project was not reproduced, and no live provider calls were made.
+
+### Exact-input local planning continuation (2026-10-22)
+
+A subsequent real diagnostic reached the two-minute bound after 55 examined packages
+and 3,173 context preparations, with no model request. Worker isolation kept the app
+responsive but did not remove repeated preparation. Local planning now shares
+immutable decision/approval-snapshot derivations and lookup indexes between context
+variants; equivalent contexts and existing exact model/checkpoint keys are unchanged.
+
+After a complete root group's local scheduling, non-pending tasks and their numeric
+report basis are checkpointed in a separate SQLite table. Explicit retries, including
+after app restart, reuse these groups **only for identical complete planner inputs**:
+project content, ordered workflow history, submissions, selected scope and algorithm
+version. This avoids rebuilding exact contexts for resolved groups before reaching
+the next eligible package. Pending tasks still require fresh exact contexts. Changed
+decisions, jobs, attempts, model selection or even irrelevant project metadata
+invalidate this conservative CPU reuse; model-stage compatibility continues to use
+its existing separate evidence checks.
+
+Queue progress/diagnostics show numeric `reusedGroups` and `resolvedGroups` counts;
+the saved receipts contain no context bodies and are never exported as model checks.
+The currently unfinished root group restarts after interruption. A project retains
+at most 2,000 root-group receipts/4 MiB for one input generation; reaching the cap
+does not change scheduling, but stops saving additional receipts. No automatic retry,
+model call, longer lease, larger context or larger model allowance is introduced.
+One indivisible slow group may still time out; scope narrowing remains a fallback,
+not the primary retry strategy. Numeric half-second progress pulses alone are still
+diagnostic metadata, distinct from completed-group CPU checkpoints.
+
+Schema 3 upgrades transactionally to schema 4 without rewriting saved requirements,
+jobs, assessments, history or completed model work. The previous timeout cannot gain
+receipts retroactively: the first run after upgrading starts the new cache. See
+[migration and recovery](migrations.md#exact-input-local-planning-continuation-2026-10-22).
+
+Verification: 633 main tests passed in `npm test`; the final pretest rerun passed
+all 53 tests, including the added zero-preparation reuse case. Type checking, UI
+build, desktop TypeScript emit, normal Node compiled-JavaScript worker smoke and
+the focused workflow browser runner passed. Full packaged Electron execution and
+the exact supplied project's performance remain unqualified; no personal database
+or live provider calls were used. The broad browser suite was not rerun for this
+follow-up (the earlier worker-isolation run's blocker is recorded above).
+
 ### Export a representative discovery run
 
 1. Restart the updated app. New discovery and saved-answer follow-up jobs record

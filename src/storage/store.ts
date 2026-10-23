@@ -27,6 +27,7 @@ import { validateEpicStages, epicStagePublicationContext } from "../core/epic-st
 import { epicReviewBatches } from "../core/epic-review.js";
 import type { GapHistory } from "../core/gap-backlog.js";
 import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSource } from "../core/discovery-diagnostics.js";
+import { epicPlanningCheckpointSchema, type EpicPlanningCheckpoint } from "../core/epic-planning-checkpoint.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
@@ -904,7 +905,8 @@ export class ProjectStore {
       COALESCE(json_extract(payload, '$.epicReviewReport.reviewed'), json_extract(payload, '$.gapReport.checked')) AS reviewed,
       COALESCE(json_extract(payload, '$.epicReviewReport.pending'), json_extract(payload, '$.gapReport.pending')) AS pending,
       COALESCE(json_extract(payload, '$.epicReviewReport.waiting'), json_extract(payload, '$.gapReport.waiting')) AS waiting,
-      COALESCE(json_extract(payload, '$.epicReviewReport.blocked'), json_extract(payload, '$.gapReport.blocked')) AS blocked
+      COALESCE(json_extract(payload, '$.epicReviewReport.blocked'), json_extract(payload, '$.gapReport.blocked')) AS blocked,
+      json_extract(payload, '$.epicReviewReport.planningPartial') AS planningPartial
       FROM jobs WHERE project_id = ? AND id IN (${ids.map(() => "?").join(",")})
       AND json_extract(payload, '$.kind') IS NULL AND json_extract(payload, '$.helpRequest') IS NULL
       AND COALESCE(json_extract(payload, '$.context.refinementOnly'), 0) = 0 ORDER BY rowid DESC LIMIT 20`)
@@ -1017,6 +1019,33 @@ export class ProjectStore {
   epicReviewHistory(projectID: string): Job[] {
     return (this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? AND json_type(payload, '$.context.epicReview') IS NOT NULL ORDER BY rowid")
       .all(projectID) as { payload: string }[]).map((row) => readStoredJob(row.payload));
+  }
+
+  /** Derived scheduling only, not exported evidence. Exact input keys include all
+   * project/job/submission data and an explicit planner-algorithm version. */
+  epicPlanningReceipts(projectID: string, inputKey: string): Map<string, EpicPlanningCheckpoint> {
+    const rows = this.db.prepare("SELECT input_key, group_key, format, payload FROM epic_planning_receipts WHERE project_id = ?")
+      .all(projectID) as { input_key: string; group_key: string; format: number; payload: string }[];
+    if (rows.some((row) => row.format !== 1)) throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
+    return new Map(rows.filter((row) => row.input_key === inputKey).map((row) => [row.group_key, epicPlanningCheckpointSchema.parse(JSON.parse(row.payload))]));
+  }
+
+  saveEpicPlanningReceipt(projectID: string, expectedRevision: number, inputKey: string, groupKey: string, value: EpicPlanningCheckpoint) {
+    z.string().regex(/^[a-f0-9]{64}$/).parse(inputKey); z.string().regex(/^[a-f0-9]{64}$/).parse(groupKey);
+    const payload = JSON.stringify(epicPlanningCheckpointSchema.parse(value));
+    this.db.transaction(() => {
+      if (this.get(projectID).revision !== expectedRevision) throw new StaleRevisionError();
+      if (this.db.prepare("SELECT 1 FROM epic_planning_receipts WHERE project_id = ? AND format != 1").get(projectID))
+        throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
+      // One input generation per project, capped at 4 MiB/2,000 root groups.
+      // This is disposable derived state, never original decisions or checks.
+      this.db.prepare("DELETE FROM epic_planning_receipts WHERE project_id = ? AND input_key != ?").run(projectID, inputKey);
+      const size = this.db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(length(CAST(payload AS BLOB))), 0) AS bytes FROM epic_planning_receipts WHERE project_id = ?")
+        .get(projectID) as { n: number; bytes: number };
+      if (size.n >= 2000 || size.bytes + Buffer.byteLength(payload) > 4 * 1024 * 1024) return;
+      this.db.prepare("INSERT INTO epic_planning_receipts VALUES (?, ?, ?, 1, ?) ON CONFLICT(project_id, group_key) DO NOTHING")
+        .run(projectID, inputKey, groupKey, payload);
+    }).immediate();
   }
 
   /** A checkpoint is evidence of a completed navigation call, never a gap check. */

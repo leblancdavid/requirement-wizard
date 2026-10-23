@@ -2,6 +2,29 @@
 
 ## Header activity feedback
 
+Discovery is the overall question/specification workflow; its actions now describe
+the next step explicitly. **Discover missing decisions** (formerly **Explore next
+gaps**) finds missing decisions and asks follow-up questions in the selected feature
+or all project areas. The same action is available in Design and in the top
+**Processing & queue** bar when idle, including from other tabs. Both use the same
+workflow handler, question target, scope and blocking rules; the idle bar shows scope.
+Saved responses instead offer **Process saved responses**, and paused work offers
+**Resume processing**. Saved responses are labelled **Saved · awaiting follow-up**.
+When a saved exploration needs additional allowance, the header's **Continue
+exploration** opens the existing review/confirmation rather than granting calls.
+This is presentation-only: no saved schema, fingerprints, history or model budgets
+change, and no forward migration or reassessment is required. Historical diagnostics
+may retain the earlier labels.
+
+Verification (2026-10-22): type check, UI build, 46 targeted UI tests, and the
+workflow, saved-evidence navigation, portable and specification browser runners
+passed (browser runners on Node 22.23.3), including idle-header feature scope,
+cross-tab discovery, mobile width and continuation confirmation without inference.
+The full `npm test` run had 631 passes and two failures in storage migration tests
+(duplicate migration-history version and Windows SQLite cleanup lock). The main
+browser runner stopped at a missing **Approve resolution** control in its refinement
+flow; the aggregate browser suite is not claimed passing.
+
 **Processing & queue → Discovery diagnostics** exports a bounded metadata-only JSON
 report for selected recent discovery runs (initially the newest five). New runs
 record planning/request timings, context sizes/counts and workflow matching counters.
@@ -70,9 +93,23 @@ this focused check is not a claim that every legacy browser flow passed.
 
 ## Saved-response context blockers
 
-The queue's **Resume discovery / Process waiting answers** action now routes through
+Workflow startup now reports **Preparing workflow evidence…** before a model request,
+with local preparation counts and elapsed time. Expensive initial preparation runs
+in an owned CPU worker so the API, **Stop**, and deadline remain responsive. It stops
+at the first eligible package rather than preparing the whole backlog upfront.
+Reports explicitly label examined-prefix counts; remaining packages are unassessed.
+The default preparation deadline is two minutes, within the existing combined
+discovery bound. Completed calls/attempt limits are preserved; progress itself is not
+a completed check. Completed local planning groups now have separate exact-input
+SQLite checkpoints: an explicit retry can reuse them even after restart, while the
+unfinished group and pending model package prepare again. Progress shows how many
+saved local groups were reused. Changes to planner inputs invalidate CPU reuse,
+without discarding earlier model checks. See
+[preparation details](discovery-efficiency.md#responsive-incremental-preparation-2026-10-22).
+
+The queue's **Resume processing / Process saved responses** action routes through
 current server state: unfinished responses receive finite isolated follow-up; otherwise
-Resume uses workflow discovery like **Explore next gaps**, not legacy individual
+Resume uses workflow discovery like **Discover missing decisions**, not legacy individual
 checks. Selected-scope emptiness cannot trigger unrelated gap discovery. Existing
 staged/headroom checkpoints and spent calls remain reusable without relabelling old
 checks. See [Resume routing](discovery-efficiency.md#browser-resume-routing-2026-10-22).
@@ -270,12 +307,13 @@ live local-checkpoint updates without main credit and mobile progress layout.
 
 ### Compact discovery and predictable review pauses (2026-10-22)
 
-Design has one **Explore next gaps** button, using epic workflow discovery, beside
+Design has one **Discover missing decisions** button, using epic workflow discovery, beside
 a compact **Questions ready** input (1–50, default 5). The existing per-project
 browser preference is retained. This is the project-wide unanswered-question target,
 not a count of additional questions; final-package overshoot and bounded runs remain
 unchanged. Details live in the tooltip and Processing & queue rather than a large
-explanatory card. Gap controls and inline legacy continuation appear only in Design;
+explanatory card. The question-target control and inline legacy continuation appear only in Design;
+the idle header also offers the same discovery action from other tabs.
 saved-job continuation also remains in Processing & queue. Review is for requirement
 decisions, changes and linked clarifications, not starting gap discovery.
 
@@ -472,7 +510,7 @@ survives closing/reopening the editor, paging, and explicit acknowledgement of u
 context within the current workspace. Reload still clears unsent drafts.
 
 The existing automatic-processing preference applies. With automatic processing off,
-use **Explore next gaps** to process the saved request. While running, current worker,
+use **Process saved responses** (or **Resume processing** if paused) to process the saved request. While running, current worker,
 pending-input and relevant-evidence checks remain enforced. Linked unanswered Design
 questions do not themselves block a request for a revision; they still block approval.
 Stale/conflicted feedback is retained for an explicit new submission, not auto-applied.
@@ -663,7 +701,7 @@ app-authored instructions/encoding explanations and explicitly omits a long gene
 advisory summary. It does not shorten human input or raise the limit. The full
 workflow envelope, not just its evidence working set, must fit before inference.
 
-**Design → Explore next gaps** is the single action for combined, epic-scoped reviews.
+**Discover missing decisions**, in Design or the idle header, starts combined, epic-scoped reviews.
 It prepares exact linked evidence locally, reviews up to six related records across all
 three lenses together, and permits only one extra evidence batch before final review.
 Declared dependency-boundary packages follow workflow packages. Select a feature to
@@ -1819,8 +1857,10 @@ feature exploration, requirement cleanup, scan batch, implementation check, codi
 verification, Git delivery or question help), stage, waiting count and
 items needing attention. Clicking opens **Processing & queue** in a right-side modal
 drawer over the workspace. Beside the summary, **Stop discovery** is available while
-discovery is active, **Resume discovery** when paused, and **Process waiting answers**
-when saved or queued responses can be processed. These controls reuse the drawer's
+discovery is active, **Resume processing** when paused, and **Process saved responses**
+when saved or queued responses can be processed. **Discover missing decisions** is
+available when idle without pending processing; **Continue exploration** opens saved
+allowance review when available. These controls reuse the workspace/drawer's
 actions, selected feature scope and disabled states without opening the drawer;
 they wrap on narrow screens. Implementation and question-help cancellation remain
 task-specific controls inside the drawer, which also retains discovery controls.

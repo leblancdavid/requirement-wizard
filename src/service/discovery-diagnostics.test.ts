@@ -133,6 +133,7 @@ test("legacy and interrupted measurements survive repeated reopen; future envelo
       assert.deepEqual(store.get(p.id), project); assert.deepEqual(store.getJob(interrupted.id), original);
       const report = store.discoveryDiagnostics(p.id, [legacy.id, interrupted.id]);
       assert.equal(report.runs[0]!.measurements!.requests[0]!.durationMs, null);
+      assert.equal(report.runs[0]!.timing!.adapterRequestMs, null, "Incomplete recording cannot manufacture a completed request-time total");
       assert.equal(report.runs[0]!.status, "interrupted"); assert.equal(report.runs[1]!.measurements, null);
     }
     store.close(); const db = new Database(path);

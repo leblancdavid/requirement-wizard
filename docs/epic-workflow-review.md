@@ -32,6 +32,16 @@ Workflow policy/attempt/check identities are unchanged; see
 
 ### Graph-backed current-specification policy (2026-10-22)
 
+Service preparation is now incremental and worker-isolated: prepare through the first
+eligible package, not every package before the first model request. `planningPartial`
+reports/diagnostics cover only the examined prefix. A parent-owned two-minute
+preparation deadline and cancellation keep initial planning responsive without
+extending the worker lease. Numeric local progress is saved before inference.
+Original policies and exact model-stage identities still reconstruct unchanged;
+staged contexts share the finalized review identity on every batch. See
+[responsive preparation](discovery-efficiency.md#responsive-incremental-preparation-2026-10-22)
+for limits and remaining synchronous work.
+
 New workflow/dependency work now tries `current-spec-v1`: graph-based exact evidence
 closure plus proactive omission of redundant generated background explanations,
 with the existing conservative unique-answer and current-decision rules. Choose the

@@ -9,7 +9,7 @@ export function ItemProcessingNotice({ submission, error, resume, disabled }: {
   if (!error && submission?.status !== "needs-attention") return null;
   return <section className="error item-processing-error" aria-label="Item processing error">
     <p role="alert"><strong>Something needs attention.</strong> {error || submission?.diagnostic || "Your response was saved but could not be processed."}</p>
-    {submission?.status === "needs-attention" && !submission.conflict && <><p>Your response is retained. Retry its follow-up without submitting it again.</p>{resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Resume discovery</button>}</>}
+    {submission?.status === "needs-attention" && !submission.conflict && <><p>Your response is retained. Retry its follow-up without submitting it again.</p>{resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Resume processing</button>}</>}
   </section>;
 }
 

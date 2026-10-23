@@ -8,6 +8,7 @@ import { DiscoveryService } from "./discovery.js";
 import { DiscoveryQueue } from "./queue.js";
 import { startApp } from "../web/server.js";
 import type { Analysis } from "../core/model.js";
+import { epicBatchKey, epicReviewBatches, planEpicReview } from "../core/epic-review.js";
 
 const empty = (): Analysis => ({ summary: "Resume fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 function seed(store: ProjectStore) {
@@ -19,7 +20,7 @@ function seed(store: ProjectStore) {
   return store.get(p.id);
 }
 async function idle(queue: DiscoveryQueue, id: string) {
-  for (let i = 0; i < 1000 && queue.isActive(id); i++) await new Promise<void>((r) => setImmediate(r));
+  for (let i = 0; i < 1000 && queue.isActive(id); i++) await new Promise<void>((r) => setTimeout(r, 20));
   assert.equal(queue.isActive(id), false, queue.progress(id).join("\n"));
 }
 
@@ -91,13 +92,17 @@ test("browser staged Resume after SQLite reopen retains completed calls and spen
     queue.resumeBrowser(p.id, { focusEpicID: "orders", questionTarget: 5, research: false }); await idle(queue, p.id);
     assert.equal(calls.length, 6); const paused = store.jobs(p.id).at(-1)!;
     assert.equal(paused.status, "failed"); assert.equal(paused.retrievalWork!.epicStages!.receipts.length, 6);
+    assert.equal(paused.retrievalWork!.epicStages!.planKey, epicBatchKey(epicReviewBatches(p, paused.context!.epicReview!)), "Prepared batches must retain their reconstructible exact basis");
     assert.deepEqual(store.get(p.id), p);
     await queue.close(); store.close(); store = new ProjectStore(path);
     queue = new DiscoveryQueue(new DiscoveryService(store, adapter));
     assert.equal(calls.length, 6, "Startup alone must not repeat model work");
     assert.deepEqual(store.getJob(paused.id), paused);
+    const resumedPlan = planEpicReview(p, store.epicReviewHistory(p.id), "orders");
+    assert.equal(resumedPlan.task!.review.inputKey, paused.context!.epicReview!.inputKey, "Saved package identity must survive preparation changes");
+    assert.equal(resumedPlan.task!.prior?.id, paused.id, "Saved staged work must remain the selected prior");
     queue.resumeBrowser(p.id, { focusEpicID: "orders", questionTarget: 5, research: false }); await idle(queue, p.id);
-    assert.equal(calls.length, 8); assert.deepEqual(store.getJob(paused.id), paused);
+    assert.equal(calls.length, 8, queue.progress(p.id).join("\n")); assert.deepEqual(store.getJob(paused.id), paused);
     assert.ok(store.jobs(p.id).some((job) => job.retrievalWork?.epicStages?.phase === "complete" && job.result));
     assert.deepEqual(store.get(p.id).requirements, p.requirements); assert.deepEqual(store.get(p.id).sources, p.sources);
   } finally { await queue?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
@@ -117,9 +122,10 @@ test("browser resume API authenticates, rejects stale/invalid input and does not
     assert.equal((await post({ ...body, savedEvidencePolicy: "prefix" })).status, 400);
     assert.equal(calls, 0);
     assert.equal((await post(body)).status, 202);
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 1000; i++) {
       const snapshot = await (await fetch(`${app.origin}/api/projects/${p.id}`, { headers })).json();
       if (!snapshot.active) break;
+      await new Promise((r) => setTimeout(r, 10));
     }
     assert.equal(calls, 1);
   } finally { await app.close(); store.close(); }

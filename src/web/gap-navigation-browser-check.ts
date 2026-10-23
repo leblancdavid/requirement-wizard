@@ -198,11 +198,13 @@ try {
   assert.match(store.jobs(paging.id).at(-1)!.diagnostic!, /three-request bound/); assert.equal(pagingCalls, 3);
   assert.deepEqual(store.getJob(firstPage.id), firstPage); assert.deepEqual(store.getJob(exhausted.id), exhausted);
   assert.deepEqual(store.get(paging.id), paging); assert.deepEqual(store.get(paging.id, pagingBefore.revision), pagingBefore);
-  await page.locator(".topbar .queue-trigger").click();
+  await expect(page.locator(".queue-header").getByRole("button", { name: "Discover missing decisions", exact: true })).toHaveCount(0);
+  await page.locator(".queue-header").getByRole("button", { name: "Continue exploration", exact: true }).click();
+  assert.equal(pagingCalls, 3, "The header continuation opens review without granting more calls");
   const queueDialog = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   const continuation = queueDialog.getByRole("region", { name: "Continue gap exploration", exact: true });
   await expect(continuation).toBeVisible();
-  await expect(queueDialog.getByRole("button", { name: "Resume discovery", exact: true })).toHaveCount(0);
+  await expect(queueDialog.getByRole("button", { name: "Resume processing", exact: true })).toHaveCount(0);
   await continuation.getByRole("button", { name: "Continue exploration", exact: true }).click();
   await expect(continuation).toContainText("six total across retries");
   await continuation.getByRole("button", { name: "Cancel", exact: true }).click();

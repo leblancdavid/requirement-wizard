@@ -19,6 +19,114 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Exact-input local planning continuation (2026-10-22)
+
+Source: SQLite schema 3. Target: schema 4, ordered migration
+`exact-input-local-planning-receipts-v1`, adding `epic_planning_receipts` only.
+The startup transaction records migration 4 and advances `user_version` atomically.
+No project/job/revision/assessment payloads, stable IDs, evidence, completed calls,
+model-stage fingerprints or optimistic-concurrency counters are rewritten. The
+derived table starts empty; prior timeouts have no retroactively invented receipts.
+Schema 4 is not supported by older app versions.
+
+Completed local scheduling of a root workflow/boundary group can save format-1
+receipts for its reviewed/waiting/blocked tasks and report counts. Pending tasks,
+partially split groups and exceptions cannot establish a skip receipt. A SHA-256
+key binds reuse to the complete serialized project, ordered workflow-job history,
+submission list, feature scope and explicit planner algorithm `resolved-prefix-v1`.
+Even a same-revision content edit or changed attempt invalidates reuse. This key is
+separate from semantic/model-stage identities. Future context/scheduling/freshness
+changes must bump the algorithm version, not reinterpret old CPU receipts.
+
+The parent persists each completed group's receipt in an immediate transaction with
+an expected-revision guard. Stop, deadline, process interruption and reopening retain
+previously committed groups. An explicit retry can skip their context reconstruction;
+startup still makes no automatic model calls. The currently incomplete group must
+restart, and all pending work prepares fresh exact contexts. These are local CPU
+checkpoints, not proof of model review or completed requirements. They are not included
+in portable projections, workspace artifacts or diagnostic exports. Only optional
+numeric `resolvedGroups`/`reusedGroups` counters enter format-1 diagnostic progress.
+
+Storage keeps one exact-input generation per project, bounded to 2,000 groups/4 MiB;
+changed-input cache replacement is transactional and deletes derived receipts only.
+At the cap, planning continues without further persistence. Unsupported future
+receipt formats reject reads/writes without replacement. A failed SQL migration rolls
+back its table/version/history together and is safe to retry. Original evidence needs
+no backup rewrite because it is untouched. Snapshot-local approval parsing, decision
+projections and lookup indexes are shared only during immutable planning; protected
+submission views copy mutable maps. No persisted context encoding or evidence policy
+changes result from these indexes.
+
+Upgrade/recovery tests cover a schema-3 fixture, rollback after table creation,
+successful retry, repeated reopen, unchanged revision/job bytes, and future receipt
+preservation. Planning tests cover cancellation after saved groups, another deadline,
+SQLite reopen, exact pending task/report identity, fewer preparations, zero-preparation
+all-resolved reuse and changed-input invalidation. See
+[local planning continuation](discovery-efficiency.md#exact-input-local-planning-continuation-2026-10-22)
+for current verification and limits.
+
+Verification: the full main suite passed all 633 tests; the final pretest rerun
+passed all 53, including upgrade/rollback/reopen and zero-context reuse checks.
+Type checking, UI build, desktop emit, compiled-JavaScript worker smoke and focused
+workflow browser verification passed. No live model calls or personal database
+were used. Exact-project performance and full Electron packaging remain unqualified;
+the broader browser suite was not rerun for this follow-up.
+
+## Incremental workflow preparation and local progress (2026-10-22)
+
+Source: existing format-1 epic-review reports and optional format-1 discovery metrics.
+Additive target: reports may include `planningPartial: true`; format-1 metrics may
+include optional format-1 `planningProgress` with fixed phase enums and numeric counts.
+Diagnostic exports label prefix backlog counts with `scope: examined-prefix`; absence
+retains the earlier saved-scope interpretation. Recording-state adapter-time totals
+now export null, not an invented completed-run zero. This initial worker-isolation
+slice did not change SQLite/project/portable schemas, revision counters, context
+policies or semantic evidence fingerprints; the later schema-4 CPU checkpoint
+addition is described above.
+
+No legacy payload is rewritten or old plan/call identity recomputed at startup.
+Initial workflow planning now stops after the first eligible package and runs in an
+owned CPU worker with parent cancellation and a two-minute deadline. Equivalent saved
+no-policy/headroom/staged profiles, completed results, spent attempts and overlapping
+split children are still reconstructed before new grouping. Precomputed staged batches
+retain the same exact evidence basis and finalized review identity on every batch;
+they do not grant a new request or change the original partition. Full synchronous
+catalog planning remains available for deterministic inspection/compatibility checks.
+
+Progress is an optional local diagnostic field, saved through the existing transactional
+measurement-only update, not a specification revision or a completed-check receipt.
+Its absence stays unknown. Half-second pulses update elapsed/last phase without
+pretending another package or model call completed. On interruption, existing lease
+recovery retains partial measurements and old evidence; there is no automatic worker
+restart/inference. Local preparation may repeat on explicit retry because these
+checkpoints are not a persistent computation cursor. Worker caches are invocation-local.
+
+The worker cannot write storage or access providers. On-demand historical snapshots
+come from the immutable revision reader in the parent; current revision and cancellation
+are checked before inference. Parent timers do not rely on a blocked planning worker's
+event loop. The five-minute discovery bound and six-minute lease are unchanged; no
+blanket lease extension masks a stalled planner. Cancellation/deadline cleanup terminates
+only the owned CPU worker. Unsupported future progress/report fields reject normal
+validated reads without overwriting saved data. No ordered SQL migration, backup
+rewrite, reset or repeat model call is needed for this additive optimization. Downgrade
+support for new report/metric metadata is not promised.
+
+Tests cover identical first-package identity/evidence versus full planning, partial
+counts, parent responsiveness, cancellation during exact context preparation, bounded
+worker deadline and cleanup, fresh work after cancellation, stale human changes,
+durable pre-model progress, API startup/cancel responsiveness, staged exact-basis
+reconstruction and SQLite reopen without model replay. Existing legacy/full-policy
+recovery checks remain applicable. No personal database or supplied diagnostics were
+committed as fixtures. See [preparation behavior and limits](discovery-efficiency.md#responsive-incremental-preparation-2026-10-22).
+
+Verification: `npm test` passed all 49 pretests and 633 main tests. Type checking,
+UI build, desktop TypeScript emit, a compiled-JavaScript planning-worker smoke check,
+and the focused epic-workflow browser check passed. The broader browser command
+stopped at the missing **Approve resolution** assertion in `src/web/browser-check.ts:1347`;
+its subsequent portable/specification runners did not execute. Full packaged Electron
+execution and the user's exact interrupted project remain unqualified. No live
+provider calls or personal database were used.
+
 ## Browser Resume mode correction (2026-10-22)
 
 No persisted schema, payload, context-policy, fingerprint, SQLite/portable version

@@ -10,7 +10,7 @@ import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenc
 import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch, type SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
-import { planEpicReview, epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
+import { epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages } from "../core/epic-stages.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
@@ -20,6 +20,7 @@ import { refinementContextKey } from "./refinement-tasks.js";
 import { pairQuestions, resolutionContextKey } from "../core/resolution.js";
 import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanWindowTimeout, scanLeaseDuration } from "./scan-batches.js";
 import { DiscoveryMeasurement } from "./discovery-metrics.js";
+import { prepareEpicReview } from "./epic-planning.js";
 
 export interface DiscoveryAdapter {
   clarify?(project: Project, request: QuestionHelpRequest, options: DiscoveryOptions): Promise<unknown>;
@@ -256,7 +257,22 @@ export class DiscoveryService {
       const pairRecords = pair ? [...pair, ...triggerSourceIDs, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
       const generalExploration = !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
-      const epicPlan = options.gapMode ? planEpicReview(project, this.store.epicReviewHistory(projectID), options.focusEpicID, this.store.submissions(projectID), (revision) => this.store.get(projectID, revision)) : undefined;
+      if (options.gapMode) options.onProgress?.("Preparing workflow evidence…\nIndexing saved checks locally. No model request has started; Stop remains available.");
+      const epicPlan = options.gapMode ? await prepareEpicReview(project, this.store.epicReviewHistory(projectID), options.focusEpicID, this.store.submissions(projectID), {
+        signal: controller.signal, readRevision: (revision) => this.store.get(projectID, revision),
+        loadReceipts: (inputKey) => this.store.epicPlanningReceipts(projectID, inputKey),
+        saveReceipt: (inputKey, key, value) => this.store.saveEpicPlanningReceipt(projectID, project.revision, inputKey, key, value),
+        onProgress: (progress) => {
+          controller.signal.throwIfAborted();
+          if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
+          measurement?.preparing(progress);
+          options.onProgress?.(`Preparing workflow evidence…\n${progress.phase === "indexing" ? "Indexing saved checks" : progress.phase === "history" ? "Verifying historical evidence" : progress.phase === "ready" ? "Working package prepared" : "Preparing exact package context"} · ${progress.examinedPackages} packages examined · ${progress.contextPreparations} context preparations · ${progress.reusedGroups ?? 0} saved local groups reused · ${Math.floor((measurement?.value.elapsedMs ?? 0) / 1000)}s elapsed. Local work only; no model request has started. Stop remains available.`);
+        },
+      }) : undefined;
+      if (epicPlan) {
+        controller.signal.throwIfAborted();
+        if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
+      }
       if (epicPlan && !epicPlan.task) {
         measurement?.planned(undefined, epicPlan.planningDecisions);
         options.onProgress?.("No pending epic packages: review saved blockers or answer waiting decisions. No model request made.");
@@ -356,7 +372,7 @@ export class DiscoveryService {
         };
         if (review.contextPolicy === "staged-guardrails-v1") {
           if (adapterOptions.research) throw new Error("Staged decision review does not support research. Retry with research disabled; no provider or mode was silently changed.");
-          const batches = epicReviewBatches(project, review);
+          const batches = epicPlan.task.batches ?? epicReviewBatches(project, review);
           const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
             phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
           validateEpicStages(project, review, staged, batches);
