@@ -44,6 +44,8 @@ revision—make it outdated. The dialog also separates discovery blockers from a
 definition gaps. Large areas use resumable exact evidence batches; indivisible
 evidence and stage-limit blockers stay explicitly unfinished. See
 [definition coverage](docs/definition-coverage.md) for bounds and upgrade behavior.
+The fifteen-minute refresh window is shared across areas: a later area can pause
+after a shorter run. Completed stages are retained; Resume continues unfinished work.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 **Discover missing decisions** (in Design or the idle top process bar) reviews related workflows and their declared dependency
 boundaries. The compact **Questions ready** input configures how many unanswered questions to

@@ -42,16 +42,26 @@ const connections: Connections = {
   async beginLogin() { throw new Error("No live sign-in"); }, loginStatus() { throw new Error("No live sign-in"); }, cancelLogin() {},
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {},
 };
-const app = await startApp({ store, connections, port: 0, adapter: { async analyze(_p, { context }) {
+const app = await startApp({ store, connections, port: 0, adapter: { async analyze(_p, { context, signal }) {
   if (context.manifest.definitionAssessment) {
     if (context.manifest.definitionAssessment.staged) {
       largeAssessmentCalls++;
-      if (largeAssessmentCalls === 2) await largeGate;
+      if (largeAssessmentCalls === 2) {
+        signal.throwIfAborted(); let cancelLarge!: () => void;
+        try {
+          await new Promise<void>((resolve, reject) => {
+            cancelLarge = () => reject(signal.reason); signal.addEventListener("abort", cancelLarge, { once: true });
+            void largeGate.then(resolve);
+          });
+        } finally { signal.removeEventListener("abort", cancelLarge); }
+      }
       assert.ok(context.manifest.characters <= 96000);
       const phase = (context.data as { definitionStage: { phase: string } }).definitionStage.phase;
       if (phase === "verify") return { definitionVerdict: [] };
-      return { ...empty(), assessments: [{ epicID: context.manifest.definitionAssessment.epicID, confidence: "medium", explanation: "Exact evidence read in bounded batches; not a readiness guarantee.",
-        checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "partial", explanation: "Consequential decisions may remain.", evidenceIDs: [context.manifest.includedIDs[0]!] })) }] };
+      const response = { ...empty(), assessments: [{ epicID: context.manifest.definitionAssessment.epicID, confidence: "medium", explanation: "Exact evidence read in bounded batches; not a readiness guarantee.",
+        checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "partial", explanation: "Consequential decisions may remain. Exact supporting evidence is retained. ".repeat(25).trim(), evidenceIDs: [context.manifest.includedIDs[0]!] })) }] };
+      assert.ok(JSON.stringify(response).length > 12000);
+      return response;
     }
     assessmentCalls++;
     return { ...empty(), assessments: [{ epicID: context.manifest.definitionAssessment.epicID, confidence: "medium", explanation: "Current exact area evidence, not completeness proof.",
@@ -355,8 +365,26 @@ try {
   assert.deepEqual(store.get(large.id).assessments, []);
   await page.reload(); await page.locator(".progress-trigger").click();
   await expect(batchProgress).toContainText("1 /"); assert.equal(largeAssessmentCalls, 2, "Reload does not repeat a saved batch or start another model request");
-  releaseLarge();
+  await page.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Stop assessment", exact: true }).click();
+  await expect.poll(() => store.jobs(large.id).at(-1)!.status).toBe("cancelled");
+  const stoppedAssessment = structuredClone(store.jobs(large.id).at(-1)!);
+  assert.equal(stoppedAssessment.definitionInterruption!.cause, "user-stop");
+  assert.equal(stoppedAssessment.definitionWork!.receipts.length, 1);
+  assert.ok(JSON.stringify(stoppedAssessment.definitionWork!.receipts[0]!.response).length > 12000);
+  await page.locator(".topbar .queue-trigger").click();
+  const assessmentQueue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+  await expect(assessmentQueue.getByRole("region", { name: "Definition assessment progress", exact: true })).toContainText("Stopped—progress saved");
+  await expect(assessmentQueue).toContainText("Definition processing is paused");
+  await expect(assessmentQueue).not.toContainText("Discovery is paused. Saved submissions are retained.");
+  await assessmentQueue.getByRole("button", { name: "Resume processing", exact: true }).click();
   await expect.poll(() => coverage(store.get(large.id)).epics.find((e) => e.epicID === "runtime")?.stale).toBe(false);
+  const resumedAssessment = store.jobs(large.id).at(-1)!;
+  assert.equal(resumedAssessment.definitionWork!.receipts[0]!.jobID, stoppedAssessment.id);
+  assert.equal(resumedAssessment.definitionWork!.receipts[1]!.attempts, 2);
+  assert.deepEqual(store.getJob(stoppedAssessment.id), stoppedAssessment);
+  await page.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await page.locator(".progress-trigger").click();
   await expect(batchProgress).toContainText("All batches read and findings checked against every batch");
   await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("1 current · 0 outdated · 1 not assessed");
   await expect(overview.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) }).locator(":scope > summary")).toContainText("Assessment incomplete");

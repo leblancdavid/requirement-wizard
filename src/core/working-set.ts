@@ -32,8 +32,8 @@ export type ContextTask = {
 };
 
 /** Lossless wire representation only; stored records and evidence IDs stay intact. */
-export function shareRepeatedText(data: unknown, compactInstructions = false, sharePhrases = false) {
-  const textFields = new Set(["text", "statement", "rationale", "acceptance", "reviewNote", "whyItMatters", "label", "consequence"]);
+export function shareRepeatedText(data: unknown, compactInstructions = false, sharePhrases = false, additionalFields: readonly string[] = []) {
+  const textFields = new Set(["text", "statement", "rationale", "acceptance", "reviewNote", "whyItMatters", "label", "consequence", ...additionalFields]);
   if (sharePhrases) { textFields.add("addendum"); textFields.add("reason"); }
   // Ordinary review statements are often shorter than 160 characters. They
   // still save space when repeated in the requirement and approval snapshot.

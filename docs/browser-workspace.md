@@ -102,8 +102,13 @@ Verified with type checking, UI build and the focused workflow browser runner,
 including computed button styling, keyboard focus and mobile layout. The full
 browser command still stops at the known **Approve resolution** assertion; no
 live model calls were used.
-Definition freshness now follows relevant saved inputs;
-the dialog shows assessment status separately from saved discovery package/blocker
+Definition freshness now follows relevant saved inputs. New timeout receipts
+distinguish the shared fifteen-minute refresh window across
+all areas from individual request timeouts, Stop and shutdown. Deadline stops show
+**Paused—progress saved**; historical cancelled runs without a cause stay explicitly
+unknown. Definition processing no longer inherits the generic **Discovery is paused**
+footer. Resume retains completed stages and spent attempts without automatic calls.
+The dialog shows assessment status separately from saved discovery package/blocker
 counts. Refreshes assess whole current areas without changing the specification,
 reuse current areas and use resumable exact batches when an area exceeds 96k. All
 batches are read, then every batch checks the accumulated findings before publication.

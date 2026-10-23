@@ -312,6 +312,7 @@ export type Job = {
   scanWork?: ScanWork;
   definitionWork?: import("./definition-stages.js").DefinitionWork;
   definitionBlock?: { format: 1; reason: string };
+  definitionInterruption?: import("./definition-interruption.js").DefinitionInterruption;
   /** Browser-safe checkpoint summary; batch outputs remain in the local store. */
   scanProgress?: { completed: number; total: number; capturedAt: string; resumable: boolean };
 };

@@ -14,8 +14,9 @@ import { reconciliationCandidates } from "../core/review-completion.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import type { SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { coverage } from "../core/coverage.js";
+import { definitionAbortReason } from "../core/definition-interruption.js";
 
-type Work = { controller: AbortController; promise: Promise<void> };
+type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" };
 
 function submissionEpic(project: Project, item: Submission) {
   const input = item.input;
@@ -91,7 +92,7 @@ export class DiscoveryQueue {
     const controller = new AbortController();
     const progress: string[] = []; this.messages.set(id, progress); this.refinementRuns.delete(id);
     const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
-    const timer = setTimeout(() => controller.abort(), 900_000);
+    const timer = setTimeout(() => controller.abort(definitionAbortReason("refresh-time-limit")), 900_000);
     const promise = Promise.resolve().then(async () => {
       let refreshed = 0, blocked = 0, reused = 0;
       for (const area of areas) {
@@ -107,9 +108,9 @@ export class DiscoveryQueue {
         if (["cancelled", "stale", "interrupted"].includes(job.status)) break;
       }
       report(`Definition refresh: ${refreshed} areas refreshed · ${reused} current assessments reused · ${blocked} unfinished. Unassessed or outdated areas remain unknown; this does not certify readiness.`);
-    }).catch((error) => report(controller.signal.aborted ? "Definition refresh stopped; completed area assessments are saved. Refresh explicitly to continue without repeating current areas." : safeMessage(error instanceof Error ? error.message : error)))
+    }).catch((error) => report(controller.signal.aborted ? "Definition refresh interrupted; completed area assessments are saved. Refresh explicitly to continue without repeating current areas." : safeMessage(error instanceof Error ? error.message : error)))
       .finally(() => { clearTimeout(timer); this.active.delete(id); });
-    this.active.set(id, { controller, promise });
+    this.active.set(id, { controller, promise, kind: "definition" });
   }
   scan(id: string, revision: number, resumeJobID?: string) {
     this.service.store.assertNoExecution(id);
@@ -236,7 +237,8 @@ export class DiscoveryQueue {
 
   stop(id: string) {
     this.service.store.pauseQueue(id, true);
-    this.active.get(id)?.controller.abort();
+    const work = this.active.get(id);
+    work?.controller.abort(work.kind === "definition" ? definitionAbortReason("user-stop") : undefined);
   }
 
   private async runOverlapFollowup(item: Submission, controller: AbortController, report: (message: string) => void): Promise<boolean> {
@@ -571,7 +573,11 @@ export class DiscoveryQueue {
   async close() {
     this.closing = true;
     clearInterval(this.wakeTimer);
-    for (const [id] of this.active) this.stop(id);
+    for (const [id, work] of this.active) {
+      if (work.kind === "definition") {
+        this.service.store.pauseQueue(id, true); work.controller.abort(definitionAbortReason("shutdown"));
+      } else this.stop(id);
+    }
     await Promise.all([...this.active.values()].map((work) => work.promise));
   }
 }

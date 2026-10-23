@@ -6,6 +6,13 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/core/definition-interruption.ts`: versioned, allowlisted stop-cause receipts
+  separate from evidence identities. Definition queue deadlines, Stop and shutdown
+  propagate their reason through the service signal; store interruption writes are
+  lease/revision checked. The renderer and diagnostics distinguish pause causes
+  without guessing the cause of older unclassified jobs. See
+  [migration/recovery](migrations.md#definition-interruption-causes-and-timeout-recovery-2026-10-23).
+
 - `src/core/definition-identity.ts` and `definition-assessment.ts`: relevance-bound
   definition freshness and complete-current-area assessment-only context/publication
   rules, separate from workflow gaps and implementation assessment. Original-snapshot

@@ -65,11 +65,41 @@ method and cap confidence at medium. Missing decisions remain unknown/partial or
 needs-review, not artificially defined.
 
 There are at most sixteen batches / 32 stages, a 12k accumulated assessment draft
-cap, three spent attempts per unfinished stage, and 32 requests per explicit staged
+target/reserve, three spent attempts per unfinished stage, and 32 requests per explicit staged
 area action within the existing fifteen-minute refresh window. Each request also
 has a five-minute timeout. Oversized individual records, over-sixteen-batch areas,
 missing records and model-identified indispensable missing evidence stay explicit
 **Evidence blocked** outcomes, not successful reviews or silent truncation.
+
+Valid collection/verdict responses are now saved before preparing the next request;
+raw drafts over 12k are not discarded solely for their size. Subsequent requests
+carry only the assessment fields, with repeated explanations/citations shared
+losslessly. Complete schema-validated responses (including ignored wrapper fields)
+remain in receipts. Explanations, statuses, importance and citations are not
+summarized, truncated or rewritten to fit. The actual encoded evidence-plus-draft
+request still cannot exceed 96,000 characters. If it does, the assessment blocks
+with all completed responses retained; unchanged Resume makes no repeated call.
+This removes an artificial raw-size failure, not every possible size limit.
+
+Existing partitions and receipt hashes are preserved. An optional versioned draft
+policy starts at the first unfinished stage only after replaying older receipts
+under their original rules. Original saved jobs, provenance and attempts remain
+unchanged; completed old ledgers can still publish without inference. Historical
+responses rejected before this fix were never checkpointed and cannot be restored
+from metadata-only diagnostics. The unfinished stage may still require a call.
+
+The historical 209,523 / 96,000 single-context failure is distinct: the current
+definition path catches that planning overflow and switches to exact batches. The
+latest supplied export reports this area's completed five-batch / ten-stage ledger,
+with seven new calls after three previously saved stages. It does not establish
+that every other area's earlier failure is resolved or that this draft fix has
+been exercised on the user's saved project.
+
+Draft follow-up checks: type check, 103 pretests + 647 main tests, UI build and
+focused workflow/specification browser runners passed. Portable browser checks
+passed on isolated rerun after a duplicate-button locator failure. The full browser
+suite was not rerun for this follow-up; its prior **Approve resolution** failure
+remains unresolved. No live model calls or personal database edits were made.
 
 **Refresh definition coverage** or **Resume processing** after a paused/cancelled/failed
 assessment continues saved stages. Ordinary Discover missing decisions remains gap
@@ -83,6 +113,35 @@ The migration ledger describes format checks and recovery.
 Resume uses the saved assessment area unless the feature filter selects another;
 the drawer labels that scope explicitly. To continue all other areas, use the global
 **Refresh definition coverage** action; already-current areas need no new calls.
+
+### Why a later area can pause after only a few minutes
+
+The fifteen-minute window is shared across the whole **Refresh definition coverage**
+action, not restarted for each area. Earlier completed or failed areas consume that
+window. A later area may therefore pause during its second request even though its
+own job has run for only two minutes and its five-minute request timeout was not
+reached. Completed stages remain saved; unfinished in-flight attempts remain spent.
+
+New runs record separate causes for that shared deadline, the area's own deadline,
+an individual request timeout, explicit Stop, app shutdown and unspecified external
+interruption. Time limits display **Paused—progress saved**, not an apparent user
+cancellation; Stop displays **Stopped—progress saved**. The drawer says definition
+processing is paused, not discovery. The same bounded Resume/Refresh actions continue
+unfinished work; there are no automatic repeated model calls or larger allowances.
+
+Older cancelled runs did not record which cause occurred. Their exact saved job and
+checks are preserved; the UI calls the cause unknown rather than guessing, and new
+diagnostics export `interruptionCause: null`. A supplied 142-second cancelled area
+with a 63-second saved first stage and a 78-second interrupted second request is not
+evidence of a five-minute request timeout. A shared deadline is possible, but the old
+export alone cannot distinguish it from Stop or another external cancellation.
+
+Interruption follow-up verification: type check/UI build, 99 pretests and 647 main
+tests passed on Windows Node 22.23.3. Focused workflow browser checks exercise Stop
+and Resume without replaying the saved first stage; portable/specification browser
+runners also passed separately. The full browser suite remains blocked at the known
+**Approve resolution** assertion. No live model calls or changes to the user's
+saved project database.
 
 Follow-up verification (2026-10-23, Windows Node 22.23.3): type check/UI build,
 91 pretests and 647 main tests passed. Portable and specification browser runners

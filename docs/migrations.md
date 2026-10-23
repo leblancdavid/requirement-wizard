@@ -19,6 +19,100 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Lossless staged definition drafts beyond the raw 12k reserve (2026-10-23)
+
+Source/target: SQLite schema 5, exact-batch work format 1 and plan/input identities
+unchanged. Work optionally adds strict `draftPolicy: {format: 1, fromStage}`.
+Absent policy retains the original draft context and raw 12k checks during replay.
+An explicit continuation first replays and validates all old receipts, then sets
+the policy boundary to their count. Earlier contexts remain byte-identical; neither
+saved partitions nor their plan keys, receipts, original provider/model/job IDs,
+spent attempts or dated project evidence are rewritten. New plans start at zero.
+Completed old ledgers need no policy upgrade or repeat inference. New metadata is
+saved by existing lease/revision-checked checkpoint transactions; interrupted startup
+does not initiate inference. Retrying upgrade is idempotent. No freshness/assessment
+semantics or project schema version changes, so no reassessment migration is needed.
+
+At and after the boundary, 12k is a generation target and planning reserve, not a
+raw-response rejection threshold. Schema-valid, reference-checked responses are
+checkpointed before constructing the following request. Its working draft projects
+only assessment fields, retaining every explanation and citation, while ignored
+analysis wrappers remain in original schema-normalized receipt responses. Repeated
+explanations use the existing lossless shared-text forms; this opt-in leaves all
+other callers and older definition contexts unchanged. There is no semantic prose
+compaction or extra model call. Status/importance/citation checks, complete-batch
+verification and independent publication validation are unchanged.
+
+The measured encoded request remains bounded at 96k. If it still cannot fit, the
+job records an explicit evidence block and the completed response remains durable;
+unchanged Resume blocks locally instead of repeating inference. There is no silent
+truncation, repartitioning or allowance reset. Responses discarded before this
+upgrade cannot be recovered from metadata diagnostics; do not manufacture receipts.
+
+Portable serialization/adoption retains the policy boundary and original receipts.
+Unknown future policy formats fail strict reads/adoption; expired-job recovery now
+also validates definition work before any rewrite, with transaction rollback on
+failure. Downgrading after saving the new optional field is unqualified. Upgrade
+tests cover unchanged old request bytes and receipt provenance, retained partition
+and attempts, repeated SQLite reopen, continuation/publication, portable replay,
+oversized collection/verification and unencodable-draft no-call recovery, plus future
+format rejection without overwriting expired worker records.
+
+Verification: Windows Node 22.23.3 type check, 103 pretests and 647 main tests,
+UI build and the focused workflow browser runner passed. The browser fixture saves
+an over-12k response, stops, reloads and resumes with the original first receipt
+and interrupted-stage attempt intact. Specification browser checks passed; portable
+browser checks passed on isolated rerun after an initial duplicate-button locator
+failure. No live inference or changes to the user's saved project database. The
+full browser suite was not rerun for this follow-up; its preceding run remains
+blocked at the known **Approve resolution** assertion.
+
+## Definition interruption causes and timeout recovery (2026-10-23)
+
+Source/target: SQLite schema 5, definition input-basis format 1, and exact-batch
+work/receipt formats unchanged. Jobs optionally add strict format-1
+`definitionInterruption: {cause, limitMs?}`. Causes distinguish the shared refresh
+deadline, per-area deadline, individual request timeout, external unspecified
+timeout, request allowance, explicit Stop, shutdown and an otherwise unspecified
+external cancellation. Only allowlisted codes/numeric bounds are persisted or
+exported; arbitrary abort errors/reasons are not copied into records or diagnostics.
+
+No eager rewrite or assessment migration: original unclassified cancelled jobs stay
+unchanged with an unknown cause. Do not infer an explicit Stop or a timeout from
+their duration, status or generic diagnostic. New explicit continuation reuses the
+original partition, exact completed receipts, original provenance and spent attempts;
+it does not repeat completed calls or reset allowances. No stage context/evidence
+hash, assessment freshness, score, human input or delivery evidence changes.
+
+Known deadlines now publish transactional interrupted/paused receipts instead of
+generic cancellation. A newer project revision wins over interruption bookkeeping;
+no stale result can publish. Explicit Stop/shutdown remain distinguishable cancelled
+work with retained checks. Late responses after a deadline cannot publish. Recovery
+and startup remain explicit: no automatic repeat inference. The processing drawer
+labels definition processing separately from gap discovery.
+
+Portable current-checkpoint records retain this optional stop receipt. Strict future
+formats reject reads/adoption without overwriting original data. Downgrading after
+new metadata is saved remains unqualified. The diagnostics JSON adds optional
+`interruptionCause` (null for old/unknown causes); timings alone never manufacture it.
+
+Tests cover a shared fifteen-minute refresh deadline during a later area, including
+a retained first stage and a much shorter current-area elapsed time; individual
+request timeout/resume with retained attempts; explicit Stop and shutdown; stale
+revision precedence; portable stop-receipt round-trip; legacy cancelled JSON reopened
+without any rewrite or repeated completed stage; arbitrary abort-text redaction; and
+future-format rejection preserving original bytes. No user database or live model
+inference is used. The supplied historical export cannot establish its original
+interruption cause because that metadata was not recorded.
+
+Verification: Windows Node 22.23.3 type check, UI build, 99 pretests and 647 main
+tests passed. The focused workflow browser runner passed explicit Stop/reload/Resume
+with an unchanged saved first-stage receipt and retained interrupted-stage attempt.
+Portable and specification browser runners passed separately (the specification
+runner was rerun after an initial 404 caused by running alongside a UI rebuild).
+The full browser command still stops at its known **Approve resolution** assertion
+at `src/web/browser-check.ts:1352`. No live inference or personal data migration.
+
 ## Exact-batch whole-area assessment continuation (2026-10-23 follow-up)
 
 Source/target: SQLite schema 5 and definition input-basis format 1 unchanged. Existing

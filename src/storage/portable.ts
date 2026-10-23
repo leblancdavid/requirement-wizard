@@ -8,6 +8,7 @@ import { retrievalWorkSchema } from "../core/gap-retrieval.js";
 import { definitionWorkSchema } from "../core/definition-stages.js";
 import { definitionTaskSchema } from "../core/definition-assessment.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionInterruptionSchema } from "../core/definition-interruption.js";
 
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 export const portableDigest = (value: unknown) => createHash("sha256").update(canonicalJSON(value)).digest("hex");
@@ -214,6 +215,7 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
     includedIDs: z.array(z.string()), omittedIDs: z.array(z.string()), definitionAssessment: definitionTaskSchema.optional() }).passthrough().optional(),
   retrievalWork: retrievalWorkSchema.optional(), gapReport: z.unknown().optional(), epicReviewReport: z.unknown().optional(),
   definitionWork: definitionWorkSchema.optional(), definitionBlock: z.object({ format: z.literal(1), reason: z.string().min(1).max(1200) }).strict().optional(),
+  definitionInterruption: definitionInterruptionSchema.optional(),
   scan: z.object({ workspaceKey: z.literal("portable"), snapshot: projectSchema.shape.scans.removeDefault().element, sources: projectSchema.shape.sources }).strict().optional(),
   scanWork: z.object({ version: z.literal(1), bindingID: z.literal("portable"), resumedFrom: z.string().optional(), batches: z.array(z.object({
     excerpts: z.array(z.object({ sourceID: z.string(), start: z.number().int().nonnegative(), end: z.number().int().positive() }).strict()),

@@ -13,6 +13,7 @@ import { addRelatedRecordHints } from "../core/similarity.js";
 import { epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
 import { definitionContext } from "../core/definition-assessment.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionAbortCause } from "../core/definition-interruption.js";
 import { runDefinitionStages, DefinitionEvidenceBlocked } from "./definition-stages.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages } from "../core/epic-stages.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
@@ -58,9 +59,10 @@ function schemaDiagnostic(error: z.ZodError): string {
 /** Shared application boundary. No model or storage operations belong in UI components. */
 export class DiscoveryService {
   constructor(readonly store: ProjectStore, private readonly adapter: DiscoveryAdapter,
-    private readonly navigation: { searchEvidence?: typeof searchSavedEvidence; stagedLimits?: { requests: number; durationMs: number } } = {}) {
+    private readonly navigation: { searchEvidence?: typeof searchSavedEvidence; stagedLimits?: { requests: number; durationMs: number }; definitionRequestMs?: number } = {}) {
     if (navigation.stagedLimits) z.object({ requests: z.number().int().min(1).max(stagedRunRequestLimit),
       durationMs: z.number().int().min(1).max(stagedRunDurationMs) }).strict().parse(navigation.stagedLimits);
+    if (navigation.definitionRequestMs !== undefined) z.number().int().min(1).max(300000).parse(navigation.definitionRequestMs);
   }
 
   requiresInitialization(projectID: string) {
@@ -267,7 +269,7 @@ export class DiscoveryService {
       return result;
     };
     const controller = new AbortController();
-    const abort = () => controller.abort();
+    const abort = () => controller.abort(options.signal?.reason);
     options.signal?.addEventListener("abort", abort, { once: true });
     const started = Date.now();
     let timedOut = false, stagedRun = false;
@@ -282,7 +284,7 @@ export class DiscoveryService {
         if (this.store.definitionHistory(project.id, options.definitionEpicID, definitionInputKey(project, options.definitionEpicID)).length) {
           clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, stagedRunDurationMs - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, this.adapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: this.navigation.stagedLimits }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
         }
         try { definition = definitionContext(project, options.definitionEpicID); }
         catch (error) {
@@ -291,7 +293,7 @@ export class DiscoveryService {
           options.onProgress?.("The complete area exceeds one request. Preparing exact evidence batches; no assessment has been published and no evidence will be truncated.");
           clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, stagedRunDurationMs - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, this.adapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: this.navigation.stagedLimits }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
         }
       }
       const question = options.helpRequest ? project.questions.find((q) => q.id === options.helpRequest!.questionID)! : undefined;
@@ -671,7 +673,12 @@ export class DiscoveryService {
       if (options.definitionEpicID && error instanceof DefinitionEvidenceBlocked && !controller.signal.aborted) {
         return completeMeasurement(this.store.blockDefinition(job.id, error.message));
       }
-      if (options.definitionEpicID && timedOut && this.store.getJob(job.id).definitionWork) return completeMeasurement(this.store.pauseDefinition(job.id, "time-limit"));
+      if (options.definitionEpicID && controller.signal.aborted) {
+        const work = this.store.getJob(job.id).definitionWork;
+        const cause = timedOut ? work ? "area-time-limit" : "request-time-limit" : definitionAbortCause(controller.signal.reason);
+        return completeMeasurement(this.store.interruptDefinition(job.id, { format: 1, cause,
+          ...(["refresh-time-limit", "area-time-limit"].includes(cause) ? { limitMs: 900000 } : cause === "request-time-limit" ? { limitMs: 300000 } : {}) }));
+      }
       if (stagedRun && controller.signal.aborted && (timedOut || options.signal?.reason?.name === "TimeoutError")) {
         return completeMeasurement(this.store.pauseEpicReview(job.id, "time-limit"));
       }

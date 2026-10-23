@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ContextPack } from "./context.js";
+import { definitionInterruptionCauses } from "./definition-interruption.js";
 
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const duration = z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -56,6 +57,7 @@ export type DiagnosticSource = {
   reusedStages: number | null; reusedFinal: number | null; stagedBatches: number | null; stagedCompleted: number | null;
   reviewed: number | null; pending: number | null; waiting: number | null; blocked: number | null;
   planningPartial: number | null;
+  interruptionCause?: string | null;
 };
 const nullableCount = (value: number | null) => value === null ? null : count.parse(value);
 export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
@@ -76,6 +78,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
         status: z.enum(["pending", "running", "completed", "failed", "cancelled", "interrupted", "stale"]).parse(row.status),
         package: row.packageID ? packages.get(row.packageID)! : null,
         policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "definition-exact-batches-v1", "current-spec-v1"].includes(row.policy ?? "") ? row.policy : null,
+        interruptionCause: definitionInterruptionCauses.find((cause) => cause === row.interruptionCause) ?? null,
         measurements: metrics,
         timing: metrics ? { initialPlanningMs: metrics.planningMs, adapterRequestMs: adapterMs,
           otherLocalMs: metrics.state === "finished" && metrics.planningMs !== null && adapterMs !== null

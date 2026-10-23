@@ -16,6 +16,7 @@ import { applyRound } from "../core/round.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionTaskSchema, validateDefinitionAssessment } from "../core/definition-assessment.js";
 import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
+import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
 import { applySpecificationUpdates } from "../core/specification.js";
 import { specificationUpdatesSchema } from "../core/model.js";
 import { wordingKey } from "../core/similarity.js";
@@ -60,6 +61,7 @@ function readStoredJob(payload: string): Job {
     if (task?.epicID !== work.epicID || task.inputKey !== work.inputKey || task.staged?.planKey !== work.planKey) throw new Error("Definition checkpoint does not match its saved task policy; original evidence was not overwritten.");
   }
   if (job.definitionBlock !== undefined) z.object({ format: z.literal(1), reason: z.string().min(1).max(1200) }).strict().parse(job.definitionBlock);
+  if (job.definitionInterruption !== undefined) definitionInterruptionSchema.parse(job.definitionInterruption);
   if (job.context?.epicContextBudget !== undefined) epicContextBudgetSchema.parse(job.context.epicContextBudget);
   if (job.epicReviewReport !== undefined) epicReviewReportSchema.parse(job.epicReviewReport);
   if (job.retrievalWork !== undefined) retrievalWorkSchema.parse(job.retrievalWork);
@@ -926,6 +928,7 @@ export class ProjectStore {
       json_extract(payload, '$.status') AS status, json_extract(payload, '$.discoveryMetrics') AS metrics,
       COALESCE(json_extract(payload, '$.context.epicReview.packageID'), json_extract(payload, '$.definitionWork.planKey')) AS packageID,
       CASE WHEN json_type(payload, '$.definitionWork') IS NOT NULL THEN 'definition-exact-batches-v1' ELSE json_extract(payload, '$.context.epicReview.contextPolicy') END AS policy,
+      CASE WHEN json_extract(payload, '$.definitionInterruption.format') = 1 THEN json_extract(payload, '$.definitionInterruption.cause') END AS interruptionCause,
       json_extract(payload, '$.context.characters') AS characters, json_extract(payload, '$.context.budget') AS budget,
       json_array_length(payload, '$.context.includedIDs') AS included, json_array_length(payload, '$.context.omittedIDs') AS omitted,
       json_array_length(payload, '$.context.epicIDs') AS areas, json_extract(payload, '$.context.sectionCharacters') AS sections,
@@ -1571,15 +1574,27 @@ export class ProjectStore {
     }).immediate();
   }
 
-  pauseDefinition(id: string, reason: "request-limit" | "time-limit"): Job {
+  interruptDefinition(id: string, input: DefinitionInterruption): Job {
+    const interruption = definitionInterruptionSchema.parse(input);
     return this.db.transaction(() => {
       const job = this.getJob(id);
-      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now() || !job.definitionWork) throw new Error("Definition worker is no longer live.");
-      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
-      job.status = "interrupted"; job.definitionWork.paused = reason;
-      job.diagnostic = "Paused—definition progress saved. Refresh definition coverage to continue unfinished evidence batches without repeating completed calls.";
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Definition worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) {
+        job.status = "stale"; job.diagnostic = "Project changed while assessment was running; saved stages were not published.";
+      } else {
+        const paused = ["refresh-time-limit", "area-time-limit", "request-time-limit", "external-time-limit", "request-limit"].includes(interruption.cause);
+        job.status = paused ? "interrupted" : "cancelled";
+        if (job.definitionWork && paused) job.definitionWork.paused = interruption.cause === "request-limit" ? "request-limit" : "time-limit";
+        job.definitionInterruption = interruption;
+        job.diagnostic = definitionInterruptionMessage(interruption);
+      }
       job.leaseUntil = null; this.saveJob(job); return job;
     }).immediate();
+  }
+
+  pauseDefinition(id: string, reason: "request-limit" | "time-limit", limitMs = 900000): Job {
+    return this.interruptDefinition(id, { format: 1, cause: reason === "request-limit" ? "request-limit" : "area-time-limit",
+      ...(reason === "time-limit" ? { limitMs } : {}) });
   }
 
   /** Intentional action-budget stop, not failed analysis or a completed review. */
@@ -1634,6 +1649,8 @@ export class ProjectStore {
       let recovered = 0;
       for (const row of this.db.prepare("SELECT payload FROM jobs").all() as Array<{ payload: string }>) {
         const job = JSON.parse(row.payload) as Job;
+        if (job.definitionInterruption !== undefined) definitionInterruptionSchema.parse(job.definitionInterruption);
+        if (job.definitionWork !== undefined) definitionWorkSchema.parse(job.definitionWork);
         if (["pending", "running"].includes(job.status) && (job.leaseUntil ?? 0) <= now) {
           job.status = "interrupted";
           job.leaseUntil = null;

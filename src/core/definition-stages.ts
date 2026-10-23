@@ -18,6 +18,8 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   epicID: z.string().min(1), inputKey: z.string().regex(/^[a-f0-9]{64}$/), planKey: z.string().regex(/^[a-f0-9]{64}$/),
   batches: z.array(z.array(z.string().min(1)).max(10000)).min(1).max(maxBatches),
   originJobID: z.string().optional(), attempts: z.number().int().min(0).max(3),
+  // A stage boundary preserves byte-identical contexts for all older receipts.
+  draftPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxBatches * 2) }).strict().optional(),
   receipts: z.array(z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
     jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
     response: z.union([analysisSchema, definitionVerdictSchema]),
@@ -33,6 +35,13 @@ function exactIDs(project: Project, epicID: string) {
 }
 const planKey = (work: Pick<DefinitionWork, "epicID" | "inputKey" | "batches">) => digest(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches]);
 export const definitionPhase = (work: DefinitionWork) => work.receipts.length < work.batches.length ? "collect" : work.receipts.length < work.batches.length * 2 ? "verify" : "complete";
+const boundedWireDraft = (work: DefinitionWork) => !!work.draftPolicy && work.receipts.length >= work.draftPolicy.fromStage;
+
+/** Call only after replaying the original receipts. No partition, attempt,
+ * original response or previously dispatched context is rewritten. */
+export function upgradeDefinitionDraftPolicy(work: DefinitionWork) {
+  if (!work.draftPolicy && definitionPhase(work) !== "complete") work.draftPolicy = { format: 1, fromStage: work.receipts.length };
+}
 
 /** Each exact record appears once. Links may cross batches; they never grant
  * citation authority before their record is read. No record or human text is cut. */
@@ -40,7 +49,8 @@ export function planDefinitionStages(project: Project, epicID: string): Definiti
   const ids = exactIDs(project, epicID);
   const records = new Map([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => [r.id, r]));
   if (ids.some((id) => !records.has(id))) throw new DefinitionEvidenceBlocked("Required linked evidence is missing from saved records. Restore or correct that evidence before assessing this area; no model call was made.");
-  const work: DefinitionWork = { format: 1, policy: "exact-batches-v1", epicID, inputKey: definitionInputKey(project, epicID), planKey: "0".repeat(64), batches: [], receipts: [], attempts: 0 };
+  const work: DefinitionWork = { format: 1, policy: "exact-batches-v1", epicID, inputKey: definitionInputKey(project, epicID), planKey: "0".repeat(64), batches: [], receipts: [], attempts: 0,
+    draftPolicy: { format: 1, fromStage: 0 } };
   // Related supporting records follow each requirement/question when possible.
   const remaining = new Set(ids), ordered: string[] = [];
   const add = (id: string) => { if (remaining.delete(id)) ordered.push(id); };
@@ -76,12 +86,14 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
   const expected = new Set(exactIDs(project, work.epicID)), flat = work.batches.flat();
   if (flat.length !== expected.size || new Set(flat).size !== flat.length || flat.some((id) => !expected.has(id))) throw new Error("Staged definition plan does not cover the complete area's exact evidence.");
   if (work.receipts.length > work.batches.length * 2) throw new Error("Definition receipt count exceeds its saved plan.");
+  if (work.draftPolicy && work.draftPolicy.fromStage > work.receipts.length) throw new Error("Definition draft policy begins after its saved receipt boundary.");
 }
 
 const stageInstructions = `ASSESSMENT-ONLY EXACT BATCH REVIEW. This request contains one batch, NOT the entire area. All batches will be read and all final findings checked against every batch before publication. Cross-batch links are navigation, not evidence until read. Preserve human decisions exactly; proposals, generated drafts, code/research, deferral and delegation do not establish human preferences. No tools, retrieval, questions, requirement edits, organization or global interpretation changes. Unknown intended behavior is unknown, never zero implementation progress. Missing text in THIS batch does not prove missing product decisions. Return definitionBlocked with a specific reason if an indispensable relationship cannot be assessed safely across batches. Never assume a draft substitutes for exact supporting evidence. Never claim exhaustive cross-record reasoning or readiness.`;
 
 export function definitionStageContext(project: Project, work: DefinitionWork, draft?: Analysis): ContextPack {
   const phase = definitionPhase(work), index = work.receipts.length % work.batches.length;
+  const wireDraft = boundedWireDraft(work);
   const ids = work.batches[index]!, included = new Set(ids);
   const byID = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
   const areas = definitionInputs(project, work.epicID).areas;
@@ -90,14 +102,19 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
     sources: project.sources.filter((r) => included.has(r.id)).sort(byID), requirements: project.requirements.filter((r) => included.has(r.id)).sort(byID),
     questions: project.questions.filter((r) => included.has(r.id)).sort(byID), research: project.research.filter((r) => included.has(r.id)).sort(byID),
     definitionStage: { policy: work.policy, phase, batch: index + 1, batches: work.batches.length,
-      draft: draft ?? null, draftCharacterLimit: definitionDraftLimit,
+      // Only the assessment affects subsequent findings. Ignored analysis wrapper
+      // fields remain in the receipt, not duplicated in every future request.
+      draft: draft ? wireDraft ? { assessments: draft.assessments } : draft : null,
+      ...(wireDraft ? { draftPolicy: "bounded-wire-v1", draftCharacterTarget: definitionDraftLimit } : { draftCharacterLimit: definitionDraftLimit }),
       instruction: stageInstructions + (phase === "collect"
-        ? " COLLECT: return ordinary analysis with exactly one nine-dimension assessment, accumulating the current batch's exact findings into the displayed draft. Keep all non-assessment arrays empty. Evidence citations may name this exact batch or previously cited draft evidence ONLY. Do not erase earlier supported constraints or findings just because their evidence is in another batch. Later batches may answer earlier uncertainties. All JSON, including explanations, must fit 12,000 characters. Explanations should be concise (at most 700 characters per dimension)."
+         ? " COLLECT: return ordinary analysis with exactly one nine-dimension assessment, accumulating the current batch's exact findings into the displayed draft. Keep all non-assessment arrays empty. Evidence citations may name this exact batch or previously cited draft evidence ONLY. Do not erase earlier supported constraints or findings just because their evidence is in another batch. Later batches may answer earlier uncertainties. " + (wireDraft
+           ? "Aim for 12,000 characters, but never drop findings or citations to meet that target. Keep summary and assessment explanation brief and dimension explanations concise (target 700 characters each). The app retains the complete valid response and measures the losslessly encoded next request against 96,000 characters."
+           : "All JSON, including explanations, must fit 12,000 characters. Explanations should be concise (at most 700 characters per dimension).")
         : " VERIFY ONLY: return {definitionVerdict:[]} when this exact batch supports or does not contradict the draft. Otherwise return only definitionVerdict checks that DOWNGRADE unsupported/contradicted findings, raise importance when warranted, and explain the exact issue using THIS batch's evidence IDs. Do not downgrade merely because another batch's cited evidence is not repeated here. No new defined/not-applicable statuses or positive upgrades. Unresolvable indispensable missing relationships must block rather than be guessed.") },
   };
   let wire: unknown = data;
   // Only lossless encodings; raw fields/human text remain reconstructible.
-  for (const encode of [(value: unknown) => shareRepeatedText(value, true, true).data,
+  for (const encode of [(value: unknown) => shareRepeatedText(value, true, true, wireDraft ? ["explanation"] : []).data,
     (value: unknown) => shareRepeatedIdentifiers(value, true).data, (value: unknown) => shareRecordStructure(value, [], true).data]) {
     const candidate = encode(wire);
     if (JSON.stringify(candidate).length < JSON.stringify(wire).length) wire = candidate;
@@ -117,7 +134,7 @@ function advanceDraft(project: Project, work: DefinitionWork, draft: Analysis | 
   if (definitionPhase(work) === "collect") {
     const next = parseDiscoveryAnalysis(raw).result;
     validateDefinitionResult(project, work.epicID, [...ids, ...draft?.assessments?.flatMap((a) => a.checks.flatMap((c) => c.evidenceIDs)) ?? []], next);
-    if (JSON.stringify(next).length > definitionDraftLimit) throw new Error("Staged definition draft exceeds 12,000 characters; nothing was truncated or published.");
+    if (!boundedWireDraft(work) && JSON.stringify(next).length > definitionDraftLimit) throw new Error("Staged definition draft exceeds 12,000 characters; nothing was truncated or published.");
     return next;
   }
   const verdict = definitionVerdictSchema.parse(raw).definitionVerdict;
@@ -131,7 +148,7 @@ function advanceDraft(project: Project, work: DefinitionWork, draft: Analysis | 
     Object.assign(check, patch, { evidenceIDs: [...new Set([...check.evidenceIDs, ...patch.evidenceIDs])] });
   }
   const validated = analysisSchema.parse(next);
-  if (JSON.stringify(validated).length > definitionDraftLimit) throw new Error("Staged definition draft exceeds its reserve; no evidence or findings were truncated.");
+  if (!boundedWireDraft(work) && JSON.stringify(validated).length > definitionDraftLimit) throw new Error("Staged definition draft exceeds its reserve; no evidence or findings were truncated.");
   return validated;
 }
 
