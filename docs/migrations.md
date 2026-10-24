@@ -19,6 +19,69 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Dynamic provider and model selection (2026-10-23)
+
+Source/target: the existing `{ providerID, modelID, connectionID? }` model-selection
+JSON in project snapshots, jobs and portable state. Provider validation expands
+from the OpenAI/Copilot enum to a nonempty string for OpenCode-backed providers;
+the representation, SQLite schema version and concurrency counters are unchanged.
+No data transformation, new storage or automatic revision is necessary. Direct
+connections still require OpenAI and an account-listed model at dispatch/save.
+
+Existing IDs, connection references, history and assessment/checkpoint identities
+are preserved. Catalog membership is not a freshness rule and discovery never
+rewrites saved work or repeats model calls. An explicit model/provider change uses
+the existing revisioned write and existing model-bound freshness rules. An absent
+model/provider remains selected and fails explicitly at runtime rather than falling
+back. Older app versions that only accept the enum cannot open newly selected
+third-party provider snapshots; downgrade after such a selection is not supported.
+
+The discovery cache is memory-only and safe to discard/retry after interruption;
+failure preserves the last successful metadata with a dated stale warning. A new
+upgrade test reopens old OpenAI/direct selections unchanged, then saves a custom
+provider and reopens it twice with exact histories preserved. No assessment
+migration or reassessment is required solely by this UI/catalog change.
+
+## Compact definition responses and deadline admission (2026-10-23)
+
+Source: definition `format: 1`, `exact-batches-v1` ledgers with legacy analysis
+responses. Target: the same ledger identity with optional
+`responsePolicy: { format: 1, fromStage }` and assessment-only/changed-dimension
+response receipts. Before the boundary, request bytes and legacy parsing are
+unchanged. From the boundary, the first collection response is
+`{ definitionAssessment: ... }`; subsequent responses are
+`{ definitionUpdate: { checks, confidence?, explanation? } }`. Omitted fields/checks
+retain the saved draft exactly. Full assessment validation still applies; every
+batch still receives verification before publication. Valid legacy analysis
+responses remain accepted and retained without rewriting their content.
+
+No SQLite/project schema bump, fingerprint change, eager rewrite, reset or repeat
+assessment is required. Explicit continuation first validates/replays original
+receipts, then enables the new response contract only if the unfinished stage has
+zero spent attempts. Attempted stages retain their contract and exhausted stages
+remain blocked. Original partitions, plan/input keys, completed hashes, responses,
+job/model provenance, completed assessments and historical jobs are preserved.
+The existing checkpoint transaction and lease/revision guards persist the optional
+boundary and each exact response in the new job. Failed/interrupted writes retain
+the last committed checkpoint; retry replays it without repeating saved calls.
+SQLite and portable continuations both carry the optional boundary and responses.
+Unsupported future policy versions fail closed; old applications must not resume
+new-format ledgers. Original jobs remain the historical backup.
+
+The interruption allowlist adds `refresh-time-reserve`: a pause *before* dispatch
+when the estimated request duration exceeds the remaining shared refresh window.
+It does not claim the deadline expired or spend an attempt. Existing causes remain
+unchanged; missing historical causes remain unknown. Estimates are ephemeral per
+explicit refresh, not persisted evidence, freshness, request grants or retries.
+Partial progress still cannot publish coverage. Startup does not trigger inference.
+
+Upgrade tests cover legacy receipt bytes, safe-boundary adoption, spent-attempt
+preservation, repeated SQLite reopen, compact portable replay, future-format
+rejection, malformed/unauthorized updates, all-batch verification and no-call
+deadline pauses followed by explicit resume. Verification results are recorded in
+the definition-coverage document; no live-model or personal-database qualification
+is implied.
+
 ## Plain-language presentation (2026-10-23)
 
 Presentation-only compatibility decision: simpler browser/terminal/desktop wording

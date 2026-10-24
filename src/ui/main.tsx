@@ -124,7 +124,9 @@ function App() {
   const [previewError, setPreviewError] = useState("");
   const editedIdentity = useRef({ name: false, description: false });
   const [model, setModel] = useState("gpt-6.1-sol");
+  const [providerID, setProviderID] = useState("openai");
   const [connectionID, setConnectionID] = useState("");
+  const [selectionProjectID, setSelectionProjectID] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [newEpic, setNewEpic] = useState(false);
   const [editingEpic, setEditingEpic] = useState<string | null>(null);
@@ -184,8 +186,8 @@ function App() {
   useActivity(loading, "Loading workspace…");
   useActivity(sending.length > 0, `Saving ${sending.length} ${sending.length === 1 ? "response" : "responses"}…`);
   useActivity(previewBusy, "Inspecting local folder…");
-  const connectionChanged = !!project && (model !== project.model.modelID || connectionID !== (project.model.connectionID ?? ""));
-  const activeConnection = project ? `${project.model.connectionID ? "Direct ChatGPT plan" : "OpenCode"} · ${project.model.modelID}` : "";
+  const connectionChanged = !!project && (providerID !== project.model.providerID || model !== project.model.modelID || connectionID !== (project.model.connectionID ?? ""));
+  const activeConnection = project ? `${project.model.connectionID ? "Direct ChatGPT plan" : `OpenCode · ${project.model.providerID}`} · ${project.model.modelID}` : "";
   const lastScan = data?.jobs.filter((job) => job.kind === "scan").at(-1);
   const needsInitialization = !!project && !project.scans.length && (!!project.origin || !!lastScan);
   const busyReason = pending ? "A workspace request is being saved. Wait for it to finish." : data?.implementationActive ? executionBlockReason : data?.active ? discoveryBlockReason : "";
@@ -270,7 +272,7 @@ function App() {
     timer = setTimeout(() => void poll(), 2000);
     return () => { controller.abort(); clearTimeout(timer); };
   }, [id]);
-  useEffect(() => { if (project) { setModel(project.model.modelID); setConnectionID(project.model.connectionID ?? ""); } }, [project?.id, project?.model.modelID, project?.model.connectionID]);
+  useEffect(() => { if (project) { setProviderID(project.model.providerID); setModel(project.model.modelID); setConnectionID(project.model.connectionID ?? ""); setSelectionProjectID(project.id); } }, [project?.id, project?.model.providerID, project?.model.modelID, project?.model.connectionID]);
   useEffect(() => {
     if (project && epicID !== "all" && !project.epics.some((item) => item.id === epicID && !item.archived)) setEpicID("all");
   }, [project?.revision, epicID]);
@@ -328,7 +330,7 @@ function App() {
     event.preventDefault();
     if (initializeFolder && (!workspacePath.trim() || !folderPreview || previewBusy)) { setError("Inspect an existing local folder before creating the project."); return; }
     await act(async () => {
-      const created = await api<Project & { workspaceError?: string }>("projects", { name, idea: idea.trim() ? idea : "Reconstruct the existing project from its connected source folder; review inferred definitions before discovering missing requirements.", entryMode: initializeFolder ? "existing" : "idea", ...(initializeFolder ? { previewFingerprint: folderPreview!.fingerprint } : {}), model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) }, ...(workspacePath.trim() ? { workspace: { path: workspacePath, create: initializeFolder ? false : createDirectory } } : {}) });
+      const created = await api<Project & { workspaceError?: string }>("projects", { name, idea: idea.trim() ? idea : "Reconstruct the existing project from its connected source folder; review inferred definitions before discovering missing requirements.", entryMode: initializeFolder ? "existing" : "idea", ...(initializeFolder ? { previewFingerprint: folderPreview!.fingerprint } : {}), model: { providerID, modelID: model, ...(connectionID ? { connectionID } : {}) }, ...(workspacePath.trim() ? { workspace: { path: workspacePath, create: initializeFolder ? false : createDirectory } } : {}) });
       setID(created.id); selected.current = created.id; setCreating(false); setName(""); setIdea("");
       setWorkspacePath(""); setCreateDirectory(false);
       editedIdentity.current = { name: false, description: false };
@@ -342,7 +344,7 @@ function App() {
   async function openProject(event: FormEvent) {
     event.preventDefault();
     await act(async () => {
-      const opened = await api<Project>("projects/open", { path: workspacePath, model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } });
+      const opened = await api<Project>("projects/open", { path: workspacePath, model: { providerID, modelID: model, ...(connectionID ? { connectionID } : {}) } });
       setID(opened.id); selected.current = opened.id; setCreating(false); setOpening(false); setWorkspacePath(""); setTab("requirements");
       await list();
     }, "Opening saved Reqwizit project…");
@@ -463,9 +465,9 @@ function App() {
       {error && <div className="error"><DiagnosticNotice detail={error} next="Check the current screen before trying again. More information is available in Technical details." alert /><button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
       {showSettings && <section id="workspace-settings" className="settings-panel" aria-label="Settings">
         <AppearanceSettings />
-        <AIConnections request={api} disabled={pending} accountID={connectionID} modelID={model} onSelect={(account, selectedModel) => { setConnectionID(account); setModel(selectedModel); }}>
-          {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Discover missing decisions and question help."}</p><button title={busyReason || (!model ? "Choose a model first." : !connectionChanged ? "This connection and model are already saved." : undefined)} disabled={busy || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
-        </AIConnections>
+        {projectsLoaded && (!id || project?.id === id && selectionProjectID === id) ? <AIConnections request={api} disabled={pending} accountID={connectionID} providerID={providerID} modelID={model} onSelect={(account, selectedModel, provider) => { setConnectionID(account); setProviderID(provider); setModel(selectedModel); }}>
+          {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Discover missing decisions and question help."}</p><button title={busyReason || (!model ? "Choose a model first." : !connectionChanged ? "This connection and model are already saved." : undefined)} disabled={busy || !providerID || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID, modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
+        </AIConnections> : <ActivityFeedback label="Loading saved AI selection…" />}
         {project && !creating ? <><h2>Project settings</h2>
           {data?.workflow && <WorkflowControls workflow={data.workflow} disabled={busy || connectionChanged || needsInitialization} pending={pending} configure={configureWorkflow} settings />}
           {data?.workflow?.enabled ? <p>Saved input and definition checks are managed by the coordinated workflow allowance. Advanced-mode preferences are retained, not overwritten.</p> : <>

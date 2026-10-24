@@ -235,6 +235,9 @@ export class DiscoveryQueue {
     const progress: string[] = []; this.messages.set(id, progress); this.refinementRuns.delete(id);
     const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
     const timer = setTimeout(() => controller.abort(definitionAbortReason("refresh-time-limit")), 900_000);
+    // Initial estimates are deliberately conservative, not promised finish times.
+    // Completed requests refine them during this action only.
+    const definitionSchedule = { deadline: Date.now() + 900_000, collectMs: 90000, verifyMs: 20000 };
     const promise = Promise.resolve().then(async () => {
       let refreshed = 0, blocked = 0, reused = 0;
       for (const [areaIndex, area] of areas.entries()) {
@@ -246,7 +249,7 @@ export class DiscoveryQueue {
         const areaTitle = snapshot.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID;
         const reportArea = (message: string) => report(`Definition coverage · area ${areaIndex + 1} of ${areas.length} · ${areaTitle}\n${message}`);
         reportArea(`Assessing definition: ${areaTitle}. Complete current area only; no specification changes or gap discovery. ${reused} current areas reused without calls.`);
-        const job = await this.service.analyze(id, snapshot.revision, { definitionEpicID: area.epicID, signal: controller.signal, onProgress: reportArea });
+        const job = await this.service.analyze(id, snapshot.revision, { definitionEpicID: area.epicID, signal: controller.signal, onProgress: reportArea, definitionSchedule });
         if (job.status === "completed") refreshed++;
         else { blocked++; report(`Definition assessment unfinished: ${job.diagnostic ?? job.status}`); }
         if (["cancelled", "stale", "interrupted"].includes(job.status)) break;

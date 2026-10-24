@@ -14,6 +14,34 @@ import { randomUUID } from "node:crypto";
 import type { ActivityPage } from "../core/project-activity.js";
 import { snapshotHeader } from "./snapshot.js";
 
+test("OpenCode catalog is authenticated metadata only, refreshable, safe on failure, and closed with the app", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0, refreshed = false, closed = false, fail = false;
+  const project = store.create("Existing", "Retain original input", { providerID: "openai", modelID: "saved-old-model" });
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { assert.fail("Catalog must never run inference"); } }, catalog: {
+    async get(refresh) { calls++; refreshed = !!refresh; if (fail) throw new Error("private-provider-secret"); return { providers: [{ id: "anthropic", name: "Anthropic", models: [{ id: "fixture", name: "Fixture" }] }], fetchedAt: "2026-10-23T00:00:00.000Z", stale: false }; },
+    async close() { closed = true; },
+  } });
+  const headers = { "X-Reqwizit-Token": app.token, Origin: app.origin, "Content-Type": "application/json" };
+  try {
+    assert.equal((await fetch(`${app.origin}/api/connections/opencode`)).status, 403);
+    assert.equal((await fetch(`${app.origin}/api/connections/opencode`, { headers: { ...headers, Origin: "https://external.invalid" } })).status, 403);
+    assert.equal(calls, 0);
+    const result = await fetch(`${app.origin}/api/connections/opencode?refresh=true`, { headers });
+    assert.equal(result.status, 200); assert.equal(refreshed, true);
+    assert.equal((await result.json()).providers[0].id, "anthropic");
+    assert.deepEqual(store.get(project.id), project, "Discovery does not rewrite an older saved selection");
+    const model = { providerID: "anthropic", modelID: "fixture" };
+    const saved = await fetch(`${app.origin}/api/projects/${project.id}/model`, { method: "POST", headers, body: JSON.stringify({ revision: project.revision, model }) });
+    assert.equal(saved.status, 200); assert.deepEqual(store.get(project.id).model, model);
+    assert.equal((await fetch(`${app.origin}/api/projects/${project.id}/model`, { method: "POST", headers, body: JSON.stringify({ revision: project.revision, model: project.model }) })).status, 409);
+    fail = true;
+    const failed = await fetch(`${app.origin}/api/connections/opencode`, { headers });
+    assert.equal(failed.status, 400); assert.equal((await failed.text()).includes("private-provider-secret"), false);
+    assert.deepEqual(store.get(project.id).model, model);
+  } finally { await app.close(); store.close(); }
+  assert.equal(closed, true);
+});
+
 test("coordinated workflow requires explicit authenticated revision/CAS-bound permission and preserves legacy choices", async () => {
   const store = new ProjectStore(":memory:"); let calls = 0;
   let project = store.create("Workflow permission", "Retain original ideas", { providerID: "openai", modelID: "fixture" });

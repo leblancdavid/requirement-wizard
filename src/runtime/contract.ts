@@ -11,7 +11,6 @@ export function selectModel(
   providerID: string,
   modelID: string,
 ) {
-  if (!["github-copilot", "openai"].includes(providerID)) throw new Error("Select github-copilot or openai.");
   if (!catalog.connected.includes(providerID)) {
     throw new Error(`Provider ${providerID} is not connected. Run opencode auth login first.`);
   }

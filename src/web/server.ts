@@ -15,6 +15,7 @@ import { DiscoveryService, type DiscoveryAdapter } from "../service/discovery.js
 import { DiscoveryQueue } from "../service/queue.js";
 import { ProjectWorkflow } from "../service/workflow.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
+import { OpenCodeCatalog, type CatalogSource } from "../runtime/catalog.js";
 import { modelSelection, answerSchema, questionHelpRequestSchema, StaleRevisionError, type Job } from "../core/model.js";
 import { organizationSchema } from "../core/epics.js";
 import { coverage } from "../core/coverage.js";
@@ -36,7 +37,7 @@ import { reviewAttemptBatchLimit } from "../core/review-attempts.js";
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
 
-export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; executionAdapter?: ExecutionAdapter; connections?: Connections; port?: number; staticDir?: string }) {
+export async function startApp(options: { store: ProjectStore; adapter: DiscoveryAdapter; executionAdapter?: ExecutionAdapter; connections?: Connections; catalog?: CatalogSource; port?: number; staticDir?: string }) {
   const token = randomBytes(32).toString("hex");
   const service = new DiscoveryService(options.store, options.adapter);
   const queue = new DiscoveryQueue(service);
@@ -102,6 +103,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (req.method !== "GET" && req.headers.origin !== origin) { json(res, 403, { error: "Same-origin request required." }); return; }
       if (url.pathname.startsWith("/api/connections")) {
         try {
+          if (req.method === "GET" && url.pathname === "/api/connections/opencode") {
+            if (!options.catalog) throw new ProviderError("OpenCode model discovery is unavailable in this setup.");
+            json(res, 200, await options.catalog.get(url.searchParams.get("refresh") === "true")); return;
+          }
           if (req.method === "GET" && url.pathname === "/api/connections") {
             json(res, 200, { available: !!options.connections, accounts: options.connections ? await options.connections.accounts() : [] }); return;
           }
@@ -138,7 +143,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
           }
           json(res, 404, { error: "Connection route not found." }); return;
         } catch (error) {
-          json(res, 400, { error: error instanceof z.ZodError ? "Invalid connection request fields." : connectionError(error) }); return;
+          json(res, 400, { error: url.pathname === "/api/connections/opencode" ? "Could not load OpenCode providers and models. Check that OpenCode is installed and your provider is connected, then refresh models." : error instanceof z.ZodError ? "Invalid connection request fields." : connectionError(error) }); return;
         }
       }
       if (url.pathname === "/api/directories" && req.method === "POST") {
@@ -413,12 +418,12 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
     closePromise = (async () => {
       const cleanup = await Promise.allSettled([
         ...[...helpWork.values()].map((work) => work.promise),
-         implementation.close(), workflow.close(), queue.close(), options.connections?.close(),
+         implementation.close(), workflow.close(), queue.close(), options.connections?.close(), options.catalog?.close(),
       ]);
       server.closeAllConnections();
       await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
       // Help failures are already persisted by the service; teardown failures are actionable.
-      for (const result of cleanup.slice(-4)) if (result.status === "rejected") throw result.reason;
+      for (const result of cleanup.slice(-5)) if (result.status === "rejected") throw result.reason;
     })();
     return closePromise;
   } };
@@ -435,7 +440,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     store.recoverExpiredJobs();
     try {
       const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
-      const app = await startApp({ store, connections, adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), port });
+      const app = await startApp({ store, connections, catalog: new OpenCodeCatalog(join(directory, "runtime")), adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), port });
       console.log(`\nReqwizit is ready: ${app.origin}\nOpen this address in your browser. Existing CLI projects are available. Ctrl+C stops the app.\n`);
       let closing = false;
       const close = () => { if (closing) return; closing = true; void app.close().finally(() => store.close()); };

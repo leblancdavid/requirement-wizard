@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const definitionInterruptionCauses = ["refresh-time-limit", "area-time-limit", "request-time-limit", "external-time-limit", "request-limit", "user-stop", "shutdown", "external-cancel"] as const;
+export const definitionInterruptionCauses = ["refresh-time-limit", "refresh-time-reserve", "area-time-limit", "request-time-limit", "external-time-limit", "request-limit", "user-stop", "shutdown", "external-cancel"] as const;
 export const definitionInterruptionSchema = z.object({ format: z.literal(1), cause: z.enum(definitionInterruptionCauses),
   limitMs: z.number().int().positive().max(900000).optional() }).strict();
 export type DefinitionInterruption = z.infer<typeof definitionInterruptionSchema>;
@@ -22,6 +22,7 @@ export function definitionAbortCause(reason: unknown): DefinitionInterruption["c
 export function definitionInterruptionMessage(value: DefinitionInterruption) {
   const lead = {
     "refresh-time-limit": "Paused—progress saved: the shared fifteen-minute refresh window across all areas ended during this area. This area's own run may be much shorter than fifteen minutes.",
+    "refresh-time-reserve": "Paused—progress saved: little time remains in the shared fifteen-minute refresh window. The next request was not started because it is estimated to need more time than remains. No attempt was spent on that request; estimates are not guarantees.",
     "area-time-limit": "Paused—progress saved: this area's assessment action reached its time budget.",
     "request-time-limit": "Paused—progress saved: the unfinished model request reached its timeout. This is not an explicit Stop.",
     "external-time-limit": "Paused—progress saved: an external caller's timeout interrupted the assessment. The caller did not identify which time budget expired.",

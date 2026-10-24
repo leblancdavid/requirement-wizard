@@ -15,7 +15,7 @@ import { definitionContext } from "../core/definition-assessment.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { readinessQuestionContext, readinessQuestionTaskSchema, type ReadinessQuestionTask } from "../core/readiness-questions.js";
 import { definitionAbortCause } from "../core/definition-interruption.js";
-import { runDefinitionStages, DefinitionEvidenceBlocked } from "./definition-stages.js";
+import { runDefinitionStages, DefinitionEvidenceBlocked, definitionRequestReserve, type DefinitionSchedule } from "./definition-stages.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages } from "../core/epic-stages.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
@@ -224,7 +224,7 @@ export class DiscoveryService {
 
   async analyze(projectID: string, expectedRevision: number, options: {
     signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
-    definitionLimits?: { requests: number; durationMs: number };
+    definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule;
     readinessQuestions?: ReadinessQuestionTask;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
@@ -238,6 +238,11 @@ export class DiscoveryService {
         throw new Error("Readiness clarification requires a separate questions-only task.");
     }
     if (options.definitionEpicID !== undefined) z.string().min(1).max(200).parse(options.definitionEpicID);
+    if (options.definitionSchedule) {
+      if (!options.definitionEpicID) throw new Error("Definition scheduling requires an assessment-only task.");
+      z.object({ deadline: z.number().finite().positive(), collectMs: z.number().finite().nonnegative(),
+        verifyMs: z.number().finite().nonnegative() }).strict().parse(options.definitionSchedule);
+    }
     if (options.definitionLimits) {
       if (!options.definitionEpicID) throw new Error("Definition limits require an assessment-only task.");
       z.object({ requests: z.number().int().min(1).max(32), durationMs: z.number().int().min(1).max(900000) }).strict().parse(options.definitionLimits);
@@ -305,7 +310,7 @@ export class DiscoveryService {
         if (this.store.definitionHistory(project.id, options.definitionEpicID, definitionInputKey(project, options.definitionEpicID)).length) {
           clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule }));
         }
         try { definition = definitionContext(project, options.definitionEpicID); }
         catch (error) {
@@ -314,7 +319,11 @@ export class DiscoveryService {
           options.onProgress?.("The complete area exceeds one request. Preparing exact evidence batches; no assessment has been published and no evidence will be truncated.");
           clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule }));
+        }
+        if (options.definitionSchedule && options.definitionSchedule.deadline - Date.now() < definitionRequestReserve(options.definitionSchedule, "collect")) {
+          this.store.attachContext(job.id, definition!.manifest);
+          return completeMeasurement(this.store.interruptDefinition(job.id, { format: 1, cause: "refresh-time-reserve", limitMs: 900000 }));
         }
       }
       const question = options.helpRequest ? project.questions.find((q) => q.id === options.helpRequest!.questionID)! : undefined;
@@ -425,9 +434,11 @@ export class DiscoveryService {
         const heartbeat = options.definitionEpicID ? setInterval(() => report(`Waiting for model response · ${Math.floor((Date.now() - requestStarted) / 1000)} seconds this request. Reviewing all nine definition dimensions; this cannot generate questions or change the specification.`), 10000) : undefined;
         if (options.definitionEpicID) report(`Reviewing ${context.manifest.includedIDs.length} exact evidence records · ${context.manifest.characters.toLocaleString("en-US")} / ${context.manifest.budget.toLocaleString("en-US")} characters. One complete-area request; checking all nine definition dimensions.`);
         try {
-          return await (measurement
+          const response = await (measurement
             ? measurement.request(() => inferenceAdapter.analyze(project, { ...adapterOptions, context }), context, controller.signal)
             : inferenceAdapter.analyze(project, { ...adapterOptions, context }));
+          if (options.definitionEpicID && options.definitionSchedule) options.definitionSchedule.collectMs = Date.now() - requestStarted;
+          return response;
         } finally { if (heartbeat) clearInterval(heartbeat); }
       };
       controller.signal.throwIfAborted();

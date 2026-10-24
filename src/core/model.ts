@@ -16,7 +16,7 @@ export const reviewUpdatesSchema = z.object({ format: z.literal(1), items: z.arr
 }).strict()) }).strict();
 export type ReviewUpdate = z.infer<typeof reviewUpdatesSchema>["items"][number];
 export const modelSelection = z.object({
-  providerID: z.enum(["openai", "github-copilot"]), modelID: z.string().min(1),
+  providerID: z.string().min(1), modelID: z.string().min(1),
   connectionID: z.string().min(1).max(500).optional(),
 }).strict();
 export type ModelSelection = z.infer<typeof modelSelection>;

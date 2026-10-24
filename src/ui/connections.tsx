@@ -3,15 +3,18 @@ import type { Account, LoginStatus, Model } from "../providers/connections.js";
 import { ActivityBar, ActivityFeedback, Spinner, useActivity } from "./activity.js";
 import { ActionScope } from "./action-button.js";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
+import { OpenCodeModels } from "./opencode-models.js";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
-export function AIConnections({ request, accountID, modelID, onSelect, children, disabled = false }: {
-  request: Request; accountID: string; modelID: string; onSelect: (accountID: string, modelID: string) => void; children?: React.ReactNode; disabled?: boolean;
+export function AIConnections({ request, accountID, providerID, modelID, onSelect: select, children, disabled = false }: {
+  request: Request; accountID: string; providerID: string; modelID: string; onSelect: (accountID: string, modelID: string, providerID: string) => void; children?: React.ReactNode; disabled?: boolean;
 }) {
+  const onSelect = (account: string, model: string) => select(account, model, "openai");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [available, setAvailable] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [models, setModels] = useState<Model[]>([]);
+  const [modelQuery, setModelQuery] = useState("");
   const [loadingModels, setLoadingModels] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -48,7 +51,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
     return () => { mounted.current = false; catalogSequence.current++; };
   }, []);
   useEffect(() => {
-    setMessage(""); setError("");
+    setMessage(""); setError(""); setModelQuery("");
     if (accountID) void catalog(accountID);
     else { catalogSequence.current++; setModels([]); setLoadingModels(false); }
   }, [accountID]);
@@ -104,7 +107,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
   }
   const account = accounts.find((item) => item.id === accountID);
   return <ActionScope reason={testing ? "Wait for the connection test to finish." : activeLogin ? "Complete or cancel the current ChatGPT sign-in first." : loadingModels ? "Wait for the model catalog to finish loading." : !available ? "Direct ChatGPT sign-in is unavailable. Check the connection service status." : busy ? "Wait for the current connection request to finish." : "Select a connected account and an available model first."}><section className="ai-connections" aria-label="AI connections">
-    <div className="connection-heading"><div><h2>AI connections</h2><p>Connect your ChatGPT plan and choose which account and model this project uses.</p></div><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
+    <div className="connection-heading"><div><h2>AI connections</h2><p>Choose a connection, provider and model. Use your ChatGPT plan directly or a provider connected through OpenCode.</p></div><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
     {error && <DiagnosticNotice detail={error} summary="Your AI connection needs attention." next="Check your account and selected AI, or reconnect. If this continues, see Technical details." alert />}
     {!activeLogin && (working || testing || loadingModels) && <ActivityFeedback label={activityLabel} />}
     {message && <p role="status" className="connection-notice">{message}</p>}
@@ -119,11 +122,13 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
       {accounts.map((item) => <option key={item.id} value={item.id}>ChatGPT · {item.label}</option>)}
     </select></label>
     {accountID ? <>
+      <label>Search models<input type="search" aria-label="Search models" placeholder="Find a model by name" value={modelQuery} disabled={loadingModels || busy || testing || activeLogin} onChange={(event) => setModelQuery(event.target.value)} /></label>
       <label>ChatGPT model<select aria-label="ChatGPT model" value={modelID} disabled={loadingModels || busy || testing || activeLogin} onChange={(event) => onSelect(accountID, event.target.value)}>
         <option value="">{loadingModels ? "Loading models…" : "Choose a model"}</option>
         {modelID && !models.some((item) => item.id === modelID) && <option value={modelID}>{modelID} · not in current catalog</option>}
-        {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+        {models.filter((item) => item.id === modelID || `${item.name} ${item.id}`.toLowerCase().includes(modelQuery.trim().toLowerCase())).map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
       </select></label>
+      {modelQuery && <small>The list shows matching models and your current selection.</small>}
       <p className="plan-label">Uses your ChatGPT plan. Web research is not available with this connection yet.</p>
       <div className="button-row">
         <button className="secondary" disabled={busy || testing || activeLogin || loadingModels || !account} onClick={() => void catalog(accountID)}>{loadingModels && <Spinner />}Refresh models</button>
@@ -131,7 +136,7 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
         {testing && <button className="secondary" onClick={() => { void request("connections/cancel-test", {}).catch((error: Error) => setError(error.message)); }}>Stop test</button>}
         {account && <><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => signIn(accountID)}>Reconnect</button><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => void act(async () => { await request("connections/disconnect", { accountID }); await reload(); setModels([]); setMessage("Account disconnected. Projects retain their selection until you change it."); })}>Disconnect</button></>}
       </div><small>Testing asks your selected AI for a short response and uses some of your plan’s usage. Looking through the AI choices does not use that allowance.</small>
-    </> : <><label>OpenCode model ID<input disabled={busy} value={modelID} onChange={(event) => onSelect("", event.target.value)} /></label><p>Uses the existing OpenCode connection. Direct ChatGPT sign-in above does not change OpenCode credentials.</p></>}
+    </> : <OpenCodeModels request={request} providerID={providerID} modelID={modelID} disabled={busy || testing || activeLogin} onSelect={(provider, model) => select("", model, provider)} />}
     {children}
   </section></ActionScope>;
 }

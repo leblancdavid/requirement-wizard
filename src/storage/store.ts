@@ -1616,7 +1616,7 @@ export class ProjectStore {
       if (this.get(job.projectID).revision !== job.expectedRevision) {
         job.status = "stale"; job.diagnostic = "Project changed while assessment was running; saved stages were not published.";
       } else {
-        const paused = ["refresh-time-limit", "area-time-limit", "request-time-limit", "external-time-limit", "request-limit"].includes(interruption.cause);
+        const paused = ["refresh-time-limit", "refresh-time-reserve", "area-time-limit", "request-time-limit", "external-time-limit", "request-limit"].includes(interruption.cause);
         job.status = paused ? "interrupted" : "cancelled";
         if (job.definitionWork && paused) job.definitionWork.paused = interruption.cause === "request-limit" ? "request-limit" : "time-limit";
         job.definitionInterruption = interruption;

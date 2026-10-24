@@ -20,6 +20,53 @@ No OpenCode credentials are read, imported, or reused.
 
 ## Connect in the app
 
+### Provider and model discovery (October 23, 2026)
+
+Settings now offers native dropdowns for the AI connection, OpenCode provider and
+model, or the direct ChatGPT account's model. **Search models** filters either
+model dropdown by name/ID while retaining the current selection. OpenCode choices come from connected
+providers in its runtime catalog, not a hardcoded OpenAI/Copilot list. Direct
+ChatGPT continues to use its separate account-specific catalog. Luna and other new
+models appear when the corresponding connection exposes their exact IDs; catalog
+presence does not establish access, speed, quality or task/tool compatibility.
+
+The browser and desktop wire an owned metadata-only OpenCode catalog service. It
+starts a short-lived runtime only when OpenCode choices are requested, reads
+`provider.list`, and closes it without creating a session or making an inference
+request. Only provider/model IDs and display names reach the browser, never provider
+keys, headers, environment fields or options. No OpenCode credentials are imported
+into direct connections. Settings waits for the saved selection to load before
+mounting a picker, so opening a direct project's Settings does not request the
+OpenCode catalog. Other providers remain OpenCode-backed: this does not add
+direct Anthropic/Google authentication or inference adapters, or qualify Copilot.
+
+OpenCode metadata is cached in memory for five minutes, shared across simultaneous
+reads, refreshed every five minutes while its picker is open, and refreshable with
+**Refresh models**. A failed refresh keeps the last successful list with its original
+timestamp and a stale warning. A first-load failure offers retry without changing
+the selection. The cache does not survive app restart. Direct ChatGPT's existing
+account-change/manual refresh behavior is unchanged.
+
+Changing the provider clears the draft model so the user chooses explicitly.
+Catalog refresh never changes a saved or draft selection; unlisted saved choices
+remain visible. Existing projects change route/provider/model only through **Save
+model**, with the existing revision check. New/open project actions use the selected
+provider rather than forcing OpenAI. See [upgrade compatibility](migrations.md#dynamic-provider-and-model-selection-2026-10-23).
+
+Deterministic catalog/API/upgrade tests cover projection, cache/refresh/failure,
+shutdown, revision checks and repeated reopen. Browser fixtures exercise Sol/Luna
+selection, provider changes and saving a non-OpenAI selection without model calls.
+Live inference across newly selectable providers is not qualified by these checks.
+
+Verification on Windows/Node 22.23.3: `npm run check`, `npm test` (159 pretests +
+652 tests), UI build, dedicated `npm run test:browser:models`, portable browser
+checks and specification browser checks passed. The broader `npm run test:browser`
+passed the connection/provider selection portion, then failed later at the existing
+automatic-answer fixture's missing **Approve resolution** button; the complete
+suite is not recorded as passing. A metadata-only live owned-runtime catalog check
+returned eight connected providers, including `openai/gpt-6-luna`. No inference,
+Copilot probe, new sign-in or billing/access verification was performed.
+
 Run `npm run app`, open the printed address, and choose **Settings → AI connections**.
 Settings is available before creating a project as well as inside a project.
 

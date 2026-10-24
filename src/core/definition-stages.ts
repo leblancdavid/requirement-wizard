@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { analysisSchema, parseDiscoveryAnalysis, type Analysis, type Job, type Project } from "./model.js";
-import { checkSchema } from "./epics.js";
+import { checkSchema, assessmentProposal } from "./epics.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
 import { definitionContext, validateDefinitionResult } from "./definition-assessment.js";
 import { definitionInputKey, definitionAreas } from "./definition-identity.js";
@@ -16,12 +16,18 @@ export const definitionVerdictSchema = z.object({ definitionVerdict: z.array(che
   status: z.enum(["unknown", "partial", "needs-review"]), explanation: z.string().trim().min(1).max(2000),
 })).max(9) }).strict();
 export const definitionBlockedSchema = z.object({ definitionBlocked: z.object({ reason: z.string().trim().min(1).max(1000) }).strict() }).strict();
+export const definitionAssessmentResponseSchema = z.object({ definitionAssessment: assessmentProposal.extend({ checks: z.array(checkSchema.strict()).length(9) }) }).strict();
+export const definitionUpdateSchema = z.object({ definitionUpdate: z.object({
+  checks: z.array(checkSchema.strict()).max(9), confidence: assessmentProposal.shape.confidence.optional(),
+  explanation: assessmentProposal.shape.explanation.optional(),
+}).strict() }).strict();
 export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-batches-v1"),
   epicID: z.string().min(1), inputKey: z.string().regex(/^[a-f0-9]{64}$/), planKey: z.string().regex(/^[a-f0-9]{64}$/),
   batches: z.array(z.array(z.string().min(1)).max(10000)).min(1).max(maxBatches),
   originJobID: z.string().optional(), attempts: z.number().int().min(0).max(3),
   // A stage boundary preserves byte-identical contexts for all older receipts.
   draftPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxBatches * 2) }).strict().optional(),
+  responsePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1) }).strict().optional(),
   // Append-only continuation boundaries. Original batches and earlier request
   // hashes remain unchanged; each event bisects only the unfinished exact step.
   continuation: z.object({ format: z.literal(1), splits: z.array(z.object({
@@ -29,7 +35,7 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   }).strict()).max(maxStages - 2) }).strict().optional(),
   receipts: z.array(z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
     jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
-    response: z.union([analysisSchema, definitionVerdictSchema]),
+    response: z.union([analysisSchema, definitionVerdictSchema, definitionAssessmentResponseSchema, definitionUpdateSchema]),
   }).strict()).max(maxStages),
   paused: z.enum(["request-limit", "time-limit"]).optional(), blocked: z.string().min(1).max(1000).optional(),
 }).strict();
@@ -43,6 +49,14 @@ function exactIDs(project: Project, epicID: string) {
 const planKey = (work: Pick<DefinitionWork, "epicID" | "inputKey" | "batches">) => digest(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches]);
 export const definitionPhase = (work: DefinitionWork) => definitionSteps(work)[work.receipts.length]?.phase ?? "complete";
 const boundedWireDraft = (work: DefinitionWork) => !!work.draftPolicy && work.receipts.length >= work.draftPolicy.fromStage;
+const compactResponse = (work: DefinitionWork) => !!work.responsePolicy && work.receipts.length >= work.responsePolicy.fromStage;
+
+/** Do not change the contract of an already attempted unfinished stage. */
+export function upgradeDefinitionResponsePolicy(work: DefinitionWork) {
+  if (!work.responsePolicy && !work.attempts && definitionPhase(work) !== "complete") {
+    work.responsePolicy = { format: 1, fromStage: work.receipts.length };
+  }
+}
 
 /** Call only after replaying the original receipts. No partition, attempt,
  * original response or previously dispatched context is rewritten. */
@@ -57,7 +71,7 @@ export function planDefinitionStages(project: Project, epicID: string, onProgres
   const records = new Map([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => [r.id, r]));
   if (ids.some((id) => !records.has(id))) throw new DefinitionEvidenceBlocked("Required linked evidence is missing from saved records. Restore or correct that evidence before assessing this area; no model call was made.");
   const work: DefinitionWork = { format: 1, policy: "exact-batches-v1", epicID, inputKey: definitionInputKey(project, epicID), planKey: "0".repeat(64), batches: [], receipts: [], attempts: 0,
-    draftPolicy: { format: 1, fromStage: 0 } };
+    draftPolicy: { format: 1, fromStage: 0 }, responsePolicy: { format: 1, fromStage: 0 } };
   // Related supporting records follow each requirement/question when possible.
   const remaining = new Set(ids), ordered: string[] = [];
   const add = (id: string) => { if (remaining.delete(id)) ordered.push(id); };
@@ -109,6 +123,7 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
   if (work.continuation?.splits.some((split) => split.fromStage > work.receipts.length)) throw new Error("Definition subdivision begins after its saved receipt boundary.");
   if (work.receipts.length > definitionSteps(work).length) throw new Error("Definition receipt count exceeds its saved plan.");
   if (work.draftPolicy && work.draftPolicy.fromStage > work.receipts.length) throw new Error("Definition draft policy begins after its saved receipt boundary.");
+  if (work.responsePolicy && work.responsePolicy.fromStage > work.receipts.length) throw new Error("Definition response policy begins after its saved receipt boundary.");
 }
 
 const stageInstructions = `ASSESSMENT-ONLY EXACT BATCH REVIEW. This request contains one batch, NOT the entire area. All batches will be read and all final findings checked against every batch before publication. Cross-batch links are navigation, not evidence until read. Preserve human decisions exactly; proposals, generated drafts, code/research, deferral and delegation do not establish human preferences. No tools, retrieval, questions, requirement edits, organization or global interpretation changes. Unknown intended behavior is unknown, never zero implementation progress. Missing text in THIS batch does not prove missing product decisions. Return definitionBlocked with a specific reason if an indispensable relationship cannot be assessed safely across batches. Never assume a draft substitutes for exact supporting evidence. Never claim exhaustive cross-record reasoning or readiness.`;
@@ -126,11 +141,16 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
     sources: project.sources.filter((r) => included.has(r.id)).sort(byID), requirements: project.requirements.filter((r) => included.has(r.id)).sort(byID),
     questions: project.questions.filter((r) => included.has(r.id)).sort(byID), research: project.research.filter((r) => included.has(r.id)).sort(byID),
     definitionStage: { policy: work.policy, phase, batch: step.batch, batches: work.batches.length,
+      ...(compactResponse(work) && phase === "collect" ? { responseFormat: draft ? "definition-update-v1" : "definition-assessment-v1" } : {}),
       // Only the assessment affects subsequent findings. Ignored analysis wrapper
       // fields remain in the receipt, not duplicated in every future request.
       draft: draft ? wireDraft ? { assessments: draft.assessments } : draft : null,
       ...(wireDraft ? { draftPolicy: "bounded-wire-v1", draftCharacterTarget: definitionDraftLimit } : { draftCharacterLimit: definitionDraftLimit }),
-      instruction: stageInstructions + (phase === "collect"
+      instruction: stageInstructions + (phase === "collect" && compactResponse(work)
+         ? draft
+           ? " COLLECT: return {definitionUpdate:{checks:[]}} with ONLY dimensions changed by this batch. Omitted dimensions, confidence and explanation are retained exactly by the app. Each changed check replaces that dimension: retain all still-supported earlier findings and citations, adding this batch's findings; never erase constraints just because their evidence is in another batch. Cite only this batch or previously cited draft evidence. An unchanged batch needs an empty checks array. No analysis wrapper or repeated unchanged checks. Keep changed explanations concise (target 700 characters), but never drop findings or citations to meet a size target."
+           : " COLLECT: return {definitionAssessment:{epicID,confidence,explanation,checks}} with exactly one check for each of the nine dimensions. Cite only this exact batch. Later batches may resolve uncertainty; do not treat unread evidence as missing decisions. Keep explanations concise (target 700 characters per dimension), without dropping findings or citations. No analysis wrapper or unrelated fields."
+         : phase === "collect"
          ? " COLLECT: return ordinary analysis with exactly one nine-dimension assessment, accumulating the current batch's exact findings into the displayed draft. Keep all non-assessment arrays empty. Evidence citations may name this exact batch or previously cited draft evidence ONLY. Do not erase earlier supported constraints or findings just because their evidence is in another batch. Later batches may answer earlier uncertainties. " + (wireDraft
            ? "Aim for 12,000 characters, but never drop findings or citations to meet that target. Keep summary and assessment explanation brief and dimension explanations concise (target 700 characters each). The app retains the complete valid response and measures the losslessly encoded next request against 96,000 characters."
            : "All JSON, including explanations, must fit 12,000 characters. Explanations should be concise (at most 700 characters per dimension).")
@@ -158,7 +178,25 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
 function advanceDraft(project: Project, work: DefinitionWork, draft: Analysis | undefined, raw: unknown): Analysis {
   const ids = definitionSteps(work)[work.receipts.length]!.ids;
   if (definitionPhase(work) === "collect") {
-    const next = parseDiscoveryAnalysis(raw).result;
+    let next: Analysis;
+    if (compactResponse(work) && raw && typeof raw === "object" && "definitionAssessment" in raw) {
+      if (draft) throw new Error("A subsequent definition batch must update the saved draft, not replace it.");
+      next = analysisSchema.parse({ summary: "Definition evidence review", goals: [], actors: [], assumptions: [],
+        questions: [], requirements: [], retireQuestions: [], assessments: [definitionAssessmentResponseSchema.parse(raw).definitionAssessment] });
+    } else if (compactResponse(work) && raw && typeof raw === "object" && "definitionUpdate" in raw) {
+      if (!draft) throw new Error("Definition updates require an existing complete draft.");
+      const update = definitionUpdateSchema.parse(raw).definitionUpdate;
+      if (new Set(update.checks.map((c) => c.dimension)).size !== update.checks.length) throw new Error("Definition updates require distinct dimensions.");
+      next = structuredClone(draft);
+      const assessment = next.assessments![0]!;
+      for (const check of update.checks) {
+        const index = assessment.checks.findIndex((c) => c.dimension === check.dimension);
+        assessment.checks[index] = check;
+      }
+      if (update.confidence !== undefined) assessment.confidence = update.confidence;
+      if (update.explanation !== undefined) assessment.explanation = update.explanation;
+      next = analysisSchema.parse(next);
+    } else next = parseDiscoveryAnalysis(raw).result;
     validateDefinitionResult(project, work.epicID, [...ids, ...draft?.assessments?.flatMap((a) => a.checks.flatMap((c) => c.evidenceIDs)) ?? []], next);
     if (!boundedWireDraft(work) && JSON.stringify(next).length > definitionDraftLimit) throw new Error("Staged definition draft exceeds 12,000 characters; nothing was truncated or published.");
     return next;
@@ -180,7 +218,9 @@ function advanceDraft(project: Project, work: DefinitionWork, draft: Analysis | 
 
 export function acceptDefinitionStage(project: Project, work: DefinitionWork, draft: Analysis | undefined, raw: unknown, jobID: string) {
   const context = definitionStageContext(project, work, draft), next = advanceDraft(project, work, draft, raw);
-  const response = definitionPhase(work) === "collect" ? next : definitionVerdictSchema.parse(raw);
+  const response = definitionPhase(work) !== "collect" ? definitionVerdictSchema.parse(raw)
+    : compactResponse(work) && raw && typeof raw === "object" && "definitionAssessment" in raw ? definitionAssessmentResponseSchema.parse(raw)
+    : compactResponse(work) && raw && typeof raw === "object" && "definitionUpdate" in raw ? definitionUpdateSchema.parse(raw) : next;
   work.receipts.push({ contextKey: digest(context.data), attempts: work.attempts, response, jobID,
     model: { providerID: project.model.providerID, modelID: project.model.modelID } }); work.attempts = 0;
   return next;

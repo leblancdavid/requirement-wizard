@@ -35,6 +35,7 @@ export function statusLabel(status: string): string {
 export function definitionStopSummary(cause: DefinitionInterruption["cause"]): string {
   const labels: Record<DefinitionInterruption["cause"], string> = {
     "refresh-time-limit": "The review paused because the shared time limit across all areas was reached. This area may have had less time. Completed checks are saved.",
+    "refresh-time-reserve": "The review paused before starting another AI request because it is estimated to need more time than remains. Completed checks are saved; no new attempt was spent.",
     "area-time-limit": "The review paused because this area reached its time limit. Completed checks are saved.",
     "request-time-limit": "The AI took too long to respond, so the review paused. Completed checks are saved.",
     "external-time-limit": "The review paused because a time limit was reached. The app wasn’t told which limit. Completed checks are saved.",

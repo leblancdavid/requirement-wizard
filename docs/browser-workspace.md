@@ -177,6 +177,12 @@ The dialog shows assessment status separately from saved discovery package/block
 counts. Refreshes assess whole current areas without changing the specification,
 reuse current areas and use resumable exact batches when an area exceeds 96k. All
 batches are read, then every batch checks the accumulated findings before publication.
+New staged reading responses return only changed dimensions after the initial
+assessment; unchanged findings remain saved. Refresh can pause before starting a
+request estimated to outlast the remaining shared window, without spending a new
+attempt. This reduces repeated output/wasted in-flight work, not verification or
+evidence scope; live speed gains remain unqualified. Existing checkpoints upgrade
+only at safe unattempted boundaries. See [definition coverage](definition-coverage.md#smaller-collection-responses-and-deadline-scheduling).
 Single-record/stage-limit/missing-evidence blockers remain explicit; partial findings
 never make coverage current. Paused/cancelled assessment Resume stays on assessment,
 not gap discovery. A near-limit staged workflow

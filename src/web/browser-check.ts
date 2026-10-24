@@ -87,7 +87,13 @@ const connections: Connections = {
   async test() { if (blockTest) await new Promise<void>((_accept, reject) => { cancelTest = () => reject(new Error("Fixture test cancelled.")); }); },
   cancelTest() { cancelTest?.(); }, async disconnect() { connected = false; }, async close() { cancelTest?.(); },
 };
-const app = await startApp({ store, connections, port: 0, executionAdapter: { async perform(request) {
+let catalogReads = 0;
+const app = await startApp({ store, connections, port: 0, catalog: {
+  async get() { catalogReads++; return { providers: [
+    { id: "openai", name: "OpenAI", models: [{ id: "gpt-6.1-sol", name: "GPT 6.1 Sol" }, { id: "gpt-6-luna", name: "GPT 6 Luna" }] },
+    { id: "anthropic", name: "Anthropic", models: [{ id: "fixture-claude", name: "Fixture Claude" }] },
+  ], fetchedAt: new Date().toISOString(), stale: false }; }, async close() {},
+}, executionAdapter: { async perform(request) {
   assert.equal(request.planning, true, "Browser fixture only permits planning; no coding or model calls");
   const project = store.get(planningProjectID), index = project.requirements.findIndex((r) => r.id === request.requirementID);
   const other = project.requirements[index === 0 ? 1 : 0]!;
@@ -375,6 +381,18 @@ try {
   await appearance.getByRole("button", { name: "Reset appearance", exact: true }).click();
   const connectionPanel = page.getByRole("region", { name: "AI connections", exact: true });
   await expect(connectionPanel.getByRole("button", { name: "Continue with ChatGPT" })).toBeEnabled();
+  await expect(connectionPanel.getByLabel("AI provider", { exact: true })).toBeEnabled();
+  await connectionPanel.getByLabel("OpenCode model", { exact: true }).selectOption("gpt-6-luna");
+  await expect(connectionPanel.getByLabel("OpenCode model", { exact: true })).toHaveValue("gpt-6-luna");
+  await connectionPanel.getByLabel("AI provider", { exact: true }).selectOption("anthropic");
+  await expect(connectionPanel.getByLabel("OpenCode model", { exact: true })).toHaveValue("");
+  await connectionPanel.getByLabel("OpenCode model", { exact: true }).selectOption("fixture-claude");
+  await connectionPanel.getByLabel("AI provider", { exact: true }).selectOption("openai");
+  await connectionPanel.getByLabel("OpenCode model", { exact: true }).selectOption("gpt-6.1-sol");
+  const reads = catalogReads;
+  await connectionPanel.getByRole("button", { name: "Refresh models", exact: true }).click();
+  await expect.poll(() => catalogReads).toBe(reads + 1);
+  await expect(connectionPanel.getByLabel("OpenCode model", { exact: true })).toHaveValue("gpt-6.1-sol");
   const headerSizes = new Map<number, { header: unknown; title: unknown; slot: unknown }>();
   const headerGeometry = async () => {
     const box = (selector: string) => page.locator(selector).evaluate((element) => {
@@ -515,8 +533,12 @@ try {
   // Reproduce an existing legacy project after connecting a direct account:
   // the account/model draft must not be mistaken for the saved execution route.
   await page.getByLabel("AI connection", { exact: true }).selectOption("");
+  await expect(page.getByLabel("AI provider", { exact: true })).toBeEnabled();
+  await page.getByLabel("AI provider", { exact: true }).selectOption("anthropic");
+  await page.getByLabel("OpenCode model", { exact: true }).selectOption("fixture-claude");
   await page.getByRole("button", { name: "Save model", exact: true }).click();
   await expect(page.locator(".topbar")).toContainText("Active connection: OpenCode");
+  assert.equal(store.get(store.list()[0]!.id).model.providerID, "anthropic");
   await expect(page.getByRole("button", { name: "Save model", exact: true })).toBeDisabled();
   await page.getByLabel("AI connection", { exact: true }).selectOption("fixture-account");
   await page.getByLabel("ChatGPT model", { exact: true }).selectOption("fixture-alt");

@@ -5,6 +5,7 @@ import { ConnectionManager } from "../providers/connections.js";
 import { CredentialStore } from "../providers/credentials.js";
 import { ConnectedDiscovery } from "../providers/discovery.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
+import { OpenCodeCatalog } from "../runtime/catalog.js";
 import { startApp } from "../web/server.js";
 
 if (!parentPort) throw new Error("Desktop backend requires an owning worker.");
@@ -18,7 +19,7 @@ async function start() {
   store = new ProjectStore(join(directory, "projects.sqlite"));
   store.recoverExpiredJobs();
   const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
-  const options = { store, connections, adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), staticDir };
+  const options = { store, connections, catalog: new OpenCodeCatalog(join(directory, "runtime")), adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), staticDir };
   try { backend = await startApp({ ...options, port: 4318 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;

@@ -41,6 +41,43 @@ current/outdated/not assessed; partial batch work cannot make one current.
 
 ## Explainable progress and oversized-draft recovery (2026-10-23)
 
+### Smaller collection responses and deadline scheduling
+
+New staged assessments use an assessment-only first response, followed by
+`definitionUpdate` responses containing only changed dimensions. The engine retains
+omitted dimensions, confidence and explanation exactly; changed dimensions must
+retain still-supported earlier findings and citations. Complete drafts are validated
+after each update; unknown citations, duplicate dimensions and unauthorized fields
+are rejected. Every batch is still read and verified before publication. This reduces
+repeated output, not the evidence reviewed, verification requirements or request count.
+It is not delta-only evidence review and does not promise a live speedup.
+
+Explicit global/per-area refreshes now share in-memory request-duration estimates.
+Initial estimates are 90 seconds for reading and 20 seconds for verification;
+completed requests update the corresponding estimate. Admission reserves the estimate
+plus 20% and five seconds (bounded by the request timeout). When less time remains,
+the action pauses *before* dispatch with `refresh-time-reserve`, preserving completed
+stages and spending no new attempt. Estimates are not guarantees: an unexpectedly
+slow request can still hit the unchanged shared fifteen-minute deadline. Single-context
+areas use the reading estimate. Estimates reset on the next explicit refresh; restart
+does not initiate work. Coordinated/maintenance allowances are unchanged.
+
+Existing saved partitions, responses, hashes, provenance and spent attempts survive.
+Legacy collection contracts switch only at an unattempted unfinished stage after
+replay validation; completed work needs no model calls. Already-attempted stages
+keep their contract and allowance. See [upgrade behavior](migrations.md#compact-definition-responses-and-deadline-admission-2026-10-23).
+
+Verification on Windows Node 22.23.3: type checking, UI build, all 155 pretests and
+650 main tests, and focused epic-review/coordinated-workflow browser checks passed.
+New checks cover compact-response validation, unchanged-dimension preservation,
+legacy-to-compact SQLite reopen/replay, portable continuation, unsupported future
+policy rejection without overwrite, deadline admission without spent attempts and
+explicit resume without repeating saved stages. The aggregate browser suite still
+stops at the known missing **Approve resolution** control (`browser-check.ts:1358`);
+its subsequent portable/specification runners did not execute. Existing bundle-size
+and test-timer warnings remain. No live calls or personal-project data edits were
+performed; live latency/quality and the reported failed stage remain unqualified.
+
 Definition processing now labels the area and its position in the requested refresh
 scope. Preparation messages distinguish local evidence packaging from inference;
 staged requests show read versus verification, original batch, saved/total stages,

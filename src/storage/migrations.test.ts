@@ -12,6 +12,27 @@ import { assessmentCurrent, assessmentFreshness, deliveredRequirement, emptyExec
 import { requirementFingerprint } from "../core/implementation.js";
 import type { Project } from "../core/model.js";
 
+test("expanded provider choices preserve older selections and history across repeated startup without migration", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/provider-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const legacy = store.create("Legacy", "Original idea", { providerID: "openai", modelID: "old-unlisted-model" });
+    const direct = store.create("Direct", "Keep connection reference", { providerID: "openai", modelID: "direct-model", connectionID: "saved-account" });
+    const history = store.history(legacy.id);
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.get(legacy.id), legacy); assert.deepEqual(store.get(direct.id), direct);
+    assert.deepEqual(store.history(legacy.id), history);
+    const changed = store.setModel(legacy.id, legacy.revision, { providerID: "custom-provider", modelID: "custom/model" });
+    const savedHistory = store.history(legacy.id);
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.get(legacy.id), changed); assert.deepEqual(store.history(legacy.id), savedHistory);
+      assert.deepEqual(store.get(direct.id), direct);
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 function fixture() {
   mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
   const directory = mkdtempSync(resolve(".reqwizit-state/tests/upgrade-")), path = join(directory, "state.sqlite");

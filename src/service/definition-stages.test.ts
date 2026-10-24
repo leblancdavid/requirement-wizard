@@ -10,7 +10,7 @@ import { DiscoveryQueue } from "./queue.js";
 import { coverage } from "../core/coverage.js";
 import { dimensions } from "../core/epics.js";
 import { definitionContext } from "../core/definition-assessment.js";
-import { acceptDefinitionStage, completedDefinitionAssessment, definitionStageContext, planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, definitionSteps, splitDefinitionStage, validateDefinitionPlan, definitionWorkSchema } from "../core/definition-stages.js";
+import { acceptDefinitionStage, completedDefinitionAssessment, definitionStageContext, planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, definitionSteps, splitDefinitionStage, validateDefinitionPlan, definitionWorkSchema } from "../core/definition-stages.js";
 import { analysisSchema, type Analysis, type Project } from "../core/model.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 import { continuationState, decodePortable } from "../storage/portable.js";
@@ -20,6 +20,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DefinitionProgress } from "../ui/definition-progress.js";
 import { definitionAbortReason } from "../core/definition-interruption.js";
+import { definitionRequestReserve } from "./definition-stages.js";
 
 const empty = (): Analysis => analysisSchema.parse({ summary: "Definition evidence batch", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 const result = (epicID: string, evidenceID: string): Analysis => ({ ...empty(), assessments: [{ epicID, confidence: "high", explanation: "Exact current evidence; remaining uncertainty is explicit.",
@@ -46,6 +47,147 @@ async function idle(queue: DiscoveryQueue, id: string) {
   for (let i = 0; i < 500 && queue.isActive(id); i++) await new Promise<void>((r) => setTimeout(r, 20));
   assert.equal(queue.isActive(id), false, queue.progress(id).join("\n"));
 }
+
+test("compact collection saves exact updates, retains omitted findings and verifies all evidence before publication", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store); let collects = 0, verifies = 0;
+    let original: NonNullable<Analysis["assessments"]>[number] | undefined;
+    const job = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      const stage = expandDefinitionWire(context.data).definitionStage;
+      assert.deepEqual(store.get(p.id).assessments, []);
+      const prompt = discoveryPrompt(p, context);
+      if (stage.phase === "verify") { verifies++; return { definitionVerdict: [] }; }
+      if (++collects === 1) {
+        assert.equal(stage.responseFormat, "definition-assessment-v1");
+        assert.match(prompt, /definitionAssessment/);
+        original = result("runtime", context.manifest.includedIDs[0]!).assessments![0]!;
+        return { definitionAssessment: original };
+      }
+      assert.equal(stage.responseFormat, "definition-update-v1");
+      assert.match(prompt, /ONLY dimensions changed/);
+      assert.deepEqual(stage.draft.assessments[0], original);
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime" });
+    assert.equal(job.status, "completed", job.diagnostic);
+    assert.equal(collects, job.definitionWork!.batches.length); assert.equal(verifies, collects);
+    assert.deepEqual(job.definitionWork!.receipts[1]!.response, { definitionUpdate: { checks: [] } });
+    assert.deepEqual(replayDefinitionStages(p, job.definitionWork!)!.assessments![0], original);
+    const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [job], [], (revision) => store.get(p.id, revision))), p.model);
+    assert.deepEqual(portable.continuation.jobs[0]!.definitionWork, job.definitionWork);
+    assert.deepEqual(completedDefinitionAssessment(p, portable.continuation.jobs[0]!.definitionWork!), completedDefinitionAssessment(p, job.definitionWork!));
+    assert.ok(job.discoveryMetrics!.requests.every((r) => r.response === "analysis"));
+    assert.ok(JSON.stringify({ definitionUpdate: { checks: [] } }).length < JSON.stringify(result("runtime", p.sources[0]!.id)).length / 10);
+  } finally { store.close(); }
+});
+
+test("compact updates validate complete drafts, distinct dimensions, exact citations and forbidden changes", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), work = planDefinitionStages(p, "runtime"), context = definitionStageContext(p, work);
+    work.attempts = 1;
+    assert.throws(() => acceptDefinitionStage(p, work, undefined, { definitionUpdate: { checks: [] } }, "job"), /existing complete draft/);
+    const assessment = result("runtime", context.manifest.includedIDs[0]!).assessments![0]!;
+    assert.throws(() => acceptDefinitionStage(p, work, undefined, { definitionAssessment: { ...assessment, checks: assessment.checks.slice(1) } }, "job"));
+    const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: assessment }, "job");
+    const original = structuredClone(draft), check = { ...assessment.checks[0]!, status: "partial" as const, explanation: "A specific unresolved choice remains." };
+    work.attempts = 1;
+    for (const invalid of [
+      { definitionUpdate: { checks: [check, check] } },
+      { definitionUpdate: { checks: [{ ...check, evidenceIDs: ["unread"] }] } },
+      { definitionUpdate: { checks: [], requirements: [] } },
+      { definitionUpdate: { checks: [{ ...check, requirements: [] }] } },
+      { definitionUpdate: { checks: [] }, questions: [] },
+      { definitionAssessment: assessment },
+    ]) assert.throws(() => acceptDefinitionStage(p, work, draft, invalid, "job"));
+    assert.equal(work.receipts.length, 1); assert.equal(work.attempts, 1); assert.deepEqual(draft, original);
+    const next = acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [check] } }, "job");
+    assert.deepEqual(next.assessments![0]!.checks[0], check);
+    assert.deepEqual(next.assessments![0]!.checks.slice(1), original.assessments![0]!.checks.slice(1));
+    assert.deepEqual(replayDefinitionStages(p, work), next);
+  } finally { store.close(); }
+});
+
+test("legacy response contracts upgrade at a safe boundary across repeated SQLite reopen without replay", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "definition-response-upgrade-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = seed(store), work = planDefinitionStages(p, "runtime"); delete work.responsePolicy;
+    const { job } = store.beginJob(p.id, p.revision); store.claimJob(job.id, Date.now() + 60000);
+    const oldContext = definitionStageContext(p, work); work.attempts = 1;
+    acceptDefinitionStage(p, work, undefined, result("runtime", oldContext.manifest.includedIDs[0]!), job.id);
+    store.checkpointDefinition(job.id, work, oldContext.manifest); store.failJob(job.id, "failed", "Interrupted before next dispatch");
+    const oldJob = store.getJob(job.id), receipt = structuredClone(work.receipts[0]);
+    const spent = structuredClone(work); spent.attempts = 3; upgradeDefinitionResponsePolicy(spent);
+    assert.equal(spent.responsePolicy, undefined); assert.equal(spent.attempts, 3);
+    store.close(); store = new ProjectStore(path);
+    let calls = 0;
+    const resumed = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const stage = expandDefinitionWire(context.data).definitionStage;
+      assert.equal(stage.responseFormat, "definition-update-v1");
+      return { definitionUpdate: { checks: [] } };
+    } }, { stagedLimits: { requests: 1, durationMs: 900000 } }).analyze(p.id, p.revision, { definitionEpicID: "runtime" });
+    assert.equal(resumed.status, "interrupted", resumed.diagnostic); assert.equal(calls, 1);
+    assert.equal(resumed.definitionWork!.responsePolicy!.fromStage, 1);
+    assert.deepEqual(resumed.definitionWork!.receipts[0], receipt); assert.deepEqual(store.getJob(job.id), oldJob);
+    assert.equal(JSON.stringify(definitionStageContext(p, { ...resumed.definitionWork!, receipts: [] }).data), JSON.stringify(oldContext.data));
+    store.close(); store = new ProjectStore(path);
+    assert.deepEqual(replayDefinitionStages(p, store.getJob(resumed.id).definitionWork!), replayDefinitionStages(p, resumed.definitionWork!));
+    const finished = await new DiscoveryService(store, adapter()).analyze(p.id, p.revision, { definitionEpicID: "runtime" });
+    assert.equal(finished.status, "completed", finished.diagnostic); assert.deepEqual(store.getJob(job.id), oldJob);
+    assert.throws(() => definitionWorkSchema.parse({ ...work, responsePolicy: { format: 99, fromStage: 1 } }));
+    store.close();
+    const futureBytes = JSON.stringify({ ...finished, status: "running", leaseUntil: 0,
+      definitionWork: { ...finished.definitionWork, responsePolicy: { format: 99, fromStage: 1 } } });
+    const db = new Database(path); db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(futureBytes, finished.id); db.close();
+    store = new ProjectStore(path); assert.throws(() => store.getJob(finished.id)); assert.throws(() => store.recoverExpiredJobs());
+    const raw = new Database(path);
+    assert.equal((raw.prepare("SELECT payload FROM jobs WHERE id = ?").get(finished.id) as { payload: string }).payload, futureBytes); raw.close();
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("deadline admission pauses before dispatch without spending attempts and explicit resume keeps saved stages", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), schedule = { deadline: Date.now() + 900000, collectMs: 90000, verifyMs: 20000 };
+    let calls = 0;
+    const paused = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; schedule.deadline = Date.now() + 1000;
+      return { definitionAssessment: result("runtime", context.manifest.includedIDs[0]!).assessments![0] };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionSchedule: schedule });
+    assert.equal(calls, 1); assert.equal(paused.status, "interrupted", paused.diagnostic);
+    assert.equal(paused.definitionInterruption!.cause, "refresh-time-reserve");
+    assert.equal(paused.definitionWork!.attempts, 0); assert.equal(paused.definitionWork!.receipts.length, 1);
+    assert.equal(paused.discoveryMetrics!.requests.length, 1); assert.deepEqual(store.get(p.id).assessments, []);
+    assert.match(paused.diagnostic!, /No attempt was spent/);
+    assert.equal(store.discoveryDiagnostics(p.id, [paused.id]).runs[0]!.interruptionCause, "refresh-time-reserve");
+    assert.match(renderToStaticMarkup(createElement(DefinitionProgress, { job: paused, project: p })), /Paused—progress saved/);
+    const resumedCalls: string[] = [];
+    const final = await new DiscoveryService(store, adapter(resumedCalls)).analyze(p.id, p.revision, { definitionEpicID: "runtime" });
+    assert.equal(final.status, "completed", final.diagnostic); assert.ok(!resumedCalls.includes("collect-1"));
+    assert.deepEqual(final.definitionWork!.receipts[0], paused.definitionWork!.receipts[0]);
+  } finally { store.close(); }
+});
+
+test("deadline admission also avoids dispatch for a small single-context area", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 0);
+    const job = await new DiscoveryService(store, { async analyze() { assert.fail("No request should start near the deadline"); } }).analyze(p.id, p.revision,
+      { definitionEpicID: "runtime", definitionSchedule: { deadline: Date.now() + 1000, collectMs: 90000, verifyMs: 20000 } });
+    assert.equal(job.status, "interrupted", job.diagnostic); assert.equal(job.definitionInterruption!.cause, "refresh-time-reserve");
+    assert.deepEqual(job.discoveryMetrics!.requests, []); assert.deepEqual(store.get(p.id).assessments, []);
+  } finally { store.close(); }
+});
+
+test("deadline reserves distinguish reading from faster verification, with bounded safety margins", () => {
+  const schedule = { deadline: Date.now() + 900000, collectMs: 90000, verifyMs: 20000 };
+  assert.equal(definitionRequestReserve(schedule, "collect"), 113000);
+  assert.equal(definitionRequestReserve(schedule, "verify"), 29000);
+  assert.equal(definitionRequestReserve(schedule, "collect", 10000), 10000);
+  assert.equal(definitionRequestReserve({ ...schedule, collectMs: 0 }, "collect"), 5000);
+});
 
 // Independent reader of the documented lossless wire forms, not model inference.
 function expandDefinitionWire(input: unknown): any {
