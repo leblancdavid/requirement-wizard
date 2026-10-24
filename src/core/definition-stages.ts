@@ -4,8 +4,10 @@ import { analysisSchema, parseDiscoveryAnalysis, type Analysis, type Job, type P
 import { checkSchema } from "./epics.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
 import { definitionContext, validateDefinitionResult } from "./definition-assessment.js";
-import { definitionInputKey, definitionInputs } from "./definition-identity.js";
+import { definitionInputKey, definitionAreas } from "./definition-identity.js";
 import { shareRepeatedIdentifiers, shareRepeatedText, shareRecordStructure } from "./working-set.js";
+import { definitionSteps, definitionStageLimit as maxStages } from "./definition-continuation.js";
+export { definitionSteps, splitDefinitionStage } from "./definition-continuation.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const definitionDraftLimit = 12000;
@@ -20,10 +22,15 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   originJobID: z.string().optional(), attempts: z.number().int().min(0).max(3),
   // A stage boundary preserves byte-identical contexts for all older receipts.
   draftPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxBatches * 2) }).strict().optional(),
+  // Append-only continuation boundaries. Original batches and earlier request
+  // hashes remain unchanged; each event bisects only the unfinished exact step.
+  continuation: z.object({ format: z.literal(1), splits: z.array(z.object({
+    fromStage: z.number().int().min(0).max(maxStages - 1), at: z.number().int().min(1).max(9999),
+  }).strict()).max(maxStages - 2) }).strict().optional(),
   receipts: z.array(z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
     jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
     response: z.union([analysisSchema, definitionVerdictSchema]),
-  }).strict()).max(maxBatches * 2),
+  }).strict()).max(maxStages),
   paused: z.enum(["request-limit", "time-limit"]).optional(), blocked: z.string().min(1).max(1000).optional(),
 }).strict();
 export type DefinitionWork = z.infer<typeof definitionWorkSchema>;
@@ -34,7 +41,7 @@ function exactIDs(project: Project, epicID: string) {
   catch (error) { if (error instanceof ContextBudgetError) return error.manifest.includedIDs; throw error; }
 }
 const planKey = (work: Pick<DefinitionWork, "epicID" | "inputKey" | "batches">) => digest(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches]);
-export const definitionPhase = (work: DefinitionWork) => work.receipts.length < work.batches.length ? "collect" : work.receipts.length < work.batches.length * 2 ? "verify" : "complete";
+export const definitionPhase = (work: DefinitionWork) => definitionSteps(work)[work.receipts.length]?.phase ?? "complete";
 const boundedWireDraft = (work: DefinitionWork) => !!work.draftPolicy && work.receipts.length >= work.draftPolicy.fromStage;
 
 /** Call only after replaying the original receipts. No partition, attempt,
@@ -45,7 +52,7 @@ export function upgradeDefinitionDraftPolicy(work: DefinitionWork) {
 
 /** Each exact record appears once. Links may cross batches; they never grant
  * citation authority before their record is read. No record or human text is cut. */
-export function planDefinitionStages(project: Project, epicID: string): DefinitionWork {
+export function planDefinitionStages(project: Project, epicID: string, onProgress?: (progress: { prepared: number; total: number; probes: number }) => void): DefinitionWork {
   const ids = exactIDs(project, epicID);
   const records = new Map([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => [r.id, r]));
   if (ids.some((id) => !records.has(id))) throw new DefinitionEvidenceBlocked("Required linked evidence is missing from saved records. Restore or correct that evidence before assessing this area; no model call was made.");
@@ -60,20 +67,34 @@ export function planDefinitionStages(project: Project, epicID: string): Definiti
     for (const id of "sourceIDs" in record ? record.sourceIDs : [...record.evidenceIDs ?? [], ...(record.sourceID ? [record.sourceID] : [])]) add(id);
   }
   for (const id of [...remaining].sort()) add(id);
-  let batch: string[] = [];
+  let probes = 0;
   const fits = (candidate: string[]) => {
+    probes++;
     const probe = { ...work, batches: [candidate] };
     try { return definitionStageContext(project, probe).manifest.characters + definitionDraftLimit + 2048 <= 96000; }
     catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
   };
-  for (const id of ordered) {
-    if (fits([...batch, id])) { batch.push(id); continue; }
-    if (batch.length) work.batches.push(batch);
-    if (!fits([id])) throw new DefinitionEvidenceBlocked("One indivisible exact evidence record cannot fit the 96,000-character assessment request with its draft reserve. No evidence was truncated and no model call was made.");
-    batch = [id];
+  // Probe growing prefixes instead of rendering/compressing once per record.
+  // Every chosen prefix is measured exactly. Compression need not be monotonic:
+  // a missed larger fit can only create smaller batches, never omit evidence.
+  for (let start = 0; start < ordered.length;) {
     if (work.batches.length >= maxBatches) throw new DefinitionEvidenceBlocked("Complete area assessment needs more than sixteen exact evidence batches. No evidence was dropped and no model call was made.");
+    if (!fits(ordered.slice(start, start + 1))) throw new DefinitionEvidenceBlocked("One indivisible exact evidence record cannot fit the 96,000-character assessment request with its draft reserve. No evidence was truncated and no model call was made.");
+    let end = start + 1, upper = end;
+    for (let size = 2; end < ordered.length; size *= 2) {
+      upper = Math.min(ordered.length, start + size);
+      if (!fits(ordered.slice(start, upper))) break;
+      end = upper;
+    }
+    while (upper - end > 1) {
+      const middle = Math.floor((end + upper) / 2);
+      if (fits(ordered.slice(start, middle))) end = middle;
+      else upper = middle;
+    }
+    work.batches.push(ordered.slice(start, end)); start = end;
+    onProgress?.({ prepared: start, total: ordered.length, probes });
   }
-  if (batch.length || !work.batches.length) work.batches.push(batch);
+  if (!work.batches.length) work.batches.push([]);
   work.planKey = planKey(work);
   return definitionWorkSchema.parse(work);
 }
@@ -85,23 +106,26 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
   if (work.inputKey !== definitionInputKey(project, work.epicID) || work.planKey !== planKey(work)) throw new Error("Saved definition assessment inputs changed. Previous stages remain historical; no stale assessment was published.");
   const expected = new Set(exactIDs(project, work.epicID)), flat = work.batches.flat();
   if (flat.length !== expected.size || new Set(flat).size !== flat.length || flat.some((id) => !expected.has(id))) throw new Error("Staged definition plan does not cover the complete area's exact evidence.");
-  if (work.receipts.length > work.batches.length * 2) throw new Error("Definition receipt count exceeds its saved plan.");
+  if (work.continuation?.splits.some((split) => split.fromStage > work.receipts.length)) throw new Error("Definition subdivision begins after its saved receipt boundary.");
+  if (work.receipts.length > definitionSteps(work).length) throw new Error("Definition receipt count exceeds its saved plan.");
   if (work.draftPolicy && work.draftPolicy.fromStage > work.receipts.length) throw new Error("Definition draft policy begins after its saved receipt boundary.");
 }
 
 const stageInstructions = `ASSESSMENT-ONLY EXACT BATCH REVIEW. This request contains one batch, NOT the entire area. All batches will be read and all final findings checked against every batch before publication. Cross-batch links are navigation, not evidence until read. Preserve human decisions exactly; proposals, generated drafts, code/research, deferral and delegation do not establish human preferences. No tools, retrieval, questions, requirement edits, organization or global interpretation changes. Unknown intended behavior is unknown, never zero implementation progress. Missing text in THIS batch does not prove missing product decisions. Return definitionBlocked with a specific reason if an indispensable relationship cannot be assessed safely across batches. Never assume a draft substitutes for exact supporting evidence. Never claim exhaustive cross-record reasoning or readiness.`;
 
 export function definitionStageContext(project: Project, work: DefinitionWork, draft?: Analysis): ContextPack {
-  const phase = definitionPhase(work), index = work.receipts.length % work.batches.length;
+  const step = definitionSteps(work)[work.receipts.length];
+  if (!step) throw new Error("Definition assessment has no unfinished evidence stage.");
+  const { phase } = step;
   const wireDraft = boundedWireDraft(work);
-  const ids = work.batches[index]!, included = new Set(ids);
+  const ids = step.ids, included = new Set(ids);
   const byID = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
-  const areas = definitionInputs(project, work.epicID).areas;
+  const areas = definitionAreas(project, work.epicID);
   const data = { epic: project.epics.find((e) => e.id === work.epicID),
     epicMap: project.epics.filter((e) => !e.archived && (work.epicID === "project" || areas.has(e.id))).sort(byID),
     sources: project.sources.filter((r) => included.has(r.id)).sort(byID), requirements: project.requirements.filter((r) => included.has(r.id)).sort(byID),
     questions: project.questions.filter((r) => included.has(r.id)).sort(byID), research: project.research.filter((r) => included.has(r.id)).sort(byID),
-    definitionStage: { policy: work.policy, phase, batch: index + 1, batches: work.batches.length,
+    definitionStage: { policy: work.policy, phase, batch: step.batch, batches: work.batches.length,
       // Only the assessment affects subsequent findings. Ignored analysis wrapper
       // fields remain in the receipt, not duplicated in every future request.
       draft: draft ? wireDraft ? { assessments: draft.assessments } : draft : null,
@@ -113,13 +137,15 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
         : " VERIFY ONLY: return {definitionVerdict:[]} when this exact batch supports or does not contradict the draft. Otherwise return only definitionVerdict checks that DOWNGRADE unsupported/contradicted findings, raise importance when warranted, and explain the exact issue using THIS batch's evidence IDs. Do not downgrade merely because another batch's cited evidence is not repeated here. No new defined/not-applicable statuses or positive upgrades. Unresolvable indispensable missing relationships must block rather than be guessed.") },
   };
   let wire: unknown = data;
+  let serialized = JSON.stringify(wire);
   // Only lossless encodings; raw fields/human text remain reconstructible.
   for (const encode of [(value: unknown) => shareRepeatedText(value, true, true, wireDraft ? ["explanation"] : []).data,
     (value: unknown) => shareRepeatedIdentifiers(value, true).data, (value: unknown) => shareRecordStructure(value, [], true).data]) {
     const candidate = encode(wire);
-    if (JSON.stringify(candidate).length < JSON.stringify(wire).length) wire = candidate;
+    const encoded = JSON.stringify(candidate);
+    if (encoded.length < serialized.length) { wire = candidate; serialized = encoded; }
   }
-  const characters = JSON.stringify(wire).length;
+  const characters = serialized.length;
   const manifest: NonNullable<Job["context"]> = { version: "definition-exact-batches-v1", revision: project.revision,
     focusEpicID: work.epicID, characters, budget: 96000, includedIDs: ids,
     omittedIDs: work.batches.flat().filter((id) => !included.has(id)), epicIDs: [work.epicID], partial: true,
@@ -130,7 +156,7 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
 }
 
 function advanceDraft(project: Project, work: DefinitionWork, draft: Analysis | undefined, raw: unknown): Analysis {
-  const ids = work.batches[work.receipts.length % work.batches.length]!;
+  const ids = definitionSteps(work)[work.receipts.length]!.ids;
   if (definitionPhase(work) === "collect") {
     const next = parseDiscoveryAnalysis(raw).result;
     validateDefinitionResult(project, work.epicID, [...ids, ...draft?.assessments?.flatMap((a) => a.checks.flatMap((c) => c.evidenceIDs)) ?? []], next);

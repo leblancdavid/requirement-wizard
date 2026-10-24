@@ -173,8 +173,8 @@ test("selection excludes unrelated pairs, caps each response at three calls, and
     assert.equal(checked.length, 3); assert.ok(checked.every((pair) => pair.includes(target)));
     const item = store.submissions(p.id)[0]!; assert.equal(item.overlapFollowup!.candidateCount, 5);
     const html = renderToStaticMarkup(createElement(SubmissionOverlapStatus, { submission: item }));
-    assert.match(html, /2 additional candidates were not scheduled/);
-    assert.match(html, /Proposed fixes still require approval/);
+    assert.match(html, /2 other possible overlaps were not checked this time/);
+    assert.match(html, /Proposed fixes still need your approval/);
   } finally { await queue?.close(); store.close(); }
 });
 

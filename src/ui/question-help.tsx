@@ -2,6 +2,8 @@ import React, { useEffect, useId, useRef, useState, type ReactNode } from "react
 import type { Concept, Job, QuestionHelpRequest } from "../core/model.js";
 import { ActivityFeedback, useActivity } from "./activity.js";
 import { ActionScope } from "./action-button.js";
+import { DiagnosticNotice } from "./diagnostic-notice.js";
+import { issueSummary, statusLabel } from "./user-messages.js";
 
 function ConceptTip({ concept }: { concept: Concept }) {
   const id = useId();
@@ -62,9 +64,9 @@ export function AnnotatedText({ text, concepts = [], onExplain, onCancel, busy =
         {selected === start && <span className="word-help" aria-live="polite">
           <button type="button" className="word-help-close" aria-label="Close word explanation" title="Close" onClick={(event) => { event.currentTarget.closest(".explain-word")?.querySelector<HTMLButtonElement>(".word-trigger")?.focus(); setSelected(null); setError(""); }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
           {loading ? <span id={tooltipID} role="tooltip" className="help-loading"><span className="help-spinner" aria-hidden="true" /> Explaining “{part}”…</span>
-            : response ? <><span id={tooltipID} role="tooltip" className="word-help-summary"><b>“{part}” in this context</b><span>{tooltipSummary(response.explanation)}</span>{response.assumptions.length > 0 && <small>Assumptions to check — see the full explanation below.</small>}{job && job.expectedRevision !== revision && <small>Earlier project context · revision {job.expectedRevision}</small>}</span><small>Full explanation saved in the help panel below.</small></>
-            : <>{job && <span role="status">{job.status}: {job.diagnostic ?? "Request an explanation again to retry."}</span>}<button type="button" className="word-help-action" disabled={busy} aria-label={`What do you mean by “${part}”?`} title={busy ? "Another question-help request is running. Wait for it to finish, or stop the clarification." : "What do you mean by this?"} onClick={() => { setRequesting(start); setError(""); void onExplain(part, text).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not request help. Try again.")).finally(() => setRequesting(null)); }}><span className="word-help-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 8a3 3 0 0 1 6 0c0 2-3 2-3 5" /><path d="M12 17h.01" /></svg></span><span>What do you mean by this?</span></button></>}
-          {error && <span role="alert">{error}</span>}
+            : response ? <><span id={tooltipID} role="tooltip" className="word-help-summary"><b>“{part}” in this context</b><span>{tooltipSummary(response.explanation)}</span>{response.assumptions.length > 0 && <small>Assumptions to check — see the full explanation below.</small>}{job && job.expectedRevision !== revision && <small>Based on an earlier version of your project</small>}</span><small>Full explanation saved in the help panel below.</small></>
+            : <>{job && <span role="status">{statusLabel(job.status)}. You can ask again; details are in the help panel below.</span>}<button type="button" className="word-help-action" disabled={busy} aria-label={`What do you mean by “${part}”?`} title={busy ? "Another question-help request is running. Wait for it to finish, or stop the clarification." : "What do you mean by this?"} onClick={() => { setRequesting(start); setError(""); void onExplain(part, text).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not request help. Try again.")).finally(() => setRequesting(null)); }}><span className="word-help-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 8a3 3 0 0 1 6 0c0 2-3 2-3 5" /><path d="M12 17h.01" /></svg></span><span>What do you mean by this?</span></button></>}
+          {error && <span role="alert">{issueSummary(error, "The explanation couldn’t be requested. You can keep drafting your answer.")}</span>}
           {loading && job && ["pending", "running"].includes(job.status) && onCancel && <button type="button" className="word-help-cancel" disabled={cancelling} onClick={() => { setCancelling(true); setError(""); void onCancel(job.id).catch((error: unknown) => setError(error instanceof Error ? error.message : "Could not cancel explanation. Try again.")).finally(() => setCancelling(false)); }}>{cancelling ? "Cancelling…" : "Canceled"}</button>}
         </span>}
       </span>;
@@ -118,20 +120,20 @@ export function QuestionHelp({ questionID, help, reveal = 0, requesting = false 
     <summary>Help me with this question</summary>
     <p>Get a simpler explanation or work through the tradeoffs. Your answer stays yours.</p>
     <div className="help-actions">{actions.map(([action, label]) => <button type="button" className="secondary" key={action} disabled={disabled} onClick={() => void request(action)}>{label}</button>)}</div>
-    <small>Each help request uses your selected model allowance. Concept tooltips open instantly.</small>
+    <small>Asking for help uses some of your AI plan’s usage. Explanations of underlined terms open instantly without an AI request.</small>
     {(sending || requesting) && !active && <p role="status" className="help-loading"><span className="help-spinner" aria-hidden="true" /> Asking for clarification…</p>}
     <div className="help-history" aria-live="polite">
       {jobs.map((job) => <section className="help-exchange" key={job.id} aria-label={actionLabel(job.helpRequest!.action)}>
-        <strong>{actionLabel(job.helpRequest!.action)}</strong><small>Context revision {job.expectedRevision}{job.expectedRevision !== help.revision ? " · Earlier project context" : ""}</small>
+        <strong>{actionLabel(job.helpRequest!.action)}</strong><small>{job.expectedRevision !== help.revision ? "Based on an earlier version of your project" : "Based on your project when you asked"}</small>
         {job.helpRequest?.message && <blockquote className="source-excerpt">{job.helpRequest.message}</blockquote>}
         {job.helpRequest?.word && <blockquote className="source-excerpt">{wordHelpContext(job.helpRequest.word.phrase, job.helpRequest.word.text).trim()}</blockquote>}
         {job.helpResponse ? <><p className="source-excerpt">{job.helpResponse.explanation}</p>{job.helpResponse.assumptions.length > 0 && <><b>Assumptions to check</b><ul>{job.helpResponse.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></>}{job.helpResponse.followUp && <p><b>Something to consider:</b> {job.helpResponse.followUp}</p>}<small>AI guidance · No answer selected or requirement confirmed.</small></>
-          : ["pending", "running"].includes(job.status) ? <ActivityFeedback label="Preparing clarification…" /> : <p role="status">{job.status}: {job.diagnostic ?? "Request help again to retry."}</p>}
+          : ["pending", "running"].includes(job.status) ? <ActivityFeedback label="Preparing clarification…" /> : <><p role="status">{statusLabel(job.status)}. You can ask for help again; your draft answer is unchanged.</p>{job.diagnostic && <details><summary>Technical details</summary><p>{job.diagnostic}</p></details>}</>}
       </section>)}
     </div>
     {active && <button type="button" className="quiet" onClick={() => void help.cancel(active.id).catch((error: Error) => setError(error.message))}>Stop clarification</button>}
     {help.busy && !active && <p role="status">Another question-help request is running. You can keep drafting your answer.</p>}
-    {error && <p role="alert" className="job-error">{error}</p>}
+    {error && <DiagnosticNotice detail={error} summary="The app couldn’t finish this help request." next="Your draft answer is unchanged. You can ask for help again." alert />}
     <form onSubmit={(event) => { event.preventDefault(); if (!disabled && message.trim()) void request("follow-up"); }}>
       <label>Ask a follow-up<textarea rows={2} maxLength={4000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="What is unclear, or what would help you decide?" required /></label>
       <button className="secondary" title={!disabled && !message.trim() ? "Write your follow-up question first." : undefined} disabled={disabled || !message.trim()}>Ask for clarification</button>

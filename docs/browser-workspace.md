@@ -1,6 +1,24 @@
 # Browser workspace, epics, and estimated completeness
 
+## Plain-language guidance
+
+Main guidance now describes product decisions and next steps rather than internal
+processing mechanics. Progress and error notices keep original diagnostics under
+**Technical details**, with clearer outcomes and saved-work/recovery explanations.
+Search labels use “features”; AI-generated prose has a shared plain-language policy
+for future requests. Existing saved text and processing behavior are unchanged.
+See [user-facing language](user-facing-language.md) for conventions and limits.
+
 ## Coordinated workflow preview
+
+Continuation controls are consolidated: **Continue project** is the sole primary
+queue/header action. With coordinated mode off, the header opens a scope/allowance
+explanation before explicit enablement; merely opening it makes no model calls.
+When enabled it resumes the existing bounded coordinator. Awaiting decisions shows
+**Needs your decision**, with no duplicate Resume processing control. Manual scoped
+processing, saved assessment recovery and exploration are under the queue drawer's
+**Advanced actions**, using explicit operation names and unchanged allowances. They
+remain available in advanced mode; mode selection stays in Project settings.
 
 **Continue project** opts into project-wide coordination with eight requests/five
 active minutes per explicit allowance. Project settings holds configuration;
@@ -130,6 +148,15 @@ tests, full `npm test`, type check and UI build. The broader browser suite is tr
 this focused check is not a claim that every legacy browser flow passed.
 
 ## Saved-response context blockers
+
+Definition coverage now shows area position, local preparation versus model waiting,
+read/verification stages, saved work, evidence counts and ten-second elapsed-request
+updates. Expand **Evidence in this request** in the assessment panel for bounded
+record previews and shared/dependency context. Measured preparation/request timings
+describe this run only. Oversized growing-draft requests try lossless unfinished-step
+subdivision, preserving completed calls; stage totals may increase without increasing
+the action allowance. Indivisible evidence still blocks explicitly. See
+[progress and recovery](definition-coverage.md#explainable-progress-and-oversized-draft-recovery-2026-10-23).
 
 For **Assessment outdated**, use **Overall progress → Refresh definition coverage**
 rather than repeated gap discovery. It is shown as an accent-filled button;

@@ -53,8 +53,8 @@ try {
   }
   await (await workspaceMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("region", { name: "Automatic maintenance settings", exact: true });
-  await expect(settings).toContainText("project setting");
-  await expect(settings).toContainText("8 model requests, 5 minutes and 3 areas");
+  await expect(settings).toContainText("this project on this computer");
+  await expect(settings).toContainText("8 AI requests over 5 minutes for up to 3 areas");
   const enable = settings.getByRole("button", { name: "Enable automatic definition updates", exact: true });
   await page.keyboard.press("Tab"); await enable.focus(); assert.ok(await enable.evaluate((element) => element.matches(":focus-visible")));
   assert.ok((await enable.boundingBox())!.height >= 44);

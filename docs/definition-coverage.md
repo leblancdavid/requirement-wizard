@@ -39,6 +39,53 @@ label is **Assessment incomplete**, not **Assessment outdated**. Old evidence is
 labelled outdated only when it actually needs rechecking. Per-area states remain
 current/outdated/not assessed; partial batch work cannot make one current.
 
+## Explainable progress and oversized-draft recovery (2026-10-23)
+
+Definition processing now labels the area and its position in the requested refresh
+scope. Preparation messages distinguish local evidence packaging from inference;
+staged requests show read versus verification, original batch, saved/total stages,
+record-type counts and exact encoded size. Both single-context and staged requests
+emit a ten-second elapsed-request heartbeat while waiting for the model. This is
+elapsed time, not a predicted finish time or access to model reasoning.
+
+The progress panel shows measured local preparation and completed request timings
+for the current run, and expandable evidence previews (25 records at a time).
+Preview shortening affects display only, never assessment evidence. Counts and titles
+explain the included area, linked, project-wide and declared-dependency evidence;
+they do not establish that every cross-area relationship has been checked.
+
+An evidence batch plus a growing complete draft can exceed 96,000 characters even
+after lossless encoding (including the reported 98,959-character failure). Instead
+of immediately blocking, the first unfinished step can now split at exact record
+boundaries. Collection and verification can subdivide independently; all original
+evidence must still be collected and checked before publication. Earlier requests,
+responses and original batch partitions remain byte-identical and reusable. Stage
+totals can increase, up to 64; existing per-action request/time allowances do not.
+An indivisible record plus findings, or the subdivision limit, still blocks explicitly.
+No findings are summarized away and no partial score is published.
+
+Existing blocked checkpoints upgrade lazily on explicit Refresh/Resume, after their
+saved receipts are replay-validated. No reset, automatic calls, or repeated completed
+calls are needed. See the [migration ledger](migrations.md#adaptive-definition-subdivision-and-progress-2026-10-23).
+
+Local batch preparation uses measured growing-prefix probes and boundary refinement
+rather than rendering once per record, avoids rebuilding linked-record closures just
+to find dependency areas, and reuses serialized wire lengths within each encoding
+pass. A deterministic 128-note test checks reduced probe count and exact evidence
+preservation. Live model speedups and delta-only assessment are not established;
+sequential collection/verification remains necessary under this protocol.
+
+Verification on Windows Node 22.23.3: type checking, UI build, `npm test` (143 pretests
+and 650 main tests), and the focused epic-review browser runner passed. Tests cover
+four saved legacy calls through repeated SQLite reopen, lossless recovery and portable
+replay without completed-call repetition, indivisible blocking, spent attempts,
+heartbeat cleanup, evidence inspection without inference, Stop/Resume and mobile
+width. These are deterministic fixtures, not the user's database or live inference.
+The aggregate `npm run test:browser` was also run and still stops at the pre-existing
+missing **Approve resolution** control (`src/web/browser-check.ts:1353`); its later
+portable/specification runners did not execute in that command. The existing UI
+bundle-size warning remains. The aggregate browser suite is not claimed passing.
+
 ## Discovery is a separate ledger
 
 The progress dialog also shows the latest available workflow discovery report,
@@ -64,7 +111,8 @@ prove all cross-batch relationships: saved assessments explicitly identify this
 method and cap confidence at medium. Missing decisions remain unknown/partial or
 needs-review, not artificially defined.
 
-There are at most sixteen batches / 32 stages, a 12k accumulated assessment draft
+There are at most sixteen original batches / 32 original stages (up to 64 exact
+subdivided stages under the continuation policy above), a 12k accumulated assessment draft
 target/reserve, three spent attempts per unfinished stage, and 32 requests per explicit staged
 area action within the existing fifteen-minute refresh window. Each request also
 has a five-minute timeout. Oversized individual records, over-sixteen-batch areas,
@@ -77,7 +125,8 @@ carry only the assessment fields, with repeated explanations/citations shared
 losslessly. Complete schema-validated responses (including ignored wrapper fields)
 remain in receipts. Explanations, statuses, importance and citations are not
 summarized, truncated or rewritten to fit. The actual encoded evidence-plus-draft
-request still cannot exceed 96,000 characters. If it does, the assessment blocks
+request still cannot exceed 96,000 characters. The adaptive continuation above now
+tries exact-record subdivision first. If that cannot fit, the assessment blocks
 with all completed responses retained; unchanged Resume makes no repeated call.
 This removes an artificial raw-size failure, not every possible size limit.
 

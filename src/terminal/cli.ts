@@ -67,7 +67,7 @@ function printProject(project: Project) {
   console.log(`\n${project.name}\nProject: ${project.id}\nRevision: ${project.revision}\nModel: ${project.model.providerID}/${project.model.modelID}`);
   if (project.summary) console.log(`\nInterpretation (AI proposal${project.analysisRevision === project.revision ? "" : "; changed since analysis — re-analyze"}): ${project.summary}`);
   for (const goal of project.goals) console.log(`  Candidate goal: ${goal}`);
-  for (const actor of project.actors) console.log(`  Candidate actor: ${actor}`);
+  for (const actor of project.actors) console.log(`  Possible user or participant: ${actor}`);
   for (const assumption of project.assumptions) console.log(`  Unconfirmed assumption: ${assumption}`);
   const score = coverage(project);
   console.log(`\nEstimated definition coverage: ${score.percent}% (${score.stale ? "needs review" : "latest assessment"}; not proof of completeness)`);
@@ -89,8 +89,8 @@ function printProject(project: Project) {
   }
   console.log("\nRequirements:");
   for (const requirement of project.requirements) {
-    console.log(`  [${requirement.status}] ${requirement.id}\n    ${requirement.statement}\n    Rationale: ${requirement.rationale}`);
-    for (const scenario of requirement.acceptance) console.log(`    Acceptance: ${scenario}`);
+    console.log(`  [${requirement.status}] ${requirement.id}\n    ${requirement.statement}\n    Why it matters: ${requirement.rationale}`);
+    for (const scenario of requirement.acceptance) console.log(`    Expected behavior: ${scenario}`);
     console.log(`    Sources: ${requirement.sourceIDs.join(", ")}`);
     if (requirement.reviewNote) console.log(`    Review: ${requirement.reviewNote}`);
     const implementation = project.implementation.find((item) => item.requirementID === requirement.id);
@@ -200,7 +200,7 @@ async function main() {
           while (!controller.signal.aborted) {
             const project = store.get(id);
             printProject(project);
-            const action = (await terminal.question("\n[a] analyze  [q] answer question  [r] review requirement  [x] exit: ", { signal: controller.signal })).trim();
+            const action = (await terminal.question("\n[a] review project and find next questions  [q] answer question  [r] review requirement  [x] exit: ", { signal: controller.signal })).trim();
             if (action === "x") break;
             if (action === "a") { await runAnalysis(id, project.revision); continue; }
             try {
@@ -209,19 +209,19 @@ async function main() {
                 const question = project.questions.find((item) => item.id === questionID);
                 if (!question) throw new Error("Question not found.");
                 console.log(`${question.text}\nWhy: ${question.whyItMatters}`);
-                const mode = (await terminal.question("[a] answer / [d] defer / [g] delegate: ", { signal: controller.signal })).trim();
+                const mode = (await terminal.question("[a] answer / [d] decide later / [g] let AI choose within your limits: ", { signal: controller.signal })).trim();
                 if (!["a", "d", "g"].includes(mode)) throw new Error("Choose a, d, or g.");
-                const answer = await terminal.question("Text, or option number for a normal answer (include scope for delegation): ", { signal: controller.signal });
+                const answer = await terminal.question("Your answer or option number (if AI may choose, describe what it may decide and any limits): ", { signal: controller.signal });
                 const option = /^\d+$/.test(answer.trim()) ? question.options[Number(answer.trim()) - 1] : undefined;
                 if (mode === "a" && /^\d+$/.test(answer.trim()) && !option) throw new Error("Option number is out of range.");
                 store.answer(id, project.revision, questionID, { kind: mode === "a" ? "answer" : mode === "d" ? "deferral" : "delegation",
                   text: mode === "a" && option ? option.label : answer });
-                console.log("Response saved. Analyze when ready to generate the next batch.");
+                console.log("Response saved. Choose [a] when ready to review it and find the next questions.");
               } else if (action === "r") {
                 const requirementID = (await terminal.question("Requirement ID: ", { signal: controller.signal })).trim();
                 const decision = (await terminal.question("accept / reject: ", { signal: controller.signal })).trim();
                 if (decision !== "accept" && decision !== "reject") throw new Error("Choose accept or reject.");
-                const note = await terminal.question("Review rationale: ", { signal: controller.signal });
+                const note = await terminal.question("Your review note (optional): ", { signal: controller.signal });
                 store.review(id, project.revision, requirementID, decision === "accept" ? "accepted" : "rejected", note);
               }
             } catch (error) {

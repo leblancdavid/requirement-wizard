@@ -5,13 +5,14 @@ import type { Project } from "../core/model.js";
 const statusLabels = { unknown: "Unknown", partial: "Partially defined", defined: "Defined", "needs-review": "Needs review", "not-applicable": "Not applicable" } as const;
 
 export function DefinitionAssessment({ area, project }: { area: ReturnType<typeof coverage>["epics"][number]; project: Project }) {
-  if (!area.assessed) return <p>No whole-area assessment saved. Existing decisions and requirements may still define this area; its gaps are unknown.</p>;
+  if (!area.assessed) return <p>This area hasn’t been checked yet. Your saved decisions and requirements are still here; we don’t yet know what details may be missing.</p>;
   const saved = project.assessments.find((a) => a.epicID === area.epicID);
   return <details className="definition-assessment">
-    <summary>Inspect definition assessment</summary>
-    <p>{area.stale ? "Outdated assessment: these are previous findings, not confirmed current gaps." : "Current whole-area assessment; this does not certify completeness."}{saved ? ` Assessed at revision ${saved.atRevision}; current revision ${project.revision}.` : ""}</p>
+    <summary>See what is defined and what needs attention</summary>
+    <p>{area.stale ? "Project information has changed since this check. These earlier findings may no longer apply." : "This check uses the latest relevant project information. It may still miss details."}</p>
+    {saved && <details><summary>Version details</summary><p>Checked at project version {saved.atRevision}; current version {project.revision}.</p></details>}
     <p>{area.explanation}</p>
-    {saved?.stagedReview && <p>Staged exact-evidence assessment: {saved.stagedReview.batches} batches read, then findings checked against every batch. No evidence was truncated. Confidence is capped at medium because independent batch checks cannot prove every cross-batch relationship. Unknown or unresolved decisions remain explicit.</p>}
+    {saved?.stagedReview && <p>This area was reviewed in {saved.stagedReview.batches} parts, without shortening the information. Connections between parts may still be missed, so the findings should be treated with some caution.</p>}
     {area.checks.map((check) => <details className="definition-check" key={check.dimension}>
       <summary>{check.label} · {check.importance} · {statusLabels[check.status]}</summary>
       {check.importance === "critical" && !["defined", "not-applicable"].includes(check.status) && <p>{area.stale ? "Previously flagged critical area — needs rechecking." : "Critical area needs clarification."}</p>}

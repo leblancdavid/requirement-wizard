@@ -2,14 +2,15 @@ import React from "react";
 import { decisionAvailability, type DecisionAvailability } from "../core/decision-availability.js";
 import { reviewFingerprint, type Job, type Project, type Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
+import { DiagnosticNotice } from "./diagnostic-notice.js";
 
 export function ItemProcessingNotice({ submission, error, resume, disabled }: {
   submission?: Submission; error?: string; resume?: () => void; disabled?: boolean;
 }) {
   if (!error && submission?.status !== "needs-attention") return null;
   return <section className="error item-processing-error" aria-label="Item processing error">
-    <p role="alert"><strong>Something needs attention.</strong> {error || submission?.diagnostic || "Your response was saved but could not be processed."}</p>
-    {submission?.status === "needs-attention" && !submission.conflict && <><p>Your response is retained. Retry its follow-up without submitting it again.</p>{resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Resume processing</button>}</>}
+    <DiagnosticNotice detail={error || submission?.diagnostic} summary={submission?.status === "needs-attention" ? submission.contextBlock ? "Your response is saved, but there is too much related information to review in one step." : "Your response is saved, but its review needs attention." : undefined} alert />
+    {submission?.status === "needs-attention" && !submission.conflict && <><p>{submission.contextBlock ? "Repeating the same review won’t fix the size limit. Check Technical details; you may need help organizing the related project information." : "You don’t need to submit your response again. Resume processing to retry its review."}</p>{resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Resume processing</button>}</>}
   </section>;
 }
 

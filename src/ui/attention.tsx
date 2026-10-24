@@ -19,14 +19,15 @@ export function attentionGroups(project: Project, submissions: Submission[]) {
 }
 
 export function attentionSummary(project: Project, submissions: Submission[], item: Submission, jobs: Job[] = []) {
-  if (item.input.type !== "review") return item.diagnostic ?? "Review this saved response and its follow-up.";
-  if (item.applied || !item.conflict) return item.contextBlock ? "Follow-up context is blocked. Review context scope before retrying." : "Follow-up needs attention. Retry processing, not the decision.";
+  if (item.contextBlock) return "Your response is saved, but there is too much related information to review in one step. Repeating the same review won’t fix this; technical help may be needed.";
+  if (item.input.type !== "review") return "Review this saved response and check why its review needs attention.";
+  if (item.applied || !item.conflict) return "Your decision is saved. Retry its review rather than submitting the decision again.";
   const availability = decisionAvailability(project, [item.input.requirementID], submissions, jobs, { excludeSubmissionID: item.id, action: item.input.action });
   return availability.state === "ready" ? "Ready to review: choose your decision on the current requirement, or dismiss old attempts if you no longer want to submit them. Their notes stay in history." : availability.reason;
 }
 
 export function attentionAction(project: Project, submissions: Submission[], item: Submission, jobs: Job[] = []) {
-  if (item.contextBlock) return "Review context";
+  if (item.contextBlock) return "Review the problem";
   if (item.input.type !== "review") return item.conflict ? "Review response" : "Retry processing";
   if (item.applied || !item.conflict) return "Retry processing";
   const availability = decisionAvailability(project, [item.input.requirementID], submissions, jobs, { excludeSubmissionID: item.id, action: item.input.action });
@@ -46,7 +47,7 @@ export function AttentionInbox({ project, submissions, jobs = [], open }: {
       const target = input.type === "review" ? project.requirements.find((r) => r.id === input.requirementID) : input.type === "answer" ? project.questions.find((q) => q.id === input.questionID) : undefined;
       return <article key={id} className="queue-item"><strong>{target ? "statement" in target ? target.statement : target.text : input.type === "review" ? input.requirementText : input.type === "answer" ? input.questionText : "Saved project information"}</strong>
         <p role="status">{attentionSummary(project, submissions, latest, jobs)}</p>
-        {input.type === "review" && !latest.conflict && latest.diagnostic && <p className="job-error">{latest.diagnostic}</p>}
+        {latest.diagnostic && (input.type !== "review" || !latest.conflict) && <details><summary>Technical details</summary><p className="source-excerpt">{latest.diagnostic}</p></details>}
         <SubmissionOverlapStatus submission={latest} /><small>{attempts.length} saved {attempts.length === 1 ? "attempt" : "attempts"}{target ? ` · ${project.epics.find((e) => e.id === target.epicID)?.title ?? target.epicID}` : ""}</small>
         <div><button type="button" className="secondary" onClick={() => open(latest.id)}>{attentionAction(project, submissions, latest, jobs)}</button></div>
       </article>;

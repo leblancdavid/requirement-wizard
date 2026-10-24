@@ -864,7 +864,7 @@ test("one model review saves a package check; compatible checks reuse without ca
     const idle = await service.analyze(p.id, after.revision, { gapMode: "epic", focusEpicID: "orders" });
     assert.equal(calls, 2); assert.equal(idle.status, "completed"); assert.equal(idle.epicReviewReport!.modelCalls, 0);
     assert.equal(store.history(p.id).length, history); assert.deepEqual(store.get(p.id), after);
-    assert.match(renderToStaticMarkup(createElement(GapExplorationStatus, { job, project: after })), /1 reviewed/);
+    assert.match(renderToStaticMarkup(createElement(GapExplorationStatus, { job, project: after })), /1 group reviewed/);
   } finally { store.close(); }
 });
 

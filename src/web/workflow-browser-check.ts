@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { workspaceMenu } from "./menu-check-helpers.js";
+import { advancedQueue } from "./queue-check-helpers.js";
 import { startApp } from "./server.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { ProjectStore } from "../storage/store.js";
@@ -60,23 +61,39 @@ try {
   async function continueProject() {
     const action = page.locator(".queue-header").getByRole("button", { name: "Continue project", exact: true });
     await expect(action).toHaveCount(1); await expect(action).toBeEnabled(); await action.click();
+    if (!store.workflow(p.id).enabled) {
+      const consent = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+      await expect(consent).toContainText("Continue project lets the app guide your next steps");
+      await expect(consent).toContainText("8 AI requests");
+      assert.equal(calls.length, 0, "Opening the coordinator explanation does not grant model calls");
+      await consent.getByRole("button", { name: "Continue project", exact: true }).click();
+      await consent.getByRole("button", { name: "Close processing queue", exact: true }).click();
+    }
   }
+  const initialQueue = await advancedQueue(page);
+  await expect(initialQueue.getByRole("button", { name: "Discover missing decisions", exact: true })).toBeVisible();
+  assert.equal(store.workflow(p.id).enabled, false, "Inspecting narrow operations does not enable coordinated mode");
+  assert.equal(calls.length, 0);
+  await initialQueue.getByRole("button", { name: "Close processing queue", exact: true }).click();
   await continueProject();
   await expect.poll(() => store.workflow(p.id).phase).toBe("needs-decision"); assert.deepEqual(calls, ["idea"]);
   await page.locator(".topbar .queue-trigger").click();
   const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true }), flow = drawer.getByRole("region", { name: "Project workflow", exact: true });
   await expect(flow).toContainText("Needs your decision");
   await expect(flow).toContainText("Should reports work offline?");
-  await flow.getByRole("button", { name: "Resolve question", exact: true }).click();
+  await expect(drawer.getByRole("button", { name: /Resume processing|Process saved responses|Resume this assessment|Resume discovery only|Continue project/ })).toHaveCount(0);
+  await expect(drawer.getByText("Advanced actions", { exact: true })).toHaveCount(0);
+  await flow.getByRole("button", { name: "Review and decide", exact: true }).click();
   await expect(drawer).toHaveCount(0);
   await page.getByRole("button", { name: /Choose Offline\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
+  await expect(page.locator(".queue-header").getByRole("button", { name: /Resume processing|Process saved responses/ })).toHaveCount(0);
   await expect.poll(() => store.get(p.id).requirements[0]?.status).toBe("accepted");
   await expect.poll(() => store.get(p.id).questions.some((q) => q.text === "What should happen after a failed report save?"), { timeout: 15000 }).toBe(true);
   assert.equal(store.workflow(p.id).readiness, undefined, "Asking a readiness question cannot certify readiness");
   await page.locator(".topbar .queue-trigger").click();
   await expect(flow).toContainText("What should happen after a failed report save?");
-  await flow.getByRole("button", { name: "Resolve question", exact: true }).click();
+  await flow.getByRole("button", { name: "Review and decide", exact: true }).click();
   await page.getByRole("button", { name: /Choose Keep draft\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
   async function finishBurst(expectedStatement?: string) {
@@ -100,7 +117,7 @@ try {
   await page.locator(".topbar .queue-trigger").click();
   await expect(flow).toContainText("Specification checks passed");
   await expect(flow.getByRole("region", { name: "Workflow decision inbox", exact: true })).toHaveCount(0);
-  await flow.locator("details > summary").click(); await expect(flow).toContainText("Prepare/review a current implementation plan");
+  await flow.getByText("Readiness checks and limitations", { exact: true }).click(); await expect(flow).toContainText("Prepare/review a current implementation plan");
   await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
   await page.getByRole("tab", { name: /^Specification/ }).click();
   const specification = page.getByRole("region", { name: "Requirement review", exact: true });

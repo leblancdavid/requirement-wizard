@@ -19,6 +19,81 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Plain-language presentation (2026-10-23)
+
+Presentation-only compatibility decision: simpler browser/terminal/desktop wording
+and a shared plain-language instruction for future discovery, scans, definition
+checks and question help. Source and target persisted formats are identical. No
+SQLite version, JSON contract, specification authority, assessment/checkpoint
+identity, fingerprint, freshness policy, model selection, retry allowance or consent
+changes. Existing human text, generated prose, diagnostics, source quotations and
+completed work remain unchanged. No migration, data reset, startup rewrite or repeat
+AI request is needed. Saved technical diagnostics are presented behind disclosures;
+unknown historical interruption causes stay unknown. Pure presentation tests check
+that rendering and prompt generation do not modify saved inputs. Existing upgrade
+and recovery suites continue to apply; this is not a new migration mechanism.
+
+Verification: all 799 pre/main tests passed on Node 22.23.3, including existing
+SQLite/portable upgrade and recovery suites; the six language tests also passed
+after adding the final stale-edit explanation. Type check, UI build and focused
+workflow/maintenance/epic-review/portable/specification browser checks passed.
+The main browser check still stops at the previously recorded missing Approve
+resolution control; no aggregate browser or live-model qualification is claimed.
+
+## Adaptive definition subdivision and progress (2026-10-23)
+
+Source: definition `format: 1`, `exact-batches-v1` ledgers with original batches,
+draft-policy boundaries and up to 32 receipts. Target: the same original identity
+plus optional `continuation: { format: 1, splits: [{ fromStage, at }] }`, permitting
+at most 64 scheduled stages/receipts. `at` bisects one unfinished step's exact record
+list; ordered append-only boundaries apply only from that receipt position onward.
+Original partitions, plan keys, input fingerprints, models, responses, completed
+context hashes and spent attempts do not change. Full exact collection and
+verification remain mandatory; assessment meaning/freshness is unchanged.
+
+No SQLite schema or project format bump, eager rewrite, reset, or reassessment is
+required. Old jobs remain untouched. Explicit continuation first validates/replays
+older requests, then transactionally checkpoints each subdivision in the new live
+job using existing lease/revision guards. Interruption/repeated reopen reuses the
+saved boundaries. A failed write leaves the previous transaction intact. Startup
+never starts model calls. Original jobs supply the historical backup; no evidence
+is deleted. Unsupported future continuation formats and malformed partitions fail
+closed; older application versions cannot read newly subdivided ledgers and should
+not be used to resume them. Indivisible-record/stage-limit/spent-attempt blockers
+remain explicit and cannot certify partial coverage.
+
+Progress uses existing messages, context manifests and measured diagnostics;
+historical timings remain unknown. The new dependency-area helper and local prefix
+planning change only how new partitions are prepared; saved partitions always take
+priority. Display previews never replace exact model evidence.
+
+Verified on Windows Node 22.23.3: type check/UI build, 143 pretests and 650 main tests,
+focused epic-review browser checks. Upgrade tests retain four legacy responses across
+repeated SQLite reopen and portable replay, preserve original jobs and byte-identical
+completed contexts, reject future/corrupt continuations, and retain true indivisible
+blockers without new calls on unchanged retry. No personal database or live provider
+qualification was performed. See [definition coverage](definition-coverage.md).
+The full browser command still stops at the existing **Approve resolution** assertion;
+it does not establish a passing aggregate browser suite.
+
+## Continuation-control consolidation (2026-10-23 follow-up)
+
+UI-only: Continue project is the primary header/drawer action; first entry from
+advanced mode opens a scope/allowance explanation before explicit consent. Manual
+queue operations move under Advanced actions with precise labels; competing manual
+dispatch controls are hidden in coordinated mode. Project settings retains mode
+selection. No project/job/workflow formats, fingerprints, authority, settings,
+allowances or checkpoints change. No migration, reset or reassessment is required.
+
+Verified: type check/UI build, 138 pretests + 650 main tests (788 total), and
+coordinated-workflow, epic-review and gap-navigation browser runners passed. The
+coordinated check proves opening the explanation/advanced disclosure causes no model
+calls or mode changes, awaiting decisions exposes no duplicate Resume, and bounded
+continuation/restart/mobile remain intact. Epic/gap runners verify manual assessment
+and exploration checkpoint recovery through Advanced actions. Full-browser rerun
+still stops at the known missing Approve resolution assertion (now
+`src/web/browser-check.ts:1353`). No live inference or personal database changes.
+
 ## Schema 6 → 7: coordinated workflow preview (2026-10-23)
 
 Adds `workflow_state` (format 1 local scheduler/settings/consent) and immutable

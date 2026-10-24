@@ -4,6 +4,7 @@ import { implementationNeedsReview } from "../core/implementation.js";
 import type { Workspace } from "../storage/workspace.js";
 import { ActivityFeedback, Spinner, useActivity } from "./activity.js";
 import { ActionScope } from "./action-button.js";
+import { DiagnosticNotice } from "./diagnostic-notice.js";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
 type Directories = { path: string; parent: string | null; directories: string[] };
@@ -26,17 +27,17 @@ export function WorkspacePicker({ path, create, onChange, request, disabled, exi
     finally { setLoading(false); }
   }
   return <ActionScope reason={!disabled && loading ? "Wait for the folder listing or folder picker to finish." : undefined}><div className="workspace-picker">
-    <label>Local workspace directory<input value={path} maxLength={4096} disabled={disabled} onChange={(event) => onChange(event.target.value, create)} placeholder="D:\Projects\my-app" /></label>
+    <label>Project folder on this computer<input value={path} maxLength={4096} disabled={disabled} onChange={(event) => onChange(event.target.value, create)} placeholder="D:\Projects\my-app" /></label>
     <div className="button-row"><button type="button" className="secondary" disabled={disabled || loading} onClick={() => void browse(path || undefined)}>{loading && <Spinner />}Browse folders</button>
-      {!existingOnly && <label><input type="checkbox" checked={create} disabled={disabled} onChange={(event) => onChange(path, event.target.checked)} /> Create directory if needed</label>}</div>
+      {!existingOnly && <label><input type="checkbox" checked={create} disabled={disabled} onChange={(event) => onChange(path, event.target.checked)} /> Create folder if needed</label>}</div>
     {loading && <ActivityFeedback label="Browsing local folders…" />}
-    {error && <p role="alert">{error}</p>}
+    {error && <DiagnosticNotice detail={error} summary="This folder couldn’t be opened." next="Check that it exists and you have permission to open it, or choose another folder." alert />}
     {listing && <div className="folder-browser" aria-label="Local folders"><strong>{listing.path}</strong><div className="button-row">
       <button type="button" title={!listing.parent ? "This is the top-level folder; there is no parent directory." : loading ? "Wait for the folder listing to finish loading." : undefined} disabled={disabled || loading || !listing.parent} onClick={() => void browse(listing.parent!)}>↑ Parent</button>
       <button type="button" disabled={disabled || loading} onClick={() => { onChange(listing.path, false); setListing(null); }}>Use this folder</button>
       <button type="button" onClick={() => setListing(null)}>Close browser</button></div>
       <div className="folder-list">{listing.directories.map((name) => <button type="button" key={name} disabled={disabled || loading} onClick={() => void browse(`${listing.path.replace(/[\\/]$/, "")}${listing.path.includes("\\") ? "\\" : "/"}${name}`)}>▸ {name}</button>)}{!listing.directories.length && <p>No subdirectories.</p>}</div></div>}
-    <small>Portable project state is saved under .reqwizit in this folder. Commit it with your code to share saved work. Legacy .requirement-wizard folders migrate on sync.</small>
+    <small>The app saves requirements and progress in a .reqwizit folder here so they can travel with your project. To share them using Git, include that folder with your code.</small>
   </div></ActionScope>;
 }
 
@@ -55,13 +56,13 @@ export function WorkspaceConnection({ project, workspace, request, disabled, run
   };
   return <ActionScope><section className="workspace-connection" aria-label="Project workspace"><h2>Project workspace</h2>
     <p>{workspace ? `${workspace.status === "saved" ? "Saved" : workspace.status === "pending" ? "Saving" : workspace.status === "conflict" ? "Conflict" : "Unavailable"} · Revision ${workspace.savedRevision ?? "not yet saved"} · ${workspace.path}` : "Connect a local folder to automatically save this project's requirements and progress."}</p>
-    {workspace?.diagnostic && <p role="status">{workspace.diagnostic}</p>}
+    {workspace?.diagnostic && <DiagnosticNotice detail={workspace.diagnostic} summary={workspace.status === "conflict" ? "The folder and this app have different saved changes. Neither version will be overwritten automatically." : "The app couldn’t finish saving to the project folder."} next="Check the folder and its saved changes before using Retry sync. See Technical details for the cause." />}
     {(working || workspace?.status === "pending") && <ActivityFeedback label="Updating workspace files…" />}
     <WorkspacePicker path={path} create={create} onChange={(value, make) => { setPath(value); setCreate(make); }} request={request} disabled={disabled} />
     <div className="button-row"><button className="secondary" title={!disabled && !path.trim() ? "Choose or enter a local folder first." : undefined} disabled={disabled || !path.trim()} onClick={() => void action({ operation: "connect", revision: project.revision, path, create })}>{workspace ? "Reconnect workspace" : "Connect workspace"}</button>
       {workspace && <><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "sync" })}>Retry sync</button><button disabled={disabled} className="quiet" onClick={() => void run(async () => { await request("projects/open", { path: workspace.path, model: project.model }); })}>Open shared checkpoint</button><button disabled={disabled} className="quiet" onClick={() => void action({ operation: "disconnect", revision: project.revision })}>Disconnect folder</button></>}</div>
     {workspace && <WorkspaceScan project={project} scanJob={scanJob} disabled={disabled} scan={(resumeJobID) => run(async () => { await request(`projects/${project.id}/scan`, { revision: project.revision, resumeJobID }); })} />}
-    <small>After pulling or switching branches, use Open shared checkpoint. Divergent local work is never overwritten. Opening an unchanged checkpoint acknowledges it as the shared baseline. Disconnecting keeps files and app data.</small>
+    <small>After getting teammates’ changes or switching Git branches, use Open shared checkpoint to load the saved project information. If you have different local changes, the app stops rather than overwriting them. Disconnecting keeps your files and saved app data.</small>
   </section></ActionScope>;
 }
 
@@ -78,12 +79,12 @@ export function WorkspaceScan({ project, disabled, scan, scanJob }: { project: P
   return <ActionScope reason={!disabled && active ? "A folder scan is already running. Wait for it to finish, or stop it in Processing & queue." : undefined}><section aria-label="Source initialization" className="insight-card workspace-scan">
     <h3>{latest ? "Folder scan" : "Initialize from existing project"}</h3>
     {active && <ActivityFeedback label="Scanning project folder…" completed={progress?.completed} total={progress?.total} />}
-    {incomplete && <p role="status"><strong>Initialization incomplete.</strong> {scanJob?.diagnostic ?? "Complete the source scan before exploring gaps."} Existing questions are not a reconstructed baseline.</p>}
-    <p>Scan documentation, source, configuration and tests to propose feature definitions and requirements. Review the proposals before continuing missing-requirement discovery.</p>
+    {incomplete && <DiagnosticNotice summary="The app hasn’t finished reading this project’s files. Complete the scan before looking for missing decisions." detail={scanJob?.diagnostic} />}
+    <p>Read the project’s files to suggest what its features do and what requirements it already meets. Review those suggestions before looking for missing decisions.</p>
     {scanJob?.scanProgress && <p role="status">{scanJob.scanProgress.completed} of {scanJob.scanProgress.total} batches saved · File snapshot: {new Date(scanJob.scanProgress.capturedAt).toLocaleString()}. Resume uses these captured files; start a new scan to read current files.</p>}
     {scanJob?.scanProgress?.resumable && <button type="button" disabled={disabled || active} onClick={() => void start(scanJob.id)}>Resume scan</button>}
     <button type="button" className="secondary" disabled={disabled || active} onClick={() => void start()}>{active && <Spinner />}{scanJob?.scanProgress?.resumable ? "Start new scan" : latest ? "Rescan folder" : incomplete ? "Retry initialization" : "Initialize from folder"}</button>
-    <small>Read-only static inspection. Dependencies, generated files, hidden paths and potentially sensitive files are excluded. Files are sent to the selected AI connection. Scanning does not run tests or confirm requirements.</small>
+    <small>Selected project files are sent to your AI for review. The scan does not change files or run the software, so it cannot prove that a feature works. Downloaded libraries, generated files, hidden folders and potentially sensitive files are excluded.</small>
     {latest && <details><summary>Last scan: {new Date(latest.capturedAt).toLocaleString()} · {new Set(latest.files.map((file) => file.path)).size} files / {latest.files.length} excerpts · {latest.changes.length} changes · {latest.omitted.length} omitted paths</summary>
       <p>Snapshot {latest.id}. {latest.traversalLimited ? "Traversal limit reached; additional paths were not enumerated." : "Inspected scope is listed below; excluded directories are not traversed."}</p>
       {!!latest.affectedRequirementIDs.length && <p>Changed or unavailable evidence affects these existing requirements; review their intent: {latest.affectedRequirementIDs.join(", ")}</p>}

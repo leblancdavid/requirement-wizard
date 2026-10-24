@@ -243,15 +243,15 @@ test("maintenance settings and queue separate configuration from operations and 
   try {
     const p = seed(store), configure = () => {}, view = queue.maintenanceView(p.id);
     const settings = renderToStaticMarkup(createElement(MaintenanceSettings, { maintenance: view, disabled: false, pending: false, configure, openQueue: () => {} }));
-    assert.match(settings, /project setting/); assert.match(settings, /No initial bulk sweep/);
-    assert.match(settings, /at most 8 model requests, 5 minutes and 3 areas per burst/);
+    assert.match(settings, /this project on this computer/); assert.match(settings, /does not recheck the whole project immediately/);
+    assert.match(settings, /up to 8 AI requests over 5 minutes for up to 3 areas/);
     assert.doesNotMatch(settings, /Pause automatic|Resume automatic/);
     const work = renderToStaticMarkup(createElement(MaintenanceQueue, { project: p, maintenance: { ...view, enabled: true, suspended: true,
       tasks: { missions: { inputKey: "a".repeat(64), state: "blocked", reason: "Exact evidence still exceeds the budget" } } },
       disabled: false, pending: false, configure, settings: () => {} }));
     assert.match(work, /Resume automatic maintenance/); assert.match(work, /Exact evidence still exceeds the budget/);
     assert.doesNotMatch(work, /Enable automatic|Turn off automatic/);
-    assert.match(work, /needs your permission/);
+    assert.match(work, /allow AI checks after restarting the app/);
   } finally { void queue.close(); store.close(); }
 });
 

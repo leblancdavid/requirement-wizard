@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import type { Account, LoginStatus, Model } from "../providers/connections.js";
 import { ActivityBar, ActivityFeedback, Spinner, useActivity } from "./activity.js";
 import { ActionScope } from "./action-button.js";
+import { DiagnosticNotice } from "./diagnostic-notice.js";
 
 type Request = <T>(path: string, body?: unknown) => Promise<T>;
 export function AIConnections({ request, accountID, modelID, onSelect, children, disabled = false }: {
@@ -104,12 +105,12 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
   const account = accounts.find((item) => item.id === accountID);
   return <ActionScope reason={testing ? "Wait for the connection test to finish." : activeLogin ? "Complete or cancel the current ChatGPT sign-in first." : loadingModels ? "Wait for the model catalog to finish loading." : !available ? "Direct ChatGPT sign-in is unavailable. Check the connection service status." : busy ? "Wait for the current connection request to finish." : "Select a connected account and an available model first."}><section className="ai-connections" aria-label="AI connections">
     <div className="connection-heading"><div><h2>AI connections</h2><p>Connect your ChatGPT plan and choose which account and model this project uses.</p></div><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage ↗</a></div>
-    {error && <p role="alert" className="connection-error">{error}</p>}
+    {error && <DiagnosticNotice detail={error} summary="Your AI connection needs attention." next="Check your account and selected AI, or reconnect. If this continues, see Technical details." alert />}
     {!activeLogin && (working || testing || loadingModels) && <ActivityFeedback label={activityLabel} />}
     {message && <p role="status" className="connection-notice">{message}</p>}
     {welcome && <div className="connection-notice" role="status"><strong>Your ChatGPT plan is connected</strong><p>Connecting an account does not change this project’s active connection. Choose a model and save the selection, or use it when creating a project. Eligible requests use your plan or credits.</p><button className="secondary" onClick={() => { localStorage.setItem(`reqwizit-plan-confirmed:${welcome}`, "true"); setWelcome(null); }}>Got it</button></div>}
-    <div className="connection-card"><div><strong>ChatGPT</strong><p>Sign in in a separate browser tab. Your credentials stay with the local service.</p></div><button className="primary" disabled={!available || busy || activeLogin || testing} onClick={() => signIn()}>Continue with ChatGPT</button></div>
-    {loaded && !available && <p>Connection management is unavailable in this server configuration.</p>}
+    <div className="connection-card"><div><strong>ChatGPT</strong><p>Sign in in a separate browser tab. Your sign-in details are kept on this computer, separate from your project.</p></div><button className="primary" disabled={!available || busy || activeLogin || testing} onClick={() => signIn()}>Continue with ChatGPT</button></div>
+    {loaded && !available && <p>ChatGPT sign-in is not available in this setup. You can use an existing OpenCode connection instead.</p>}
     {!loaded && !error && <ActivityFeedback label="Loading saved connections…" />}
     {activeLogin && <div className="connection-notice" role="status"><strong><Spinner />{login.status === "validating" ? "Validating your account…" : "Waiting for ChatGPT sign-in…"}</strong><ActivityBar label="Account authorization progress" /><p>Complete authorization in the other tab, then return here. This attempt expires after three minutes.</p>{authURL && <a href={authURL} target="_blank" rel="noreferrer">Open sign-in tab ↗</a>}<button className="quiet" disabled={busy} onClick={() => void act(async () => { await request("connections/cancel-login", { id: login.id }); setLogin({ ...login, status: "cancelled" }); sessionStorage.removeItem("reqwizit-login"); setAuthURL(""); })}>Cancel sign-in</button></div>}
     <label>AI connection<select aria-label="AI connection" value={accountID} disabled={busy || testing || activeLogin} onChange={(event) => { onSelect(event.target.value, event.target.value ? "" : "gpt-6.1-sol"); }}>
@@ -123,13 +124,13 @@ export function AIConnections({ request, accountID, modelID, onSelect, children,
         {modelID && !models.some((item) => item.id === modelID) && <option value={modelID}>{modelID} · not in current catalog</option>}
         {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
       </select></label>
-      <p className="plan-label">Selected: ChatGPT plan · Direct connection · Web research is not available yet.</p>
+      <p className="plan-label">Uses your ChatGPT plan. Web research is not available with this connection yet.</p>
       <div className="button-row">
         <button className="secondary" disabled={busy || testing || activeLogin || loadingModels || !account} onClick={() => void catalog(accountID)}>{loadingModels && <Spinner />}Refresh models</button>
         <button className="secondary" disabled={busy || testing || activeLogin || !account || !models.some((model) => model.id === modelID)} onClick={() => { setTesting(true); void act(async () => { await request("connections/test", { accountID, modelID }); setMessage("Connection test passed. The selected model returned a valid response."); }).finally(() => { if (mounted.current) setTesting(false); }); }}>Test connection</button>
         {testing && <button className="secondary" onClick={() => { void request("connections/cancel-test", {}).catch((error: Error) => setError(error.message)); }}>Stop test</button>}
         {account && <><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => signIn(accountID)}>Reconnect</button><button className="quiet" disabled={busy || testing || activeLogin} onClick={() => void act(async () => { await request("connections/disconnect", { accountID }); await reload(); setModels([]); setMessage("Account disconnected. Projects retain their selection until you change it."); })}>Disconnect</button></>}
-      </div><small>Testing makes one small inference request and uses your plan allowance. Browsing models does not run inference.</small>
+      </div><small>Testing asks your selected AI for a short response and uses some of your plan’s usage. Looking through the AI choices does not use that allowance.</small>
     </> : <><label>OpenCode model ID<input disabled={busy} value={modelID} onChange={(event) => onSelect("", event.target.value)} /></label><p>Uses the existing OpenCode connection. Direct ChatGPT sign-in above does not change OpenCode credentials.</p></>}
     {children}
   </section></ActionScope>;

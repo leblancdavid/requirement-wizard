@@ -52,7 +52,7 @@ else {
     // must not prevent the desktop from opening its own authenticated backend.
     backend = new DesktopBackend(directory, join(app.getAppPath(), "web"), () => {
       if (!shuttingDown) {
-        if (window) dialog.showErrorBox("Reqwizit backend stopped", "The local service stopped unexpectedly. Saved work is retained; reopen the app to recover interrupted work.");
+        if (window) dialog.showErrorBox("Reqwizit stopped unexpectedly", "Reopen the app to continue. Previously saved work is still available; check whether your latest changes were saved before continuing.");
         setImmediate(() => { void shutdown(); });
       }
     });
@@ -80,7 +80,7 @@ else {
     };
     ipcMain.handle("reqwizit:choose-directory", async (event) => {
       trusted(event);
-      const result = await dialog.showOpenDialog(window!, { title: "Choose project workspace", properties: ["openDirectory", "createDirectory"] });
+      const result = await dialog.showOpenDialog(window!, { title: "Choose project folder", properties: ["openDirectory", "createDirectory"] });
       return result.canceled ? null : result.filePaths[0] ?? null;
     });
     ipcMain.handle("reqwizit:open-external", async (event, url: unknown) => {

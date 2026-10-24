@@ -301,6 +301,7 @@ export class DiscoveryService {
       options.onJob?.(job);
       let definition: ContextPack | undefined;
       if (options.definitionEpicID) {
+        options.onProgress?.(`Preparing definition evidence for ${project.epics.find((e) => e.id === options.definitionEpicID)?.title ?? options.definitionEpicID}\nGathering exact current area records and linked project/dependency evidence. Local preparation only; no model request is running yet.`);
         if (this.store.definitionHistory(project.id, options.definitionEpicID, definitionInputKey(project, options.definitionEpicID)).length) {
           clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
@@ -401,7 +402,8 @@ export class DiscoveryService {
       const shorten = (text: string) => { const line = text.replace(/\s+/g, " ").trim(); return line.length > 140 ? `${line.slice(0, 137)}…` : line; };
       const submitted = options.submissionIDs?.map((id) => this.store.submissions(projectID).find((item) => item.id === id))[0];
       const feature = project.epics.find((epic) => epic.id === options.focusEpicID)?.title;
-      const task = question ? `Explaining: ${shorten(question.text)}`
+      const task = options.definitionEpicID ? `Assessing definition: ${shorten(project.epics.find((e) => e.id === options.definitionEpicID)?.title ?? options.definitionEpicID)}`
+        : question ? `Explaining: ${shorten(question.text)}`
         : pair ? "Resolving a possible requirement duplicate or conflict"
         : refinementTarget ? `Refining: ${shorten(refinementTarget.statement)}`
         : submitted?.input.type === "answer" ? `Reviewing your response: ${shorten(submitted.input.questionText)}`
@@ -418,9 +420,16 @@ export class DiscoveryService {
         research: continuationSource?.retrievalWork?.research ?? epicPlan?.task?.prior?.retrievalWork?.research ?? (options.helpRequest || options.refinementOnly ? false : options.research ?? false),
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
-      const requestModel = (context: ContextPack) => measurement
-        ? measurement.request(() => inferenceAdapter.analyze(project, { ...adapterOptions, context }), context, controller.signal)
-        : inferenceAdapter.analyze(project, { ...adapterOptions, context });
+      const requestModel = async (context: ContextPack) => {
+        const requestStarted = Date.now();
+        const heartbeat = options.definitionEpicID ? setInterval(() => report(`Waiting for model response · ${Math.floor((Date.now() - requestStarted) / 1000)} seconds this request. Reviewing all nine definition dimensions; this cannot generate questions or change the specification.`), 10000) : undefined;
+        if (options.definitionEpicID) report(`Reviewing ${context.manifest.includedIDs.length} exact evidence records · ${context.manifest.characters.toLocaleString("en-US")} / ${context.manifest.budget.toLocaleString("en-US")} characters. One complete-area request; checking all nine definition dimensions.`);
+        try {
+          return await (measurement
+            ? measurement.request(() => inferenceAdapter.analyze(project, { ...adapterOptions, context }), context, controller.signal)
+            : inferenceAdapter.analyze(project, { ...adapterOptions, context }));
+        } finally { if (heartbeat) clearInterval(heartbeat); }
+      };
       controller.signal.throwIfAborted();
       if (epicPlan?.task) {
         const review = epicPlan.task.review;

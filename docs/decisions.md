@@ -32,6 +32,13 @@ every technical detail proposed in the planning documents.
 
 ## Coordinated project workflow (DEC-032)
 
+Confirmed continuation-control follow-up: the user approved consolidating normal
+continuation into **Continue project**, with clear first-entry scope/allowance
+explanation and narrow manual recovery under **Advanced actions**. Do not silently
+relabel a scoped/manual Resume as authorization for project-wide coordination.
+Waiting decisions show their status rather than a misleading resume action. Mode
+configuration stays in Project settings; existing evidence and budgets are unchanged.
+
 Confirmed direction (2026-10-23): the user approved coordinating idea → questions →
 requirements → implementation-readiness while preserving existing views and evidence.
 Faithful requirements become current automatically; choices/conflicts go to the user;

@@ -8,6 +8,23 @@ Stop/pause, blockers, and a decision inbox linking to existing questions, requir
 exceptions, refinements and saved-input issues. Advanced views/actions remain;
 the redundant What's next card stays removed.
 
+### One primary continuation action
+
+**Continue project** is the primary action in the header and queue drawer. When
+coordinated mode is off, its header button opens the queue's scope/allowance
+explanation without starting model work. The drawer's explicit Continue enables
+the mode and grants the existing bounded allowance. When already enabled, Continue
+resumes coordinated work directly. While awaiting decisions with a live allowance,
+the UI shows **Needs your decision**, not a redundant Resume button.
+
+Narrow manual operations move under **Advanced actions** in the queue drawer:
+**Process saved responses only**, **Resume this assessment**, **Resume discovery
+only**, or explicit discovery/exploration continuation as applicable. These retain
+their selected-feature scope, checkpoints and operation-specific allowances; they
+do not enable coordinated mode. While coordinated mode is enabled, these competing
+queue dispatch controls are hidden. Switch modes in Project settings to use them.
+This is presentation/consent clarification, not a new dispatch or migration policy.
+
 The coordinator sequences existing validated operations: process authorized input,
 refresh stale refinement proposals, stop for decisions, establish requirement
 provenance/checks, inspect similarity candidates, review epic workflow packages,

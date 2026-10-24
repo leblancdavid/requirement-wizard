@@ -1,7 +1,7 @@
 import type { Job, Project } from "../core/model.js";
 import { StaleRevisionError } from "../core/model.js";
 import { acceptDefinitionStage, completedDefinitionAssessment, definitionBlockedSchema, definitionPhase, definitionStageContext,
-  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, DefinitionEvidenceBlocked } from "../core/definition-stages.js";
+  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, DefinitionEvidenceBlocked, definitionSteps, splitDefinitionStage } from "../core/definition-stages.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import type { ProjectStore } from "../storage/store.js";
@@ -13,8 +13,10 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     limits?: { requests: number; durationMs: number }; requestTimeoutMs?: number }): Promise<Job> {
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   const prior = store.definitionHistory(project.id, epicID, definitionInputKey(project, epicID)).find((j) => j.id !== job.id);
+  const preparationStarted = Date.now();
+  options.onProgress?.(`Preparing definition evidence for ${project.epics.find((e) => e.id === epicID)?.title ?? epicID} · ${prior?.definitionWork?.receipts.length ?? 0} saved stages available. Gathering exact area, project-wide and declared dependency evidence; no model request is running yet.`);
   const work = prior?.definitionWork ? { ...structuredClone(prior.definitionWork), originJobID: prior.id }
-    : planDefinitionStages(project, epicID);
+    : planDefinitionStages(project, epicID, (progress) => options.onProgress?.(`Preparing exact definition batches · ${progress.prepared} / ${progress.total} evidence records packaged · ${progress.probes} exact size checks. Local preparation only; no model request is running yet.`));
   delete work.paused;
   let draft = replayDefinitionStages(project, work), calls = 0;
   upgradeDefinitionDraftPolicy(work);
@@ -25,17 +27,27 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     return definitionStageContext(project, prefix, replayDefinitionStages(project, prefix));
   };
   const prepareContext = (): ContextPack | Job => {
-    try { return currentContext(); }
-    catch (error) {
-      if (!(error instanceof ContextBudgetError)) throw error;
-      store.checkpointDefinition(job.id, work, error.manifest);
-      return store.blockDefinition(job.id, `The next exact evidence batch plus the complete assessment draft still exceeds 96,000 characters after lossless encoding (${error.manifest.characters.toLocaleString("en-US")}). All ${work.receipts.length} completed responses and spent attempts are saved; no findings or evidence were truncated and partial coverage was not published. Unchanged Resume cannot make this request fit and will not repeat completed calls.`);
+    for (;;) {
+      options.signal.throwIfAborted();
+      try { return currentContext(); }
+      catch (error) {
+        if (!(error instanceof ContextBudgetError)) throw error;
+        if (definitionPhase(work) !== "complete" && splitDefinitionStage(work)) {
+          store.checkpointDefinition(job.id, work, error.manifest);
+          options.onProgress?.(`Repacking oversized definition evidence into smaller exact-record steps · ${work.receipts.length} completed responses retained. No findings or evidence removed; no completed request repeated.`);
+          continue;
+        }
+        store.checkpointDefinition(job.id, work, error.manifest);
+        const indivisible = definitionSteps(work)[work.receipts.length]?.ids.length === 1;
+        return store.blockDefinition(job.id, `The next exact evidence batch plus the complete assessment draft still exceeds 96,000 characters after lossless encoding (${error.manifest.characters.toLocaleString("en-US")}). ${indivisible ? "One indivisible evidence record plus the saved findings cannot fit; further record-level splitting cannot help." : "The 64-stage exact subdivision limit was reached."} All ${work.receipts.length} completed responses and spent attempts are saved; no findings or evidence were truncated and partial coverage was not published. Unchanged Resume cannot make this request fit and will not repeat completed calls.`);
+      }
     }
   };
   const initial = prepareContext();
   if (!("manifest" in initial)) return initial;
   let context = initial;
   store.checkpointDefinition(job.id, work, context.manifest); options.measurement?.planned(context);
+  options.onProgress?.(`Definition evidence prepared in ${((Date.now() - preparationStarted) / 1000).toFixed(1)} seconds · ${work.receipts.length} stages reused · ${definitionSteps(work).length} planned read/check stages. Additional exact subdivisions may be needed if findings grow.`);
   for (;;) {
     options.signal.throwIfAborted();
     if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
@@ -43,8 +55,11 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     if (definitionPhase(work) === "complete") return store.finishJob(job.id, completedDefinitionAssessment(project, work));
     if (calls >= limits.requests || Date.now() >= deadline) return store.pauseDefinition(job.id, calls >= limits.requests ? "request-limit" : "time-limit", limits.durationMs);
     if (work.attempts >= 3) return store.blockDefinition(job.id, "This exact assessment stage exhausted three attempts. Completed evidence checks are retained; unchanged refresh does not grant new calls. Review missing evidence or changed decisions before retrying.");
-    const phase = definitionPhase(work), batch = work.receipts.length % work.batches.length + 1;
-    options.onProgress?.(`Staged definition assessment: ${phase === "collect" ? "reading exact evidence" : "checking all findings"} · batch ${batch} / ${work.batches.length} · ${work.receipts.length} / ${work.batches.length * 2} stages saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Coverage remains unpublished until all checks finish. Exact evidence is distributed across batches, never truncated.`);
+    const steps = definitionSteps(work), step = steps[work.receipts.length]!;
+    const included = new Set(context.manifest.includedIDs);
+    const evidence = `${project.requirements.filter((r) => included.has(r.id)).length} requirements, ${project.questions.filter((r) => included.has(r.id)).length} questions, ${project.sources.filter((r) => included.has(r.id)).length} source records and ${project.research.filter((r) => included.has(r.id)).length} research records`;
+    const requestLabel = `${project.epics.find((e) => e.id === epicID)?.title ?? epicID} · ${step.phase === "collect" ? "reading exact evidence" : "checking findings against evidence"} · batch ${step.batch} / ${work.batches.length} · ${work.receipts.length} / ${steps.length} stages saved`;
+    options.onProgress?.(`${requestLabel}\nProcessing ${evidence} · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Coverage remains unpublished until all checks finish. Exact evidence is distributed across batches, never truncated.`);
     work.attempts++; calls++;
     store.checkpointDefinition(job.id, work, context.manifest);
     const requestMs = options.requestTimeoutMs ?? 300000;
@@ -56,6 +71,8 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
       onResearch: (value) => { if (value.length) throw new Error("Staged definition assessment does not authorize research."); },
       onProgress: (message) => options.onProgress?.(message) });
     let raw: unknown;
+    const requestStarted = Date.now();
+    const heartbeat = setInterval(() => options.onProgress?.(`${requestLabel}\nWaiting for model response · ${Math.floor((Date.now() - requestStarted) / 1000)} seconds this request · processing ${evidence}. Completed stages are saved; Stop retains them.`), 10000);
     try {
       raw = options.measurement ? await options.measurement.request(request, context, signal) : await request();
       signal.throwIfAborted(); // A late adapter response cannot outrun a deadline.
@@ -67,6 +84,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
         : store.interruptDefinition(job.id, { format: 1, cause: "request-time-limit", limitMs: requestMs });
       throw error;
     }
+    finally { clearInterval(heartbeat); }
     options.signal.throwIfAborted();
     if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
     if (raw && typeof raw === "object" && "definitionBlocked" in raw) {

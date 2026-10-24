@@ -1,4 +1,5 @@
 import { workspaceMenu } from "./menu-check-helpers.js";
+import { advancedQueue, runQueueAction } from "./queue-check-helpers.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
@@ -111,7 +112,7 @@ try {
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
   const review = page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions", exact: true });
-  const headerDiscovery = page.locator(".queue-header").getByRole("button", { name: "Discover missing decisions", exact: true });
+  const headerDiscovery = page.locator(".queue-header").getByRole("button", { name: "Continue project", exact: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(headerDiscovery).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -121,14 +122,14 @@ try {
     await page.getByRole("tab", { name: tab }).click();
     await expect(review).toHaveCount(0);
     await expect(headerDiscovery).toBeVisible();
-    await expect(headerDiscovery).toHaveAttribute("aria-description", /Scope:.*Orders/i);
+    await expect(headerDiscovery).toHaveAttribute("title", /before enabling/);
     await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveCount(0);
   }
   await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(review).toBeVisible();
   await expect(page.locator(".discovery-hint")).toContainText("Find missing decisions");
   await page.getByRole("tab", { name: /^Specification/ }).click();
-  await headerDiscovery.click();
+  await runQueueAction(page, "Discover missing decisions");
   await expect.poll(() => calls).toBe(2);
   await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(review).toBeEnabled();
@@ -139,9 +140,10 @@ try {
   assert.ok(completedPackage); assert.notEqual(completedPackage.context!.epicReview!.packageID, blocked.context!.epicReview!.packageID);
   await page.locator(".topbar .queue-trigger").click();
   const status = page.getByRole("region", { name: "Epic workflow review progress", exact: true });
-  await expect(status).toContainText("1 reviewed"); await expect(status).toContainText("1 evidence blocked");
+  await expect(status).toContainText("1 group reviewed"); await expect(status).toContainText("1 unable to finish");
   await expect(status.getByLabel("Workflow context budget", { exact: true })).toContainText("Preferred context target: 72,000");
   await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("No eligible packages remain");
+  await status.locator(":scope > details > summary").click();
   await status.getByText("Evidence blockers", { exact: true }).click();
   await expect(status).toContainText("Missing the external order recovery contract.");
   await page.getByRole("button", { name: "Close processing queue" }).click();
@@ -151,7 +153,7 @@ try {
   await expect.poll(() => store.jobs(project.id).at(-1)!.epicReviewReport?.modelCalls).toBe(0);
   assert.equal(calls, 2, "Neither checked nor blocked packages replay after reload");
   await page.locator(".topbar .queue-trigger").click();
-  await expect(status).toContainText("1 reviewed"); await expect(status).toContainText("1 evidence blocked");
+  await expect(status).toContainText("1 group reviewed"); await expect(status).toContainText("1 unable to finish");
   await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("No eligible packages remain");
   await page.getByText("Discovery diagnostics", { exact: true }).click();
   const diagnostics = page.getByRole("region", { name: "Discovery diagnostics", exact: true });
@@ -185,7 +187,7 @@ try {
   await page.locator(".progress-trigger").click();
   const overview = page.getByRole("dialog", { name: "Project progress", exact: true });
   await expect(overview.getByRole("region", { name: "Discovery review status", exact: true })).toContainText("Discovery is incomplete");
-  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("does not refresh");
+  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("separate steps");
   const refreshCoverage = overview.getByRole("button", { name: "Refresh definition coverage", exact: true });
   const refreshAppearance = await refreshCoverage.evaluate((button) => {
     const style = getComputedStyle(button);
@@ -257,6 +259,7 @@ try {
   await page.locator(".topbar .queue-trigger").click();
   await expect(page.getByRole("region", { name: "Gap scan outcome", exact: true })).toContainText("Gap exploration blocked: all");
   await expect(status).toContainText("no packages could be reviewed");
+  await status.locator(":scope > details > summary").click();
   await status.getByText("Evidence blockers", { exact: true }).click();
   await expect(status).toContainText("Largest exact records before lossless encoding");
   assert.equal(calls, 2); assert.equal(targetCalls, 4, "Size blockers make no model calls");
@@ -310,7 +313,7 @@ try {
   await expect(pauseDialog).toContainText("Paused—progress saved");
   await expect(pauseDialog.getByText(/^Last round (failed|interrupted):/)).toHaveCount(0);
   await pauseDialog.getByRole("button", { name: "Close processing queue", exact: true }).click();
-  await page.locator(".queue-header").getByRole("button", { name: "Resume processing", exact: true }).click();
+  await runQueueAction(page, "Resume discovery only");
   await expect.poll(() => store.jobs(pausedProject.id).at(-1)?.status).toBe("completed");
   assert.deepEqual(store.getJob(paused.id), paused);
   let headroomProject = store.create("Headroom fallback browser", "Keep every linked decision exact", { providerID: "openai", modelID: "fixture" });
@@ -344,6 +347,8 @@ try {
   assert.ok(diagnostic);
   const outcome = page.getByRole("region", { name: "Gap scan outcome", exact: true });
   await expect(outcome).toContainText(diagnostic);
+  await expect(outcome.locator("details")).not.toHaveAttribute("open");
+  await outcome.getByText("Technical details", { exact: true }).click();
   const dialogText = await page.getByRole("dialog", { name: "Processing & queue" }).innerText();
   assert.equal(dialogText.split(diagnostic).length - 1, 1, "A failed round repeated in progress is shown only once");
   await expect(page.getByText(/^Last round failed:/)).toHaveCount(0);
@@ -361,10 +366,16 @@ try {
   await refreshRuntime.click();
   await expect.poll(() => largeAssessmentCalls).toBe(2);
   const batchProgress = overview.getByRole("region", { name: "Definition assessment progress", exact: true });
-  await expect(batchProgress).toContainText("1 /"); await expect(batchProgress).toContainText("Partial findings are not published");
+  await expect(batchProgress).toContainText("1 of"); await expect(batchProgress).toContainText("progress score updates when the whole review finishes");
+  await expect(batchProgress).toContainText(/Reading your project information|Checking the findings against your project information/);
+  await expect(batchProgress).toContainText("Local preparation:");
+  await batchProgress.getByText(/^Evidence in this request/).click();
+  await expect(batchProgress).toContainText("exact text is retained for assessment");
+  await expect(batchProgress).toContainText("rules that apply to the whole project");
+  assert.equal(largeAssessmentCalls, 2, "Inspecting assessment evidence never starts a request");
   assert.deepEqual(store.get(large.id).assessments, []);
   await page.reload(); await page.locator(".progress-trigger").click();
-  await expect(batchProgress).toContainText("1 /"); assert.equal(largeAssessmentCalls, 2, "Reload does not repeat a saved batch or start another model request");
+  await expect(batchProgress).toContainText("1 of"); assert.equal(largeAssessmentCalls, 2, "Reload does not repeat a saved batch or start another model request");
   await page.getByRole("button", { name: "Close progress", exact: true }).click();
   await page.locator(".queue-header").getByRole("button", { name: "Stop assessment", exact: true }).click();
   await expect.poll(() => store.jobs(large.id).at(-1)!.status).toBe("cancelled");
@@ -377,7 +388,7 @@ try {
   await expect(assessmentQueue.getByRole("region", { name: "Definition assessment progress", exact: true })).toContainText("Stopped—progress saved");
   await expect(assessmentQueue).toContainText("Definition processing is paused");
   await expect(assessmentQueue).not.toContainText("Discovery is paused. Saved submissions are retained.");
-  await assessmentQueue.getByRole("button", { name: "Resume processing", exact: true }).click();
+  await (await advancedQueue(page)).getByRole("button", { name: "Resume this assessment", exact: true }).click();
   await expect.poll(() => coverage(store.get(large.id)).epics.find((e) => e.epicID === "runtime")?.stale).toBe(false);
   const resumedAssessment = store.jobs(large.id).at(-1)!;
   assert.equal(resumedAssessment.definitionWork!.receipts[0]!.jobID, stoppedAssessment.id);
@@ -385,11 +396,13 @@ try {
   assert.deepEqual(store.getJob(stoppedAssessment.id), stoppedAssessment);
   await page.getByRole("button", { name: "Close processing queue", exact: true }).click();
   await page.locator(".progress-trigger").click();
-  await expect(batchProgress).toContainText("All batches read and findings checked against every batch");
+  await expect(batchProgress).toContainText("The review is finished");
   await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("1 current · 0 outdated · 1 not assessed");
   await expect(overview.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) }).locator(":scope > summary")).toContainText("Assessment incomplete");
   assert.deepEqual(store.get(large.id).sources, large.sources);
   await page.setViewportSize({ width: 390, height: 844 });
+  await batchProgress.getByText(/^Evidence in this request/).click();
+  await expect(batchProgress).toContainText("exact text is retained for assessment");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-definition-staged.png"), fullPage: true });
   const completedCalls = largeAssessmentCalls; await page.reload(); assert.equal(largeAssessmentCalls, completedCalls);

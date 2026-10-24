@@ -22,7 +22,7 @@ try {
   await page.goto(app.origin);
   await (await applicationMenu(page)).getByRole("button", { name: "Open project", exact: true }).click();
   const form = page.getByRole("form", { name: "Open Reqwizit project" });
-  await form.getByLabel("Local workspace directory").fill(directory);
+  await form.getByLabel("Project folder on this computer").fill(directory);
   await form.getByRole("button", { name: "Open saved project", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Shared project fixture", exact: true })).toBeVisible();
   assert.equal(store.get(project.id).sources[1]!.text, "Do not ask the team to repeat completed work.");

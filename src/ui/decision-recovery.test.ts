@@ -19,7 +19,7 @@ test("item errors show saved diagnostics and distinguish follow-up retry from de
   submission.conflict = false; submission.applied = true;
   const failed = renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, resume: () => {} }));
   assert.match(failed, /Resume processing/);
-  assert.match(failed, /without submitting it again/);
+  assert.match(failed, /don’t need to submit your response again/);
   submission.status = "completed";
   assert.equal(renderToStaticMarkup(createElement(ItemProcessingNotice, { submission })), "");
   assert.match(renderToStaticMarkup(createElement(ItemProcessingNotice, { error: "Request failed; draft retained" })), /Request failed; draft retained/);

@@ -4,6 +4,33 @@ import { emptyExecution } from "../core/execution.js";
 import { projectSchema, type Job } from "../core/model.js";
 import { queueActivities } from "./queue-activity.js";
 import { refinementActivity } from "./refinement-progress.js";
+import { mayContinueProject, WorkflowControls } from "./workflow-controls.js";
+import type { WorkflowView } from "../service/workflow.js";
+import { workflowLimits } from "../core/workflow.js";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+test("Continue project consistently distinguishes consent, waiting decisions, active work and resumable allowances", () => {
+  const workflow: WorkflowView = { version: 0, enabled: false, paused: true, suspended: false, phase: "idle", message: "Not started",
+    current: undefined, grant: undefined, limits: workflowLimits, active: false, decisions: [], readiness: {
+      policy: "coordinated-checks-v1", revision: 1, requirementIDs: [], specificationChecked: false, readyToImplement: false,
+      explanation: "Checks pending", limitation: "No coding authority" } };
+  assert.equal(mayContinueProject(workflow), true);
+  const consent = renderToStaticMarkup(createElement(WorkflowControls, { workflow, disabled: false, pending: false, configure() {} }));
+  assert.match(consent, /Continue project lets the app guide your next steps/);
+  assert.match(consent, /across all project areas/); assert.match(consent, /Advanced actions/);
+  assert.doesNotMatch(consent, /Resume processing/);
+  for (const phase of ["needs-decision", "working", "ready-to-plan", "ready-to-implement"] as const) {
+    const waiting = { ...workflow, enabled: true, paused: false, phase };
+    assert.equal(mayContinueProject(waiting), false);
+    const html = renderToStaticMarkup(createElement(WorkflowControls, { workflow: waiting, disabled: false, pending: false, configure() {} }));
+    assert.doesNotMatch(html, />Continue project<\/button>/);
+  }
+  assert.equal(mayContinueProject({ ...workflow, enabled: true, phase: "paused" }), true);
+  assert.equal(mayContinueProject({ ...workflow, enabled: true, paused: false, suspended: true }), true);
+  assert.equal(mayContinueProject({ ...workflow, enabled: true, paused: false, phase: "blocked" }), true);
+  assert.equal(mayContinueProject({ ...workflow, active: true }), false);
+});
 
 test("refinement labels distinguish stage progress, run scope and terminal outcomes", () => {
   const running = { phase: "overlaps", status: "running", completed: 6, total: 20 } as const;

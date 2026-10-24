@@ -50,15 +50,15 @@ test("definition inspection exposes outdated category explanations and exact lin
     checks: [{ dimension: "failures", importance: "critical", status: "unknown", explanation: "Recovery after failed saves is undecided.", evidenceIDs: [project.requirements[0]!.id, "missing-evidence"] }] }];
   const before = JSON.stringify(project);
   const html = renderToStaticMarkup(createElement(DefinitionAssessment, { project, area: coverage(project).epics.find((e) => e.epicID === "project")! }));
-  assert.match(html, /previous findings, not confirmed current gaps/);
-  assert.match(html, /Assessed at revision 1; current revision 2/);
+  assert.match(html, /earlier findings may no longer apply/);
+  assert.match(html, /Checked at project version 1; current version 2/);
   assert.match(html, /Failure behavior/);
   assert.match(html, /Recovery after failed saves is undecided/);
   assert.ok(html.includes(project.requirements[0]!.statement));
   assert.match(html, /Evidence unavailable/);
   assert.match(html, /Previously flagged critical area/);
   const unassessed = renderToStaticMarkup(createElement(DefinitionAssessment, { project, area: coverage(project).epics.find((e) => e.epicID === "inbox")! }));
-  assert.match(unassessed, /gaps are unknown/);
+  assert.match(unassessed, /don’t yet know what details may be missing/);
   assert.doesNotMatch(unassessed, /0 critical gaps/);
   project.assessments[0]!.atRevision = 2;
   const current = renderToStaticMarkup(createElement(DefinitionAssessment, { project, area: coverage(project).epics.find((e) => e.epicID === "project")! }));
@@ -117,7 +117,7 @@ test("gap continuation status shows the durable six-request limit and never gran
   const continued = () => assert.fail("Rendering must not grant requests");
   assert.equal(renderToStaticMarkup(createElement(GapContinuation, { job, available: false, disabled: false, continueExploration: continued })), "");
   const offered = renderToStaticMarkup(createElement(GapContinuation, { job: { ...job, retrievalWork: { ...job.retrievalWork!, attempts: 3, continuation: undefined } }, available: true, disabled: false, continueExploration: continued }));
-  assert.match(offered, /Continue exploration/); assert.match(offered, /Ordinary Resume does not reset/);
+  assert.match(offered, /Continue exploration/); assert.match(offered, /Choosing Resume alone won’t allow more requests/);
   assert.doesNotMatch(offered, /Allow up to 3 more requests/, "cost confirmation requires a user action first");
 });
 
@@ -177,7 +177,7 @@ test("Review uses Refine as the single duplicate/conflict workflow without runni
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
     refine: () => { calls++; }, submit: async () => true, reviewRefinement: async () => true }));
   assert.match(html, /Refine requirements/);
-  assert.match(html, /possible duplicates\/conflicts/);
+  assert.match(html, /duplicates and conflicting choices/);
   assert.ok(!html.includes("Check approved requirements for duplicates and conflicts"));
   assert.ok(!html.includes("Approved requirement audit"));
   assert.equal(calls, 0);

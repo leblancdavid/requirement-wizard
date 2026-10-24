@@ -6,7 +6,7 @@ import { bytesToHex } from "@noble/hashes/utils";
  * Conservative scope includes project-wide decisions, transitive dependencies,
  * linked evidence and superseding sources. Assessment/job/model metadata is not
  * specification evidence and must not invalidate other completed assessments. */
-export function definitionInputs(project: Project, epicID: string, evidenceIDs: string[] = []) {
+export function definitionAreas(project: Project, epicID: string) {
   const areas = new Set(["project", epicID]);
   const visit = (id: string) => {
     for (const dependency of project.epics.find((e) => e.id === id)?.dependencies ?? []) {
@@ -14,6 +14,11 @@ export function definitionInputs(project: Project, epicID: string, evidenceIDs: 
     }
   };
   for (const id of [...areas]) visit(id);
+  return areas;
+}
+
+export function definitionInputs(project: Project, epicID: string, evidenceIDs: string[] = []) {
+  const areas = definitionAreas(project, epicID);
   const records = [...project.sources, ...project.questions, ...project.requirements, ...project.research];
   const included = new Set([...evidenceIDs, ...records.filter((r) => areas.has(r.epicID) || "kind" in r && r.kind === "initial").map((r) => r.id)]);
   let changed = true;

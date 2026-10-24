@@ -87,7 +87,7 @@ export function projectProgress(project: Project, execution: ExecutionEvaluation
        assessmentState: !definitionAreas.some((e) => e.assessed) ? "unassessed" : definitionAreas.some((e) => e.assessed && e.stale) ? "outdated" : definition.stale ? "incomplete" : "current",
       status: definition.stale ? "Definition assessment incomplete" : definition.criticalGaps || definition.openQuestions ? "Gaps remaining" : "Assessed",
       detail: definitionAssessmentDetail(definitionAreas),
-       explanation: "Assesses specification detail, not code or the fraction of questions answered. Critical gaps count unresolved critical categories, not individual missing requirements. Not assessed means no saved whole-area assessment; gaps are unknown. Outdated findings may no longer apply. Relevant area, project-wide, dependency or linked evidence changes make assessments outdated; discovery checks alone do not refresh them. Use Refresh definition coverage for a complete current-area assessment. No open questions recorded does not mean no unresolved decisions. Expand an area to inspect its categories, explanations and evidence. The overall estimate still uses saved coverage, with unassessed areas counted as zero.",
+       explanation: "Shows how clearly the product is defined, not how much code is built or how many questions you answered. Critical gaps are important topics that still need decisions, not a count of missing requirements. Areas not yet checked have unknown gaps and count as zero in the estimate. Earlier findings may no longer apply after related project information changes. Use Refresh definition coverage to check the latest information; finding new questions does not refresh this score. Expand an area to see what is defined and why. No open questions does not guarantee that nothing is missing.",
       epics: definitionAreas.map((score) => ({
          epicID: score.epicID, title: active.find((e) => e.id === score.epicID)?.title ?? score.epicID, percent: score.percent,
          assessmentState: !score.assessed ? "unassessed" : score.stale ? "outdated" : "current",
@@ -95,10 +95,10 @@ export function projectProgress(project: Project, execution: ExecutionEvaluation
          detail: definitionAssessmentDetail([score], false),
       })) },
     { id: "review", title: "Specification decisions", ...reviewScore(requirements),
-      explanation: "Requirements recorded from explicit answers, explicitly approved, or rejected, divided by identified requirements in active epics. This is decision coverage, not proof of human review of generated wording. A matching pending refinement remains unresolved. Specification changes do not authorize coding.",
+       explanation: "Shows how many requirements have a recorded decision: stated clearly in your answers, approved, or rejected. It does not mean you personally reviewed every word written by the AI. Requirements with a proposed wording change still need attention. Updating requirements does not give permission to start coding.",
       epics: active.map((e) => ({ epicID: e.id, title: e.title, ...reviewScore(requirements.filter((r) => r.epicID === e.id)) })) },
     { id: "implementation", title: "Verified delivery to main", ...implementationScore(requirements),
-      explanation: "Current requirements verified as delivered to the configured repository’s main branch divided by all non-rejected requirements in active epics, including those awaiting approval. Local code completeness is shown separately over approved requirements and updates during assessment. Manual progress, code assessments and unmerged PRs earn no delivery credit.",
+       explanation: "Shows how many current requirements have been checked and added to the main project (the main branch in Git). Requirements still awaiting approval are included in the total. Code found on this computer is shown separately. Build notes, code reviews alone and pull requests waiting to be merged do not count as delivered.",
       epics: active.map((e) => ({ epicID: e.id, title: e.title, ...implementationScore(requirements.filter((r) => r.epicID === e.id)) })) },
   ];
   const complete = stages.every((stage) => stage.percent === 100) && !definition.stale && !definition.pendingReviews && !definition.criticalGaps && !definition.openQuestions;

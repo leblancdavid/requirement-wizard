@@ -117,7 +117,7 @@ try {
     await second.locator(":scope > summary").click();
     await expect(second.getByRole("navigation").first()).toContainText("1–25 of 55");
     await expect(rows).toContainText("26–50 of 55");
-    const search = view.getByRole("searchbox", { name: "Search epics and requirements", exact: true });
+    const search = view.getByRole("searchbox", { name: "Search features and requirements", exact: true });
     await search.fill("BROWSE-R-0-54 token-0-54");
     await expect(view.locator(".feature-group")).toHaveCount(1);
     await expect(rows).toContainText("1–1 of 1");

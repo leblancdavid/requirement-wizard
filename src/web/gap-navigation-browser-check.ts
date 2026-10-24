@@ -1,4 +1,5 @@
 import { workspaceMenu } from "./menu-check-helpers.js";
+import { advancedQueue } from "./queue-check-helpers.js";
 import { exploreLegacyGaps } from "./legacy-gap-check-helpers.js";
 import assert from "node:assert/strict";
 import { browserDiagnostics } from "./browser-diagnostics.js";
@@ -199,7 +200,7 @@ try {
   assert.deepEqual(store.getJob(firstPage.id), firstPage); assert.deepEqual(store.getJob(exhausted.id), exhausted);
   assert.deepEqual(store.get(paging.id), paging); assert.deepEqual(store.get(paging.id, pagingBefore.revision), pagingBefore);
   await expect(page.locator(".queue-header").getByRole("button", { name: "Discover missing decisions", exact: true })).toHaveCount(0);
-  await page.locator(".queue-header").getByRole("button", { name: "Continue exploration", exact: true }).click();
+  await advancedQueue(page);
   assert.equal(pagingCalls, 3, "The header continuation opens review without granting more calls");
   const queueDialog = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   const continuation = queueDialog.getByRole("region", { name: "Continue gap exploration", exact: true });

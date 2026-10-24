@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import type { ActivityPage, ActivityType } from "../core/project-activity.js";
 import { LazyDetails } from "./lazy-details.js";
 import { Spinner } from "./activity.js";
+import { DiagnosticNotice } from "./diagnostic-notice.js";
 import "./project-activity.css";
 
 const labels: Record<ActivityType, string> = { decisions: "Decisions", discovery: "Discovery", implementation: "Implementation", problems: "Problems", technical: "Technical" };
@@ -51,11 +52,11 @@ export function ProjectActivityFeed({ projectID, feature, updateToken, request, 
       <label>Type<select aria-label="Activity type" value={type} onChange={(e) => { setType(e.target.value); reset(); }}><option value="">All types</option>{Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       <form onSubmit={(e) => { e.preventDefault(); setSearch(draft.trim()); reset(); }}><label>Search history<input type="search" aria-label="Search activity" maxLength={200} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Requirement, decision or feature…" /></label><button className="secondary" type="submit">Search</button>{search && <button className="quiet" type="button" onClick={() => { setDraft(""); setSearch(""); reset(); }}>Clear</button>}</form>
     </div>
-    <small>Highlights hide routine revisions without recorded item changes. All activity retains the full revision audit trail. Search and filters cover the whole saved history.</small>
+    <small>Highlights show important changes. All activity includes the full saved history, including routine updates. Search and filters cover that whole history.</small>
     {data && latest > data.anchor && <p className="activity-new" role="status"><button className="secondary" disabled={loading} onClick={reset}>New activity available · Show latest</button></p>}
     {controls("top")}
     {loading && <p role="status"><Spinner />Loading activity…</p>}
-    {error && <p role="alert">{error} <button className="secondary" onClick={() => setNavigation((n) => ({ ...n, refresh: n.refresh + 1 }))}>Retry activity</button></p>}
+    {error && <><DiagnosticNotice detail={error} summary="The activity history couldn’t be loaded." next="Retry to load it again; this does not change your project." alert /><button className="secondary" onClick={() => setNavigation((n) => ({ ...n, refresh: n.refresh + 1 }))}>Retry activity</button></>}
     {!loading && !error && data && <>
       {!data.entries.length && <div className="empty-card"><h3>No matching activity.</h3><p>Try All activity, another type or feature, or clear your search.</p></div>}
       <div className="activity-entries">{data.entries.map((entry) => <article className={`activity-entry ${entry.type}`} key={entry.id}>

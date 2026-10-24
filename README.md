@@ -11,6 +11,10 @@ support is deferred.
 
 ## Project status
 
+User-facing guidance is being kept at product-owner level: plain explanations first,
+with internal processing details available separately. See the
+[language conventions](docs/user-facing-language.md) for scope and compatibility.
+
 **Coordinated workflow (preview)** adds **Continue project** to sequence saved input,
 questions and specification checks with a shared bounded allowance and decision
 inbox in Processing & queue. Opt-in per project; saved work and advanced actions

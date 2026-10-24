@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import type { Submission } from "../core/model.js";
 import { dismissibleReviewAttempt, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { ActionButton } from "./action-button.js";
+import { DiagnosticNotice } from "./diagnostic-notice.js";
 
 export function AttemptCleanup({ submissions, disabled, dismiss, undo }: {
   submissions: Submission[]; disabled: boolean;
@@ -25,6 +26,6 @@ export function AttemptCleanup({ submissions, disabled, dismiss, undo }: {
         setArchived(items.map((s) => ({ submissionID: s.id, archivedAt: s.archivedAt! })));
       })}>Dismiss old attempts{eligible.length > 1 ? ` (${eligible.length})` : ""}</ActionButton></>}
     {archived.length > 0 && <div role="status"><p>Old attempts dismissed. All notes and history kept. No requirement decision changed.</p><ActionButton className="secondary" disabled={disabled || working} onClick={() => void run(async () => { await undo(archived); setArchived([]); })}>Undo dismissal</ActionButton></div>}
-    {error && <p role="alert">{error}</p>}
+    {error && <DiagnosticNotice detail={error} summary="The app couldn’t update these earlier attempts." next="Check the list before trying again." alert />}
   </section>;
 }

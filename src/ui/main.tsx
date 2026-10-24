@@ -1,5 +1,6 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
+import { DiagnosticNotice } from "./diagnostic-notice.js";
 import type { Job, Project, Submission, ReviewAction } from "../core/model.js";
 import { ChangeRequestForm } from "./change-request.js";
 import { captureAnswerScope } from "../core/input-scope.js";
@@ -426,7 +427,7 @@ function App() {
     <DesktopTitleBar />
     {issue && issue.projectID === project?.id && data && <IssueDialog key={project.id} close={() => setIssue(undefined)}>
       <p>Current saved information · Actions use the same checks as Review. Closing returns you to your previous view.</p>
-      {error && <p role="alert">{error}</p>}
+      {error && <DiagnosticNotice detail={error} alert />}
       {issueHistory.some((s) => resolvedAttempts.has(s.id)) && <p role="status">A later decision was saved. Earlier failed attempts are history only; all original notes are preserved, not applied. Current wording may still need review.</p>}
       {issueRequirementID && <AttemptCleanup key={issueRequirementID} submissions={issueHistory.filter((s) => !resolvedAttempts.has(s.id))} disabled={pending} dismiss={async (submissionIDs) => {
         const items = await api<Submission[]>(`projects/${project.id}/dismiss-review-attempts`, { revision: project.revision, requirementID: issueRequirementID, submissionIDs });
@@ -459,7 +460,7 @@ function App() {
       <div className="workspace-content">
       {pending && <ActivityFeedback label={actionLabel} />}
       {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
-      {error && <div role="alert" className="error"><strong>Something needs attention.</strong> {error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
+      {error && <div className="error"><DiagnosticNotice detail={error} next="Check the current screen before trying again. More information is available in Technical details." alert /><button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
       {showSettings && <section id="workspace-settings" className="settings-panel" aria-label="Settings">
         <AppearanceSettings />
         <AIConnections request={api} disabled={pending} accountID={connectionID} modelID={model} onSelect={(account, selectedModel) => { setConnectionID(account); setModel(selectedModel); }}>
@@ -484,9 +485,9 @@ function App() {
       {(creating || projectsLoaded && !id && !project && !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>
         {opening && <form onSubmit={(event) => void openProject(event)} aria-label="Open Reqwizit project">
-          <h2>Continue saved project work</h2><p>Choose a cloned repository containing .reqwizit. Saved decisions, assessments and continuation checkpoints are restored without model calls. Automatic processing starts paused.</p>
+          <h2>Continue saved project work</h2><p>Choose a project folder containing .reqwizit. Your saved decisions, checks and unfinished review progress are restored without asking the AI again. Automatic work starts paused.</p>
           <WorkspacePicker path={workspacePath} create={false} existingOnly onChange={(path) => setWorkspacePath(path)} request={api} disabled={pending} />
-          <p>Review shared evidence before publishing it. Imported verification commands are not executed on open; review Implementation settings before running checks. Coding sessions and worktrees do not transfer between machines.</p>
+          <p>Review shared project information before publishing it. Opening a project does not run its saved checking commands; review Implementation settings first. Active coding work does not transfer between computers.</p>
           <p>Local discovery connection: {connectionID ? "Direct ChatGPT plan" : "OpenCode"} · {model || "Choose a model"}. <button type="button" className="quiet" onClick={() => navigate("settings")}>Choose AI connection</button> Saved assessment models remain attached to their findings.</p>
           <button className="primary" disabled={pending || !workspacePath.trim() || !model}>Open saved project</button>
         </form>}
@@ -496,13 +497,13 @@ function App() {
           <label>Project name<input required maxLength={150} value={name} onChange={(event) => { editedIdentity.current.name = true; setName(event.target.value); }} placeholder="Something worth building" /></label>
           <label>{initializeFolder ? "Project description (suggested from files)" : "Your idea"}<textarea required={!initializeFolder} maxLength={12000} value={idea} onChange={(event) => { editedIdentity.current.description = true; setIdea(event.target.value); }} placeholder={initializeFolder ? "Describe this existing project, or leave blank for initialization…" : "I want to build an app that…"} rows={5} /></label>
           {!initializeFolder && <WorkspacePicker path={workspacePath} create={createDirectory} onChange={(path, make) => { setWorkspacePath(path); setCreateDirectory(make); }} request={api} disabled={pending} />}
-          {initializeFolder && <p>Source files will be sent to your selected AI connection in bounded batches. Review the generated feature and requirement proposals first. {workspacePath.trim() ? "" : "Select a local folder to initialize."}</p>}
+          {initializeFolder && <p>Selected project files will be sent to your AI in smaller groups. Review its suggested features and requirements before continuing. {workspacePath.trim() ? "" : "Choose the project folder to get started."}</p>}
           <div className="connection-summary">{connectionID ? "Direct ChatGPT plan" : "OpenCode connection"} · {model || "Choose a model in Settings"} <button type="button" className="quiet" onClick={() => navigate("settings")}>Choose AI connection</button></div>
           <label className="research-toggle"><input type="checkbox" checked={!connectionID && research} disabled={!!connectionID} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted web research</label>
           <button className="primary" title={pending ? "Creating your project. Wait for this request to finish." : !model ? "Choose an AI model in Settings first." : initializeFolder && (!workspacePath.trim() || previewBusy || !folderPreview) ? "Select an existing folder and wait for its preview to finish." : undefined} disabled={pending || !model || initializeFolder && (!workspacePath.trim() || previewBusy || !folderPreview)}>{pending && <Spinner />}{pending ? "Creating…" : initializeFolder ? "Create & initialize existing project →" : "Create & explore →"}</button>
         </form>
       </section> : !project || !summary ? <div className="empty">Loading your workspace…</div> : <>
-        <div className="workspace-status" role="status"><span>{data.workspace ? `${data.workspace.status === "saved" ? "Saved" : data.workspace.status === "pending" ? "Saving" : data.workspace.status === "conflict" ? "Conflict" : "Unavailable"} · ${data.workspace.path}${data.workspace.savedRevision ? ` · r${data.workspace.savedRevision}` : ""}` : "No local folder connected"}</span><button className="quiet" onClick={() => navigate("settings")}>{data.workspace ? "Workspace settings" : "Connect workspace"}</button>{data.workspace?.diagnostic && <span>{data.workspace.diagnostic}</span>}</div>
+        <div className="workspace-status" role="status"><span>{data.workspace ? `${data.workspace.status === "saved" ? "Saved" : data.workspace.status === "pending" ? "Saving" : data.workspace.status === "conflict" ? "Different saved changes need review" : "Folder unavailable"} · ${data.workspace.path}` : "No local folder connected"}</span><button className="quiet" onClick={() => navigate("settings")}>{data.workspace ? "Workspace settings" : "Connect workspace"}</button>{data.workspace?.diagnostic && <span>Open Workspace settings to review the folder issue.</span>}</div>
         <section className="workspace">
           <div className="discovery-column">
             <div className="work-heading"><div><h2>{tab === "discover" ? "One decision at a time" : tab === "review" ? "Your specification, kept current" : tab === "implementation" ? "Build one requirement at a time" : tab === "requirements" ? "Your project, taking shape" : "Project activity"}</h2><label className="area-filter">Feature<select aria-label="Filter by feature" value={epicID} onChange={(event) => setEpicID(event.target.value)}><option value="all">All project areas</option>{epics.map((epic) => <option key={epic.id} value={epic.id}>{areaTitle(epic)}</option>)}</select></label></div>{tab === "discover" && <div className="gap-controls" aria-label="Gap discovery">
@@ -637,7 +638,7 @@ function QuestionCard({ question, area, purpose, expanded, onToggle, onCancel, h
         <button type="button" className="quiet" disabled={disabled} onClick={() => { setText(initialText ?? ""); setKind(initialKind ?? "answer"); setBasis(fingerprint); onCancel(); }}>Cancel</button>
         {onDismiss && <button type="button" className="quiet" disabled={disabled || dismissDisabled} onClick={() => void onDismiss()} aria-label={`Dismiss unrelated question: ${question.text}`}>Unrelated / dismiss</button>}
         <ActionButton className="primary" reason={changed ? "Review the updated question and choose Use draft with updated question first." : !text.trim() ? "Choose an option or write a response first." : undefined} disabled={disabled || changed || !text.trim()}>{initialText ? "Save changes →" : "Save response →"}</ActionButton></div>
-      {kind === "delegation" && <small className="delegation-note">Delegation records permission within your stated limits. It does not turn this text into a confirmed product preference.</small>}
+      {kind === "delegation" && <small className="delegation-note">This lets the AI choose only within the limits you describe. It does not record a specific choice as your decision.</small>}
     </form></div>}
     {notice}
    </article>;
@@ -654,7 +655,7 @@ function ReviewForm({ project, requirementID, submissions, jobs, disabled, disab
   const availability = decisionAvailability(project, [requirementID], submissions, jobs);
   const paused = disabled || !!availability.jobIDs.length || !!availability.submissionIDs.length || availability.state === "needs-review";
   return <ActionScope reason={disabledReason || availability.reason || (changed ? "Review the updated requirement and supporting context first." : "This review is being saved or already waiting for processing.")}><div className="review-form">
-    <label>Review rationale (optional)<input maxLength={12000} value={note} onChange={(event) => { setNote(event.target.value); setBasis((current) => current ?? { contextKey, revision: project.revision }); }} placeholder="Anything to add or change?" /></label>
+    <label>Your review note (optional)<input maxLength={12000} value={note} onChange={(event) => { setNote(event.target.value); setBasis((current) => current ?? { contextKey, revision: project.revision }); }} placeholder="Anything to add or change?" /></label>
     {paused && <p className="save-notice" role="status"><strong>Decisions temporarily paused.</strong> {disabledReason || availability.reason} Your note is retained; review the result before deciding.</p>}
     {!paused && availability.questionIDs?.length && <p role="status">Approval: {availability.reason} You can still reject this requirement; rejection does not answer or retire these questions.</p>}
     {changed && <p role="status">Supporting information changed. Your note is retained. <button className="quiet" onClick={() => setBasis({ contextKey, revision: project.revision })}>I have reviewed the updated information</button></p>}
