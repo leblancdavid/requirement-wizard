@@ -20,6 +20,11 @@ guardrails remain. Multi-requirement packages, executable subpackages, adaptive 
 dependency discovery and live planning qualification remain follow-on checks. This does
 not complete portable handoff/readiness milestones.
 
+DEC-031 adds a guided next-action panel and opt-in, bounded changed-area assessment
+maintenance. This is a workflow slice, not completion of readiness or discovery
+milestones. True delta-only evidence review and live maintenance qualification remain
+pending; see [guided maintenance](guided-maintenance.md).
+
 ## M1 — OpenCode runtime integration spike
 
 Progress: version-pinned runner, provider discovery, live ChatGPT JSON-text response,

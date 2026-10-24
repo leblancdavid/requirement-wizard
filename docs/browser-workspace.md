@@ -1,5 +1,28 @@
 # Browser workspace, epics, and estimated completeness
 
+## Guided next steps and automatic maintenance
+
+**What’s next?** recommends setup, processing saved input, reviewing decisions,
+answering existing questions or updating definition progress. **Settings → Project
+settings → Automatic maintenance** opts in to changed-area definition updates after a twenty-second
+settle window, bounded at eight requests/five minutes/three areas per burst. Saved-input
+processing keeps its separate consent setting, renamed **Automatically process saved
+inputs**. A completed assessment no longer leaves a spurious idle Resume action.
+Current evidence/compatible stages are reused, but delta-only assessment is not yet
+implemented. No retrospective bulk sweep, automatic proposal approval, coding or
+delivery; restart needs explicit resume. See [guided maintenance](guided-maintenance.md)
+and the schema-6 [migration ledger](migrations.md#opt-in-guided-maintenance-2026-10-23).
+
+Maintenance is project-specific and stored on this machine, not an app-wide or
+repository-shared preference. Enable/disable and usage explanations are in Settings.
+**Processing & queue** holds task status, blockers and pause/resume; Stop stays on
+the current task. **What’s next?** contains no maintenance configuration panel—only
+brief relevant status and a **View background work** link. The queue links directly
+back to the settings section with keyboard focus; opening either view starts no calls.
+
+Run `npm run test:browser:maintenance` for the deterministic guided flow, keyboard,
+mobile and restart-consent checks; screenshots use `.reqwizit-state/browser-maintenance*`.
+
 ## Header activity feedback
 
 Discovery is the overall question/specification workflow; its actions now describe

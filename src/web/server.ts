@@ -189,7 +189,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? revisionSnapshot(options.store.get(id, lastRound.expectedRevision)).coverage.percent : null;
         const helpJobs = recent.helpJobs.map(({ result: _, researchEvidence: __, ...job }) => job);
-        const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
+        const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), maintenance: queue.maintenanceView(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
         if (known) {
           const encoded = snapshotEncoder.encode(snapshot, known, ["project", "coverage"]);
           res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", [snapshotHeader]: JSON.stringify(encoded.tokens) });
@@ -299,6 +299,11 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         if (project.revision !== input.revision) throw new StaleRevisionError();
         queue.refreshDefinition(id, input.revision, input.focusEpicID);
         json(res, 202, { started: true }); return;
+      }
+      if (action === "maintenance") {
+        const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["enable", "disable", "pause", "resume"]) }).strict().parse(raw);
+        if (["enable", "resume"].includes(input.action) && project.revision !== input.revision) throw new StaleRevisionError();
+        json(res, 200, queue.configureMaintenance(id, input.version, input.action)); return;
       }
       if (action === "analyze") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);

@@ -14,6 +14,30 @@ import { randomUUID } from "node:crypto";
 import type { ActivityPage } from "../core/project-activity.js";
 import { snapshotHeader } from "./snapshot.js";
 
+test("automatic maintenance requires authenticated, revision-bound and CAS-bound explicit consent", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const p = store.create("Maintenance consent", "Retain decisions", { providerID: "openai", modelID: "fixture" });
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; throw new Error("No initial sweep"); } } });
+  const input = { revision: p.revision, version: 0, action: "enable" };
+  const headers = { "X-Reqwizit-Token": app.token, Origin: app.origin };
+  const post = (body: unknown, extra = headers) => fetch(`${app.origin}/api/projects/${p.id}/maintenance`, { method: "POST", headers: { "Content-Type": "application/json", ...extra }, body: JSON.stringify(body) });
+  try {
+    assert.equal((await post(input, {} as typeof headers)).status, 403);
+    assert.equal((await post(input, { ...headers, Origin: "https://example.invalid" })).status, 403);
+    assert.equal((await post({ ...input, revision: p.revision + 1 })).status, 409);
+    assert.equal((await post({ ...input, requests: 999 })).status, 400);
+    const enabled = await post(input); assert.equal(enabled.status, 200);
+    const view = await enabled.json(); assert.equal(view.enabled, true); assert.equal(view.suspended, false); assert.equal(view.version, 1);
+    assert.equal((await post(input)).status, 409, "Stale consent cannot overwrite a newer setting");
+    const checkpoint = store.maintenance(p.id); checkpoint.dueAt++; store.saveMaintenance(p.id, checkpoint);
+    const snapshot = await (await fetch(`${app.origin}/api/projects/${p.id}`, { headers })).json();
+    assert.deepEqual(snapshot.maintenance, view); assert.equal(calls, 0); assert.deepEqual(store.get(p.id), p);
+    store.note(p.id, p.revision, "A newer project decision", "project");
+    assert.equal((await post({ revision: p.revision, version: view.version, action: "pause" })).status, 200);
+    assert.equal(store.maintenance(p.id).paused, true); assert.equal(calls, 0);
+  } finally { await app.close(); store.close(); }
+});
+
 test("opening a portable project is authenticated, bounded, paused, and makes no model calls", async () => {
   const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
   const directory = mkdtempSync(join(parent, "portable-api-"));

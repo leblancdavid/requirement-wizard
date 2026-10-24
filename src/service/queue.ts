@@ -15,6 +15,7 @@ import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import type { SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { coverage } from "../core/coverage.js";
 import { definitionAbortReason } from "../core/definition-interruption.js";
+import { maintenanceBasis, maintenanceLimits, observeMaintenance, type MaintenanceView } from "../core/maintenance.js";
 
 type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" };
 
@@ -31,6 +32,7 @@ export class DiscoveryQueue {
   private readonly active = new Map<string, Work>();
   private readonly messages = new Map<string, string[]>();
   private readonly refinementRuns = new Map<string, RefinementProgress>();
+  private readonly maintenanceArmed = new Set<string>();
   private closing = false;
   private readonly wakeTimer: ReturnType<typeof setInterval>;
 
@@ -48,6 +50,7 @@ export class DiscoveryQueue {
     // Also notices a worker in another local process releasing its lease.
     this.wakeTimer = setInterval(() => {
       for (const id of service.store.automaticQueueProjects()) this.start(id);
+      for (const id of this.maintenanceArmed) this.maintain(id);
     }, 500);
     this.wakeTimer.unref();
   }
@@ -76,6 +79,141 @@ export class DiscoveryQueue {
   isActive(id: string) { return this.active.has(id) || this.service.store.discoveryActive(id); }
   progress(id: string) { return this.messages.get(id) ?? []; }
   refinementProgress(id: string) { return this.refinementRuns.get(id) ?? null; }
+
+  maintenanceView(id: string): MaintenanceView {
+    const { settingsVersion: version, enabled, paused, tasks } = this.service.store.maintenance(id);
+    const suspended = enabled && !this.maintenanceArmed.has(id);
+    if (suspended && !this.service.store.discoveryActive(id)) for (const task of Object.values(tasks)) if (task.state === "running") {
+      task.state = "paused"; task.reason ??= "This saved task has no live worker. Resume explicitly; completed evidence and spent attempts are retained.";
+    }
+    return { version, enabled, paused, tasks, suspended, limits: maintenanceLimits };
+  }
+
+  configureMaintenance(id: string, version: number, action: "enable" | "disable" | "pause" | "resume") {
+    let state = this.service.store.maintenance(id);
+    if (state.settingsVersion !== version) throw new OperationConflictError("Automatic maintenance settings changed. Refresh before continuing.");
+    if (action === "enable" || action === "resume") {
+      if (this.closing || this.isActive(id)) throw new OperationConflictError("Wait for the current task before enabling or resuming maintenance.");
+      this.service.store.assertNoExecution(id);
+      this.service.assertCanDiscover(id);
+      const project = this.service.store.get(id);
+      if (!state.observedRevision) {
+        // Opt-in is not permission for a retrospective full-project sweep.
+        state.basis = maintenanceBasis(project); state.observedRevision = project.revision;
+      } else state = observeMaintenance(state, project, Date.now());
+      state.enabled = true; state.paused = false;
+      for (const task of Object.values(state.tasks)) if (task.state === "paused" || task.state === "running") task.state = "queued";
+      state.dueAt = Date.now() + maintenanceLimits.debounceMs;
+    } else {
+      state.paused = true;
+      if (action === "disable") state.enabled = false;
+    }
+    state.settingsVersion++;
+    this.service.store.saveMaintenance(id, state);
+    if (!state.enabled) this.maintenanceArmed.delete(id);
+    else if (action === "enable" || action === "resume") this.maintenanceArmed.add(id);
+    return this.maintenanceView(id);
+  }
+
+  /** Called by the local wake loop. Persisted opt-in alone never arms a new
+   * process. One bounded burst follows settled relevant changes, not a timer sweep. */
+  maintain(id: string, now = Date.now()) {
+    if (this.closing || !this.maintenanceArmed.has(id)) return;
+    const report = (message: string) => { const messages = this.messages.get(id) ?? []; messages.push(message); if (messages.length > 20) messages.shift(); this.messages.set(id, messages); };
+    try {
+      let state = this.service.store.maintenance(id);
+      if (!state.enabled) return;
+      let project: Project | undefined;
+      if (state.observedRevision !== this.service.store.projectRevision(id)) {
+        project = this.service.store.get(id);
+        state = this.service.store.saveMaintenance(id, observeMaintenance(state, project, now));
+      }
+      if (state.paused || state.dueAt > now || this.isActive(id) || this.service.store.executionActive(id) || this.service.store.executionExpired(id)) return;
+      if (!Object.keys(state.tasks).length) return;
+      project ??= this.service.store.get(id);
+      const inputs = this.service.store.submissions(id), resolved = resolvedReviewAttempts(project, inputs);
+      if (inputs.some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status))) return;
+      const areas = coverage(project).epics;
+      let cleaned = false;
+      for (const [area, task] of Object.entries(state.tasks)) {
+        const current = areas.find((e) => e.epicID === area);
+        if (current?.assessed && !current.stale && task.state !== "running") { delete state.tasks[area]; cleaned = true; }
+      }
+      if (cleaned) state = this.service.store.saveMaintenance(id, state);
+      if (!Object.values(state.tasks).some((task) => task.state === "queued")) return;
+      this.service.assertCanDiscover(id);
+      const controller = new AbortController(), deadline = Date.now() + maintenanceLimits.durationMs;
+      let claimed: { epicID: string; inputKey: string; jobID?: string } | undefined;
+      const timer = setTimeout(() => controller.abort(new DOMException("Automatic maintenance time limit", "TimeoutError")), maintenanceLimits.durationMs);
+      const promise = Promise.resolve().then(async () => {
+        let requests = 0, areas = 0;
+        while (!this.closing && !controller.signal.aborted) {
+          // Another app process may have dispatched after our initial idle check.
+          if (this.service.store.discoveryActive(id) || this.service.store.executionActive(id) || this.service.store.executionExpired(id)) break;
+          let current = this.service.store.maintenance(id);
+          if (!current.enabled || current.paused) break;
+          const project = this.service.store.get(id);
+          const inputs = this.service.store.submissions(id), resolved = resolvedReviewAttempts(project, inputs);
+          if (inputs.some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status))) break;
+          const observed = observeMaintenance(current, project, Date.now());
+          if (observed !== current) current = this.service.store.saveMaintenance(id, observed);
+          if (current.dueAt > Date.now()) break;
+          const entry = Object.entries(current.tasks).find(([, task]) => task.state === "queued");
+          if (!entry) break;
+          if (requests >= maintenanceLimits.requests || areas >= maintenanceLimits.areas || Date.now() >= deadline) {
+            current.paused = true; this.service.store.saveMaintenance(id, current); report("Automatic maintenance paused at its burst limit. Completed checks are saved; resume explicitly for remaining areas."); break;
+          }
+          const [epicID, task] = entry;
+          const area = coverage(project).epics.find((e) => e.epicID === epicID);
+          if (area?.assessed && !area.stale) { delete current.tasks[epicID]; this.service.store.saveMaintenance(id, current); continue; }
+          task.state = "running"; delete task.reason;
+          this.service.store.saveMaintenance(id, current); // durable dispatch claim, before inference
+          claimed = { epicID, inputKey: task.inputKey, jobID: task.jobID };
+          report(`Updating definition progress: ${project.epics.find((e) => e.id === epicID)?.title ?? epicID}. Changed-area full review; no automatic approvals or gap discovery.`);
+          const job = await this.service.analyze(id, project.revision, { definitionEpicID: epicID, signal: controller.signal, research: false,
+            definitionLimits: { requests: maintenanceLimits.requests - requests, durationMs: Math.max(1, deadline - Date.now()) }, onProgress: report,
+            onJob: (job) => {
+              if (claimed) claimed.jobID = job.id;
+              const latest = this.service.store.maintenance(id), saved = latest.tasks[epicID];
+              if (saved?.inputKey === task.inputKey) { saved.jobID = job.id; this.service.store.saveMaintenance(id, latest); }
+            } });
+          requests += Math.max(1, job.discoveryMetrics?.requests.length ?? 0); areas++;
+          const latest = this.service.store.maintenance(id), saved = latest.tasks[epicID];
+          if (saved?.inputKey === task.inputKey) {
+            if (job.status === "completed") delete latest.tasks[epicID];
+            else {
+              saved.state = job.status === "failed" ? "blocked" : "paused";
+              saved.reason = (job.diagnostic ?? `Assessment ${job.status}.`).slice(0, 1200);
+              latest.paused = true;
+            }
+          }
+          this.service.store.saveMaintenance(id, latest);
+          claimed = undefined;
+          if (job.status !== "completed") break;
+        }
+        report(this.service.store.maintenance(id).paused
+          ? "Automatic definition updates paused. Completed checks are saved; inspect the blocker or resume explicitly for another bounded burst."
+          : "Definition maintenance finished this burst. Saved input, decisions and definition progress remain separate; coding and delivery never start automatically.");
+      }).catch((error) => {
+        const latest = this.service.store.maintenance(id);
+        const conflict = error instanceof OperationConflictError;
+        const task = claimed && latest.tasks[claimed.epicID];
+        if (!conflict) latest.paused = true;
+        if (task && task.state === "running" && task.inputKey === claimed!.inputKey && task.jobID === claimed!.jobID) {
+          task.state = conflict ? "queued" : controller.signal.aborted ? "paused" : "blocked";
+          task.reason = safeMessage(error instanceof Error ? error.message : error).slice(0, 1200);
+        }
+        this.service.store.saveMaintenance(id, latest); report(conflict
+          ? "Automatic maintenance is waiting for another local worker; no model call was repeated."
+          : "Automatic maintenance needs attention. Saved checkpoints are retained; no automatic retry.");
+      }).catch((error) => {
+        // Unsupported/corrupt metadata must not be overwritten by failure
+        // bookkeeping, nor become an unhandled background rejection.
+        this.maintenanceArmed.delete(id); report(safeMessage(error instanceof Error ? error.message : error));
+      }).finally(() => { clearTimeout(timer); this.active.delete(id); });
+      this.active.set(id, { controller, promise, kind: "definition" });
+    } catch (error) { report(safeMessage(error instanceof Error ? error.message : error)); this.maintenanceArmed.delete(id); }
+  }
   refreshDefinition(id: string, revision: number, focusEpicID?: string) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
@@ -146,6 +284,12 @@ export class DiscoveryQueue {
     const item = this.service.store.enqueue(id, raw);
     const initializing = this.service.requiresInitialization(id);
     if (initializing) this.service.store.pauseQueue(id, true);
+    if (!initializing && item.auto && this.maintenanceArmed.has(id)) {
+      const maintenance = this.service.store.maintenance(id);
+      const unresolved = resolvedReviewAttempts(this.service.store.get(id), this.service.store.submissions(id));
+      const blocked = this.service.store.submissions(id).some((s) => !s.archivedAt && s.status === "needs-attention" && !unresolved.has(s.id));
+      if (maintenance.enabled && !maintenance.paused && !blocked) this.service.store.pauseQueue(id, false);
+    }
     // Plain approval records a human decision, not a request for interpretation.
     // Apply only this response, even when automatic AI follow-up is paused.
     if (!this.closing && !initializing && this.isLocalApproval(item) && item.status === "queued"
@@ -183,6 +327,11 @@ export class DiscoveryQueue {
     const unfinished = submissions.some((s) => !s.archivedAt && !resolved.has(s.id)
       && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
     const last = this.service.store.jobs(id).at(-1);
+    const maintenance = this.service.store.maintenance(id);
+    if (!unfinished && maintenance.enabled && Object.values(maintenance.tasks).some((task) => !!task.jobID && task.jobID === last?.id)
+      && (!options.focusEpicID || options.focusEpicID === last?.context?.definitionAssessment?.epicID)) {
+      this.configureMaintenance(id, maintenance.settingsVersion, "resume"); return;
+    }
     if (!unfinished && last?.context?.definitionAssessment && ["interrupted", "cancelled", "failed", "stale"].includes(last.status)) {
       this.refreshDefinition(id, project.revision, options.focusEpicID ?? last.context.definitionAssessment.epicID); return;
     }

@@ -39,7 +39,7 @@ function fixture() {
   store.saveExecution(project.id, state);
   store.close();
   const db = new Database(path);
-  db.exec("DROP TABLE project_activity; DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;");
+  db.exec("DROP TABLE project_activity; DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;");
   const raw = JSON.parse(JSON.stringify(state)); delete raw.schemaVersion;
   const payload = JSON.stringify(raw);
   db.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(payload, project.id);
@@ -71,7 +71,7 @@ test("legacy execution migration preserves evidence, delivery, original payload 
     const db = new Database(f.path);
     assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.deepEqual(db.prepare("SELECT payload FROM execution_migration_backups").all(), [{ payload: f.payload }]);
-    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history").get() as { n: number }).n, 4);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history").get() as { n: number }).n, 5);
     db.close();
   } finally { rmSync(f.directory, { recursive: true, force: true }); }
 });

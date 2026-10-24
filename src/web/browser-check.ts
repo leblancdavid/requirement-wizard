@@ -655,7 +655,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({ path: ".reqwizit-state/browser-desktop.png", fullPage: true });
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByLabel("Automatically explore queued answers").uncheck();
+  await page.getByLabel("Automatically process saved inputs").uncheck();
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /Owner only.*Keeps account/ }).click();
   await page.locator(".question-card").filter({ has: page.getByRole("heading", { name: "Who will use the first release?", exact: true }) }).getByRole("button", { name: "Save response" }).click();
@@ -890,7 +890,7 @@ try {
   await page.reload();
   await expect(page.getByRole("heading", { name: "Browser sample", exact: true })).toBeVisible();
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-  await expect(page.getByLabel("Automatically explore queued answers")).not.toBeChecked();
+  await expect(page.getByLabel("Automatically process saved inputs")).not.toBeChecked();
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await card.getByRole("button", { name: "Edit answer", exact: true }).click();
@@ -904,7 +904,7 @@ try {
   await page.keyboard.press("Escape");
   await expect(page.getByRole("textbox", { name: "Your answer to Who will use the first release?", exact: true })).toHaveValue("Owner and office team");
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByLabel("Automatically explore queued answers").check();
+  await page.getByLabel("Automatically process saved inputs").check();
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await page.getByRole("button", { name: /To answer/ }).click();
   await page.locator(".queue-header").getByRole("button", { name: "Process saved responses", exact: true }).click();
@@ -1323,7 +1323,7 @@ try {
          await page.getByLabel("Filter by feature").selectOption("all");
          await page.getByRole("tab", { name: /^Design/ }).click();
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         const autoPreference = page.getByLabel("Automatically explore queued answers");
+         const autoPreference = page.getByLabel("Automatically process saved inputs");
          const wasAutomatic = await autoPreference.isChecked();
          await autoPreference.check();
          await page.getByRole("button", { name: "Back to workspace" }).click();
@@ -1372,8 +1372,8 @@ try {
          await (await workspaceMenu(page)).getByRole("button", { name: new RegExp(resolutionProject.name) }).click();
          if (ambiguous) {
            await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-           restoreAutomatic = await page.getByLabel("Automatically explore queued answers").isChecked();
-           await page.getByLabel("Automatically explore queued answers").uncheck();
+           restoreAutomatic = await page.getByLabel("Automatically process saved inputs").isChecked();
+           await page.getByLabel("Automatically process saved inputs").uncheck();
            await page.getByRole("button", { name: "Back to workspace" }).click();
          }
         await page.getByRole("tab", { name: /Specification/ }).click();
@@ -1438,7 +1438,7 @@ try {
          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "Resolution workflow must fit mobile width");
          if (restoreAutomatic !== undefined) {
            await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-           await page.getByLabel("Automatically explore queued answers").setChecked(restoreAutomatic);
+           await page.getByLabel("Automatically process saved inputs").setChecked(restoreAutomatic);
            await page.getByRole("button", { name: "Back to workspace" }).click();
          }
       }
@@ -1452,8 +1452,8 @@ try {
          await page.reload();
          await (await workspaceMenu(page)).getByRole("button", { name: new RegExp(changes.name) }).click();
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         const automatic = await page.getByLabel("Automatically explore queued answers").isChecked();
-         await page.getByLabel("Automatically explore queued answers").uncheck();
+         const automatic = await page.getByLabel("Automatically process saved inputs").isChecked();
+         await page.getByLabel("Automatically process saved inputs").uncheck();
          await page.getByRole("button", { name: "Back to workspace" }).click();
          await page.getByRole("tab", { name: /Specification/ }).click();
          await page.getByLabel("Filter by feature").selectOption("all");
@@ -1504,7 +1504,7 @@ try {
          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Change request flow fits mobile width");
          await page.setViewportSize({ width: 1440, height: 1000 });
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         await page.getByLabel("Automatically explore queued answers").setChecked(automatic);
+         await page.getByLabel("Automatically process saved inputs").setChecked(automatic);
          await page.getByRole("button", { name: "Back to workspace" }).click();
        }
        {
@@ -1517,8 +1517,8 @@ try {
          narrow = store.get(narrow.id);
          await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Narrow blocker browser fixture/ }).click();
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         const automatic = await page.getByLabel("Automatically explore queued answers").isChecked();
-         await page.getByLabel("Automatically explore queued answers").uncheck();
+         const automatic = await page.getByLabel("Automatically process saved inputs").isChecked();
+         await page.getByLabel("Automatically process saved inputs").uncheck();
          await page.getByRole("button", { name: "Back to workspace" }).click();
          await page.getByRole("tab", { name: /^Design/ }).click();
          await expect(page.getByRole("complementary", { name: "Targeted answer scope", exact: true })).toBeVisible();
@@ -1557,7 +1557,7 @@ try {
          assert.equal(store.get(narrow.id).requirements[0]!.status, "proposed");
          assert.equal(store.submissions(narrow.id).some((s) => s.status === "needs-attention"), false);
          await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
-         await page.getByLabel("Automatically explore queued answers").setChecked(automatic);
+         await page.getByLabel("Automatically process saved inputs").setChecked(automatic);
          await page.getByRole("button", { name: "Back to workspace" }).click();
        }
        let cleanup = store.create("Cleanup fixture", "Jump and aim", { providerID: "openai", modelID: "fixture" });

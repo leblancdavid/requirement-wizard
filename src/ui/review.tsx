@@ -144,7 +144,7 @@ function DuplicateRemoval({ project, submissions, jobs, removeID, keepID, disabl
     : <ActionButton className="secondary" disabled={disabled} onClick={() => setOpen(true)}>Remove as duplicate…</ActionButton>;
 }
 
-export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, renderClarification, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, focusItemID, openIssue, draftStore }: {
+export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, renderClarification, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, focusItemID, openIssue, draftStore, pendingRequest }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
   disabled: boolean; disabledReason?: string; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
@@ -156,6 +156,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   itemErrors?: Record<string, string>; resume?: () => void;
   focusRequirementID?: string; focusItemID?: string; openIssue?: (submissionID: string) => void;
   draftStore?: React.MutableRefObject<Record<string, ReviewDraft>>;
+  pendingRequest?: number;
 }) {
   const [filter, setFilter] = useState<ReviewFilter>(() => reviewItems(project, submissions, "pending").length ? "pending" : "current");
   const filterChosen = useRef(false);
@@ -187,6 +188,10 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   const reviewed = reviewItems(project, submissions, "reviewed", epicID);
   const current = reviewItems(project, submissions, "current", epicID);
   useEffect(() => { if (!filterChosen.current) setFilter(pending.length ? "pending" : "current"); }, [pending.length]);
+  useEffect(() => {
+    if (!pendingRequest) return;
+    filterChosen.current = true; setFilter("pending"); setSearch(""); setReadinessFilter("all");
+  }, [pendingRequest]);
   const readinessByID = new Map(pending.map((item) => {
     const draft = item.kind === "requirement" ? drafts.current[item.requirement.id] : undefined;
     const changed = !!draft && item.kind === "requirement" && (draft.fingerprint !== reviewFingerprint(item.requirement) || draft.contextKey !== decisionContextKey(project, [item.requirement.id]));

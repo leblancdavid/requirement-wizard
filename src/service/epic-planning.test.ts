@@ -329,7 +329,7 @@ test("schema-4 upgrade preserves existing root receipts; bounded intermediate ca
     const group = "a".repeat(64), receipt: EpicPlanningCheckpoint = { format: 1, tasks: [], decisions: { newPackage: 0, noCompatibleSavedPackage: 0, compatibleSavedPackage: 0 } };
     store.saveEpicPlanningReceipt(p.id, p.revision, input, group, receipt); store.close();
     let db = new Database(path);
-    db.exec("DROP TABLE epic_planning_contexts; DELETE FROM migration_history WHERE version = 5; PRAGMA user_version = 4;");
+    db.exec("DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DELETE FROM migration_history WHERE version >= 5; PRAGMA user_version = 4;");
     const originals = db.prepare("SELECT * FROM epic_planning_receipts").all();
     db.prepare("INSERT INTO execution_state VALUES (?, 0, ?)").run(p.id, JSON.stringify({ schemaVersion: 999, version: 0, assessments: {}, delivered: {}, history: [] }));
     db.close(); assert.throws(() => new ProjectStore(path), /Unsupported execution/);
@@ -365,7 +365,7 @@ test("schema-4 upgrade preserves existing root receipts; bounded intermediate ca
       assert.deepEqual(future.epicPlanningReceipts(p.id, input).get(group), receipt);
     } finally { future.close(); }
     db = new Database(path);
-    assert.equal(db.pragma("user_version", { simple: true }), 5);
+    assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.deepEqual(db.prepare("SELECT * FROM epic_planning_receipts").all(), originals); db.close();
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

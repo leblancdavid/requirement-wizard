@@ -30,6 +30,25 @@ every technical detail proposed in the planning documents.
 | DEC-021 | Process queued AI follow-up one submission at a time, each with its own focused revision-linked context. Do not combine the queue or include unrelated feature history solely because it shares an area. Retain exact target evidence and explicit guardrails; preserve omitted records and request wider context when needed. | User requested individual processing/contexts after repeated queue-size blockers |
 | DEC-021 | Split generated requirements by stable feature ID, keep original evidence in shared referenced files, and avoid rewriting unchanged outputs. Retain an on-demand combined specification export. | User reported large generated files and confirmed both reading/coding-agent context and disk/Git efficiency as goals after the feature-based export recommendation |
 
+## Guided workflow and bounded automatic maintenance (DEC-031)
+
+Confirmed direction (2026-10-23): simplify the growing set of long-running operations
+with one next-action recommendation and opt-in background maintenance after stories
+and accepted decisions change. Preserve explicit approval, coding and delivery
+boundaries, model-usage limits, Stop and no automatic repeat inference on restart.
+The user approved the staged implementation recommendation in this conversation.
+
+Implemented first slice: What’s next guidance, decision-triggered area scheduling,
+twenty-second coalescing and eight-request/five-minute/three-area bursts, durable
+blocked/paused tasks and explicit restart consent. Individual process actions remain
+available. Delta-only evidence review and consolidating every advanced control are
+follow-on work, not verified capabilities. See [guided maintenance](guided-maintenance.md).
+
+Confirmed placement follow-up: maintenance is a per-project, machine-local setting.
+The user approved configuration in Settings → Project settings, operational status
+and pause/resume in Processing & queue, and only brief status/navigation in What’s
+next rather than a maintenance configuration panel repeated across workspace tabs.
+
 ## Continuous specification (DEC-030)
 
 Confirmed direction (2026-10-22): the user approved replacing routine requirement

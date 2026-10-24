@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { ProjectStore } from "./store.js";
+import { databaseSchemaVersion } from "./migrations.js";
 import { emptyExecution } from "../core/execution.js";
 import { randomUUID } from "node:crypto";
 import { executionActivities } from "../core/project-activity.js";
@@ -126,7 +127,7 @@ test("v2 upgrade backfills 1000 revisions without altering evidence, retries tra
   try {
     const store = new ProjectStore(path), p = store.create("Legacy", "Original exact human input", { providerID: "openai", modelID: "fixture" }); store.close();
     let db = new Database(path);
-    db.exec("DROP TABLE project_activity; DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DELETE FROM migration_history WHERE version >= 3; PRAGMA user_version = 2;");
+    db.exec("DROP TABLE project_activity; DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DELETE FROM migration_history WHERE version >= 3; PRAGMA user_version = 2;");
     const insert = db.prepare("INSERT INTO revisions VALUES (?, ?, ?, ?)");
     db.transaction(() => { for (let revision = 2; revision <= 1000; revision++) insert.run(p.id, revision, "Model selection changed", JSON.stringify({ ...p, revision })); })();
     db.prepare("UPDATE revisions SET payload = ? WHERE revision = 500").run("{broken");
@@ -146,7 +147,7 @@ test("v2 upgrade backfills 1000 revisions without altering evidence, retries tra
       assert.equal(upgraded.get(p.id).sources[0]!.text, p.sources[0]!.text); upgraded.close();
     }
     db = new Database(path);
-    assert.equal(db.pragma("user_version", { simple: true }), 5);
+    assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.deepEqual(db.prepare("SELECT * FROM revisions ORDER BY revision").all(), retained);
     assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history WHERE version = 3").get() as { n: number }).n, 1); db.close();
   } finally { rmSync(directory, { recursive: true, force: true }); }

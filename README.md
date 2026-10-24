@@ -47,6 +47,14 @@ evidence and stage-limit blockers stay explicitly unfinished. See
 The fifteen-minute refresh window is shared across areas: a later area can pause
 after a shorter run. Completed stages are retained; Resume continues unfinished work.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
+**What’s next?** recommends the next useful action. Use **Settings → Project settings
+→ Automatic maintenance** to opt in to definition updates after relevant decisions change: edits settle for
+20 seconds, then at most eight requests/five minutes/three areas run per burst.
+No initial bulk sweep or automatic approvals/coding; app restart requires resume.
+Affected areas still receive full evidence review, not delta-only assessment. See
+[guided maintenance](docs/guided-maintenance.md) for controls, costs and limits.
+Queued areas, blockers and pause/resume controls live in **Processing & queue**;
+the workspace tabs show only brief relevant status and a link to background work.
 **Discover missing decisions** (in Design or the idle top process bar) reviews related workflows and their declared dependency
 boundaries. The compact **Questions ready** input configures how many unanswered questions to
 keep ready (1–50, default 5). Gap exploration continues through bounded packages,

@@ -337,6 +337,12 @@ show a deterministic project aggregate with explanations and evidence.
 - Show critical gaps, assessment freshness, and qualitative scope confidence separately.
 - Explain that newly discovered scope can lower the estimate; even 100% is not proof of readiness.
 - Expose the rubric and the supporting records behind each assessment.
+- Guide users to the next useful action and offer explicit opt-in maintenance after
+  relevant saved decisions change. Coalesce edits, show model-call/time/area bounds,
+  preserve completed work and require explicit resume after interruption or app restart.
+  Do not automatically approve proposals, discover unrelated gaps, code or deliver.
+  Distinguish implemented changed-area full reviews from future delta-only assessment;
+  see [guided maintenance](guided-maintenance.md) (DEC-031).
 - Show overall progress in a top-right card with percentage and status; open a
   dialog with separate Definition, Requirements review and Implementation scores,
   each expandable into epic-level percentages and counts. Overall gives equal

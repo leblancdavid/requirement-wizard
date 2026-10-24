@@ -19,6 +19,89 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Maintenance control placement (2026-10-23 follow-up)
+
+UI-only relocation: enable/disable and usage limits move from the workspace's
+What’s next panel to Settings → Project settings → Automatic maintenance. Queue
+status, area receipts, blockers and pause/resume move to Processing & queue; Stop
+remains attached to the current task. What's next retains brief status/navigation.
+The setting is still per project and machine-local, never app-global or portable.
+
+No persisted format, SQLite schema, fingerprint, concurrency counter, preference,
+task identity, job receipt, permission or budget changes. No data migration or
+reassessment is needed. Opening settings or the queue never dispatches model work.
+Existing opt-in, paused state and completed checks are read as before. Tests cover
+configuration/operation separation, queue/settings links with focus, absence of
+controls from workspace tabs, saved opt-in, pause/reload, server-restart consent,
+keyboard targets and mobile layout. No personal saved data or live inference.
+
+Verified: type check, UI build, 119 pretests + 648 main tests (767 total), and
+maintenance/workflow/portable/specification browser runners passed on Windows
+Node 22.23.3. The focused browser check visits every workspace tab, enables updates
+only in Project settings, opens the queue/settings links with focus, and preserves
+pause/reload and restart consent. Full-browser verification caught a mobile Stop
+visibility regression from placing maintenance above active work; active tasks now
+come first. The rerun passed that check and stopped at the existing **Approve
+resolution** assertion at `src/web/browser-check.ts:1352`.
+
+## Opt-in guided maintenance (2026-10-23)
+
+Source/target: SQLite schema **5 → 6**, additive `maintenance_state(project_id,
+payload)` table. The ordered transactional migration adds the table/history entry
+without rewriting any project, revision, submission, assessment, delivery evidence,
+saved job or checkpoint. No backup of existing evidence is needed because it is
+untouched. New projects and older saved projects read a default disabled state;
+no row or model consent is fabricated until explicit configuration. Interrupted
+migration rolls back table/history/version together and can be retried.
+
+Strict local format-1 payloads contain separate optimistic scheduler `version` and
+user-settings `settingsVersion`, enabled/paused flags, observed project revision,
+decision-trigger keys, debounce timestamp and current per-area queue receipts.
+Settings CAS does not become stale merely because the scheduler checkpointed work;
+neither concurrency counter is a schema version. Enabling/resuming checks the
+current project revision; pause/disable can reduce authority even from an older
+project snapshot, but still check settings CAS. No assessment freshness or input
+fingerprint semantics change. A narrower scheduling projection is never used to
+certify coverage; publication still validates complete exact assessment inputs.
+
+Opt-in starts with today's scheduling baseline, not a retrospective sweep. Tasks
+claim their input identity transactionally before dispatch, retaining the real job
+ID once begun. The existing service owns paid-call checkpoints, leases, attempts
+and revision-safe publication. Automatic bursts have eight requests/five minutes/
+three areas. Budget stops and failures pause; unchanged failed tasks are not retried.
+Existing exact-stage receipts are reusable without representation migration or
+reassessment solely for this workflow change. A current published assessment clears
+an abandoned scheduler task without repeating inference.
+
+Consent is durable as a preference, not permission to restart inference: each new
+queue/server session starts unarmed and requires explicit resume. Browser reloads
+do not reset a live server session. Other workers' live job/execution leases are
+respected; failure bookkeeping only updates the scheduler's own claimed task.
+Maintenance state is deliberately excluded from portable files, exports and
+specification history; opening a clone on a different machine does not import
+automatic-call authority. Unsupported future maintenance envelopes fail strict
+reads/writes without overwriting the original payload; future SQLite versions
+continue to reject startup. Downgrade after schema 6 requires a compatible app.
+
+Upgrade fixtures cover an older schema-5 database with byte-preserved project and
+history, a simulated migration interruption/rollback/retry, repeated reopen,
+default-off consent, future-payload preservation, independent settings/scheduler
+CAS, no inference on restart and two-process dispatch. Service/browser fixtures
+exercise processing-before-assessment, approval-only input, relevant dependencies,
+model-only proposal exclusion, debounce/coalescing, burst limits, stale publication,
+pause/Stop, checkpoint continuation and publication-crash reconciliation. See
+[guided maintenance](guided-maintenance.md) for implemented limits versus proposed
+delta-only assessment work. No personal database or live provider calls are used.
+
+Verification on Windows Node 22.23.3: type checking, UI build, 119 pretests and 648
+main tests passed. Focused maintenance, workflow, portable and specification browser
+runners passed; the full browser command still hits the known **Approve resolution**
+assertion at `src/web/browser-check.ts:1352`. Initial browser verification caught and
+fixed settings CAS racing scheduler checkpoints; subsequent browser checks cover
+Pause after publication and explicit server-restart consent. No live cost/latency or
+actual-user database upgrade was exercised. New migration tests use disposable older
+SQLite fixtures, including interruption/rollback and repeated reopen.
+
 ## Lossless staged definition drafts beyond the raw 12k reserve (2026-10-23)
 
 Source/target: SQLite schema 5, exact-batch work format 1 and plan/input identities

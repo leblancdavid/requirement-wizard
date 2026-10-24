@@ -1,5 +1,7 @@
 import Database from "better-sqlite3";
 import { activityPage, activitySnapshot, saveActivity } from "./activity.js";
+import { readMaintenance, saveMaintenance } from "./maintenance.js";
+import type { MaintenanceState } from "../core/maintenance.js";
 import { revisionActivity, jobActivity, submissionActivity, executionActivities, type ActivityQuery } from "../core/project-activity.js";
 import { discoveryBlockReason, executionBlockReason, OperationConflictError } from "../core/operations.js";
 import { randomUUID } from "node:crypto";
@@ -167,6 +169,14 @@ export class ProjectStore {
   }
 
   close() { this.syncWorkspaces(); this.db.close(); }
+
+  projectRevision(id: string) {
+    const row = this.db.prepare("SELECT revision FROM projects WHERE id = ?").get(id) as { revision: number } | undefined;
+    if (!row) throw new Error("Project or revision not found.");
+    return row.revision;
+  }
+  maintenance(id: string) { this.projectRevision(id); return readMaintenance(this.db, id); }
+  saveMaintenance(id: string, state: MaintenanceState) { this.projectRevision(id); return saveMaintenance(this.db, id, state); }
 
   execution(id: string): ExecutionState {
     if (!this.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(id)) throw new Error("Project or revision not found.");

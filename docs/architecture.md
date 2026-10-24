@@ -6,6 +6,16 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/core/maintenance.ts`, `src/storage/maintenance.ts`, `src/service/queue.ts`:
+  opt-in decision-triggered area scheduling with durable CAS dispatch receipts,
+  separate settings concurrency, debounce and bounded automatic assessment bursts.
+  Scheduling projections never certify coverage. Existing assessment validation and
+  owned job leases remain the publication boundary; restart requires explicit consent.
+  `src/ui/next-step.tsx` guides users without automatically choosing product decisions.
+  `src/ui/maintenance-controls.tsx` separates per-project Settings configuration from
+  operational queue status/pause/resume; navigation does not grant model-call authority.
+  See [guided maintenance](guided-maintenance.md) and the schema-6 migration ledger.
+
 - `src/core/definition-interruption.ts`: versioned, allowlisted stop-cause receipts
   separate from evidence identities. Definition queue deadlines, Stop and shutdown
   propagate their reason through the service signal; store interruption writes are

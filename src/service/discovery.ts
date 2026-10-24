@@ -222,9 +222,14 @@ export class DiscoveryService {
 
   async analyze(projectID: string, expectedRevision: number, options: {
     signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
+    definitionLimits?: { requests: number; durationMs: number };
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
     if (options.definitionEpicID !== undefined) z.string().min(1).max(200).parse(options.definitionEpicID);
+    if (options.definitionLimits) {
+      if (!options.definitionEpicID) throw new Error("Definition limits require an assessment-only task.");
+      z.object({ requests: z.number().int().min(1).max(32), durationMs: z.number().int().min(1).max(900000) }).strict().parse(options.definitionLimits);
+    }
     if (options.definitionEpicID !== undefined && (options.gapMode || options.helpRequest || options.refinementOnly || options.recordIDs?.length
       || options.submissionIDs?.length || options.continueGapJobID || options.questionTarget !== undefined || options.research
       || options.savedEvidencePolicy || options.requiredEpicIDs?.length || options.isolatedTask || options.savedOverlapSubmissionID)) throw new Error("Definition assessment requires a separate assessment-only action.");
@@ -274,7 +279,7 @@ export class DiscoveryService {
     const started = Date.now();
     let timedOut = false, stagedRun = false;
     const timeout = () => { timedOut = true; abort(); };
-    let timer = setTimeout(timeout, 300_000);
+    let timer = setTimeout(timeout, Math.min(300_000, options.definitionLimits?.durationMs ?? 300_000));
     const refinementTarget = options.refinementOnly && !options.refinementPair ? project.requirements.find((r) => options.recordIDs?.length
       ? options.recordIDs.includes(r.id) : !options.focusEpicID || r.epicID === options.focusEpicID) : undefined;
     try {
@@ -282,18 +287,18 @@ export class DiscoveryService {
       let definition: ContextPack | undefined;
       if (options.definitionEpicID) {
         if (this.store.definitionHistory(project.id, options.definitionEpicID, definitionInputKey(project, options.definitionEpicID)).length) {
-          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, stagedRunDurationMs - (Date.now() - started)));
+          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, this.adapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
         }
         try { definition = definitionContext(project, options.definitionEpicID); }
         catch (error) {
           if (!(error instanceof ContextBudgetError)) throw error;
           this.store.attachContext(job.id, error.manifest);
           options.onProgress?.("The complete area exceeds one request. Preparing exact evidence batches; no assessment has been published and no evidence will be truncated.");
-          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, stagedRunDurationMs - (Date.now() - started)));
+          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, this.adapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
         }
       }
       const question = options.helpRequest ? project.questions.find((q) => q.id === options.helpRequest!.questionID)! : undefined;
@@ -675,9 +680,9 @@ export class DiscoveryService {
       }
       if (options.definitionEpicID && controller.signal.aborted) {
         const work = this.store.getJob(job.id).definitionWork;
-        const cause = timedOut ? work ? "area-time-limit" : "request-time-limit" : definitionAbortCause(controller.signal.reason);
+        const cause = timedOut ? work || options.definitionLimits ? "area-time-limit" : "request-time-limit" : definitionAbortCause(controller.signal.reason);
         return completeMeasurement(this.store.interruptDefinition(job.id, { format: 1, cause,
-          ...(["refresh-time-limit", "area-time-limit"].includes(cause) ? { limitMs: 900000 } : cause === "request-time-limit" ? { limitMs: 300000 } : {}) }));
+          ...(["refresh-time-limit", "area-time-limit"].includes(cause) ? { limitMs: cause === "area-time-limit" ? options.definitionLimits?.durationMs ?? 900000 : 900000 } : cause === "request-time-limit" ? { limitMs: 300000 } : {}) }));
       }
       if (stagedRun && controller.signal.aborted && (timedOut || options.signal?.reason?.name === "TimeoutError")) {
         return completeMeasurement(this.store.pauseEpicReview(job.id, "time-limit"));
