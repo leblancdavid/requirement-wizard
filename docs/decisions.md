@@ -30,6 +30,28 @@ every technical detail proposed in the planning documents.
 | DEC-021 | Process queued AI follow-up one submission at a time, each with its own focused revision-linked context. Do not combine the queue or include unrelated feature history solely because it shares an area. Retain exact target evidence and explicit guardrails; preserve omitted records and request wider context when needed. | User requested individual processing/contexts after repeated queue-size blockers |
 | DEC-021 | Split generated requirements by stable feature ID, keep original evidence in shared referenced files, and avoid rewriting unchanged outputs. Retain an on-demand combined specification export. | User reported large generated files and confirmed both reading/coding-agent context and disk/Git efficiency as goals after the feature-based export recommendation |
 
+## Coordinated project workflow (DEC-032)
+
+Confirmed direction (2026-10-23): the user approved coordinating idea → questions →
+requirements → implementation-readiness while preserving existing views and evidence.
+Faithful requirements become current automatically; choices/conflicts go to the user;
+relevant changes trigger rechecks. Configuration stays in Project settings and
+operational controls in Processing & queue, without the redundant What's next card.
+
+Implemented opt-in preview: Continue project, shared allowance, decision inbox,
+provenance/checkpoint reuse and revision-linked receipts. Do not manufacture approval
+or promote legacy proposals. Specification checks passed differs from ready to
+implement, which also requires a current reviewed plan and configuration; neither
+authorizes coding. Automatic planning and delta-only assessments remain follow-on
+work. See [coordinated workflow](coordinated-workflow.md).
+
+Implemented readiness follow-up: the user selected targeted readiness questions as
+the next slice. Current unresolved definition checks can request up to three scoped,
+evidence-linked questions for one dimension using the same allowance. Answers
+trigger affected rechecks, not automatic approval. Technical/evidence blockers stay
+blocked; unchanged completed no-question tasks are reused across restart/Continue.
+No automatic planning or coding authority is added.
+
 ## Guided workflow and bounded automatic maintenance (DEC-031)
 
 Confirmed direction (2026-10-23): simplify the growing set of long-running operations
@@ -38,7 +60,7 @@ and accepted decisions change. Preserve explicit approval, coding and delivery
 boundaries, model-usage limits, Stop and no automatic repeat inference on restart.
 The user approved the staged implementation recommendation in this conversation.
 
-Implemented first slice: What’s next guidance, decision-triggered area scheduling,
+Originally implemented first slice: What’s next guidance, decision-triggered area scheduling,
 twenty-second coalescing and eight-request/five-minute/three-area bursts, durable
 blocked/paused tasks and explicit restart consent. Individual process actions remain
 available. Delta-only evidence review and consolidating every advanced control are
@@ -48,6 +70,12 @@ Confirmed placement follow-up: maintenance is a per-project, machine-local setti
 The user approved configuration in Settings → Project settings, operational status
 and pause/resume in Processing & queue, and only brief status/navigation in What’s
 next rather than a maintenance configuration panel repeated across workspace tabs.
+
+Superseding UI simplification: the user requested removal of the entire What’s next
+card because it duplicated information already visible elsewhere. Its presentation
+and card-only navigation helpers are removed; Design, Specification, Overall progress,
+Processing & queue and Project settings retain the actual workflow controls.
+Automatic maintenance, consent, saved preferences and task checkpoints are unchanged.
 
 ## Continuous specification (DEC-030)
 

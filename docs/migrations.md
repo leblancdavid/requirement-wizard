@@ -19,6 +19,90 @@ freshness rules. Record the plan here **with the code change**, before release:
    future formats and recovery after failure.
 5. Upgrade fixtures/checks actually run and remaining qualification gaps.
 
+## Schema 6 → 7: coordinated workflow preview (2026-10-23)
+
+Adds `workflow_state` (format 1 local scheduler/settings/consent) and immutable
+`workflow_readiness_receipts` (policy `coordinated-checks-v1`). Settings CAS is separate
+from scheduler checkpoints and SQLite schema version. No project JSON, jobs, evidence,
+assessment formats, context fingerprints or existing preferences are rewritten.
+Missing state defaults off; no calls, reassessment or approval are inferred. Readiness
+proofs reuse current answer-derived authority, human review or compatible checks.
+The unreleased receipt representation uses `requirementProofs`, replacing its
+development-only refinement-job-ID list; no released workflow data needs upgrading.
+
+Migration/history entry are transactional. Failure rolls back table creation and
+version advancement; retry is safe. Startup validates strict workflow/readiness
+formats, refusing malformed/future data without replacing it. Restart requires
+explicit Continue even when enabled. Portable exports omit local authority and
+scheduling receipts; shared-work adoption pauses enabled local coordination.
+Original dated receipts/jobs survive changed input and reopen.
+
+Upgrade fixtures use schema-6 saved projects/jobs/preferences, inject migration
+failure, retry and reopen twice, proving preservation without inference. API/browser
+consent and restart checks use no live calls. Actual-user upgrades and live-provider
+coordination remain unqualified. See [coordinated workflow](coordinated-workflow.md).
+
+Verification for this slice: type check/UI build and all 780 deterministic tests
+(131 pretests + 649 main) passed on Windows Node 22.23.3, including portable consent
+exclusion/adoption pause and immutable readiness-history reopen. Coordinated,
+maintenance, specification and portable browser checks passed. Full-browser rerun
+still fails at the existing **Approve resolution** assertion (`browser-check.ts:1352`);
+do not treat that runner or real-user upgrade qualification as passing.
+
+### Additive readiness-question tasks (2026-10-23 follow-up)
+
+SQLite remains schema 7, workflow state format 1 and readiness policy unchanged.
+Existing projects, assessments, readiness receipts, job checkpoints and fingerprints
+are not rewritten or invalidated. Adds optional job-context `readinessQuestions`
+(format 1, policy `readiness-questions-v1`, selected area/dimension, exact definition
+input key and check digest) and the scheduler's `readiness-questions` current kind.
+Older saved rows without these fields are read as before. Unknown task formats are
+rejected rather than overwritten; strict portable job validation also recognizes
+the optional task envelope. Ordinary clarification jobs remain local, not portable
+scheduling/model-call authority. Questions themselves retain ordinary stable IDs and
+evidence links in shared project state.
+
+The new task does not change assessment meaning or reuse identity: a compatible
+saved partial assessment directly drives clarification without another assessment
+call. A completed no-question task is reused for unchanged inputs after reopen and
+explicit Continue. New answers invalidate affected definition inputs as before.
+Prior ready receipts remain valid for unchanged inputs; prior paused/blocked projects
+still require explicit continuation. No background calls are inferred on upgrade.
+
+Publication is atomic through existing job/revision transactions. Cancellation,
+stale output, malformed/overbroad proposals, duplicate questions and invalid evidence
+cannot change requirements or assessments. The new tests cover those failures,
+preserved interpretation/evidence, bounded context and saved-task reopen/reuse.
+Actual-user upgrades and live question quality remain unqualified.
+
+Verified for this follow-up on Windows Node 22.23.3: all 787 deterministic tests
+(138 pretests + 649 main), type check, UI build, and coordinated/specification/
+maintenance browser runners passed. The updated coordinated browser check includes
+targeted readiness questions and answer-triggered reassessment. Full-browser rerun
+still fails at the prior `browser-check.ts:1352` **Approve resolution** assertion.
+
+## Remove duplicate What’s next card (2026-10-23 follow-up)
+
+UI-only removal of the redundant summary card and its unused navigation helpers.
+Existing Design/Specification actions, Overall progress assessments, Processing &
+queue status/continuation and project maintenance settings remain available. Rename
+the remaining maintenance stylesheet to match the controls it still styles.
+
+No persisted format, schema, fingerprint, preference, authority, job receipt,
+checkpoint or budget changes; no data migration or reassessment is required. Saved
+maintenance enable/pause settings and completed work are untouched. Browser tests
+assert the card is absent on every workspace tab while exercising the existing
+settings, queue, story processing, assessment, decisions and restart-consent flows.
+
+Verification: type check, UI build, 56 focused maintenance/review/recovery tests,
+and maintenance/specification/workflow browser runners passed on Windows Node
+22.23.3. The maintenance browser asserts absence on all workspace tabs and continues
+to exercise opt-in, queue/settings navigation, pause/reload, restart consent and
+mobile layout. The full browser command was rerun and still stops at the known
+**Approve resolution** assertion at `src/web/browser-check.ts:1352`. The full unit
+suite was not rerun for this presentation-only follow-up. No live calls or changes
+to the user's saved project database.
+
 ## Maintenance control placement (2026-10-23 follow-up)
 
 UI-only relocation: enable/disable and usage limits move from the workspace's

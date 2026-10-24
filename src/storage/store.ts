@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 import { activityPage, activitySnapshot, saveActivity } from "./activity.js";
 import { readMaintenance, saveMaintenance } from "./maintenance.js";
 import type { MaintenanceState } from "../core/maintenance.js";
+import { readWorkflow, saveWorkflow, claimWorkflow, workflowBusy, workflowReadinessHistory } from "./workflow.js";
+import type { WorkflowState } from "../core/workflow.js";
 import { revisionActivity, jobActivity, submissionActivity, executionActivities, type ActivityQuery } from "../core/project-activity.js";
 import { discoveryBlockReason, executionBlockReason, OperationConflictError } from "../core/operations.js";
 import { randomUUID } from "node:crypto";
@@ -37,6 +39,7 @@ import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSourc
 import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
+import { readinessQuestionTaskSchema, validateReadinessQuestions } from "../core/readiness-questions.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
 import { dismissibleReviewAttempt, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { prepareScanAnalysis } from "../core/scan.js";
@@ -58,6 +61,7 @@ function readStoredJob(payload: string): Job {
   if (job.gapReport !== undefined) gapReportSchema.parse(job.gapReport);
   if (job.context?.epicReview !== undefined) epicReviewSchema.parse(job.context.epicReview);
   if (job.context?.definitionAssessment !== undefined) definitionTaskSchema.parse(job.context.definitionAssessment);
+  if (job.context?.readinessQuestions !== undefined) readinessQuestionTaskSchema.parse(job.context.readinessQuestions);
   if (job.definitionWork !== undefined) {
     const work = definitionWorkSchema.parse(job.definitionWork), task = job.context?.definitionAssessment;
     if (task?.epicID !== work.epicID || task.inputKey !== work.inputKey || task.staged?.planKey !== work.planKey) throw new Error("Definition checkpoint does not match its saved task policy; original evidence was not overwritten.");
@@ -177,6 +181,17 @@ export class ProjectStore {
   }
   maintenance(id: string) { this.projectRevision(id); return readMaintenance(this.db, id); }
   saveMaintenance(id: string, state: MaintenanceState) { this.projectRevision(id); return saveMaintenance(this.db, id, state); }
+  workflow(id: string) { this.projectRevision(id); return readWorkflow(this.db, id); }
+  saveWorkflow(id: string, state: WorkflowState) { this.projectRevision(id); return saveWorkflow(this.db, id, state); }
+  claimWorkflow(id: string) {
+    return this.db.transaction(() => {
+      this.assertNoExecution(id);
+      if (this.discoveryActive(id)) throw new OperationConflictError("Wait for the active model operation before continuing the project workflow.");
+      return claimWorkflow(this.db, id);
+    }).immediate();
+  }
+  workflowBusy(id: string, owner?: string) { return workflowBusy(this.db, id, owner); }
+  workflowReadinessHistory(id: string) { return workflowReadinessHistory(this.db, id); }
 
   execution(id: string): ExecutionState {
     if (!this.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(id)) throw new Error("Project or revision not found.");
@@ -189,7 +204,7 @@ export class ProjectStore {
     this.db.transaction(() => {
       if (expected && this.get(id).revision !== expected.revision) throw new StaleRevisionError();
       if (expected?.bindingID && this.workspace(id)?.bindingID !== expected.bindingID) throw new Error("Workspace changed before the implementation update could be saved.");
-      if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
+      if (this.discoveryActive(id) || this.workflowBusy(id)) throw new OperationConflictError(discoveryBlockReason);
       const live = this.db.prepare("SELECT owner FROM execution_leases WHERE project_id = ? AND lease_until > ?").get(id, Date.now()) as { owner: string } | undefined;
       if (live && live.owner !== owner || owner && !live) throw new Error("Implementation worker lease changed or expired.");
       const saved = this.db.prepare("SELECT version FROM execution_state WHERE project_id = ?").get(id) as { version: number } | undefined;
@@ -210,6 +225,7 @@ export class ProjectStore {
 
   claimExecution(id: string, resource: string, owner: string) {
     this.db.transaction(() => {
+      if (this.workflowBusy(id)) throw new OperationConflictError("Pause the active project workflow before implementation work.");
       if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
       if (this.db.prepare("SELECT 1 FROM execution_leases WHERE (resource = ? OR project_id = ?) AND lease_until > ?").get(resource, id, Date.now())) throw new Error("This project or repository already has an active implementation worker.");
       this.db.prepare("DELETE FROM execution_leases WHERE resource = ? OR project_id = ?").run(resource, id);
@@ -368,13 +384,19 @@ export class ProjectStore {
       this.db.prepare("INSERT INTO workspaces(project_id,path_key,payload,dirty) VALUES (?, ?, ?, 0) ON CONFLICT(project_id) DO UPDATE SET path_key=excluded.path_key,payload=excluded.payload,dirty=0")
         .run(id, directoryKey(canonical), JSON.stringify(binding));
       this.pauseQueue(id, true);
+      const workflow = readWorkflow(this.db, id);
+      if (workflow.enabled) {
+        workflow.paused = true; workflow.phase = "paused"; workflow.settingsVersion++;
+        workflow.message = "Shared checkpoint adopted. Continue project explicitly before running coordinated model calls.";
+        delete workflow.owner; delete workflow.leaseUntil; saveWorkflow(this.db, id, workflow);
+      }
     }).immediate();
     return this.get(id);
   }
 
   private assertWorkspaceIdle(id: string) {
     this.assertNoExecution(id);
-    if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
+    if (this.discoveryActive(id) || this.workflowBusy(id)) throw new OperationConflictError(discoveryBlockReason);
     const row = this.db.prepare("SELECT lease_until FROM workspaces WHERE project_id = ?").get(id) as { lease_until: number | null } | undefined;
     if ((row?.lease_until ?? 0) > Date.now()) throw new Error("Workspace is saving. Retry shortly.");
   }
@@ -886,12 +908,13 @@ export class ProjectStore {
     });
   }
 
-  beginJob(id: string, revision: number, helpRequest?: QuestionHelpRequest, scan = false): { project: Project; job: Job } {
+  beginJob(id: string, revision: number, helpRequest?: QuestionHelpRequest, scan = false, workflowOwner?: string): { project: Project; job: Job } {
     return this.db.transaction(() => {
       this.recoverExpiredJobs();
       const project = this.get(id);
       if (project.revision !== revision) throw new StaleRevisionError();
       if (!helpRequest) {
+        if (this.workflowBusy(id, workflowOwner)) throw new OperationConflictError("The project workflow is coordinating this project. Pause it before starting another operation.");
         this.assertNoExecution(id);
         if (this.discoveryActive(id)) throw new OperationConflictError(discoveryBlockReason);
       }
@@ -1382,6 +1405,7 @@ export class ProjectStore {
             return;
           }
           const before = structuredClone(project);
+          if (job.context?.readinessQuestions) validateReadinessQuestions(project, job.context, result);
           if (job.context?.gapExploration?.check || job.context?.epicReview) {
             // Older/deterministic adapters may omit the optional area field.
             // A bounded gap task defaults to its detailed target, never an unseen inbox.
@@ -1512,7 +1536,7 @@ export class ProjectStore {
           if (job.context?.partial && ((result.organization?.length ?? 0) || (result.assessments?.length ?? 0))) {
             throw new Error("Partial task passes cannot reorganize areas or replace whole-area assessments.");
           }
-          const interpretation = job.context?.partial || job.context?.refinementOnly || changeRequests.length || scopedAnswers.length ? { summary: project.summary, analysisRevision: project.analysisRevision,
+          const interpretation = job.context?.partial || job.context?.refinementOnly || job.context?.readinessQuestions || changeRequests.length || scopedAnswers.length ? { summary: project.summary, analysisRevision: project.analysisRevision,
             goals: project.goals, actors: project.actors, assumptions: project.assumptions, scopeAssessment: project.scopeAssessment } : undefined;
           // Retire old comparisons only in the successful publication transaction.
           // Failed/cancelled/stale/blocked checks leave the original proposal intact.

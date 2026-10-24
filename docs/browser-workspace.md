@@ -1,9 +1,25 @@
 # Browser workspace, epics, and estimated completeness
 
+## Coordinated workflow preview
+
+**Continue project** opts into project-wide coordination with eight requests/five
+active minutes per explicit allowance. Project settings holds configuration;
+Processing & queue holds status, Stop/pause and the decision inbox. Advanced
+preferences survive, but legacy automatic maintenance is suspended while enabled.
+Restart/shared-checkpoint adoption require explicit continuation. See
+[coordinated workflow](coordinated-workflow.md) for readiness and remaining gaps.
+`npm run test:browser:workflow` exercises the deterministic flow; screenshots are
+`.reqwizit-state/browser-workflow.png` and `browser-workflow-mobile.png`.
+
+Current unresolved definition checks can now produce targeted questions in the same
+decision inbox, with answers triggering affected rechecks. This shares the existing
+allowance and never marks a dimension resolved merely because a question was asked.
+Evidence/technical blockers remain visible rather than becoming invented choices.
+
 ## Guided next steps and automatic maintenance
 
-**What’s next?** recommends setup, processing saved input, reviewing decisions,
-answering existing questions or updating definition progress. **Settings → Project
+Workflow status and actions stay in Design, Specification, Overall progress and
+Processing & queue rather than a duplicate **What’s next?** card. **Settings → Project
 settings → Automatic maintenance** opts in to changed-area definition updates after a twenty-second
 settle window, bounded at eight requests/five minutes/three areas per burst. Saved-input
 processing keeps its separate consent setting, renamed **Automatically process saved
@@ -16,8 +32,7 @@ and the schema-6 [migration ledger](migrations.md#opt-in-guided-maintenance-2026
 Maintenance is project-specific and stored on this machine, not an app-wide or
 repository-shared preference. Enable/disable and usage explanations are in Settings.
 **Processing & queue** holds task status, blockers and pause/resume; Stop stays on
-the current task. **What’s next?** contains no maintenance configuration panel—only
-brief relevant status and a **View background work** link. The queue links directly
+the current task. The **What’s next?** card has been removed entirely. The queue links directly
 back to the settings section with keyboard focus; opening either view starts no calls.
 
 Run `npm run test:browser:maintenance` for the deterministic guided flow, keyboard,

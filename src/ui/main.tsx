@@ -13,9 +13,11 @@ import { Pagination, PagedList, usePagination } from "./pagination.js";
 import "./pagination.css";
 import { pendingRefinementRequirementIDs } from "../core/resolution.js";
 import { ProcessingQueue } from "./processing-queue.js";
-import { NextStep } from "./next-step.js";
 import { MaintenanceSettings, type MaintenanceAction } from "./maintenance-controls.js";
-import "./next-step.css";
+import { WorkflowControls, type WorkflowAction } from "./workflow-controls.js";
+import type { WorkflowView } from "../service/workflow.js";
+import type { WorkflowDecision } from "../core/workflow.js";
+import "./maintenance-controls.css";
 import type { MaintenanceView } from "../core/maintenance.js";
 import { IssueDialog } from "./issue-dialog.js";
 import { attentionSummary } from "./attention.js";
@@ -49,7 +51,7 @@ import { GapContinuation } from "./gap-continuation.js";
 import { AppMenu } from "./app-menu.js";
 import { DesktopTitleBar } from "./desktop-titlebar.js";
 
-type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: (Job & { gapContinuationAvailable?: boolean })[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; maintenance: MaintenanceView; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
+type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: (Job & { gapContinuationAvailable?: boolean })[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; maintenance: MaintenanceView; workflow?: WorkflowView; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
 type Draft = { kind: "answer" | "delegation" | "deferral"; text: string; fingerprint?: string };
 // Carry pre-rename browser preferences forward once, without replacing newer values.
@@ -93,7 +95,6 @@ function App() {
   const [creating, setCreating] = useState(false);
   const [opening, setOpening] = useState(false);
   const [tab, setTab] = useState<"discover" | "review" | "implementation" | "requirements" | "research" | "history">("discover");
-  const [pendingReviewRequest, setPendingReviewRequest] = useState<{ projectID: string; value: number }>();
   const [queueRequest, setQueueRequest] = useState<{ projectID: string; value: number }>();
   const [epicID, setEpicID] = useState("all");
   const [error, setError] = useState("");
@@ -153,6 +154,21 @@ function App() {
   const configureMaintenance = (action: MaintenanceAction) => void act(async () => {
     if (project && data) await api(`projects/${project.id}/maintenance`, { revision: project.revision, version: data.maintenance.version, action });
   }, "Updating automatic maintenance…");
+  const configureWorkflow = (action: WorkflowAction) => void act(async () => {
+    if (project && data?.workflow) await api(`projects/${project.id}/workflow`, { revision: project.revision, version: data.workflow.version, action });
+  }, "Updating project workflow…");
+  const openWorkflowDecision = (decision: WorkflowDecision) => {
+    if (!project) return;
+    navigate("workspace");
+    if (decision.kind === "input") openIssue(decision.id);
+    else if (decision.kind === "requirement") setIssue({ projectID: project.id, requirementID: decision.id });
+    else if (decision.kind === "question") {
+      const question = project.questions.find((q) => q.id === decision.id); if (!question) return;
+      setTab("discover"); setEpicID(question.epicID); setQuestionFilter(question.status === "pending" ? "open" : "later"); setExpandedQuestion(question.id);
+    } else if (decision.kind === "refinement") {
+      const proposal = project.refinements.find((p) => p.id === decision.id); if (proposal) setIssue({ projectID: project.id, requirementID: proposal.requirementID });
+    } else { setTab("requirements"); setEpicID("all"); }
+  };
   const pendingRefinementIDs = useMemo(() => project ? pendingRefinementRequirementIDs(project) : new Set<string>(), [project]);
   const summary = data?.coverage;
   const evaluationCache = useRef<ExecutionEvaluation | null>(null);
@@ -294,13 +310,14 @@ function App() {
     if ((input.type === "review" || input.type === "answer") && input.reviewedRevision === undefined) input = { ...input, reviewedRevision: project.revision };
     const projectID = project.id;
     const useResearch = project.model.connectionID ? false : research;
-    const payload = JSON.stringify({ projectID, input, auto, research: useResearch, replaces });
+    const processAutomatically = data?.workflow?.enabled ? true : auto;
+    const payload = JSON.stringify({ projectID, input, auto: processAutomatically, research: useResearch, replaces });
     const submissionID = requests.current.get(payload) ?? crypto.randomUUID();
     requests.current.set(payload, submissionID);
     inFlight.current.add(key); setSending([...inFlight.current]); setError("");
     setItemErrors((errors) => ({ ...errors, [key]: "" }));
     try {
-      const saved = await api<Submission>(`projects/${projectID}/submit`, { id: submissionID, input, auto, research: useResearch, ...(replaces ? { replaces } : {}) });
+      const saved = await api<Submission>(`projects/${projectID}/submit`, { id: submissionID, input, auto: processAutomatically, research: useResearch, ...(replaces ? { replaces } : {}) });
       requests.current.delete(payload);
       await load(projectID); await list(); return saved.status !== "needs-attention";
     } catch (error) { setItemErrors((errors) => ({ ...errors, [key]: error instanceof Error ? error.message : "Could not submit response. Your draft is retained." })); return false; }
@@ -381,7 +398,7 @@ function App() {
   const renderReview = (focusRequirementID?: string) => {
     if (!project || !data) return null;
     return <ReviewQueue key={`${project.id}:${focusRequirementID ?? "list"}`} draftStore={focusRequirementID ? issueDrafts : undefined} focusRequirementID={focusRequirementID} openIssue={openIssue} visible={!!focusRequirementID || tab === "review"} project={project} submissions={data.submissions} jobs={data.jobs} epicID={focusRequirementID ? "all" : epicID} sending={sending} submit={submit} itemErrors={itemErrors} resume={() => focusRequirementID ? processBlocking(data.submissions.filter((s) => s.input.type === "review" && s.input.requirementID === focusRequirementID && s.status === "needs-attention" && !s.conflict).map((s) => s.id)) : void act(explore)}
-      processBlocking={processBlocking} pendingRequest={!focusRequirementID && pendingReviewRequest?.projectID === project.id ? pendingReviewRequest.value : undefined} renderClarification={focusRequirementID || tab === "review" ? renderClarification : undefined}
+      processBlocking={processBlocking} renderClarification={focusRequirementID || tab === "review" ? renderClarification : undefined}
       openQuestion={(questionID) => { const q = project.questions.find((q) => q.id === questionID); if (!q) return; setIssue(undefined); setEpicID(q.epicID); setTab("discover"); setQuestionFilter(queuedQuestionIDs.has(questionID) ? "submitted" : q.status === "answered" ? "answered" : q.status === "pending" ? "open" : "later"); setExpandedQuestion(questionID); }}
       disabled={busy || connectionChanged || needsInitialization} disabledReason={discoveryReason}
       refine={() => void act(async () => { await api(`projects/${project.id}/analyze`, { revision: project.revision, refinementOnly: true, research: false, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) }); })}
@@ -434,7 +451,7 @@ function App() {
         selectProject={(projectID) => { setID(projectID); setCreating(false); navigate("workspace"); }}
         settings={() => navigate("settings")} reportError={setError} />
         <div className="app-header-title"><div className="app-header-title-row"><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? opening ? "Open Reqwizit project" : "New project" : project?.name ?? "Your next idea starts here."}</h1><HeaderActivity /></div><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small></div></div>
-        {!creating && project && data && <ProcessingQueue key={project.id} project={project} jobs={data.jobs} maintenance={data.maintenance} configureMaintenance={configureMaintenance} maintenanceSettings={openMaintenanceSettings} openRequest={queueRequest?.projectID === project.id ? queueRequest.value : undefined} exportDiagnostics={(jobIDs) => api(`projects/${project.id}/discovery-diagnostics`, { jobIDs })} openIssue={openIssue} active={data.active} progress={data.progress} refinementProgress={data.refinementProgress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(resumeDiscovery, "Resuming processing…")} discover={() => void act(reviewEpic, "Preparing workflow evidence…")} continuationAvailable={!!lastJob?.gapContinuationAvailable} continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
+        {!creating && project && data && <ProcessingQueue key={project.id} project={project} jobs={data.jobs} workflow={data.workflow} configureWorkflow={configureWorkflow} openWorkflowDecision={openWorkflowDecision} maintenance={data.maintenance} configureMaintenance={configureMaintenance} maintenanceSettings={openMaintenanceSettings} openRequest={queueRequest?.projectID === project.id ? queueRequest.value : undefined} exportDiagnostics={(jobIDs) => api(`projects/${project.id}/discovery-diagnostics`, { jobIDs })} openIssue={openIssue} active={data.active} progress={data.progress} refinementProgress={data.refinementProgress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(resumeDiscovery, "Resuming processing…")} discover={() => void act(reviewEpic, "Preparing workflow evidence…")} continuationAvailable={!!lastJob?.gapContinuationAvailable} continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
         {!showSettings && project && summary && data && !creating && <ProjectProgress key={`progress:${project.id}`} progress={mapProgress!} definition={summary} project={project} jobs={data.jobs} disabled={busy || connectionChanged || needsInitialization} disabledReason={discoveryReason || (connectionChanged ? "Save your connection and model selection first." : undefined)} refreshDefinition={(focusEpicID) => void act(async () => { await api(`projects/${project.id}/refresh-definition`, { revision: project.revision, ...(focusEpicID ? { focusEpicID } : {}) }); }, "Refreshing definition coverage…")} />}
         {!showSettings && project && summary && data && !creating && <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Specification"], ["implementation", "Implement"], ["requirements", "Project map"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}{key === "review" && <span title="Requirements needing a decision">{pendingReviewCount}</span>}{key === "implementation" && <span>{implementationRemaining}</span>}</button>)}</div>}
       </header>
@@ -448,8 +465,12 @@ function App() {
         <AIConnections request={api} disabled={pending} accountID={connectionID} modelID={model} onSelect={(account, selectedModel) => { setConnectionID(account); setModel(selectedModel); }}>
           {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Discover missing decisions and question help."}</p><button title={busyReason || (!model ? "Choose a model first." : !connectionChanged ? "This connection and model are already saved." : undefined)} disabled={busy || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID: "openai", modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
         </AIConnections>
-        {project && !creating ? <><h2>Project settings</h2><label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically process saved inputs</label><p>Each saved response receives its own focused follow-up using your model allowance. This does not request unrelated gap discovery. Automatic definition updates are separately opt-in below.</p>
-          {data?.maintenance && <MaintenanceSettings maintenance={data.maintenance} disabled={busy || connectionChanged || needsInitialization} pending={pending} configure={configureMaintenance} openQueue={openProcessingQueue} />}</> : <p>Your selected connection and model will be used when you create a project.</p>}
+        {project && !creating ? <><h2>Project settings</h2>
+          {data?.workflow && <WorkflowControls workflow={data.workflow} disabled={busy || connectionChanged || needsInitialization} pending={pending} configure={configureWorkflow} settings />}
+          {data?.workflow?.enabled ? <p>Saved input and definition checks are managed by the coordinated workflow allowance. Advanced-mode preferences are retained, not overwritten.</p> : <>
+            <label><input type="checkbox" checked={auto} onChange={(event) => setAuto(event.target.checked)} /> Automatically process saved inputs</label><p>Each saved response receives its own focused follow-up using your model allowance. This does not request unrelated gap discovery. Automatic definition updates are separately opt-in below.</p>
+            {data?.maintenance && <MaintenanceSettings maintenance={data.maintenance} disabled={busy || connectionChanged || needsInitialization} pending={pending} configure={configureMaintenance} openQueue={openProcessingQueue} />}</>}
+          </> : <p>Your selected connection and model will be used when you create a project.</p>}
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
         {project && !creating && !!(project.requirements.length || project.questions.length) && <section aria-label="Saved-evidence retrieval pilot"><h2>Experimental saved-evidence search</h2>
           <label><input type="checkbox" checked={evidencePilot} disabled={busy} onChange={(event) => setEvidencePilot(event.target.checked)} /> Use auxiliary merge for legacy individual-check exploration</label>
@@ -459,12 +480,6 @@ function App() {
         {project && !creating && <WorkspaceConnection project={project} scanJob={lastScan} workspace={data?.workspace ?? null} request={api} disabled={busy} run={act} />}
       </section>}
       <div hidden={showSettings}>
-      {project && data?.maintenance && !creating && <NextStep project={project} submissions={data.submissions} maintenance={data.maintenance} active={data.active || data.implementationActive} progress={data.progress} disabled={busy || connectionChanged || needsInitialization} needsInitialization={needsInitialization} decisionCount={pendingReviewCount}
-        review={(submissionID) => { if (submissionID) openIssue(submissionID); else { setEpicID("all"); setPendingReviewRequest((previous) => ({ projectID: project.id, value: (previous?.value ?? 0) + 1 })); setTab("review"); } }} design={() => { setEpicID("all"); setQuestionFilter("open"); setTab("discover"); }}
-        initialize={() => navigate("settings")} openQueue={openProcessingQueue}
-        process={() => void act(async () => { await api(`projects/${project.id}/resume-discovery`, { revision: project.revision }); }, "Processing saved responses…")}
-        assess={() => void act(async () => { await api(`projects/${project.id}/refresh-definition`, { revision: project.revision }); }, "Updating definition progress…")}
-        />}
       {project && !creating && connectionChanged && <div className="connection-notice" role="status">Connection changes are not saved. This project still uses {activeConnection}. <button className="secondary" onClick={() => navigate("settings")}>Review connection settings</button></div>}
       {(creating || projectsLoaded && !id && !project && !projects.length) ? <section className="welcome">
         <div className="welcome-art">✦</div><span className="eyebrow">LET’S MAKE IT CONCRETE</span><h2>Big ideas begin<br />with a little clarity.</h2><p>Tell us what you have in mind. Your AI partner will organize the possibilities, ask useful questions, and help fill in the gaps.</p>

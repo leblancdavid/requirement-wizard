@@ -14,6 +14,32 @@ import { randomUUID } from "node:crypto";
 import type { ActivityPage } from "../core/project-activity.js";
 import { snapshotHeader } from "./snapshot.js";
 
+test("coordinated workflow requires explicit authenticated revision/CAS-bound permission and preserves legacy choices", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  let project = store.create("Workflow permission", "Retain original ideas", { providerID: "openai", modelID: "fixture" });
+  const job = store.beginJob(project.id, project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { summary: "Unconfirmed option", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [],
+    requirements: [{ epicID: "inbox", statement: "An unconfirmed product choice", rationale: "Proposal only", acceptance: ["A candidate scenario"], sourceIDs: [project.sources[0]!.id] }] });
+  project = store.get(project.id); const original = structuredClone(project);
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; throw new Error("No model needed while a choice is pending"); } } });
+  const headers = { "X-Reqwizit-Token": app.token, Origin: app.origin }, input = { revision: project.revision, version: 0, action: "continue" };
+  const post = (body: unknown, extra: Record<string, string> = headers) => fetch(`${app.origin}/api/projects/${project.id}/workflow`, { method: "POST", headers: { "Content-Type": "application/json", ...extra }, body: JSON.stringify(body) });
+  try {
+    assert.equal((await post(input, {})).status, 403);
+    assert.equal((await post(input, { ...headers, Origin: "https://example.invalid" })).status, 403);
+    assert.equal((await post({ ...input, revision: project.revision + 1 })).status, 409);
+    assert.equal((await post({ ...input, requests: 999 })).status, 400);
+    assert.equal(store.workflow(project.id).enabled, false);
+    assert.equal((await post(input)).status, 200); assert.equal((await post(input)).status, 409);
+    assert.equal(calls, 0); assert.deepEqual(store.get(project.id), original);
+    const snapshot = await (await fetch(`${app.origin}/api/projects/${project.id}`, { headers })).json();
+    assert.equal(snapshot.workflow.enabled, true); assert.equal(snapshot.workflow.decisions[0].kind, "requirement");
+    assert.equal(snapshot.workflow.readiness.readyToImplement, false);
+    assert.equal((await post({ revision: 1, version: snapshot.workflow.version, action: "pause" })).status, 200);
+    assert.equal(store.workflow(project.id).paused, true);
+  } finally { await app.close(); store.close(); }
+});
+
 test("automatic maintenance requires authenticated, revision-bound and CAS-bound explicit consent", async () => {
   const store = new ProjectStore(":memory:"); let calls = 0;
   const p = store.create("Maintenance consent", "Retain decisions", { providerID: "openai", modelID: "fixture" });

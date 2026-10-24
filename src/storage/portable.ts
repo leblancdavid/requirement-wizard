@@ -7,6 +7,7 @@ import { implementationPlanningSchema } from "../core/implementation-planning.js
 import { retrievalWorkSchema } from "../core/gap-retrieval.js";
 import { definitionWorkSchema } from "../core/definition-stages.js";
 import { definitionTaskSchema } from "../core/definition-assessment.js";
+import { readinessQuestionTaskSchema } from "../core/readiness-questions.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionInterruptionSchema } from "../core/definition-interruption.js";
 
@@ -212,7 +213,8 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
   kind: z.literal("scan").optional(), result: analysisSchema.optional(), researchEvidence: z.array(researchEvidenceSchema).optional(),
   portableReceipt: z.literal(1).optional(),
   context: z.object({ revision: z.number().int().positive(), focusEpicID: z.string().nullable(), characters: z.number().nonnegative(), budget: z.number().nonnegative(),
-    includedIDs: z.array(z.string()), omittedIDs: z.array(z.string()), definitionAssessment: definitionTaskSchema.optional() }).passthrough().optional(),
+    includedIDs: z.array(z.string()), omittedIDs: z.array(z.string()), definitionAssessment: definitionTaskSchema.optional(),
+    readinessQuestions: readinessQuestionTaskSchema.optional() }).passthrough().optional(),
   retrievalWork: retrievalWorkSchema.optional(), gapReport: z.unknown().optional(), epicReviewReport: z.unknown().optional(),
   definitionWork: definitionWorkSchema.optional(), definitionBlock: z.object({ format: z.literal(1), reason: z.string().min(1).max(1200) }).strict().optional(),
   definitionInterruption: definitionInterruptionSchema.optional(),

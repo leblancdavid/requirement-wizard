@@ -11,6 +11,14 @@ support is deferred.
 
 ## Project status
 
+**Coordinated workflow (preview)** adds **Continue project** to sequence saved input,
+questions and specification checks with a shared bounded allowance and decision
+inbox in Processing & queue. Opt-in per project; saved work and advanced actions
+remain. Passed checks lead to planning, not automatic coding. See
+[coordinated workflow](docs/coordinated-workflow.md) for consent and limitations.
+Unresolved definition behavior can now produce targeted questions; answers trigger
+affected rechecks using the same allowance.
+
 **Specification** now replaces routine Review: explicit answers, notes and targeted
 change requests can maintain current requirements without another approval. Design
 shows what changed; **Needs your decision** retains genuine exceptions and existing
@@ -47,14 +55,15 @@ evidence and stage-limit blockers stay explicitly unfinished. See
 The fifteen-minute refresh window is shared across areas: a later area can pause
 after a shorter run. Completed stages are retained; Resume continues unfinished work.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
-**What’s next?** recommends the next useful action. Use **Settings → Project settings
+Use **Settings → Project settings
 → Automatic maintenance** to opt in to definition updates after relevant decisions change: edits settle for
 20 seconds, then at most eight requests/five minutes/three areas run per burst.
 No initial bulk sweep or automatic approvals/coding; app restart requires resume.
 Affected areas still receive full evidence review, not delta-only assessment. See
 [guided maintenance](docs/guided-maintenance.md) for controls, costs and limits.
-Queued areas, blockers and pause/resume controls live in **Processing & queue**;
-the workspace tabs show only brief relevant status and a link to background work.
+Queued areas, blockers and pause/resume controls live in **Processing & queue**.
+Design, Specification and Overall progress retain their existing workflow actions;
+there is no separate “What’s next?” summary card duplicating those views.
 **Discover missing decisions** (in Design or the idle top process bar) reviews related workflows and their declared dependency
 boundaries. The compact **Questions ready** input configures how many unanswered questions to
 keep ready (1–50, default 5). Gap exploration continues through bounded packages,

@@ -13,6 +13,7 @@ import { browseDirectories } from "../storage/workspace.js";
 import { previewFolder } from "../storage/folder-preview.js";
 import { DiscoveryService, type DiscoveryAdapter } from "../service/discovery.js";
 import { DiscoveryQueue } from "../service/queue.js";
+import { ProjectWorkflow } from "../service/workflow.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
 import { modelSelection, answerSchema, questionHelpRequestSchema, StaleRevisionError, type Job } from "../core/model.js";
 import { organizationSchema } from "../core/epics.js";
@@ -39,6 +40,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
   const token = randomBytes(32).toString("hex");
   const service = new DiscoveryService(options.store, options.adapter);
   const queue = new DiscoveryQueue(service);
+  const workflow = new ProjectWorkflow(options.store, options.adapter);
   const implementation = new ImplementationService(options.store, options.executionAdapter);
   const snapshotEncoder = new SnapshotEncoder();
   // Revision payloads are immutable. Bound this cache across projects/history reads.
@@ -189,7 +191,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? revisionSnapshot(options.store.get(id, lastRound.expectedRevision)).coverage.percent : null;
         const helpJobs = recent.helpJobs.map(({ result: _, researchEvidence: __, ...job }) => job);
-        const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), maintenance: queue.maintenanceView(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
+        const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), maintenance: queue.maintenanceView(id), workflow: workflow.view(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
         if (known) {
           const encoded = snapshotEncoder.encode(snapshot, known, ["project", "coverage"]);
           res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", [snapshotHeader]: JSON.stringify(encoded.tokens) });
@@ -305,6 +307,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         if (["enable", "resume"].includes(input.action) && project.revision !== input.revision) throw new StaleRevisionError();
         json(res, 200, queue.configureMaintenance(id, input.version, input.action)); return;
       }
+      if (action === "workflow") {
+        const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["continue", "pause", "disable"]) }).strict().parse(raw);
+        json(res, 200, workflow.configure(id, input.revision, input.version, input.action)); return;
+      }
       if (action === "analyze") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
         const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional(), savedEvidencePolicy: savedEvidencePolicySchema.optional(), gapMode: z.literal("epic").optional(), questionTarget: z.number().int().min(1).max(50).optional() }).strict().parse(raw);
@@ -325,7 +331,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         queue.scan(id, input.revision, input.resumeJobID);
         json(res, 202, { started: true }); return;
       }
-      if (action === "cancel") { z.object({}).strict().parse(raw); queue.stop(id); json(res, 200, { cancelled: queue.isActive(id) }); return; }
+      if (action === "cancel") { z.object({}).strict().parse(raw); if (workflow.active(id)) workflow.stop(id); else queue.stop(id); json(res, 200, { cancelled: queue.isActive(id) }); return; }
       if (action === "submit") { json(res, 202, queue.submit(id, raw)); return; }
       if (action === "archive-review-attempt") {
         const input = z.object({ revision, submissionID: z.string().min(1).max(200) }).strict().parse(raw);
@@ -407,12 +413,12 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
     closePromise = (async () => {
       const cleanup = await Promise.allSettled([
         ...[...helpWork.values()].map((work) => work.promise),
-        implementation.close(), queue.close(), options.connections?.close(),
+         implementation.close(), workflow.close(), queue.close(), options.connections?.close(),
       ]);
       server.closeAllConnections();
       await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
       // Help failures are already persisted by the service; teardown failures are actionable.
-      for (const result of cleanup.slice(-3)) if (result.status === "rejected") throw result.reason;
+      for (const result of cleanup.slice(-4)) if (result.status === "rejected") throw result.reason;
     })();
     return closePromise;
   } };

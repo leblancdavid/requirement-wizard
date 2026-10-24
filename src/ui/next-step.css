@@ -1,7 +1,0 @@
-.next-step { padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
-.next-step h2 { margin: 0; font-size: 1rem; }
-.next-step p { margin: .5rem 0; }
-.next-step button, .maintenance-settings button, .maintenance-queue button { min-height: 44px; }
-.maintenance-settings, .maintenance-queue { min-width: 0; overflow-wrap: anywhere; }
-.maintenance-queue li { margin-bottom: .5rem; }
-@media (max-width: 700px) { .next-step button, .maintenance-settings button, .maintenance-queue button { width: 100%; } }

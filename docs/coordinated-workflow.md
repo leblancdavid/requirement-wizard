@@ -1,0 +1,96 @@
+# Coordinated workflow preview (DEC-032)
+
+## Implemented first slice
+
+Enable per project through **Continue project**, or Settings → Project settings →
+**Coordinated workflow (preview)**. Processing & queue shows current work, allowance,
+Stop/pause, blockers, and a decision inbox linking to existing questions, requirement
+exceptions, refinements and saved-input issues. Advanced views/actions remain;
+the redundant What's next card stays removed.
+
+The coordinator sequences existing validated operations: process authorized input,
+refresh stale refinement proposals, stop for decisions, establish requirement
+provenance/checks, inspect similarity candidates, review epic workflow packages,
+refresh stale scoped definition assessments, and clarify unresolved definition
+behavior with targeted questions. It is not a second approval or
+publication pipeline. Faithful answer-derived updates use DEC-030; human-reviewed
+wording and valid answer-derived provenance do not need another routine cleanup
+call. Legacy proposals and unsupported choices are never silently approved.
+
+Changed input invalidates readiness and causes outstanding checks to be reconsidered
+within the remaining live-session allowance. Existing exact-context checkpoints
+remain authoritative. Definition refreshes review full scoped evidence, not just
+deltas. Similarity selects candidates; it does not prove semantic conflict freedom.
+
+## Consent, limits and recovery
+
+- Default off, machine-local; scheduling and model-call authority are not exported.
+  Advanced preferences survive, but legacy automatic maintenance is suspended while
+  coordinated mode is enabled.
+- Explicit Continue grants at most eight requests, five active minutes and twenty
+  coordinator steps. Accounting is saved before dispatch and shared across steps.
+  Ordinary jobs require room for three calls, so unused slots are possible. Staged
+  operations retain completed checkpoints when paused.
+- Waiting for decisions preserves allowance. Eligible input can resume that allowance
+  in the same app session. Save-only input cannot use an earlier grant; explicit
+  Continue authorizes its IDs. Restart never automatically resumes calls.
+- Stop/shutdown preserve completed work. Explicit continuation can recover this
+  coordinator's interrupted input, not arbitrary failed submissions. Worker leases
+  exclude competing model/execution/workspace operations; stale results cannot
+  overwrite newer decisions. Portable adoption pauses enabled local coordination.
+- Coding, delivery, research and scans remain explicit advanced operations; this
+  mode never authorizes them or silently changes provider/model.
+
+## Readiness
+
+**Specification checks passed / ready to plan** requires accepted active requirements,
+valid evidence and provenance proofs, no pending input/decisions, completed relevant
+workflow review, and current defined/not-applicable definition dimensions with valid
+dependencies. Percentages alone never establish readiness. Revision-linked receipts
+are archived immutably; changes invalidate current status, not dated evidence/jobs.
+
+**Ready to implement** additionally requires a current approved implementation plan
+covering the active requirements without unresolved package questions, a matching
+workspace binding and saved implementation configuration. Starting coding remains
+explicit. These bounded checks do not certify exhaustive completeness or replace
+the user's eventual baseline review.
+
+## Limits and verification
+
+After current definition checks, unresolved dimensions receive a questions-only
+clarification task, prioritized by importance. Each task covers one area/dimension
+and proposes at most three evidence-linked questions. Its finding is an AI hypothesis,
+not a confirmed product gap. Existing answers and retired questions are retained;
+exact repeated questions and out-of-scope/unread citations are rejected. Answers
+flow through ordinary saved-input processing, then affected assessments refresh.
+Asking a question never resolves a dimension or establishes readiness.
+
+Clarification shares the existing allowance, leases, cancellation and stale-result
+checks. An unchanged completed task that found no useful product question is not
+called again, including after restart/Continue. Missing evidence, invalid dependency
+graphs, oversized mandatory context and assessment-only limitations remain specific
+blockers linked to Overall progress. Model failures require explicit continuation.
+Semantic paraphrase duplication cannot be ruled out deterministically. Automatic
+plan preparation, true delta-only assessment and broader delegated-choice automation
+remain follow-on work.
+
+Deterministic tests cover faithful activation, legacy choices, readiness, bounded
+consent/restart, leases/Stop, stale output, API authorization and transactional schema
+6 → 7 recovery. The coordinated browser runner covers answers, corrections/rechecks,
+planning boundary, bounded continuation, restart and mobile without live calls.
+Real-project latency/cost, live-provider coordination and actual-user database
+upgrades are not qualified. See [migrations](migrations.md) for compatibility.
+
+First-slice verification on Windows Node 22.23.3: type check, UI build, 131 pretests + 649 main
+tests (780 total), coordinated-workflow, maintenance, specification and portable
+browser runners, and diff whitespace check. The full browser command was rerun;
+it still stops at the previously observed missing **Approve resolution** assertion
+at `src/web/browser-check.ts:1352`. That suite is not passing. No live inference,
+personal database changes, commits or pushes were performed.
+
+Readiness-question follow-up verification: type check, UI build and all 787 tests
+(138 pretests + 649 main) passed, along with the updated coordinated browser flow
+including question → answer → fresh assessment, specification and maintenance browser
+runners. Reopen tests preserve completed clarification jobs and prevent unchanged
+no-question retries. The full browser command was rerun and still fails at the same
+**Approve resolution** assertion. No live calls or personal database changes.

@@ -1,0 +1,8 @@
+.maintenance-settings button, .maintenance-queue button { min-height: 44px; }
+.maintenance-settings, .maintenance-queue { min-width: 0; overflow-wrap: anywhere; }
+.maintenance-queue li { margin-bottom: .5rem; }
+.workflow-controls { min-width: 0; overflow-wrap: anywhere; }
+.workflow-controls button { min-height: 44px; }
+.workflow-controls .queue-item small { display: block; }
+@media (max-width: 700px) { .workflow-controls button { width: 100%; } }
+@media (max-width: 700px) { .maintenance-settings button, .maintenance-queue button { width: 100%; } }

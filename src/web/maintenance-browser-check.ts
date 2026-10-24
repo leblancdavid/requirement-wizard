@@ -44,13 +44,12 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(() => { localStorage.setItem("reqwizit-research", "false"); localStorage.setItem("reqwizit-auto", "true"); });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: /Guided maintenance browser/ }).click();
-  const next = page.getByRole("region", { name: "What's next?", exact: true });
-  await expect(next).toContainText("Definition review recommended");
-  await expect(next.getByRole("button", { name: "Enable automatic definition updates", exact: true })).toHaveCount(0);
+  const removedCard = page.getByRole("region", { name: "What's next?", exact: true });
+  await expect(removedCard).toHaveCount(0);
   for (const name of [/^Specification/, /^Implement/, /^Project map/, /^Activity/, /^Design/]) {
     await page.getByRole("tab", { name }).click();
     await expect(page.locator(".maintenance-settings, .maintenance-queue")).toHaveCount(0);
-    await expect(next.getByRole("button", { name: "Enable automatic definition updates", exact: true })).toHaveCount(0);
+    await expect(removedCard).toHaveCount(0);
   }
   await (await workspaceMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("region", { name: "Automatic maintenance settings", exact: true });
@@ -69,11 +68,11 @@ try {
   await expect.poll(() => store.submissions(p.id)[0]?.status).toBe("completed");
   await expect.poll(() => store.maintenance(p.id).tasks.missions?.state).toBe("queued");
   const hold = store.maintenance(p.id); hold.dueAt = Date.now() + 60000; store.saveMaintenance(p.id, hold);
-  await expect(next).toContainText("Definition updates queued"); assert.deepEqual(calls, ["process"]);
-  await next.getByRole("button", { name: "View background work", exact: true }).click();
+  assert.deepEqual(calls, ["process"]);
+  await page.locator(".topbar .queue-trigger").click();
   const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   const work = drawer.getByRole("region", { name: "Automatic maintenance work", exact: true });
-  await expect(work).toContainText("Missions"); await expect(work).toContainText("Changes awaiting review");
+  await expect(work).toContainText("Missions"); await expect(work).toContainText("Definition update queued");
   await expect(work.getByRole("button", { name: "Enable automatic definition updates", exact: true })).toHaveCount(0);
   await work.getByRole("button", { name: "Automatic maintenance settings", exact: true }).click();
   await expect(drawer).toHaveCount(0); await expect(settings).toBeVisible();
@@ -91,7 +90,7 @@ try {
   await work.getByRole("button", { name: "Pause automatic updates", exact: true }).click();
   await expect(work).toContainText("Automatic updates are paused");
   assert.equal(store.maintenance(p.id).paused, true);
-  await page.reload(); await next.getByRole("button", { name: "View background work", exact: true }).click();
+  await page.reload(); await page.locator(".topbar .queue-trigger").click();
   await expect(work).toContainText("Automatic updates are paused");
   await work.getByRole("button", { name: "Resume automatic maintenance", exact: true }).click();
   await expect(work).toContainText("No definition updates are queued");
@@ -117,18 +116,20 @@ try {
   const current = store.get(p.id), proposed = store.beginJob(p.id, current.revision).job;
   store.claimJob(proposed.id, Date.now() + 60000);
   store.finishJob(proposed.id, { ...empty(), requirements: [{ epicID: "inbox", statement: "An unconfirmed export choice", rationale: "Model proposal, not human preference", acceptance: ["The proposed format can be reviewed"], sourceIDs: [current.sources[0]!.id] }] });
-  await expect(next).toContainText("Review proposed decisions");
-  await next.getByRole("button", { name: "Review decisions", exact: true }).click();
+  await expect(page.getByRole("tab", { name: /^Specification/ })).toContainText("1");
+  await page.getByLabel("Filter by feature").selectOption("all");
+  await expect(specification.getByRole("button", { name: /^Needs your decision/ })).toContainText("1");
+  await specification.getByRole("button", { name: /^Needs your decision/ }).click();
   await expect(specification.getByRole("button", { name: /^Needs your decision/ })).toHaveClass(/active/);
-  await expect(page.getByLabel("Filter by feature")).toHaveValue("all");
+  await expect(removedCard).toHaveCount(0);
   assert.equal(calls.length, 2, "Model-only proposals do not trigger another assessment");
   await app.close(); app = await startApp(options);
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: /Guided maintenance browser/ }).click();
-  await next.getByRole("button", { name: "View background work", exact: true }).click();
+  await page.locator(".topbar .queue-trigger").click();
   await expect(work).toContainText("Automatic updates are paused");
   assert.equal(calls.length, 2, "Server restart cannot infer fresh model consent");
   await expect(work.getByRole("button", { name: "Resume automatic maintenance", exact: true })).toBeVisible();
   assert.deepEqual(errors, []);
-  console.log("Guided maintenance browser passed: project Settings configuration, operational queue and focus links, no repeated controls across tabs, consent, story → processing → assessment, pause/reload, restart consent, keyboard and mobile; no live model calls.");
+  console.log("Maintenance browser passed: no What's next card on any tab, project Settings, operational queue and focus links, consent, story → processing → assessment, specification decisions, pause/reload, restart consent, keyboard and mobile; no live model calls.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-maintenance-failure"); throw error; }
 finally { await browser?.close(); await app.close(); store.close(); }

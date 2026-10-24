@@ -267,6 +267,15 @@ data lifecycle, permissions, integrations, quality constraints, and operations.
 
 **RW-014 — Release readiness.** Assess readiness for a selected scope and revision.
 
+Implemented preview (DEC-032): opt-in coordination sequences authorized input and
+existing checks, reuses provenance/checkpoints, and stops for decisions in Processing
+& queue. Specification-check receipts are not a human baseline review. Ready to
+implement also requires a current approved plan/configuration; coding stays explicit.
+See [coordinated workflow](coordinated-workflow.md) for limits and remaining gates.
+Current unresolved definition dimensions can produce questions-only clarification;
+answers trigger affected rechecks. Evidence/technical limitations remain blockers,
+and asking a question does not establish readiness or approve a requirement.
+
 - Report specific blockers and deferred/delegated decisions.
 - Block a ready assessment on unresolved material contradictions and missing critical
   workflow behavior or acceptance scenarios.
@@ -337,7 +346,8 @@ show a deterministic project aggregate with explanations and evidence.
 - Show critical gaps, assessment freshness, and qualitative scope confidence separately.
 - Explain that newly discovered scope can lower the estimate; even 100% is not proof of readiness.
 - Expose the rubric and the supporting records behind each assessment.
-- Guide users to the next useful action and offer explicit opt-in maintenance after
+- Keep contextual status/actions in the existing workspace views rather than a
+  duplicate summary card, and offer explicit opt-in maintenance after
   relevant saved decisions change. Coalesce edits, show model-call/time/area bounds,
   preserve completed work and require explicit resume after interruption or app restart.
   Do not automatically approve proposals, discover unrelated gaps, code or deliver.

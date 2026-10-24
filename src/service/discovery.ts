@@ -13,6 +13,7 @@ import { addRelatedRecordHints } from "../core/similarity.js";
 import { epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
 import { definitionContext } from "../core/definition-assessment.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { readinessQuestionContext, readinessQuestionTaskSchema, type ReadinessQuestionTask } from "../core/readiness-questions.js";
 import { definitionAbortCause } from "../core/definition-interruption.js";
 import { runDefinitionStages, DefinitionEvidenceBlocked } from "./definition-stages.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages } from "../core/epic-stages.js";
@@ -59,7 +60,8 @@ function schemaDiagnostic(error: z.ZodError): string {
 /** Shared application boundary. No model or storage operations belong in UI components. */
 export class DiscoveryService {
   constructor(readonly store: ProjectStore, private readonly adapter: DiscoveryAdapter,
-    private readonly navigation: { searchEvidence?: typeof searchSavedEvidence; stagedLimits?: { requests: number; durationMs: number }; definitionRequestMs?: number } = {}) {
+    private readonly navigation: { searchEvidence?: typeof searchSavedEvidence; stagedLimits?: { requests: number; durationMs: number }; definitionRequestMs?: number;
+      workflow?: { owner: string; beforeJob: () => { requests: number; durationMs: number }; beforeRequest: (jobID: string) => void } } = {}) {
     if (navigation.stagedLimits) z.object({ requests: z.number().int().min(1).max(stagedRunRequestLimit),
       durationMs: z.number().int().min(1).max(stagedRunDurationMs) }).strict().parse(navigation.stagedLimits);
     if (navigation.definitionRequestMs !== undefined) z.number().int().min(1).max(300000).parse(navigation.definitionRequestMs);
@@ -223,8 +225,18 @@ export class DiscoveryService {
   async analyze(projectID: string, expectedRevision: number, options: {
     signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
     definitionLimits?: { requests: number; durationMs: number };
+    readinessQuestions?: ReadinessQuestionTask;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
+    const workflowLimits = this.navigation.workflow?.beforeJob();
+    if (options.readinessQuestions !== undefined) {
+      readinessQuestionTaskSchema.parse(options.readinessQuestions);
+      if (options.definitionEpicID || options.definitionLimits || options.gapMode || options.helpRequest || options.refinementOnly
+        || options.recordIDs || options.submissionIDs || options.continueGapJobID || options.questionTarget !== undefined
+        || options.research || options.savedEvidencePolicy || options.requiredEpicIDs || options.isolatedTask || options.savedOverlapSubmissionID
+        || options.focusEpicID || options.refinementPair || options.includeUnapproved || options.resolutionTriggerSourceIDs)
+        throw new Error("Readiness clarification requires a separate questions-only task.");
+    }
     if (options.definitionEpicID !== undefined) z.string().min(1).max(200).parse(options.definitionEpicID);
     if (options.definitionLimits) {
       if (!options.definitionEpicID) throw new Error("Definition limits require an assessment-only task.");
@@ -262,7 +274,10 @@ export class DiscoveryService {
       || options.requiredEpicIDs?.length || options.isolatedTask || options.savedEvidencePolicy !== undefined || options.research !== undefined || options.focusEpicID !== undefined)) {
       throw new Error("Continue exploration retains its saved task, model, research permission and search policy; other discovery options are not accepted.");
     }
-    const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest);
+    const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest, false, this.navigation.workflow?.owner);
+    const inferenceAdapter: DiscoveryAdapter = this.navigation.workflow ? { ...this.adapter, analyze: (snapshot, request) => {
+      this.navigation.workflow!.beforeRequest(job.id); return this.adapter.analyze(snapshot, request);
+    } } : this.adapter;
     // Ordinary calls retain five minutes. Staged packages may continue within a
     // fifteen-minute action, including preparation, with a one-minute lease margin.
     this.store.claimJob(job.id, Date.now() + (options.gapMode || options.definitionEpicID ? stagedRunLeaseMs : 360_000));
@@ -279,7 +294,7 @@ export class DiscoveryService {
     const started = Date.now();
     let timedOut = false, stagedRun = false;
     const timeout = () => { timedOut = true; abort(); };
-    let timer = setTimeout(timeout, Math.min(300_000, options.definitionLimits?.durationMs ?? 300_000));
+    let timer = setTimeout(timeout, Math.min(300_000, workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? 300_000));
     const refinementTarget = options.refinementOnly && !options.refinementPair ? project.requirements.find((r) => options.recordIDs?.length
       ? options.recordIDs.includes(r.id) : !options.focusEpicID || r.epicID === options.focusEpicID) : undefined;
     try {
@@ -287,18 +302,18 @@ export class DiscoveryService {
       let definition: ContextPack | undefined;
       if (options.definitionEpicID) {
         if (this.store.definitionHistory(project.id, options.definitionEpicID, definitionInputKey(project, options.definitionEpicID)).length) {
-          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
-          return completeMeasurement(await runDefinitionStages(this.store, this.adapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
+          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
+          return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
         }
         try { definition = definitionContext(project, options.definitionEpicID); }
         catch (error) {
           if (!(error instanceof ContextBudgetError)) throw error;
           this.store.attachContext(job.id, error.manifest);
           options.onProgress?.("The complete area exceeds one request. Preparing exact evidence batches; no assessment has been published and no evidence will be truncated.");
-          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
-          return completeMeasurement(await runDefinitionStages(this.store, this.adapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
+          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
+          return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs }));
         }
       }
       const question = options.helpRequest ? project.questions.find((q) => q.id === options.helpRequest!.questionID)! : undefined;
@@ -311,7 +326,7 @@ export class DiscoveryService {
       const refinementRecords = pair ? refinementEvidenceRecords(project, pair)
         : refinementTarget ? refinementEvidenceRecords(project, [refinementTarget.id]) : undefined;
       const pairRecords = pair ? [...pair, ...triggerSourceIDs, ...linkedQuestions.flatMap((q) => [q.id, ...(q.sourceID ? [q.sourceID] : [])])] : undefined;
-      const generalExploration = !options.definitionEpicID && !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
+      const generalExploration = !options.readinessQuestions && !options.definitionEpicID && !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
       if (options.gapMode) options.onProgress?.("Preparing workflow evidence…\nIndexing saved checks locally. No model request has started; Stop remains available.");
       const epicPlan = options.gapMode ? await prepareEpicReview(project, this.store.epicReviewHistory(projectID), options.focusEpicID, this.store.submissions(projectID), {
@@ -338,7 +353,7 @@ export class DiscoveryService {
         options.onProgress?.("No pending epic packages: review saved blockers or answer waiting decisions. No model request made.");
         return completeMeasurement(this.store.attachEpicReviewReport(job.id, epicPlan.report, true));
       }
-      let context = definition ? definition
+      let context = options.readinessQuestions ? readinessQuestionContext(project, options.readinessQuestions) : definition ? definition
         : options.helpRequest ? questionHelpContext(project, options.helpRequest, options.helpRequest.action === "define" ? [] : this.store.jobs(projectID))
         : continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
         : epicPlan?.task?.context ? epicPlan.task.context
@@ -363,7 +378,7 @@ export class DiscoveryService {
       }
       if (pair) context.manifest.refinementPair = { requirementIDs: pair, contextKey: resolutionContextKey(project, pair, triggerSourceIDs),
         ...(options.includeUnapproved ? { includeUnapproved: true } : {}), ...(triggerSourceIDs.length ? { triggerSourceIDs } : {}) };
-      if (!options.definitionEpicID && !options.helpRequest && !options.refinementOnly && !epicPlan && context.manifest.budget <= 96000) addRelatedRecordHints(project, context);
+      if (!options.readinessQuestions && !options.definitionEpicID && !options.helpRequest && !options.refinementOnly && !epicPlan && context.manifest.budget <= 96000) addRelatedRecordHints(project, context);
       if (refinementTarget) context.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
       // Detailed context can include historical reviews. Only the job's current
       // submission batch authorizes review follow-up, matching publication checks.
@@ -404,8 +419,8 @@ export class DiscoveryService {
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
       const requestModel = (context: ContextPack) => measurement
-        ? measurement.request(() => this.adapter.analyze(project, { ...adapterOptions, context }), context, controller.signal)
-        : this.adapter.analyze(project, { ...adapterOptions, context });
+        ? measurement.request(() => inferenceAdapter.analyze(project, { ...adapterOptions, context }), context, controller.signal)
+        : inferenceAdapter.analyze(project, { ...adapterOptions, context });
       controller.signal.throwIfAborted();
       if (epicPlan?.task) {
         const review = epicPlan.task.review;
@@ -441,7 +456,7 @@ export class DiscoveryService {
             phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
           validateEpicStages(project, review, staged, batches);
           stagedRun = true;
-          const limits = this.navigation.stagedLimits ?? { requests: stagedRunRequestLimit, durationMs: stagedRunDurationMs };
+          const limits = workflowLimits ?? this.navigation.stagedLimits ?? { requests: stagedRunRequestLimit, durationMs: stagedRunDurationMs };
           work.stagedRun = { format: 1, requestLimit: limits.requests, durationMs: limits.durationMs };
           clearTimeout(timer);
           timer = setTimeout(timeout, Math.max(0, started + limits.durationMs - Date.now()));
@@ -680,9 +695,9 @@ export class DiscoveryService {
       }
       if (options.definitionEpicID && controller.signal.aborted) {
         const work = this.store.getJob(job.id).definitionWork;
-        const cause = timedOut ? work || options.definitionLimits ? "area-time-limit" : "request-time-limit" : definitionAbortCause(controller.signal.reason);
+        const cause = timedOut ? work || options.definitionLimits || workflowLimits ? "area-time-limit" : "request-time-limit" : definitionAbortCause(controller.signal.reason);
         return completeMeasurement(this.store.interruptDefinition(job.id, { format: 1, cause,
-          ...(["refresh-time-limit", "area-time-limit"].includes(cause) ? { limitMs: cause === "area-time-limit" ? options.definitionLimits?.durationMs ?? 900000 : 900000 } : cause === "request-time-limit" ? { limitMs: 300000 } : {}) }));
+          ...(["refresh-time-limit", "area-time-limit"].includes(cause) ? { limitMs: cause === "area-time-limit" ? workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? 900000 : 900000 } : cause === "request-time-limit" ? { limitMs: 300000 } : {}) }));
       }
       if (stagedRun && controller.signal.aborted && (timedOut || options.signal?.reason?.name === "TimeoutError")) {
         return completeMeasurement(this.store.pauseEpicReview(job.id, "time-limit"));

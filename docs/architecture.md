@@ -6,12 +6,25 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/core/workflow.ts`, `src/storage/workflow.ts`, `src/service/workflow.ts`:
+  coordinator over existing discovery/queue publication paths, separate settings and
+  scheduler CAS, worker exclusion, shared pre-dispatch accounting, provenance reuse
+  and immutable readiness receipts. Schema 7 adds local metadata only; existing
+  assessment/context identities remain. API and `src/ui/workflow-controls.tsx`
+  expose settings and an operational decision inbox. See
+  [coordinated workflow](coordinated-workflow.md).
+
+- `src/core/readiness-questions.ts`: additive versioned task/context contract for
+  questions-only clarification of current unresolved definition dimensions. The
+  coordinator shares its allowance/lease; runtime prompts and the storage publication
+  boundary forbid edits or assessment upgrades. Original findings and exact evidence
+  remain in saved jobs; answers use the existing input and definition-refresh paths.
+
 - `src/core/maintenance.ts`, `src/storage/maintenance.ts`, `src/service/queue.ts`:
   opt-in decision-triggered area scheduling with durable CAS dispatch receipts,
   separate settings concurrency, debounce and bounded automatic assessment bursts.
   Scheduling projections never certify coverage. Existing assessment validation and
   owned job leases remain the publication boundary; restart requires explicit consent.
-  `src/ui/next-step.tsx` guides users without automatically choosing product decisions.
   `src/ui/maintenance-controls.tsx` separates per-project Settings configuration from
   operational queue status/pause/resume; navigation does not grant model-call authority.
   See [guided maintenance](guided-maintenance.md) and the schema-6 migration ledger.

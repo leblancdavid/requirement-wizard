@@ -39,7 +39,7 @@ export function MaintenanceQueue({ project, maintenance, disabled, pending, conf
     {maintenance.enabled && <p>Pause holds the next automatic assessment; the current task can finish. Use Stop on the current task to interrupt it now. Resume grants a bounded burst, not a retry of unchanged blockers.</p>}
     {maintenance.enabled && maintenance.suspended && <p>This app session needs your permission before starting automatic model calls. Resume explicitly after an app restart.</p>}
     <p>Project-wide scope · at most {maintenance.limits.requests} requests, {maintenance.limits.durationMs / 60000} minutes and {maintenance.limits.areas} areas per burst. Saved inputs finish first.</p>
-    {tasks.length > 0 && <ul>{tasks.map(([id, task]) => <li key={id}><strong>{project.epics.find((e) => e.id === id)?.title ?? id}</strong> · {task.state === "queued" ? "Changes awaiting review" : task.state}
+    {tasks.length > 0 && <ul>{tasks.map(([id, task]) => <li key={id}><strong>{project.epics.find((e) => e.id === id)?.title ?? id}</strong> · {task.state === "queued" ? "Definition update queued" : task.state}
       {task.reason && <details><summary>Why this needs attention</summary><p>{task.reason}</p></details>}</li>)}</ul>}
     <button className="quiet" onClick={settings}>Automatic maintenance settings</button>
   </section>;

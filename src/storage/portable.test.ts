@@ -146,13 +146,24 @@ test("pull adoption preserves local history, detects divergent execution-only wo
   const f = fixture(), target = join(f.directory, "target"); mkdirSync(target);
   const other = new ProjectStore(join(f.directory, "other.sqlite"));
   try {
+    const workflow = f.store.workflow(f.project.id); workflow.enabled = true; workflow.paused = false;
+    workflow.grant = { id: "private-workflow-authority", used: 2, remainingMs: 1000, submissionIDs: [] };
+    f.store.saveWorkflow(f.project.id, workflow);
     f.store.connectWorkspace(f.project.id, f.project.revision, f.root);
     cpSync(join(f.root, ".reqwizit"), join(target, ".reqwizit"), { recursive: true });
     other.openWorkspace(target, selection);
+    assert.equal(other.workflow(f.project.id).enabled, false, "Local coordination authority never travels with a checkpoint");
+    assert.ok(!Object.values(readPortableWorkspace(target).files).join("").includes("private-workflow-authority"));
+    const local = other.workflow(f.project.id); local.enabled = true; local.paused = false;
+    local.grant = { id: "local-consent", used: 1, remainingMs: 2000, submissionIDs: [] }; other.saveWorkflow(f.project.id, local);
     const changed = f.store.note(f.project.id, f.project.revision, "Preserve this new human constraint"); f.store.syncWorkspace(changed.id);
     cpSync(join(f.root, ".reqwizit"), join(target, ".reqwizit"), { recursive: true });
     assert.equal(other.syncWorkspace(changed.id)?.status, "conflict", "Polling detects pull; it does not overwrite it");
     assert.equal(other.openWorkspace(target, selection).revision, changed.revision);
+    assert.equal(other.workflow(changed.id).enabled, true);
+    assert.equal(other.workflow(changed.id).paused, true, "Adoption requires new explicit model-call consent");
+    assert.equal(other.workflow(changed.id).grant!.id, "local-consent");
+    assert.match(other.workflow(changed.id).message, /checkpoint adopted/);
     assert.equal(other.history(changed.id).length, 2);
     const inspect = new Database(join(f.directory, "other.sqlite"), { readonly: true });
     try {

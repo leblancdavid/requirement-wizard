@@ -4,8 +4,9 @@ import { z } from "zod";
 import { decisionIdentity, executionSchemaVersion } from "../core/assessment-identity.js";
 import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
+import { workflowSchema, workflowReadinessSchema } from "../core/workflow.js";
 
-export const databaseSchemaVersion = 6;
+export const databaseSchemaVersion = 7;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -92,6 +93,13 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   db.exec(`CREATE TABLE IF NOT EXISTS maintenance_state (
     project_id TEXT PRIMARY KEY REFERENCES projects(id), payload TEXT NOT NULL
   );`);
+} }, { version: 7, name: "coordinated-project-workflow-v1", apply(db: Database.Database) {
+  db.exec(`CREATE TABLE IF NOT EXISTS workflow_state (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id), payload TEXT NOT NULL
+  ); CREATE TABLE IF NOT EXISTS workflow_readiness_receipts (
+    project_id TEXT NOT NULL REFERENCES projects(id), receipt_key TEXT NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY(project_id, receipt_key)
+  );`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -111,5 +119,7 @@ export function migrateDatabase(db: Database.Database) {
       const state = executionEnvelope.parse(JSON.parse(row.payload));
       if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution data format. Saved data was not overwritten.");
     }
+    for (const row of db.prepare("SELECT payload FROM workflow_state").all() as { payload: string }[]) workflowSchema.parse(JSON.parse(row.payload));
+    for (const row of db.prepare("SELECT payload FROM workflow_readiness_receipts").all() as { payload: string }[]) workflowReadinessSchema.parse(JSON.parse(row.payload));
   }).immediate();
 }

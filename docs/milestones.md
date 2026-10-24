@@ -1,5 +1,13 @@
 # Milestone backlog
 
+DEC-032 coordinated-workflow preview sequences existing specification checks with
+bounded consent and a decision inbox while preserving checkpoints. It reaches a
+specification-check/planning boundary, not autonomous planning or coding. M4 baseline
+and handoff exits remain incomplete. Targeted definition-blocker questions and
+answer-triggered rechecks are now implemented; delta-only assessment and
+live/actual-user qualification remain. See
+[coordinated workflow](coordinated-workflow.md).
+
 Status: M1 partially verified; M2 persistent engine and local API implemented with
 remaining review/UI work; M3 browser-first workspace implemented; M4 research/epic
 coverage/context slice implemented with readiness work pending. Requirements refer to
@@ -20,10 +28,11 @@ guardrails remain. Multi-requirement packages, executable subpackages, adaptive 
 dependency discovery and live planning qualification remain follow-on checks. This does
 not complete portable handoff/readiness milestones.
 
-DEC-031 adds a guided next-action panel and opt-in, bounded changed-area assessment
+DEC-031 adds opt-in, bounded changed-area assessment
 maintenance. This is a workflow slice, not completion of readiness or discovery
 milestones. True delta-only evidence review and live maintenance qualification remain
-pending; see [guided maintenance](guided-maintenance.md).
+pending. The duplicate What’s next card was subsequently removed; existing views
+retain workflow status/actions. See [guided maintenance](guided-maintenance.md).
 
 ## M1 — OpenCode runtime integration spike
 

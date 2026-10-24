@@ -1,15 +1,18 @@
 # Guided workflow and automatic definition maintenance (DEC-031)
 
+The newer [coordinated workflow preview (DEC-032)](coordinated-workflow.md) suspends
+the legacy automatic maintenance scheduler while enabled. Saved preferences and
+completed work remain intact.
+
 ## Implemented first slice
 
-The workspace has one **What’s next?** panel recommending the next useful action:
-finish setup, inspect a failed saved input, process waiting input, review proposed
-decisions, continue a paused definition update, answer existing questions, or update
-definition progress. Navigation recommendations open the corresponding view without
-starting inference. Review navigation clears feature/search/readiness filters and
-opens **Needs your decision**, without discarding review drafts. A completed
-assessment no longer leaves an idle **Resume processing** action merely because
-the legacy input queue is paused.
+The separate **What’s next?** card was removed because it duplicated existing views.
+Use Design for stories/questions, Specification for current requirements and pending
+decisions, Overall progress for definition coverage, and Processing & queue for saved
+input, current work, blockers and continuation. Project setup and automatic maintenance
+configuration remain in Settings. No workflow action or maintenance capability was
+removed with the card. A completed assessment no longer leaves an idle **Resume
+processing** action merely because the legacy input queue is paused.
 
 The normal path is **add information → process saved input → review exceptions /
 answer questions → see updated definition progress**. Explicit-input faithful
@@ -23,15 +26,15 @@ Advanced actions menu is not part of this first slice.
 Open **Settings → Project settings → Automatic maintenance** and choose **Enable
 automatic definition updates**. This project-local, machine-local setting defaults off on
 upgrade and is not exported to shared workspaces. Enabling records the current
-scheduling baseline; it does **not** assess the existing backlog. Use **Update
-definition progress** / **Overall progress → Refresh definition coverage** when a
+scheduling baseline; it does **not** assess the existing backlog. Use
+**Overall progress → Refresh definition coverage** when a
 full initial baseline is wanted.
 
 Settings contains only configuration (enable/disable and usage limits). Queued
 areas, specific blockers and pause/resume live in **Processing & queue**. Stop stays
-on the current task. **What’s next?** shows only brief relevant maintenance status
-and **View background work**, not a repeated maintenance panel in every tab. The
-queue links directly back to this settings section, restoring keyboard focus there.
+on the current task. The duplicate **What’s next?** card is no longer shown. The
+queue links directly back to this settings section, restoring keyboard focus there;
+Settings retains its **View background work** link to the queue.
 Opening these views does not enable maintenance or start model calls. Existing
 preferences, pause state and saved tasks are preserved by this UI-only relocation.
 Active work and its Stop control appear before maintenance details in the queue.

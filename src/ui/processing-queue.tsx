@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import type { MaintenanceView } from "../core/maintenance.js";
 import { MaintenanceQueue, type MaintenanceAction } from "./maintenance-controls.js";
+import { WorkflowControls, workflowLabels, type WorkflowAction } from "./workflow-controls.js";
+import type { WorkflowView } from "../service/workflow.js";
+import type { WorkflowDecision } from "../core/workflow.js";
 import { Modal } from "./modal.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
@@ -19,7 +22,7 @@ import { AttentionInbox, attentionGroups } from "./attention.js";
 import { DiscoveryDiagnostics } from "./discovery-diagnostics.js";
 import type { DiscoveryDiagnosticReport } from "../core/discovery-diagnostics.js";
 
-export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, discover, stop, error, openIssue, jobs = [], continuationAvailable = false, continueExploration, exportDiagnostics, maintenance, configureMaintenance, maintenanceSettings, openRequest }: {
+export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, discover, stop, error, openIssue, jobs = [], continuationAvailable = false, continueExploration, exportDiagnostics, maintenance, configureMaintenance, maintenanceSettings, openRequest, workflow, configureWorkflow, openWorkflowDecision }: {
   project: Project;
   active: boolean; progress: string[]; submissions: Submission[]; paused: boolean; lastJob?: Job;
   refinementProgress?: RefinementProgress | null;
@@ -31,6 +34,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   exportDiagnostics?: (jobIDs: string[]) => Promise<DiscoveryDiagnosticReport>;
   maintenance?: MaintenanceView; configureMaintenance?: (action: MaintenanceAction) => void;
   maintenanceSettings?: () => void; openRequest?: number;
+  workflow?: WorkflowView; configureWorkflow?: (action: WorkflowAction) => void; openWorkflowDecision?: (decision: WorkflowDecision) => void;
 }) {
   const [open, setOpen] = useState(false);
   useEffect(() => { if (openRequest) setOpen(true); }, [openRequest]);
@@ -41,7 +45,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const attentionCount = attentionGroups(project, submissions).length;
   const blocked = attention.filter((item) => item.contextBlock);
   const saved = submissions.filter((item) => item.status === "saved");
-  const [task = "Preparing discovery…", ...stage] = (progress.at(-1) ?? "Preparing discovery…").split("\n");
+  const [task = "Preparing discovery…", ...stage] = (workflow?.active ? workflow.message : progress.at(-1) ?? "Preparing discovery…").split("\n");
   const failed = lastJob && ["failed", "stale", "interrupted"].includes(lastJob.status);
   const gapOutcome = !active && !refinementProgress && progress.length > 0 && (lastJob?.context?.questionTarget !== undefined
     || !!lastJob?.epicReviewReport || !!lastJob?.gapReport
@@ -61,7 +65,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
    const discoveryHeadline = active ? refinement?.headline ?? (processing.length ? `Processing ${processing.length} ${processing.length === 1 ? "response" : "responses"}` : task)
       : blocked.length ? "AI follow-up blocked by context size" : actionablePause ? "Processing paused" : attention.length ? "Needs attention"
       : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting follow-up" : "Ready when you are";
-   const headline = taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? discoveryHeadline;
+   const headline = taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? (workflow?.enabled ? `Project workflow · ${workflowLabels[workflow.phase]}` : discoveryHeadline);
   const liveStage = running[0]?.stage ?? refinement?.label ?? stage.join(" ");
     const canResume = !active && (actionablePause || waiting.length > 0 || saved.length > 0)
      && (!continuationAvailable || waiting.length > 0 || saved.length > 0);
@@ -95,9 +99,10 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
         <span className="queue-chevron" aria-hidden="true">▾</span>
         {working && <ActivityBar label={refinement && !running.length ? refinement.label : "Background task progress"} completed={taskCount === 1 ? active ? completed : running[0]?.completed : undefined} total={taskCount === 1 ? active ? total : running[0]?.total : undefined} />}
       </button>
-      {active && <button className="secondary queue-header-action" disabled={stopDisabled} onClick={stop}>{lastJob?.context?.definitionAssessment ? "Stop assessment" : "Stop discovery"}</button>}
-      {canResume && <button className="secondary queue-header-action" disabled={disabled} onClick={resume} aria-description={`Processing scope: ${scope}`}>{resumeLabel}</button>}
-      {canDiscover && <button className="primary queue-header-action" disabled={disabled} onClick={discover} title="Staged packages continue automatically: up to 32 requests per package within the 15-minute action. Stop saves progress." aria-description={`Find missing decisions and ask follow-up questions. Scope: ${scope}. Up to 32 requests per staged package within the 15-minute action; Stop saves progress.`}>Discover missing decisions</button>}
+      {active && <button className="secondary queue-header-action" disabled={stopDisabled} onClick={stop}>{workflow?.active ? "Stop workflow" : lastJob?.context?.definitionAssessment ? "Stop assessment" : "Stop discovery"}</button>}
+      {workflow && configureWorkflow && !working && (!workflow.enabled || workflow.paused || workflow.suspended || workflow.phase === "blocked") && <button key="continue-project" className="primary queue-header-action" disabled={disabled} title="Coordinate saved input and outstanding specification checks: up to 8 model requests and 5 active minutes. This does not authorize coding or approve unsupported choices." onClick={() => configureWorkflow("continue")}>Continue project</button>}
+      {!workflow?.enabled && canResume && <button className="secondary queue-header-action" disabled={disabled} onClick={resume} aria-description={`Processing scope: ${scope}`}>{resumeLabel}</button>}
+      {!workflow?.enabled && canDiscover && <button className="secondary queue-header-action" disabled={disabled} onClick={discover} title="Staged packages continue automatically: up to 32 requests per package within the 15-minute action. Stop saves progress." aria-description={`Find missing decisions and ask follow-up questions. Scope: ${scope}. Up to 32 requests per staged package within the 15-minute action; Stop saves progress.`}>Discover missing decisions</button>}
       {!working && !canResume && continuationAvailable && <button className="secondary queue-header-action" disabled={disabled} onClick={() => setOpen(true)}>Continue exploration</button>}
     </div>
     {open && <ActionScope><Modal id="processing-queue" className="queue-drawer" titleID="queue-title" title="Processing & queue" close={() => setOpen(false)} closeLabel="Close processing queue" headerClassName="queue-drawer-heading" bodyClassName="queue-panel"
@@ -106,7 +111,9 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
          <p>All project areas · Discovery, scans, implementation, verification, delivery and question help. Each queued response receives its own follow-up.</p>
         {running.map((item) => <section key={item.id} aria-label={item.title}><h3>{item.title}</h3><span className="badge">{item.status}</span><ActivityFeedback label={item.stage ?? item.title} completed={item.completed} total={item.total} />{item.detail && <p>{item.detail}</p>}{item.stop && <button className="secondary" disabled={stopDisabled} onClick={() => stopActivity(item.stop!)}>Stop {item.title === "Question help" ? "question help" : "implementation"}</button>}</section>)}
          {active && <section aria-label="Current task"><h3>{refinement?.headline ?? task}</h3><ActivityFeedback label={refinement?.label ?? (stage.join(" ") || task)} completed={completed} total={total} />{refinement && <><p>{task}{stage.length ? ` · ${stage.join(" ")}` : ""}</p><p>Progress covers this run only, with up to 20 overlap checks followed by unfinished wording checks. Ineligible work is skipped; further overlaps may remain. Proposed changes still need your approval.</p></>}<button className="secondary" disabled={stopDisabled} onClick={stop}>Stop</button>{!processing.length && !refinement && <p>{lastJob?.context?.definitionAssessment ? "This round is assessing saved definition evidence; it cannot generate questions or change the specification." : "The active round is exploring existing project information; queued responses join the next round."}</p>}</section>}
-         {maintenance && configureMaintenance && maintenanceSettings && <MaintenanceQueue project={project} maintenance={maintenance} disabled={disabled} pending={stopDisabled} configure={configureMaintenance}
+         {workflow && configureWorkflow && <WorkflowControls workflow={workflow} disabled={disabled} pending={stopDisabled} configure={configureWorkflow}
+           openDecision={openWorkflowDecision && ((decision) => { setOpen(false); openWorkflowDecision(decision); })} />}
+         {!workflow?.enabled && maintenance && configureMaintenance && maintenanceSettings && <MaintenanceQueue project={project} maintenance={maintenance} disabled={disabled} pending={stopDisabled} configure={configureMaintenance}
            settings={() => { setOpen(false); maintenanceSettings(); }} />}
         {!active && refinement && <section aria-label="Refinement outcome"><h3>{refinement.headline}</h3><p>{refinement.label}</p><p>{progress.at(-1)}</p></section>}
         {gapOutcome && <section aria-label="Gap scan outcome"><h3>Gap scan outcome</h3><p role={lastJob?.retrievalWork?.stagedRun?.paused ? "status" : jobDiagnostic === outcomeMessage ? "alert" : undefined}>{outcomeMessage}</p></section>}

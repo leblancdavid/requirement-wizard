@@ -11,7 +11,6 @@ import { dimensions } from "../core/epics.js";
 import { maintenanceLimits, observeMaintenance } from "../core/maintenance.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { NextStep } from "../ui/next-step.js";
 import { MaintenanceSettings, MaintenanceQueue } from "../ui/maintenance-controls.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { coverage } from "../core/coverage.js";
@@ -239,32 +238,20 @@ test("concurrent human changes make an assessment stale rather than publishing o
   } finally { await queue.close(); store.close(); }
 });
 
-test("What's next separates proposal review, pending inputs, restart consent and bounded automation", () => {
+test("maintenance settings and queue separate configuration from operations and retain restart consent", () => {
   const store = new ProjectStore(":memory:"), queue = new DiscoveryQueue(new DiscoveryService(store, adapter([])));
   try {
     const p = seed(store), configure = () => {}, view = queue.maintenanceView(p.id);
-    const props = { project: p, submissions: [], maintenance: view, active: false, progress: [], disabled: false, needsInitialization: false, decisionCount: 0,
-      review: () => {}, process: () => {}, assess: () => {}, design: () => {}, initialize: () => {}, openQueue: () => {} };
-    const baseline = renderToStaticMarkup(createElement(NextStep, props));
-    assert.match(baseline, /Definition review recommended/);
-    assert.doesNotMatch(baseline, /Enable automatic|Turn off automatic|model requests|maintenance-controls/);
     const settings = renderToStaticMarkup(createElement(MaintenanceSettings, { maintenance: view, disabled: false, pending: false, configure, openQueue: () => {} }));
     assert.match(settings, /project setting/); assert.match(settings, /No initial bulk sweep/);
     assert.match(settings, /at most 8 model requests, 5 minutes and 3 areas per burst/);
     assert.doesNotMatch(settings, /Pause automatic|Resume automatic/);
-    const review = renderToStaticMarkup(createElement(NextStep, { ...props, decisionCount: 2 }));
-    assert.match(review, /Review proposed decisions/); assert.match(review, /never approves/);
-    const resumed = renderToStaticMarkup(createElement(NextStep, { ...props, maintenance: { ...view, enabled: true, suspended: true,
-      tasks: { missions: { inputKey: "a".repeat(64), state: "paused" } } } }));
-    assert.match(resumed, /Continue from Processing &amp; queue/); assert.match(resumed, /View background work/);
-    assert.doesNotMatch(resumed, /Resume automatic|Enable automatic/);
     const work = renderToStaticMarkup(createElement(MaintenanceQueue, { project: p, maintenance: { ...view, enabled: true, suspended: true,
       tasks: { missions: { inputKey: "a".repeat(64), state: "blocked", reason: "Exact evidence still exceeds the budget" } } },
       disabled: false, pending: false, configure, settings: () => {} }));
     assert.match(work, /Resume automatic maintenance/); assert.match(work, /Exact evidence still exceeds the budget/);
     assert.doesNotMatch(work, /Enable automatic|Turn off automatic/);
-    const working = renderToStaticMarkup(createElement(NextStep, { ...props, active: true, progress: ["Updating definition progress"] }));
-    assert.match(working, /Working on your project/); assert.doesNotMatch(working, />Update definition progress<\/button>/);
+    assert.match(work, /needs your permission/);
   } finally { void queue.close(); store.close(); }
 });
 
@@ -274,7 +261,7 @@ test("schema-5 upgrade is additive, transactional, repeatable and defaults exist
   try {
     const p = seed(store), project = structuredClone(p), history = store.history(p.id); store.close();
     let db = new Database(path);
-    db.exec("DROP TABLE maintenance_state; DELETE FROM migration_history WHERE version = 6; PRAGMA user_version = 5;");
+    db.exec("DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DELETE FROM migration_history WHERE version >= 6; PRAGMA user_version = 5;");
     db.exec("CREATE TRIGGER fail_maintenance_upgrade BEFORE INSERT ON migration_history WHEN new.version = 6 BEGIN SELECT RAISE(ABORT, 'Simulated migration interruption'); END;");
     const bytes = (db.prepare("SELECT payload FROM projects WHERE id = ?").get(p.id) as { payload: string }).payload; db.close();
     assert.throws(() => new ProjectStore(path), /Simulated migration interruption/);

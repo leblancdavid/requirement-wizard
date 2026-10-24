@@ -16,6 +16,7 @@ import type { SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { coverage } from "../core/coverage.js";
 import { definitionAbortReason } from "../core/definition-interruption.js";
 import { maintenanceBasis, maintenanceLimits, observeMaintenance, type MaintenanceView } from "../core/maintenance.js";
+import { WorkflowBudgetPause } from "../core/workflow.js";
 
 type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" };
 
@@ -36,7 +37,7 @@ export class DiscoveryQueue {
   private closing = false;
   private readonly wakeTimer: ReturnType<typeof setInterval>;
 
-  constructor(private readonly service: DiscoveryService) {
+  constructor(private readonly service: DiscoveryService, private readonly coordinator?: { manualOnly: boolean; owner: string }) {
     // Never repeat inference on restart. Reconcile only batches whose worker is no longer live.
     service.store.recoverExpiredJobs();
     for (const project of service.store.list()) {
@@ -49,6 +50,7 @@ export class DiscoveryQueue {
     }
     // Also notices a worker in another local process releasing its lease.
     this.wakeTimer = setInterval(() => {
+      if (this.coordinator?.manualOnly) return;
       for (const id of service.store.automaticQueueProjects()) this.start(id);
       for (const id of this.maintenanceArmed) this.maintain(id);
     }, 500);
@@ -76,7 +78,8 @@ export class DiscoveryQueue {
     }
   }
 
-  isActive(id: string) { return this.active.has(id) || this.service.store.discoveryActive(id); }
+  isActive(id: string) { return this.active.has(id) || this.service.store.discoveryActive(id) || this.service.store.workflowBusy(id, this.coordinator?.owner); }
+  async wait(id: string) { await this.active.get(id)?.promise; }
   progress(id: string) { return this.messages.get(id) ?? []; }
   refinementProgress(id: string) { return this.refinementRuns.get(id) ?? null; }
 
@@ -119,6 +122,7 @@ export class DiscoveryQueue {
    * process. One bounded burst follows settled relevant changes, not a timer sweep. */
   maintain(id: string, now = Date.now()) {
     if (this.closing || !this.maintenanceArmed.has(id)) return;
+    if (this.service.store.workflow(id).enabled) return;
     const report = (message: string) => { const messages = this.messages.get(id) ?? []; messages.push(message); if (messages.length > 20) messages.shift(); this.messages.set(id, messages); };
     try {
       let state = this.service.store.maintenance(id);
@@ -298,7 +302,7 @@ export class DiscoveryQueue {
       if (applied && this.completeLocalApproval(applied)) return applied;
       return this.service.store.submissions(id).find((s) => s.id === item.id)!;
     }
-    if (!this.isActive(id) && !this.service.store.queuePaused(id)) this.start(id);
+    if (!this.service.store.workflow(id).enabled && !this.isActive(id) && !this.service.store.queuePaused(id)) this.start(id);
     return item;
   }
 
@@ -340,7 +344,7 @@ export class DiscoveryQueue {
       : { ...options, gapMode: "epic" });
   }
 
-  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number; processOnly?: boolean } = {}) {
+  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number; processOnly?: boolean; submissionIDs?: string[] } = {}) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
@@ -378,6 +382,7 @@ export class DiscoveryQueue {
     if (options.refinementOnly) { this.start(id, options); return; }
     this.service.store.pauseQueue(id, false);
     for (const item of this.service.store.submissions(id).filter((s) => s.status === "needs-attention" && s.applied && !s.conflict
+      && (!options.submissionIDs || options.submissionIDs.includes(s.id))
       && (!options.focusEpicID || submissionEpic(project, s) === options.focusEpicID))) {
       item.status = "saved"; delete item.diagnostic; this.service.store.saveSubmission(item);
     }
@@ -436,6 +441,9 @@ export class DiscoveryQueue {
       return true;
     } catch (error) {
       if (!ownsCheckpoint) { report("A newer worker owns the saved follow-up; its work was preserved."); return false; }
+      if (error instanceof WorkflowBudgetPause) {
+        item.status = "saved"; save(); this.service.store.pauseQueue(item.projectID, true); throw error;
+      }
       item.status = "needs-attention";
       item.diagnostic = safeMessage(`Discovery and human input were saved. Targeted duplicate/conflict checking ${controller.signal.aborted ? "was cancelled" : "needs attention"}: ${error instanceof Error ? error.message : String(error)} Resume discovery explicitly to continue; the completed discovery round will not be repeated.`);
       try { save(); } catch { return false; }
@@ -484,8 +492,9 @@ export class DiscoveryQueue {
     report("Gap scan stopped after 10 packages; completed results are saved. Start again to explore more.");
   }
 
-  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; questionTarget?: number; processOnly?: boolean }) {
+  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; questionTarget?: number; processOnly?: boolean; submissionIDs?: string[] }) {
     if (this.closing || this.isActive(id) || this.service.store.executionActive(id)) return;
+    if (!manual && this.service.store.workflow(id).enabled) return;
     if (!manual && this.service.store.executionExpired(id)) {
       this.service.store.pauseQueue(id, true);
       return;
@@ -558,7 +567,7 @@ export class DiscoveryQueue {
         if (this.service.store.executionActive(id)) break;
         const scope = manual?.focusEpicID;
         const before = this.service.store.get(id);
-        const submissionIDs = scope ? this.service.store.submissions(id).filter((s) => submissionEpic(before, s) === scope).map((s) => s.id) : undefined;
+        const submissionIDs = manual?.submissionIDs ?? (scope ? this.service.store.submissions(id).filter((s) => submissionEpic(before, s) === scope).map((s) => s.id) : undefined);
         const applied = this.service.store.applyQueued(id, submissionIDs);
         const current = this.service.store.get(id);
         let localApprovals = 0;
@@ -703,11 +712,13 @@ export class DiscoveryQueue {
         }
       }
     }).catch((error: unknown) => {
+      if (error instanceof WorkflowBudgetPause) { this.service.store.pauseQueue(id, true); report(error.message); return; }
       if (refinement) refinement.status = controller.signal.aborted ? "stopped" : "failed";
       if (error instanceof OperationConflictError) { report(error.message); return; }
       const diagnostic = safeMessage(error instanceof Error ? error.message : error);
       report(diagnostic);
-      for (const item of this.service.store.submissions(id).filter((s) => s.status === "saved" || s.status === "processing")) {
+      for (const item of this.service.store.submissions(id).filter((s) => (s.status === "saved" || s.status === "processing")
+        && (!manual?.submissionIDs || manual.submissionIDs.includes(s.id)))) {
         delete item.contextBlock;
         item.status = "needs-attention"; item.diagnostic = diagnostic; this.service.store.saveSubmission(item);
       }
