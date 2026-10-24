@@ -295,6 +295,7 @@ test("four legacy saved calls recover after reopen without replay, with portable
   let store = new ProjectStore(path);
   try {
     const p = seed(store, 40), work = planDefinitionStages(p, "runtime"); let draft: Analysis | undefined;
+    delete work.responsePolicy; // Actual pre-compact checkpoint, not a new-format fixture.
     assert.ok(work.batches.length > 4);
     const { job } = store.beginJob(p.id, p.revision); store.claimJob(job.id, Date.now() + 60000);
     for (let index = 0; index < 4; index++) {
@@ -307,7 +308,7 @@ test("four legacy saved calls recover after reopen without replay, with portable
     assert.throws(() => definitionStageContext(p, work, draft), /context/i);
     // An old application saved all four responses before the next request failed.
     const manifest = { ...definitionStageContext(p, { ...work, receipts: [] }).manifest };
-    store.checkpointDefinition(job.id, work, manifest); store.blockDefinition(job.id, "Legacy oversized next request");
+    store.checkpointDefinition(job.id, work, manifest); store.blockDefinition(job.id, "The next exact evidence batch plus the complete assessment draft still exceeds 96,000 characters after lossless encoding (98,959). All 4 completed responses and spent attempts are saved; no findings or evidence were truncated and partial coverage was not published. Unchanged Resume cannot make this request fit and will not repeat completed calls.");
     const original = store.getJob(job.id), receipts = structuredClone(work.receipts);
     store.close(); store = new ProjectStore(path); store.close(); store = new ProjectStore(path);
     const controller = new AbortController();
@@ -327,6 +328,10 @@ test("four legacy saved calls recover after reopen without replay, with portable
       return stage.phase === "verify" ? { definitionVerdict: [] } : { ...empty(), assessments: stage.draft.assessments };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime" });
     assert.equal(completed.status, "completed", completed.diagnostic);
+    const history = store.definitionReviewHistory(p.id, { epicID: "runtime" }).entries;
+    assert.equal(history[0]!.status, "completed"); assert.equal(history[0]!.latestForArea, true);
+    const oldBlock = history.find((entry) => entry.id === job.id)!;
+    assert.equal(oldBlock.savedSteps, 4); assert.equal(oldBlock.latestForArea, false); assert.match(oldBlock.blockReason!, /98,959/);
     assert.deepEqual(completed.definitionWork!.receipts.slice(0, 4), receipts);
     assert.deepEqual(completed.definitionWork!.batches, work.batches);
     assert.deepEqual(store.getJob(job.id), original);
@@ -336,7 +341,7 @@ test("four legacy saved calls recover after reopen without replay, with portable
     assert.deepEqual(portable.continuation.jobs[0]!.definitionWork, completed.definitionWork);
     assert.deepEqual(completedDefinitionAssessment(p, portable.continuation.jobs[0]!.definitionWork!), completed.result);
     const html = renderToStaticMarkup(createElement(DefinitionProgress, { job: completed, project: p }));
-    assert.match(html, /exact subdivisions/); assert.match(html, /Evidence in this request/);
+    assert.match(html, /View logs/); assert.doesNotMatch(html, /exact subdivisions/); assert.match(html, /Evidence in this request/);
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 

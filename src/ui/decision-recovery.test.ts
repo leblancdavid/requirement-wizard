@@ -13,8 +13,8 @@ test("item errors show saved diagnostics and distinguish follow-up retry from de
   const { submission } = fixture();
   const conflict = renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, resume: () => assert.fail("No automatic retry") }));
   assert.match(conflict, /role="alert"/);
-  assert.match(conflict, /Answer the linked clarification/);
-  assert.match(renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, error: "" })), /Answer the linked clarification/);
+  assert.match(conflict, /Review the current item and any linked decisions/);
+  assert.match(renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, error: "" })), /View logs/);
   assert.ok(!conflict.includes("Resume processing"));
   submission.conflict = false; submission.applied = true;
   const failed = renderToStaticMarkup(createElement(ItemProcessingNotice, { submission, resume: () => {} }));
@@ -22,7 +22,8 @@ test("item errors show saved diagnostics and distinguish follow-up retry from de
   assert.match(failed, /don’t need to submit your response again/);
   submission.status = "completed";
   assert.equal(renderToStaticMarkup(createElement(ItemProcessingNotice, { submission })), "");
-  assert.match(renderToStaticMarkup(createElement(ItemProcessingNotice, { error: "Request failed; draft retained" })), /Request failed; draft retained/);
+  const unknown = renderToStaticMarkup(createElement(ItemProcessingNotice, { error: "Request failed; draft retained" }));
+  assert.match(unknown, /View logs/); assert.doesNotMatch(unknown, /draft retained/);
 });
 
 test("focused Review card contains failed review diagnostic, clarification navigation and retained note", () => {

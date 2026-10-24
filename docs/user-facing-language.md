@@ -1,5 +1,9 @@
 # User-facing language
 
+The 2026-10-24 [workspace consolidation](workspace-navigation.md) supersedes scattered
+**Technical details** disclosures: outcomes stay inline and **View logs** opens the
+single optional viewer. Existing historical/generated wording is not rewritten.
+
 Reqwizit guides product owners, including people with no software or AI background.
 Plain language is the default throughout the app, not only in interview questions
 (RW-003). Technical users can inspect details without changing that default.

@@ -39,6 +39,44 @@ label is **Assessment incomplete**, not **Assessment outdated**. Old evidence is
 labelled outdated only when it actually needs rechecking. Per-area states remain
 current/outdated/not assessed; partial batch work cannot make one current.
 
+## Finding earlier failures (2026-10-24)
+
+Open **Overall progress → View assessment history**, or **Logs → View assessment
+history**. Saved assessment attempts are grouped by area, with area/unfinished-only
+filters and older-page navigation. Failed responses, evidence blockers and pauses
+have distinct labels. Each attempt identifies whether it is the latest saved task
+for that area or earlier history; this does not establish current evidence freshness
+or that an earlier failure is resolved. Expand **Failure details** for its original
+saved diagnostic, or use its **View logs** link. A newer paused task no longer hides
+older response errors. Opening any of these views starts no model calls.
+
+The authenticated read-only `GET /api/projects/:id/definition-history` endpoint
+selects at most 25 summaries per page in SQLite before returning them, rather than
+decoding full model results/receipts. It reaches beyond the workspace's 20 recent
+jobs. No account/model/session fields, prompts, answers or response bodies are
+included; error prose can still contain project text or paths. Display redacts
+credential patterns and escapes markup. Each diagnostic field has a disclosed
+16,000-character display bound; original saved text is unchanged. Missing historical
+counts/errors stay unknown. The separate metadata-only diagnostics export is
+unchanged and still excludes error prose.
+
+The strengthened recovery regression uses a pre-compact ledger and the reported
+98,959-character blocker wording: four exact saved responses survive repeated
+SQLite reopen, interruption during repacking, final continuation and portable
+replay without repeated completed calls. Earlier failed jobs remain historical and
+the finished continuation is identified as the area's latest attempt. This verifies
+the existing recovery mechanism with deterministic evidence, not the user's actual
+saved project. Genuine indivisible-record/attempt/stage limits remain blockers.
+
+Verification on Windows Node 22.23.4: type check, UI build, 169 pretests and 652 main
+tests passed. The focused `npm run test:browser:definition-history` passed older
+failures behind a newer pause, area filtering, redacted exact errors, targeted Logs,
+paging, failed-history-request retry, reload and mobile width. The aggregate browser
+suite passed model selection, then stopped at a missing **Project map** tab in
+`src/web/browser-check.ts:706` after workspace consolidation; subsequent portable
+and specification runners did not execute. The bundle-size warning remains. No live
+inference, personal-project edits, retry resets or schema/data migrations were used.
+
 ## Explainable progress and oversized-draft recovery (2026-10-23)
 
 ### Smaller collection responses and deadline scheduling

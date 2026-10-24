@@ -19,6 +19,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GapExplorationStatus } from "../ui/gap-status.js";
+import { projectLogs } from "../ui/log-records.js";
 import { decisionAvailability } from "./decision-availability.js";
 import { createHash } from "node:crypto";
 import { gapEvidence } from "./gap-backlog.js";
@@ -272,7 +273,7 @@ test("staged drafts remain unpublished across an explicit action-budget pause, r
     assert.equal(current.questions.length, p.questions.length);
     assert.equal(planEpicReview(current, store.epicReviewHistory(p.id), "orders").tasks.find((t) => t.review.packageID === job.context!.epicReview!.packageID)!.state, "reviewed");
     const html = renderToStaticMarkup(createElement(GapExplorationStatus, { job, project: current }));
-    assert.match(html, /all batches checked/);
+    assert.match(html, /All parts have been checked/); assert.match(html, /View logs/);
     const corrupted = structuredClone(job.retrievalWork!.epicStages!); corrupted.receipts[0]!.evidenceKey = "0".repeat(64);
     assert.throws(() => validateEpicStages(p, job.context!.epicReview!, corrupted), /receipt evidence/);
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
@@ -458,14 +459,17 @@ test("fresh workflow packages target 72k after early optimization and reserve ac
     const mock = { id: "budget", projectID: p.id, expectedRevision: p.revision, status: "running" as const,
       model: p.model, leaseUntil: null, context: workflows[0]!.context!.manifest, epicReviewReport: plan.report };
     const html = renderToStaticMarkup(createElement(GapExplorationStatus, { job: mock, project: p }));
-    assert.match(html, /Workflow context budget/); assert.match(html, /headroom/); assert.match(html, /24,000/);
+    assert.match(html, /View logs/); assert.doesNotMatch(html, /headroom/);
+    assert.equal(JSON.parse(projectLogs([mock], [])[0]!.detail).context.epicContextBudget.evidenceReserve, 24000);
     const emptyScope = renderToStaticMarkup(createElement(GapExplorationStatus, { job: { ...mock, context: undefined,
       epicReviewReport: { ...plan.report, total: 0, reviewed: 0, pending: 0, waiting: 0, blocked: 0, blockers: [],
         contextBudget: { target: 72000, hardLimit: 96000, largestPackage: 0, aboveTarget: 0 } } }, project: p }));
-    assert.match(emptyScope, /No packages in this scope/); assert.doesNotMatch(emptyScope, /No context packages fit/);
+    assert.match(emptyScope, /No groups in this review scope/); assert.doesNotMatch(emptyScope, /No context packages fit/);
     const reduced = renderToStaticMarkup(createElement(GapExplorationStatus, { job: { ...mock, context: { ...mock.context, characters: 95000,
       epicContextBudget: { format: 1, target: 72000, hardLimit: 96000, characters: 95000, headroom: 1000, evidenceReserve: 1000, aboveTarget: true } } }, project: p }));
-    assert.match(reduced, /Reduced buffer/); assert.match(reduced, /1,000 headroom/);
+    assert.match(reduced, /View logs/); assert.doesNotMatch(reduced, /headroom/);
+    const reducedLog = JSON.parse(projectLogs([{ ...mock, context: { ...mock.context, characters: 95000, epicContextBudget: { format: 1, target: 72000, hardLimit: 96000, characters: 95000, headroom: 1000, evidenceReserve: 1000, aboveTarget: true } } }], [])[0]!.detail);
+    assert.equal(reducedLog.context.epicContextBudget.headroom, 1000); assert.equal(reducedLog.context.epicContextBudget.aboveTarget, true);
     assert.deepEqual(p, before);
   } finally { store.close(); }
 });
@@ -1081,7 +1085,7 @@ test("all size-blocked packages stop without inference and show an actionable fa
     const job = store.jobs(p.id).at(-1)!;
     assert.equal(job.epicReviewReport!.blocked, job.epicReviewReport!.total);
     assert.equal(job.epicReviewReport!.modelCalls, 0);
-    assert.match(renderToStaticMarkup(createElement(GapExplorationStatus, { job, project: p })), /no packages could be reviewed/);
+    assert.match(renderToStaticMarkup(createElement(GapExplorationStatus, { job, project: p })), /could not check any groups/);
     assert.deepEqual(store.get(p.id), p);
   } finally { await queue?.close(); store.close(); }
 });

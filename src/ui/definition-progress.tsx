@@ -4,6 +4,7 @@ import { definitionSteps } from "../core/definition-continuation.js";
 import { LazyDetails } from "./lazy-details.js";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { definitionStopSummary, statusLabel } from "./user-messages.js";
+import { LogLink } from "./log-access.js";
 
 export function DefinitionProgress({ job, project }: { job: Job; project: Project }) {
   const task = job.context?.definitionAssessment, work = job.definitionWork;
@@ -17,17 +18,14 @@ export function DefinitionProgress({ job, project }: { job: Job; project: Projec
   const questions = project.questions.filter((r) => included.has(r.id));
   const sources = project.sources.filter((r) => included.has(r.id));
   const research = project.research.filter((r) => included.has(r.id));
-  const metrics = job.discoveryMetrics;
-  const finishedRequests = metrics?.requests.filter((r) => r.durationMs !== null) ?? [];
   const label = job.definitionBlock ? "Needs attention" : stopped
     ? interruption?.cause === "user-stop" ? "Stopped—progress saved" : interruption?.cause === "shutdown" ? "Interrupted by shutdown—progress saved"
       : job.status === "interrupted" && (interruption || work?.paused) ? "Paused—progress saved" : "Interrupted—progress saved" : statusLabel(job.status);
   return <section aria-label="Definition assessment progress">
     <p>Latest area assessment: {project.epics.find((e) => e.id === task.epicID)?.title ?? task.epicID} · {label}.</p>
-    {work && <><p>{work.receipts.length} of {steps.length} review steps saved. {job.status === "completed" ? "The review is finished. This is an estimate of how clearly the area is defined, not a guarantee that nothing is missing." : job.definitionBlock ? "The review needs attention before it can finish. Your progress score has not been updated with partial results." : "The progress score updates when the whole review finishes. Use Refresh definition coverage to continue; completed work is kept."}</p>
-      <details><summary>Technical details</summary><p>{work.batches.length} original batches{work.continuation?.splits.length ? ` · ${work.continuation.splits.length} exact subdivisions` : ""} · {work.attempts} of 3 attempts spent on the unfinished stage. Completed batches are read and findings checked against every batch. Cross-batch relationships remain an estimate.</p></details></>}
+    {work && <p>{work.receipts.length} of {steps.length} review steps saved. {job.status === "completed" ? "The review is finished. This is an estimate of how clearly the area is defined, not a guarantee that nothing is missing." : job.definitionBlock ? "The review needs attention before it can finish. Your progress score has not been updated with partial results." : "The progress score updates when the whole review finishes. Use Refresh definition coverage to continue; completed work is kept."}</p>}
     {job.status === "running" && step && <p role="status">{step.phase === "collect" ? "Reading your project information" : "Checking the findings against your project information"}. Larger reviews may need extra steps, so the step count can change.</p>}
-    {metrics && <details><summary>Timing details</summary><p>Local preparation: {metrics.planningMs === null ? "not yet measured" : `${(metrics.planningMs / 1000).toFixed(1)}s`} · completed request time this run: {finishedRequests.length ? `${(finishedRequests.reduce((sum, r) => sum + (r.durationMs ?? 0), 0) / 1000).toFixed(1)}s` : "not yet measured"}. Earlier runs are not included.</p></details>}
+    <LogLink target={job.id} />
     {included.size > 0 && <LazyDetails summary={<>Evidence in this request · {requirements.length} requirements · {questions.length} questions · {sources.length} sources · {research.length} research records</>}>{() => <>
       <p>The review uses this area’s requirements and answers, relevant information from related areas, and rules that apply to the whole project. Large areas are reviewed in smaller parts.</p>
       <DefinitionEvidence records={[

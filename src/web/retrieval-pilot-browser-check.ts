@@ -60,6 +60,7 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: false }).click();
   const pilot = page.getByRole("checkbox", { name: "Use auxiliary merge for legacy individual-check exploration", exact: true });
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByText("Experimental tools", { exact: true }).click();
   await expect(pilot).not.toBeChecked(); await expect(page.getByRole("region", { name: "Saved-evidence retrieval pilot" })).toContainText("Default off");
   await pilot.check(); await page.getByRole("button", { name: "Back to workspace", exact: false }).click();
   await page.getByRole("tab", { name: /^Design/ }).click(); await page.getByLabel("Filter by feature").selectOption("admission");

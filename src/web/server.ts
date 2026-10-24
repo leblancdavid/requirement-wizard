@@ -205,6 +205,9 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         return;
       }
       if (req.method === "GET" && action === "history") { json(res, 200, options.store.history(id)); return; }
+      if (req.method === "GET" && action === "definition-history") {
+        json(res, 200, options.store.definitionReviewHistory(id, Object.fromEntries(url.searchParams))); return;
+      }
       if (req.method === "GET" && action === "activity") {
         json(res, 200, options.store.activity(id, activityQuerySchema.parse(Object.fromEntries(url.searchParams)))); return;
       }

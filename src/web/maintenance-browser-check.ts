@@ -46,7 +46,7 @@ try {
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: /Guided maintenance browser/ }).click();
   const removedCard = page.getByRole("region", { name: "What's next?", exact: true });
   await expect(removedCard).toHaveCount(0);
-  for (const name of [/^Specification/, /^Implement/, /^Project map/, /^Activity/, /^Design/]) {
+  for (const name of [/^Specification/, /^Implement/, /^Activity/, /^Design/]) {
     await page.getByRole("tab", { name }).click();
     await expect(page.locator(".maintenance-settings, .maintenance-queue")).toHaveCount(0);
     await expect(removedCard).toHaveCount(0);

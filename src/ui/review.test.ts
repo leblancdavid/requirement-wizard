@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { projectLogs } from "./log-records.js";
 import test from "node:test";
 import { projectSchema, reviewFingerprint, type Project, type Submission } from "../core/model.js";
 import { DuplicateRemovalForm, ReviewQueue, ReviewComparison, reviewItems, reviewReadiness, reviewProcessingScope } from "./review.js";
@@ -73,8 +74,9 @@ test("gap backlog status distinguishes saved checks, unresolved decisions and no
     status: "completed", leaseUntil: null, gapReport: { format: 1, state: "idle", checked: 2, pending: 0, waiting: 1, blocked: 1,
       total: 4, modelCalls: 0, explanation: "Bounded task checks are not proof of completeness." } };
   const before = structuredClone(job), html = renderToStaticMarkup(createElement(GapExplorationStatus, { job }));
-  assert.match(html, /Gap exploration backlog/); assert.match(html, /2 checked/); assert.match(html, /waiting for decisions/);
-  assert.match(html, /No model request made/); assert.match(html, /not live completeness/); assert.match(html, /not proof of completeness/);
+  assert.match(html, /Gap exploration backlog/); assert.match(html, /2 groups reviewed/); assert.match(html, /waiting for your decisions/);
+  assert.match(html, /No new questions does not mean/); assert.match(html, /View logs/);
+  assert.equal(JSON.parse(projectLogs([job], [])[0]!.detail).gapReport.modelCalls, 0);
   assert.ok(!html.includes("100%")); assert.deepEqual(job, before);
 });
 
@@ -86,9 +88,10 @@ test("gap status separates request-limit blockers from context blockers and name
         targetRecordID: target.id, inputKey: "0".repeat(64), sourceJobID: "saved-six-attempt-job" }], explanation: "Partial task check only." } };
   const before = structuredClone(job);
   const html = renderToStaticMarkup(createElement(GapExplorationStatus, { job, project }));
-  assert.match(html, /1 context blocked/); assert.match(html, /1 request-limit blocked/);
-  assert.match(html, /remain incomplete after six attempts/); assert.match(html, /continues other pending checks/);
-  assert.ok(html.includes(target.statement)); assert.deepEqual(job, before);
+  assert.match(html, /2 unable to finish/); assert.match(html, /View logs/);
+  const saved = JSON.parse(projectLogs([job], [])[0]!.detail).gapReport;
+  assert.equal(saved.requestBlocked, 1); assert.equal(saved.blocked, 2);
+  assert.equal(saved.exhaustedTasks[0].targetRecordID, target.id); assert.deepEqual(job, before);
 });
 
 test("pilot status distinguishes requested default from saved experimental policy and explains bounded auxiliary omissions", () => {
@@ -100,11 +103,11 @@ test("pilot status distinguishes requested default from saved experimental polic
     retrievalWork: { format: 1, research: false, requestedPolicy: "prefix", attempts: 1, stages: [{ revision: p.revision,
       contextKey: "0".repeat(64), includedIDs: context.manifest.includedIDs, request, searchResult: result }] } };
   const before = structuredClone(job), html = renderToStaticMarkup(createElement(GapExplorationStatus, { job }));
-  assert.match(html, /Requested for new searches in this job: Default prefix search/);
-  assert.match(html, /Saved policy: Experimental prefix-preserving auxiliary merge/);
-  assert.match(html, /1,000,000 scan characters/); assert.match(html, /auxiliary records text-limited/);
-  assert.match(html, /Zero omissions is not proof/); assert.match(html, /No candidate search-page continuation offered/);
-  assert.match(html, /96,000-character evidence cap/); assert.deepEqual(job, before);
+  assert.match(html, /View logs/); assert.doesNotMatch(html, /scan characters|auxiliary/);
+  const saved = JSON.parse(projectLogs([job], [])[0]!.detail).retrieval;
+  assert.equal(saved.requestedPolicy, "prefix");
+  assert.deepEqual(saved.stages[0].searchResult.policy, result.policy);
+  assert.deepEqual(job, before);
 });
 
 test("gap continuation status shows the durable six-request limit and never grants calls on render", () => {
@@ -113,7 +116,9 @@ test("gap continuation status shows the durable six-request limit and never gran
       total: 3, modelCalls: 6, explanation: "Exploration is not complete." },
     retrievalWork: { format: 1, research: false, attempts: 6, stages: [], continuation: { format: 1, sourceJobID: "exhausted-job", fromStage: 0 } } };
   const html = renderToStaticMarkup(createElement(GapExplorationStatus, { job }));
-  assert.match(html, /6 of 6 model requests/); assert.match(html, /no second grant is available/);
+  assert.match(html, /View logs/);
+  const saved = JSON.parse(projectLogs([job], [])[0]!.detail).retrieval;
+  assert.equal(saved.attempts, 6); assert.deepEqual(saved.continuation, job.retrievalWork!.continuation);
   const continued = () => assert.fail("Rendering must not grant requests");
   assert.equal(renderToStaticMarkup(createElement(GapContinuation, { job, available: false, disabled: false, continueExploration: continued })), "");
   const offered = renderToStaticMarkup(createElement(GapContinuation, { job: { ...job, retrievalWork: { ...job.retrievalWork!, attempts: 3, continuation: undefined } }, available: true, disabled: false, continueExploration: continued }));

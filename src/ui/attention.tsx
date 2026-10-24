@@ -4,6 +4,7 @@ import { decisionAvailability } from "../core/decision-availability.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { PagedList } from "./pagination.js";
 import { SubmissionOverlapStatus } from "./submission-overlap.js";
+import { LogLink } from "./log-access.js";
 
 /** Group by stable identity, never by similar wording or inferred intent. */
 export function attentionGroups(project: Project, submissions: Submission[]) {
@@ -47,7 +48,7 @@ export function AttentionInbox({ project, submissions, jobs = [], open }: {
       const target = input.type === "review" ? project.requirements.find((r) => r.id === input.requirementID) : input.type === "answer" ? project.questions.find((q) => q.id === input.questionID) : undefined;
       return <article key={id} className="queue-item"><strong>{target ? "statement" in target ? target.statement : target.text : input.type === "review" ? input.requirementText : input.type === "answer" ? input.questionText : "Saved project information"}</strong>
         <p role="status">{attentionSummary(project, submissions, latest, jobs)}</p>
-        {latest.diagnostic && (input.type !== "review" || !latest.conflict) && <details><summary>Technical details</summary><p className="source-excerpt">{latest.diagnostic}</p></details>}
+        {latest.diagnostic && (input.type !== "review" || !latest.conflict) && <LogLink target={latest.id} />}
         <SubmissionOverlapStatus submission={latest} /><small>{attempts.length} saved {attempts.length === 1 ? "attempt" : "attempts"}{target ? ` · ${project.epics.find((e) => e.id === target.epicID)?.title ?? target.epicID}` : ""}</small>
         <div><button type="button" className="secondary" onClick={() => open(latest.id)}>{attentionAction(project, submissions, latest, jobs)}</button></div>
       </article>;

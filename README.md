@@ -11,6 +11,11 @@ support is deferred.
 
 ## Project status
 
+The workspace now has one home for requirements (**Specification**, including
+feature organization), unfinished work (**Processing & queue**) and technical
+details (**Application menu → Logs**). See [workspace responsibilities](docs/workspace-navigation.md)
+for diagnostic retention and verification limits.
+
 User-facing guidance is being kept at product-owner level: plain explanations first,
 with internal processing details available separately. See the
 [language conventions](docs/user-facing-language.md) for scope and compatibility.

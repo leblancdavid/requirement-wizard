@@ -253,7 +253,7 @@ try {
   await expect(appMenu.getByRole("button", { name: "New project", exact: true })).toBeFocused();
   await expect(appMenu.getByRole("button", { name: "Quit", exact: true })).toHaveCount(0);
   await page.keyboard.press("End");
-  await expect(appMenu.getByRole("button", { name: "Settings", exact: true })).toBeFocused();
+  await expect(appMenu.getByRole("button", { name: "Logs", exact: true })).toBeFocused();
   await page.keyboard.press("Home");
   await page.keyboard.press("ArrowDown");
   await expect(appMenu.getByRole("button", { name: "Open project", exact: true })).toBeFocused();
@@ -437,11 +437,12 @@ try {
   await expect.poll(() => !!cancelTest).toBe(true);
   await connectionPanel.getByRole("button", { name: "Stop test", exact: true }).click();
   await expect(connectionPanel.getByRole("alert")).toContainText("Your AI connection needs attention");
-  const connectionDetails = connectionPanel.locator("details").filter({ has: page.locator("summary", { hasText: "Technical details" }) });
-  await expect(connectionDetails).not.toHaveAttribute("open");
-  await connectionDetails.locator("summary").focus();
-  await connectionDetails.locator("summary").press("Enter");
-  await expect(connectionDetails).toContainText("could not complete");
+  const connectionDetails = connectionPanel.getByRole("button", { name: "View logs", exact: true });
+  await connectionDetails.focus();
+  await connectionDetails.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Logs", exact: true })).toContainText("could not complete");
+  await page.keyboard.press("Escape");
+  await expect(connectionDetails).toBeFocused();
   blockTest = false;
   await connectionPanel.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(connectionPanel.getByText(/Connection test passed/)).toBeVisible();

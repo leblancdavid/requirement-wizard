@@ -10,10 +10,10 @@ function savedRecents(): string[] {
   } catch { return []; }
 }
 
-export function AppMenu({ projects, activeID, newProject, openProject, selectProject, settings, reportError }: {
+export function AppMenu({ projects, activeID, newProject, openProject, selectProject, settings, logs, reportError }: {
   projects: ProjectItem[]; activeID: string | null;
   newProject: () => void; openProject: () => void; selectProject: (id: string) => void;
-  settings: () => void; reportError: (message: string) => void;
+  settings: () => void; logs: () => void; reportError: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [recentOpen, setRecentOpen] = useState(false);
@@ -74,6 +74,7 @@ export function AppMenu({ projects, activeID, newProject, openProject, selectPro
         {ordered.length ? ordered.map((item) => <button key={item.id} className={`project-link ${activeID === item.id ? "selected" : ""}`} aria-current={activeID === item.id ? "page" : undefined} onClick={() => choose(() => selectProject(item.id))}>{item.name}</button>) : <p>No saved workspaces yet.</p>}
       </div>
       <button onClick={() => choose(settings)}>Settings</button>
+      <button onClick={() => choose(logs)}>Logs</button>
       {window.reqwizitDesktop && <><hr /><button onClick={() => choose(() => {
         void window.reqwizitDesktop!.quit().catch(() => reportError("Could not quit Reqwizit. Try closing the window."));
       })}>Quit</button></>}

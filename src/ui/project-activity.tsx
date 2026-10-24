@@ -3,6 +3,8 @@ import type { ActivityPage, ActivityType } from "../core/project-activity.js";
 import { LazyDetails } from "./lazy-details.js";
 import { Spinner } from "./activity.js";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
+import { LogLink } from "./log-access.js";
+import { issueSummary } from "./user-messages.js";
 import "./project-activity.css";
 
 const labels: Record<ActivityType, string> = { decisions: "Decisions", discovery: "Discovery", implementation: "Implementation", problems: "Problems", technical: "Technical" };
@@ -46,7 +48,7 @@ export function ProjectActivityFeed({ projectID, feature, updateToken, request, 
     <button className="secondary" disabled={loading || !data || data.page >= pages} onClick={() => setNavigation((n) => ({ ...n, page: data!.page + 1, anchor: data!.anchor }))}>Older →</button>
   </nav>;
   return <section className="project-activity" aria-label="Project activity feed" aria-busy={loading}>
-    <p>Meaningful changes and work outcomes, newest recorded first. Open an entry for evidence and technical details.</p>
+    <p>What changed and why, newest recorded first. Technical processing details are in Logs.</p>
     <div className="activity-filters">
       <label>Show<select aria-label="Activity view" value={view} onChange={(e) => { setView(e.target.value as typeof view); reset(); }}><option value="highlights">Highlights</option><option value="all">All activity & revisions</option></select></label>
       <label>Type<select aria-label="Activity type" value={type} onChange={(e) => { setType(e.target.value); reset(); }}><option value="">All types</option>{Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
@@ -60,12 +62,12 @@ export function ProjectActivityFeed({ projectID, feature, updateToken, request, 
     {!loading && !error && data && <>
       {!data.entries.length && <div className="empty-card"><h3>No matching activity.</h3><p>Try All activity, another type or feature, or clear your search.</p></div>}
       <div className="activity-entries">{data.entries.map((entry) => <article className={`activity-entry ${entry.type}`} key={entry.id}>
-        <span className="badge">{labels[entry.type]}</span><h3>{entry.title}</h3><p>{entry.summary}</p>
+        <span className="badge">{labels[entry.type]}</span><h3>{entry.type === "technical" ? "Background work recorded" : entry.title}</h3><p>{entry.type === "problems" ? issueSummary(entry.summary) : entry.type === "technical" ? "The app recorded a processing update. Your saved history is retained." : entry.summary}</p>
         {entry.changes.filter((change) => change.label === "saved response").map((change) => openIssue && <button key={change.id} type="button" className="secondary" onClick={() => openIssue(change.id)}>View &amp; resolve</button>)}
         {!!entry.features.length && <small>{entry.features.map((f) => f.title).join(" · ")}</small>}
         <LazyDetails summary="View changes & details">{() => <>
-          <p><small>{entry.revision === undefined ? "Specification revision not recorded" : `Specification revision ${entry.revision}`}{entry.at ? ` · ${entry.atLabel ?? "Started"} ${new Date(entry.at).toLocaleString()}` : " · Date not recorded"}</small></p>
-          <p className="source-excerpt">{entry.reason}</p>
+          <p><small>{entry.at ? `${entry.atLabel ?? "Started"} ${new Date(entry.at).toLocaleString()}` : "Date not recorded"}</small></p>
+          <LogLink detail={`${entry.title}\n${entry.summary}\n${entry.reason}\nSpecification revision: ${entry.revision ?? "not recorded"}`} title="Activity record" projectID={projectID} />
           {entry.features.filter((f) => activeFeatureIDs.includes(f.id)).map((f) => <button key={f.id} className="quiet" onClick={() => openFeature(f.id)}>View current feature: {f.title} →</button>)}
           {entry.changes.filter((change) => change.label === "requirement").map((change) => openRequirement && <button key={change.id} type="button" className="secondary" onClick={() => openRequirement(change.id)}>View current requirement · {change.id}</button>)}
           {entry.changes.map((change, index) => <LazyDetails key={`${change.id}:${index}`} summary={<>{change.label} · {change.id}</>}>{() => <div className="activity-comparison">{change.before !== undefined && <section><h4>Before</h4><p className="source-excerpt">{change.before}</p></section>}{change.after !== undefined && <section><h4>{change.before === undefined ? "Added / recorded" : "After"}</h4><p className="source-excerpt">{change.after}</p></section>}{change.after === undefined && <p>Removed from this revision.</p>}</div>}</LazyDetails>)}

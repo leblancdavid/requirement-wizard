@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { definitionReviewHistory } from "./definition-review-history.js";
 import { activityPage, activitySnapshot, saveActivity } from "./activity.js";
 import { readMaintenance, saveMaintenance } from "./maintenance.js";
 import type { MaintenanceState } from "../core/maintenance.js";
@@ -942,6 +943,10 @@ export class ProjectStore {
       ? this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid").all(projectID)
       : this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid DESC LIMIT ?").all(projectID, Math.max(1, Math.min(200, limit))).reverse();
     return (rows as Array<{ payload: string }>).map((row) => readStoredJob(row.payload));
+  }
+
+  definitionReviewHistory(projectID: string, query: unknown = {}) {
+    return definitionReviewHistory(this.db, projectID, query);
   }
 
   /** Local diagnostic checkpoints do not modify revisions, activity or portable work. */

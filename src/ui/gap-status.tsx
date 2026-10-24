@@ -1,58 +1,21 @@
 import React from "react";
 import type { Job, Project } from "../core/model.js";
+import { LogLink } from "./log-access.js";
 
 export function GapExplorationStatus({ job, project }: { job: Job; project?: Project }) {
-  if (job.epicReviewReport) {
-    const report = job.epicReviewReport;
-    const review = job.context?.epicReview;
-    const budget = job.context?.epicContextBudget;
-    return <section aria-label="Epic workflow review progress"><h3>Review for missing decisions</h3>
-      {review && <p>{project?.epics.find((e) => e.id === review.epicID)?.title ?? review.epicID} · {review.kind === "boundary" ? "Checking how related features work together" : "Checking related requirements"}</p>}
-      <p>{report.reviewed} {report.reviewed === 1 ? "group" : "groups"} reviewed · {report.pending} waiting for review · {report.waiting} waiting for your decisions · {report.blocked} unable to finish.</p>
-      {report.planningPartial && <p>These counts cover only the groups prepared so far, not the whole project.</p>}
-      {!!report.blocked && <p role="status">Some groups could not be reviewed. No new questions does not mean there are no missing decisions. Repeating a review with the same information will not fix size limits. See Technical details for the cause; technical help may be needed. Update the definition score separately in Overall progress.</p>}
-      {report.stagedProgress && <p>{report.stagedProgress.completed} of {report.stagedProgress.batches * 2} review steps saved. Findings appear after all parts have been checked. Stop saves progress.</p>}
-      <details><summary>Technical details</summary>
-      <p>{report.total} {report.planningPartial ? "examined packages" : "packages"} in this saved review.</p>
-      {review?.contextPolicy === "staged-current-spec-v3" && <p>Near-limit evidence policy: exact human constraints are retained. Draft proposal capacity is 8,000 characters instead of 12,000, leaving more room for evidence under the same 96,000-character ceiling. Fewer concise proposals may be returned; nothing is silently truncated.</p>}
-      {!!report.blocked && <p role="status"><strong>Discovery is incomplete: {report.blocked} packages could not be reviewed.</strong> No additional questions from completed packages does not mean no remaining gaps. Retrying unchanged evidence cannot resolve size blockers. Definition coverage is refreshed separately in Overall progress.</p>}
-      {report.stagedProgress && <p aria-label="Staged decision review">Staged decision review: {report.stagedProgress.phase === "complete" ? "all batches checked" : report.stagedProgress.phase === "discover" ? "drafting gaps" : "checking drafts"} · {report.stagedProgress.completed} / {report.stagedProgress.batches * 2} stages saved · {report.stagedProgress.totalCalls} total attempts. Drafts stay unpublished until every decision batch is checked. {job.retrievalWork?.stagedRun ? <>Continues automatically within this action: up to {job.retrievalWork.stagedRun.requestLimit} requests or {Math.ceil(job.retrievalWork.stagedRun.durationMs / 60000)} minutes per package. Stop remains available.</> : "Saved legacy run: up to six requests per package attempt."} Retries preserve completed stages. This is not exhaustive cross-record coverage.</p>}
-      {budget ? <p aria-label="Workflow context budget">Context: {budget.characters.toLocaleString("en-US")} / {budget.hardLimit.toLocaleString("en-US")} characters · {budget.headroom.toLocaleString("en-US")} headroom · {budget.evidenceReserve.toLocaleString("en-US")} evidence buffer (character capacity, not additional requests). Preferred context target: 72,000.{budget.aboveTarget && " Reduced buffer: exact mandatory evidence exceeds the target; nothing was dropped to force a fit."} Runtime/schema overhead and model token limits are separate.</p>
-        : report.contextBudget && <p aria-label="Workflow context budget">Preferred context target: 72,000 / 96,000 characters · {report.contextBudget.largestPackage ? <>largest prepared package: {report.contextBudget.largestPackage.toLocaleString("en-US")} · {report.contextBudget.aboveTarget} above target. Compatible saved work is preserved; indivisible exact evidence may leave less buffer.</> : report.total ? "No context packages fit this review's bounded policy; see evidence blockers." : "No packages in this scope."} Counts describe this saved scope, not a live model token budget.</p>}
-      {!report.planningPartial && report.total > 0 && report.blocked === report.total && <p role="status"><strong>Gap exploration blocked: no packages could be reviewed.</strong> Expand Evidence blockers for sizes and causes. Retrying unchanged evidence will not resolve these blockers; no gaps found is not the outcome.</p>}
-      {report.stagedProgress ? <p>{report.modelCalls} of 3 attempts spent on the current stage across retries. At most sixteen decision batches, each with discovery and validation. No model-driven search, paging or additional loads.</p>
-        : <p>{report.modelCalls} of 3 model attempts spent across retries; at most one batched exact load, then final review. No model-driven search or paging. Completed evidence stages are retained.</p>}
-      {!!report.blockers.length && <details><summary>Evidence blockers</summary><ul>{report.blockers.map((b) => <li key={b.packageID}>{project?.epics.find((e) => e.id === b.epicID)?.title ?? b.epicID}: {b.reason}</li>)}</ul><small>At most 20 blockers listed. Blocked packages do not count as reviewed.</small></details>}
-      <p>{report.explanation}</p><small>Counts describe this review's input scope/revision, not live completeness. Existing legacy checks remain separate; compatible workflow reviews are reused.</small>
-      </details>
-    </section>;
-  }
-  const report = job.gapReport;
+  const report = job.epicReviewReport ?? job.gapReport;
   if (!report) return null;
-  return <section aria-label="Gap exploration backlog"><h3>Review for missing decisions</h3>
-    <p>{report.checked} checks finished · {report.pending} waiting for review · {report.waiting} waiting for your decisions · {report.blocked} unable to finish.</p>
-    {!!report.blocked && <p role="status">Some checks need attention before they can finish. See Technical details for the cause. No new questions does not guarantee that nothing is missing.</p>}
-    <details><summary>Technical details</summary>
-    <p>{report.checked} checked · {report.pending} pending · {report.waiting} waiting for decisions · {report.blocked - (report.requestBlocked ?? 0)} context blocked{report.requestBlocked ? ` · ${report.requestBlocked} request-limit blocked` : ""} · {report.total} tasks</p>
-    {!!report.requestBlocked && <><p>Request-limit blocked checks remain incomplete after six attempts. Discover missing decisions skips their unchanged inputs and continues other pending checks, without granting more calls or discarding saved evidence.</p>
-      <details><summary>Checks blocked by the request limit · {report.requestBlocked}</summary><ul>{report.exhaustedTasks?.map((task) => {
-        const record = project && [...project.requirements, ...project.questions, ...project.sources].find((r) => r.id === task.targetRecordID);
-        const label = record ? "statement" in record ? record.statement : record.text : task.targetRecordID;
-        return <li key={`${task.targetRecordID}:${task.lens}`}>{task.lens} check: {label}</li>;
-      })}</ul>{report.requestBlocked > (report.exhaustedTasks?.length ?? 0) && <p>Not all blocked checks are listed here (at most 20).</p>}</details></>}
-    <p>{job.retrievalWork ? `${job.retrievalWork.stages.length} evidence navigation stages saved · ${job.retrievalWork.attempts} of ${job.retrievalWork.continuation ? 6 : 3} model requests attempted across retries. Exact loaded evidence only; navigation hints cannot be cited.` : report.modelCalls ? "One model request attempted." : "No model request made."}{report.projectedReviewSnapshots ? ` ${report.projectedReviewSnapshots} superseded plain review snapshots omitted; original evidence remains saved.` : ""}</p>
-    {job.retrievalWork?.continuation && <p>One-time continuation granted from a saved exhausted task: up to three additional requests, six cumulative attempts and five navigation stages maximum. Resume retains this allowance and all spent attempts; no second grant is available.</p>}
-    {job.retrievalWork?.requestedPolicy && <p>Requested for new searches in this job: {job.retrievalWork.requestedPolicy === "prefix-aux-v1" ? "Experimental prefix-preserving auxiliary merge (prefix-aux-v1)" : "Default prefix search"}. Saved stages below retain their original policy, even after switching back.</p>}
-    <p>{report.explanation}</p><small>Counts describe this exploration's input scope and revision, not live completeness. Compatible checks are reused; changed evidence can reopen tasks.</small>
-    {job.retrievalWork?.stages.map((stage, index) => stage.searchResult && <div key={index} aria-label={`Saved evidence search stage ${index + 1}`}>
-      <p>Saved-evidence search: {stage.searchResult.records.length} handles · {stage.searchResult.omittedMatches} further {stage.searchResult.policy ? "" : "prefix "}matches omitted · {stage.searchResult.unexaminedRecords} records unexamined · {stage.searchResult.prefixLimitedRecords} text prefixes limited. {stage.searchResult.page && <>Saved snapshot revision {stage.searchResult.page.snapshotRevision}, record position {stage.searchResult.page.recordOffset}, text window {stage.searchResult.page.textOffset / 4096 + 1}. {stage.searchResult.page.next ? "A bounded continuation is available, subject to the same remaining stage/request budget." : "No continuation offered within this search window; this is not proof of exhaustive search."} </>}Navigation only, not exhaustive; exact loading required. Search shares the existing request budget.</p>
-      {stage.searchResult.policy ? <><p>Saved policy: Experimental prefix-preserving auxiliary merge (prefix-aux-v1), recorded at revision {stage.revision}. Existing primary hits take priority; auxiliary fields can only fill free slots.</p>
-        <p>{stage.searchResult.policy.primaryCharacters} primary + {stage.searchResult.policy.auxiliaryCharacters} auxiliary / 1,000,000 scan characters · {stage.searchResult.scannedRecords} / 5,000 primary records scanned. Each record shares a 4,096-character primary/auxiliary allowance.</p>
-        <p>{stage.searchResult.policy.auxiliaryRecords} auxiliary records examined · {stage.searchResult.policy.auxiliaryLimitedRecords} auxiliary records text-limited. Auxiliary fields can remain unsearched when primary slots are full or scan limits are reached. Zero omissions is not proof that all fields were examined.</p>
-        <p>No candidate search-page continuation offered. Saved legacy cursors retain their original prefix semantics. The task's displayed request allowance and the 96,000-character evidence cap still apply.</p></>
-        : <p>Saved policy: Original prefix search, recorded at revision {stage.revision}. Legacy receipts are not relabelled as experimental.</p>}
-    </div>)}
-    {job.retrievalWork?.reuse && <p>{job.retrievalWork.reuse.stages} navigation stages reused{job.retrievalWork.reuse.final ? " and the saved final response reused" : ""} from revision {job.retrievalWork.reuse.sourceRevision} at revision {job.retrievalWork.reuse.targetRevision}. Original evidence and model-call provenance remain unchanged; publication uses the current revision.</p>}
-    </details>
+  const reviewed = "reviewed" in report ? report.reviewed : report.checked;
+  const review = job.context?.epicReview;
+  return <section aria-label={job.epicReviewReport ? "Epic workflow review progress" : "Gap exploration backlog"}>
+    <h3>Review for missing decisions</h3>
+    {review && <p>{project?.epics.find((e) => e.id === review.epicID)?.title ?? "Selected feature"} · {review.kind === "boundary" ? "Checking how related features work together" : "Checking related requirements"}</p>}
+    <p>{reviewed} {reviewed === 1 ? "group" : "groups"} reviewed · {report.pending} waiting for review · {report.waiting} waiting for your decisions · {report.blocked} unable to finish.</p>
+    {report.total === 0 && <p>No groups in this review scope.</p>}
+    {report.total > 0 && report.blocked === report.total && <p role="status">This review could not check any groups. It has not established whether decisions are missing.</p>}
+    {"planningPartial" in report && report.planningPartial && <p>These counts cover only the groups prepared so far, not the whole project.</p>}
+    {!!report.blocked && <p role="status">Some checks could not finish. No new questions does not mean there are no missing decisions. Check Logs for the cause; repeating the same review may not resolve it.</p>}
+    {job.epicReviewReport?.stagedProgress && <p>{job.epicReviewReport.stagedProgress.completed} of {job.epicReviewReport.stagedProgress.batches * 2} review steps saved. {job.epicReviewReport.stagedProgress.phase === "complete" ? "All parts have been checked." : "Findings appear after all parts have been checked."}</p>}
+    <LogLink target={job.id} />
   </section>;
 }

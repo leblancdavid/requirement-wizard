@@ -1,0 +1,6 @@
+.logs-panel { overflow-wrap: anywhere; }
+.log-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-block: 16px; }
+.log-filters label { flex: 1 1 140px; }
+.log-record { padding-block: 16px; border-bottom: 1px solid var(--border); }
+.log-record h3 { margin: 0 0 8px; }
+.log-record pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; padding: 12px; background: var(--surface); font-size: .85rem; }

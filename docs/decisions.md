@@ -2,6 +2,13 @@
 
 ## Confirmed product direction
 
+**DEC-033 — Clear workspace responsibilities and consolidated logs (2026-10-24).**
+The user approved merging Project map into Specification, keeping the queue focused
+on unfinished work, separating meaningful Activity from technical Logs, and replacing
+duplicate viewers with brief status/deep links. Keep recovery and consequential
+consent visible; preserve all saved evidence. See
+[implemented boundaries and limits](workspace-navigation.md).
+
 These choices come from the project conversation. They do not imply acceptance of
 every technical detail proposed in the planning documents.
 

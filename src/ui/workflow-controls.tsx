@@ -2,6 +2,7 @@ import React from "react";
 import type { WorkflowView } from "../service/workflow.js";
 import type { WorkflowDecision } from "../core/workflow.js";
 import { PagedList } from "./pagination.js";
+import { LogLink } from "./log-access.js";
 
 export const workflowLabels: Record<WorkflowView["phase"], string> = {
   idle: "Not started", working: "Working", "needs-decision": "Needs your decision", blocked: "Blocked",
@@ -24,10 +25,10 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
     </> : <>
       {!workflow.enabled && <p><strong>Continue project lets the app guide your next steps.</strong> It reviews saved answers and checks requirements across all project areas. To run just one task instead, use Advanced actions below.</p>}
       <p role="status">{workflow.suspended ? "Choose Continue project to resume after reopening the app. Completed checks are saved." : workflowLabels[workflow.phase]}</p>
-      {workflow.phase === "blocked" && <p>The app cannot continue this task yet. Review any items under Needs your decision. If none are listed, check Technical details for the cause; technical help may be needed.</p>}
+      {workflow.phase === "blocked" && <p>The app cannot continue this task yet. Review any items under Needs your decision. If none are listed, check Logs for the cause; technical help may be needed.</p>}
       <p>Works across your project, using up to {workflow.limits.requests} AI requests and {workflow.limits.durationMs / 60000} active minutes each time you choose Continue project. This uses your AI plan’s usage. Choices that need your decision are not approved automatically.</p>
       {workflow.grant && <p>{workflow.grant.used} of {workflow.limits.requests} AI requests used · {Math.ceil(workflow.grant.remainingMs / 1000)} seconds of working time remaining.</p>}
-      <details><summary>Technical details</summary><p>{workflow.message}</p></details>
+      {workflow.phase === "blocked" && <LogLink detail={workflow.message} title="Project workflow" />}
     </>}
     <div className="button-row">{mayContinue && <button className="primary" disabled={disabled} onClick={() => configure("continue")}>Continue project</button>}
       {workflow.enabled && !workflow.paused && !workflow.suspended && <button className="secondary" disabled={pending} onClick={() => configure("pause")}>Pause project workflow</button>}

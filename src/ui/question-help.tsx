@@ -128,7 +128,7 @@ export function QuestionHelp({ questionID, help, reveal = 0, requesting = false 
         {job.helpRequest?.message && <blockquote className="source-excerpt">{job.helpRequest.message}</blockquote>}
         {job.helpRequest?.word && <blockquote className="source-excerpt">{wordHelpContext(job.helpRequest.word.phrase, job.helpRequest.word.text).trim()}</blockquote>}
         {job.helpResponse ? <><p className="source-excerpt">{job.helpResponse.explanation}</p>{job.helpResponse.assumptions.length > 0 && <><b>Assumptions to check</b><ul>{job.helpResponse.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></>}{job.helpResponse.followUp && <p><b>Something to consider:</b> {job.helpResponse.followUp}</p>}<small>AI guidance · No answer selected or requirement confirmed.</small></>
-          : ["pending", "running"].includes(job.status) ? <ActivityFeedback label="Preparing clarification…" /> : <><p role="status">{statusLabel(job.status)}. You can ask for help again; your draft answer is unchanged.</p>{job.diagnostic && <details><summary>Technical details</summary><p>{job.diagnostic}</p></details>}</>}
+          : ["pending", "running"].includes(job.status) ? <ActivityFeedback label="Preparing clarification…" /> : <><p role="status">{statusLabel(job.status)}. You can ask for help again; your draft answer is unchanged.</p>{job.diagnostic && <DiagnosticNotice detail={job.diagnostic} summary="The explanation couldn’t finish." />}</>}
       </section>)}
     </div>
     {active && <button type="button" className="quiet" onClick={() => void help.cancel(active.id).catch((error: Error) => setError(error.message))}>Stop clarification</button>}

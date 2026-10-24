@@ -1,5 +1,48 @@
 # Data migrations and upgrade compatibility
 
+## Definition assessment history visibility (2026-10-24)
+
+Source and target persisted formats are identical. This adds a read-only SQL/API/UI
+projection over existing jobs, including attempts older than the workspace's recent
+20-job projection. No table/index/schema version, job/checkpoint format, fingerprint,
+freshness rule, evidence, assessment, revision, workspace/portable artifact or
+request/attempt allowance changes. No forward transformation, backup, startup write,
+reassessment or model call is needed. Reading history does not reconstruct or adopt
+future checkpoint formats, publish assessments or mutate original rows.
+
+Summaries use existing row order/area metadata; no timestamps, missing error prose,
+model results or semantic resolution claims are invented. Newer/earlier labels are
+local task-order information only. The API returns 25 selected summaries per page;
+diagnostic display limits/redaction affect only projections. Original error text,
+receipts, attempts, hashes and jobs remain unchanged. Interrupted/failed reads can
+be retried without a data transaction or inference. Existing formats continue to
+reopen; missing historical fields remain unknown. Unsupported recovery formats
+remain subject to the unchanged fail-closed checkpoint validators.
+
+Tests cover earlier errors outside recent jobs, bounded project-scoped pagination,
+authentication/origin/input rejection, repeated SQLite reopen with unchanged saved
+jobs, escaped/redacted errors and explicit unknown/limited displays. The existing
+four-receipt size-blocker recovery test now uses an actual pre-compact contract and
+checks earlier-error visibility after successful continuation. Verification and the
+unqualified personal-project recovery gap are recorded in
+[definition coverage](definition-coverage.md#finding-earlier-failures-2026-10-24).
+
+## Workspace consolidation and logs (2026-10-24)
+
+Source/target persisted formats are identical. DEC-033 changes browser projections
+and navigation only: SQLite/schema versions, job JSON, saved assessment identities,
+specification revisions, workspace/portable files and preferences are unchanged.
+No forward rewrite or reassessment is necessary. Original diagnostics, attempts,
+completed checks and delivery evidence remain saved. Old internal map destinations
+lead to Specification; technical details open Logs instead of local disclosures.
+
+Transient API errors/selected details are bounded browser-memory records, not a
+new durable/exported format. Reload discards them; existing saved job diagnostics
+remain available through the same read-only projection. No new calls start on
+opening/reopening Logs. Unknown historical times remain unknown. Old-job tests
+cover repeat projection and preservation; existing storage upgrade/recovery tests
+remain applicable. See [workspace responsibilities](workspace-navigation.md).
+
 ## Upgrade contract
 
 Application upgrades preserve saved decisions, IDs, histories, assessments, command

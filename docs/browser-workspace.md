@@ -1,5 +1,15 @@
 # Browser workspace, epics, and estimated completeness
 
+## Consolidated workspace (2026-10-24)
+
+Specification now owns feature organization and requirement review; the separate
+Project map requirement viewer is removed. Processing & queue focuses on unfinished
+work. Technical disclosures and diagnostic exports route to **Application menu →
+Logs**, while Overall progress owns assessment explanations and Activity owns saved
+changes. See [workspace responsibilities and logs](workspace-navigation.md) for
+boundaries, retention, compatibility and verification limits. Earlier descriptions
+below of Project map, queue history or Technical details describe the preceding UI.
+
 ## Plain-language guidance
 
 Main guidance now describes product decisions and next steps rather than internal
@@ -148,6 +158,15 @@ tests, full `npm test`, type check and UI build. The broader browser suite is tr
 this focused check is not a claim that every legacy browser flow passed.
 
 ## Saved-response context blockers
+
+**Overall progress → View assessment history** (also in Logs) reads saved definition
+attempts beyond the recent-task window. Group/filter by area, distinguish failed
+responses from pauses and evidence blockers, and open each earlier attempt's
+**Failure details** or **View logs** link. Latest-per-area labels describe recorded
+task order, not coverage freshness. Reading history never starts AI requests or
+spends attempts; the metadata-only diagnostic export remains unchanged. See
+[earlier definition failures](definition-coverage.md#finding-earlier-failures-2026-10-24)
+for bounds, original-error display and verification results.
 
 Definition coverage now shows area position, local preparation versus model waiting,
 read/verification stages, saved work, evidence counts and ten-second elapsed-request

@@ -7,6 +7,7 @@ import type { Job, Project } from "../core/model.js";
 import { DefinitionAssessment } from "./definition-assessment.js";
 import { GapExplorationStatus } from "./gap-status.js";
 import { DefinitionProgress } from "./definition-progress.js";
+import { openLogs } from "./log-access.js";
 
 function ProgressMeter({ value, label }: { value: number; label: string }) {
   return <div className="meter" role="meter" aria-label={label} aria-valuenow={value} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${value}%` }} /></div>;
@@ -39,6 +40,7 @@ function ProjectProgressView({ progress, definition, project, jobs = [], refresh
         <details><summary>Review limits and AI usage</summary><p>Up to sixteen batches and 32 review steps per area, with up to 32 AI requests per large area within a shared fifteen-minute window. Requests use your AI plan’s usage. A review may pause or need attention before it finishes.</p></details>
         {refreshDefinition && <button type="button" className="primary definition-refresh" disabled={disabled} title={disabledReason || "Assess complete current areas without changing the specification. Up to ten areas per action; current assessments are reused. Oversized areas remain explicitly blocked."} onClick={() => refreshDefinition()}>Refresh definition coverage</button>}
         {assessment && <DefinitionProgress job={assessment} project={project} />}
+        <button type="button" className="secondary" onClick={() => { setOpen(false); openLogs("definition-history"); }}>View assessment history</button>
       </section>
       <section className="progress-stage" aria-label="Discovery review status"><h3>Finding missing decisions</h3><p>No new questions does not necessarily mean everything is defined. Some parts may still be waiting for review or need attention. These results describe the last review, not a continuous check of the whole project.</p>{discovery ? <GapExplorationStatus job={discovery} project={project} /> : <p>No review for missing decisions has been saved yet.</p>}</section>
       <section className="progress-stage" aria-label="Questions answered"><h3>Questions answered</h3><strong>{progress.questions.answered} / {progress.questions.total} ({progress.questions.percent}%)</strong><ProgressMeter value={progress.questions.percent} label="Questions answered" /><p>Saved answers in active areas, excluding retired questions. Deferred and delegated questions remain unanswered. More questions may emerge as scope develops.</p></section>

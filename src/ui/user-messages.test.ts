@@ -37,15 +37,14 @@ test("recorded interruption causes remain specific without guessing historical r
   assert.match(definitionStopSummary("external-cancel"), /no specific reason/);
 });
 
-test("diagnostics stay exact, escaped and collapsed behind the plain explanation", () => {
+test("diagnostics link to the consolidated logs without exposing raw detail inline", () => {
   const detail = "Old checkpoint <script> & revision 4\nOriginal diagnostic";
   const html = renderToStaticMarkup(createElement(DiagnosticNotice, { detail, summary: "The review needs attention.", next: "Open the affected item.", alert: true }));
   assert.match(html, /role="alert"/);
   assert.match(html, /The review needs attention\. Open the affected item\./);
-  assert.match(html, /<details><summary>Technical details<\/summary>/);
-  assert.match(html, /Old checkpoint &lt;script&gt; &amp; revision 4\nOriginal diagnostic/);
-  assert.ok(html.indexOf("The review needs attention") < html.indexOf("Old checkpoint"));
-  assert.ok(!html.includes("open="));
+  assert.match(html, />View logs<\/button>/);
+  assert.ok(!html.includes("Old checkpoint"));
+  assert.ok(!html.includes("<details>"));
   assert.equal(renderToStaticMarkup(createElement(DiagnosticNotice, {})), "");
 });
 
