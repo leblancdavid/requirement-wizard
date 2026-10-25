@@ -308,9 +308,12 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (action === "refresh-definition") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
-        const input = z.object({ revision, focusEpicID: z.string().min(1).max(200).optional() }).strict().parse(raw);
+        const input = z.object({ revision, focusEpicID: z.string().min(1).max(200).optional(),
+          additionalRequests: z.array(z.object({ epicID: z.string().min(1).max(200), jobID: z.string().uuid() }).strict()).min(1).max(64).optional(),
+          confirmAdditionalRequests: z.literal(true).optional(),
+        }).strict().refine((value) => !!value.additionalRequests === !!value.confirmAdditionalRequests, "Additional requests require explicit confirmation.").parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();
-        queue.refreshDefinition(id, input.revision, input.focusEpicID);
+        queue.refreshDefinition(id, input.revision, input.focusEpicID, undefined, input.additionalRequests);
         json(res, 202, { started: true }); return;
       }
       if (action === "recover-definition") {

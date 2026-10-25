@@ -7,6 +7,7 @@ import { definitionContext, validateDefinitionResult, validateDefinitionCitation
 import { definitionInputKey, definitionAreas } from "./definition-identity.js";
 import { shareRepeatedIdentifiers, shareRepeatedText, shareRecordStructure } from "./working-set.js";
 import { definitionSteps, definitionStageLimit as maxStages } from "./definition-continuation.js";
+import { definitionEvidenceRequests, definitionEvidenceRequestLimit, definitionRequestLimit } from "./definition-budget.js";
 export { definitionSteps, splitDefinitionStage } from "./definition-continuation.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -28,7 +29,9 @@ export const definitionUpdateSchema = z.object({ definitionUpdate: z.object({
 export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-batches-v1"),
   epicID: z.string().min(1), inputKey: z.string().regex(/^[a-f0-9]{64}$/), planKey: z.string().regex(/^[a-f0-9]{64}$/),
   batches: z.array(z.array(z.string().min(1)).max(10000)).min(1).max(maxBatches),
-  originJobID: z.string().optional(), attempts: z.number().int().min(0).max(3),
+  originJobID: z.string().optional(), attempts: z.number().int().min(0).max(definitionRequestLimit),
+  allowancePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages),
+    legacyRecoveryStages: z.array(z.number().int().min(0).max(maxStages - 1)).max(1) }).strict().optional(),
   recovery: z.object({ format: z.literal(1), grants: z.array(z.object({
     stage: z.number().int().min(0).max(maxStages - 1), sourceJobID: z.string().min(1),
     jobID: z.string().min(1), spent: z.boolean(),
@@ -42,7 +45,7 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   evidencePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
     supersededBlock: z.string().min(1).max(1000).optional() }).strict().optional(),
   evidenceRequests: z.array(z.object({ stage: z.number().int().min(0).max(maxStages - 1),
-    contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
+    contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(definitionRequestLimit),
     jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
     response: definitionEvidenceSchema,
   }).strict()).max(maxStages).optional(),
@@ -54,21 +57,27 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   }).strict().optional(),
   evidenceFollowups: z.array(z.object({ stage: z.number().int().min(0).max(maxStages - 1),
     evidenceStage: z.number().int().min(0).max(maxStages - 1), splitCount: z.number().int().min(0).max(maxStages - 2),
-    contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
+    contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(definitionRequestLimit),
     jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: definitionEvidenceSchema,
-  }).strict()).max(maxStages * 3).optional(),
+  }).strict()).max(maxStages * definitionEvidenceRequestLimit).optional(),
   // Append-only continuation boundaries. Original batches and earlier request
   // hashes remain unchanged; each event bisects only the unfinished exact step.
   continuation: z.object({ format: z.literal(1), splits: z.array(z.object({
     fromStage: z.number().int().min(0).max(maxStages - 1), at: z.number().int().min(1).max(9999),
     evidenceRequestStage: z.number().int().min(0).max(maxStages - 1).optional(),
   }).strict()).max(maxStages - 2) }).strict().optional(),
-  receipts: z.array(z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
+  receipts: z.array(z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(definitionRequestLimit),
     jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
     response: z.union([analysisSchema, definitionVerdictSchema, definitionAssessmentResponseSchema, definitionUpdateSchema]),
   }).strict()).max(maxStages),
   paused: z.enum(["request-limit", "time-limit"]).optional(), blocked: z.string().min(1).max(1000).optional(),
-}).strict();
+}).strict().superRefine((work, ctx) => {
+  const allowed = (stage: number, attempts: number) => attempts <= 3 || !!work.allowancePolicy && stage >= work.allowancePolicy.fromStage;
+  if (!allowed(work.receipts.length, work.attempts) || work.receipts.some((r, stage) => !allowed(stage, r.attempts))
+    || [...work.evidenceRequests ?? [], ...work.evidenceFollowups ?? []].some((r) => !allowed(r.stage, r.attempts))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Expanded definition attempts require the versioned allowance policy." });
+  }
+});
 export type DefinitionWork = z.infer<typeof definitionWorkSchema>;
 export class DefinitionEvidenceBlocked extends Error {}
 
@@ -137,8 +146,11 @@ export function requestDefinitionEvidence(project: Project, work: DefinitionWork
   if (!evidenceEnabled(work) || supplemental && !followupsEnabled(work)) {
     throw new DefinitionEvidenceBlocked("This exact stage cannot request further cross-batch evidence. No partial assessment was published.");
   }
-  if ((work.evidenceFollowups?.length ?? 0) >= maxStages * 3) throw new DefinitionEvidenceBlocked("The bounded exact evidence follow-up ledger is full. No partial assessment was published.");
+  if ((work.evidenceFollowups?.length ?? 0) >= maxStages * definitionEvidenceRequestLimit) throw new DefinitionEvidenceBlocked("The bounded exact evidence follow-up ledger is full. No partial assessment was published.");
   if (work.attempts < 1) throw new Error("Exact evidence requests require a spent stage attempt.");
+  if (work.allowancePolicy && work.receipts.length >= work.allowancePolicy.fromStage && definitionEvidenceRequests(work) >= definitionEvidenceRequestLimit) {
+    throw new DefinitionEvidenceBlocked("This step reached its eight successful evidence-request limit. Saved evidence is retained; no partial assessment was published.");
+  }
   const responses = [...work.evidenceRequests ?? [], ...work.evidenceFollowups ?? []]
     .filter((r) => r.stage === work.receipts.length && r.attempts === work.attempts).length;
   const recovery = work.attempts === 3 && work.recovery?.grants.some((g) => g.stage === work.receipts.length && g.spent);
@@ -273,6 +285,10 @@ export function planDefinitionStages(project: Project, epicID: string, onProgres
  * newly grouped representation that would replay completed model calls. */
 export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
   definitionWorkSchema.parse(work);
+  if (work.allowancePolicy && (work.allowancePolicy.fromStage > work.receipts.length
+    || work.allowancePolicy.legacyRecoveryStages.some((stage) => stage !== work.allowancePolicy!.fromStage))) throw new Error("Invalid definition allowance policy boundary.");
+  if (work.attempts > 3 && (!work.allowancePolicy || work.receipts.length < work.allowancePolicy.fromStage)
+    || work.receipts.some((r, stage) => r.attempts > 3 && (!work.allowancePolicy || stage < work.allowancePolicy.fromStage))) throw new Error("Expanded definition attempts require the versioned allowance policy.");
   if (work.inputKey !== definitionInputKey(project, work.epicID) || work.planKey !== planKey(work)) throw new Error("Saved definition assessment inputs changed. Previous stages remain historical; no stale assessment was published.");
   const expected = new Set(exactIDs(project, work.epicID)), flat = work.batches.flat();
   if (flat.length !== expected.size || new Set(flat).size !== flat.length || flat.some((id) => !expected.has(id))) throw new Error("Staged definition plan does not cover the complete area's exact evidence.");

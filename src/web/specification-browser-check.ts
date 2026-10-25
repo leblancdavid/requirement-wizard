@@ -7,6 +7,7 @@ import { ProjectStore } from "../storage/store.js";
 import { type Analysis } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
+import { definitionInputKey } from "../core/definition-identity.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -145,6 +146,51 @@ try {
     await page.setViewportSize({ width: 1280, height: 960 });
   }
   assert.equal(calls, 2, "Browsing and searching never invoke a model");
+  // A saved evidence-conflict blocker is actionable even without a proposal/question.
+  await page.unroute(snapshotRoute);
+  const conflictProject = store.get(p.id);
+  const conflictJob = { id: "saved-conflict-review", projectID: p.id, expectedRevision: conflictProject.revision, model: conflictProject.model,
+    status: "failed", leaseUntil: null, context: { revision: conflictProject.revision, focusEpicID: "inbox", characters: 0, budget: 48000,
+      includedIDs: [conflictProject.sources[0]!.id], omittedIDs: [],
+      definitionAssessment: { format: 1, epicID: "inbox", inputKey: definitionInputKey(conflictProject, "inbox") } },
+    definitionBlock: { format: 1, reason: "Conflicting answers require one successful trick and at least two tricks. Decide which minimum governs and whether a single-trick landing earns both rewards." } };
+  await page.route(snapshotRoute, async (route) => {
+    const { "x-reqwizit-snapshot": _tokens, ...headers } = route.request().headers();
+    const response = await route.fetch({ headers });
+    const snapshot = await response.json();
+    await route.fulfill({ response, json: { ...snapshot, jobs: [...snapshot.jobs, conflictJob] } });
+  });
+  await page.addInitScript(() => localStorage.setItem("reqwizit-auto", "false"));
+  await page.reload();
+  await page.getByRole("tab", { name: /^Specification/ }).click();
+  await panel.getByRole("button", { name: /^Needs your decision/ }).click();
+  const finding = panel.getByRole("article", { name: "Assessment needs attention", exact: true });
+  await expect(finding).toContainText("which minimum governs");
+  await expect(finding).toContainText("not proof of a missing feature");
+  const decision = "One successful trick earns both individual and completed-combination rewards. This replaces the earlier two-trick and two-move minimums.";
+  await finding.getByLabel("Your decision or correction", { exact: true }).fill(decision);
+  await panel.getByRole("button", { name: /^Current specification/ }).click();
+  await panel.getByRole("button", { name: /^Needs your decision/ }).click();
+  await expect(finding.getByLabel("Your decision or correction", { exact: true })).toHaveValue(decision);
+  await page.route(`**/api/projects/${p.id}/submit`, (route) => route.fulfill({ status: 409, json: { error: "Saved version changed" } }));
+  await finding.getByRole("button", { name: "Save clarification", exact: true }).click();
+  await expect(finding.getByRole("alert")).toContainText("Your draft is kept");
+  await expect(finding.getByLabel("Your decision or correction", { exact: true })).toHaveValue(decision);
+  await page.unroute(`**/api/projects/${p.id}/submit`);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-definition-decision-mobile.png", fullPage: true });
+  await finding.getByRole("button", { name: "Save clarification", exact: true }).click();
+  await expect(finding).toContainText("Your clarification is saved");
+  await expect(finding).toContainText("Saving alone does not resolve");
+  const correction = store.submissions(p.id).find((s) => s.input.type === "note" && s.input.text.includes(decision));
+  assert.ok(correction); assert.equal(correction.status, "saved");
+  assert.equal(calls, 2, "Displaying and saving a save-only correction never starts inference");
+  assert.equal(store.get(p.id).requirements[0]!.statement, "Save encrypted reports offline", "Saving a clarification does not choose or rewrite a requirement");
+  await page.reload(); await page.getByRole("tab", { name: /^Specification/ }).click();
+  await panel.getByRole("button", { name: /^Needs your decision/ }).click();
+  await expect(finding).toContainText("Your clarification is saved");
+  await expect(finding.getByRole("button", { name: "Save clarification", exact: true })).toHaveCount(0);
   console.log("Specification/browser lists passed: answer → current requirement → correction; both tabs have epic-first lists, independent pagination, search, retained drafts, filters and mobile layout. No browsing model calls.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-continuous-specification-failure")); throw error; }
 finally { await browser?.close(); await app.close(); store.close(); }

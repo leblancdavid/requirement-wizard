@@ -66,6 +66,9 @@ or paused, with no shared fifteen-minute or ten-area cutoff. Requests consume yo
 AI allowance; **Pause assessment** saves completed work. Individual request timeouts,
 evidence/attempt limits and stale-result protection remain. Restart requires explicit
 continuation. Automatic maintenance and coordinated workflow keep separate allowances.
+Successful evidence gathering is separate from failed requests. **Refresh definition
+coverage** continues saved work and asks inline if repeated failures need one extra
+request; there is no separate recovery screen or silent allowance reset.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 Use **Settings → Project settings
 → Automatic maintenance** to opt in to definition updates after relevant decisions change: edits settle for

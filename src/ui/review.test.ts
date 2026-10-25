@@ -17,6 +17,68 @@ import { ChangeRequestForm } from "./change-request.js";
 import { DefinitionAssessment } from "./definition-assessment.js";
 import { coverage } from "../core/coverage.js";
 import { EpicRequirements, matchesRequirementSearch } from "./epic-requirements.js";
+import { definitionDecisionPrefix, definitionDecisions } from "../core/definition-decisions.js";
+import { definitionInputKey } from "../core/definition-identity.js";
+import { DefinitionDecisionCard } from "./definition-decisions.js";
+
+test("saved blocked assessments appear in Specification without manufacturing a question, approval or product gap", () => {
+  const p = fixture();
+  p.refinements = []; p.requirements.forEach((r) => { r.status = "accepted"; });
+  const job: Job = { id: "blocked-review", projectID: p.id, expectedRevision: p.revision, model: p.model, status: "failed", leaseUntil: null,
+    context: { revision: p.revision, focusEpicID: "inbox", includedIDs: ["idea"], omittedIDs: [], characters: 0, budget: 48000,
+      definitionAssessment: { format: 1, epicID: "inbox", inputKey: definitionInputKey(p, "inbox") } },
+    definitionBlock: { format: 1, reason: "Earlier answers specify both one trick and two tricks. Which minimum governs?" } };
+  const before = JSON.stringify({ p, job });
+  const findings = definitionDecisions(p, [job]);
+  assert.equal(findings.length, 1); assert.equal(findings[0]!.stale, false);
+  const props = { project: p, jobs: [job], submissions: [], epicID: "all", sending: [], disabled: false,
+    refine: () => assert.fail("No inference on render"), submit: async () => { assert.fail("No automatic correction"); }, reviewRefinement: async () => true };
+  const html = renderToStaticMarkup(createElement(ReviewQueue, props));
+  assert.match(html, /Needs your decision <span>1/);
+  assert.match(html, /Definition findings needing review/);
+  assert.match(html, /Which minimum governs/);
+  assert.match(html, /A game/);
+  assert.match(html, /Your decision or correction/);
+  assert.match(html, /Save clarification/);
+  assert.match(html, /not proof of a missing feature or unfinished implementation/);
+  assert.doesNotMatch(html, /No requirements waiting for review/);
+  assert.equal(JSON.stringify({ p, job }), before);
+  assert.deepEqual(definitionDecisions(p, JSON.parse(JSON.stringify([job]))), findings, "Older saved payloads project identically after reopen");
+  const otherScope = renderToStaticMarkup(createElement(ReviewQueue, { ...props, epicID: "project" }));
+  assert.doesNotMatch(otherScope, /Definition findings needing review/);
+  const next = { ...job, id: "completed-review", status: "completed" as const, definitionBlock: undefined };
+  assert.equal(definitionDecisions(p, [job, next]).length, 0, "Superseded blocked jobs do not remain active");
+  p.sources.push({ id: "new-answer", kind: "note", text: "One trick earns both rewards", epicID: "inbox" });
+  const stale = definitionDecisions(p, [job])[0]!;
+  assert.equal(stale.stale, true);
+  const earlier = renderToStaticMarkup(createElement(DefinitionDecisionCard, { finding: stale, project: p, submissions: [], submit: async () => true, disabled: false }));
+  assert.match(earlier, /Refresh definition coverage before making a decision/);
+  assert.doesNotMatch(earlier, /<textarea/);
+  const saved: Submission = { id: "correction", projectID: p.id, status: "saved", applied: false, conflict: false, auto: false, research: false, submittedAt: "2026-10-25T00:00:00.000Z",
+    input: { type: "note", epicID: "inbox", text: definitionDecisionPrefix(findings[0]!) + "One trick earns both rewards; replaces the earlier two-trick minimum." } };
+  const pending = renderToStaticMarkup(createElement(DefinitionDecisionCard, { finding: stale, project: p, submissions: [saved], submit: async () => true, disabled: false }));
+  assert.match(pending, /Your clarification is saved/);
+  assert.match(pending, /Saving alone does not resolve/);
+  assert.doesNotMatch(pending, /<textarea/);
+});
+
+test("technical assessment blockers stay neutral and current completed review findings also reach Specification", () => {
+  const p = fixture();
+  p.assessments = [{ epicID: "project", atRevision: p.revision, confidence: "low", explanation: "Review", answerVersions: {},
+    checks: [{ dimension: "failures", status: "needs-review", importance: "critical", explanation: "Human decisions conflict", evidenceIDs: ["idea"] }] }];
+  assert.equal(definitionDecisions(p, []).length, 1);
+  p.epics.find((e) => e.id === "project")!.archived = true;
+  assert.equal(definitionDecisions(p, []).length, 0, "Archived areas do not create inbox work");
+  const job: Job = { id: "technical", projectID: p.id, expectedRevision: p.revision, model: p.model, status: "failed", leaseUntil: null,
+    context: { revision: p.revision, focusEpicID: "inbox", includedIDs: ["missing-evidence"], omittedIDs: [], characters: 0, budget: 48000,
+      definitionAssessment: { format: 1, epicID: "inbox", inputKey: definitionInputKey(p, "inbox") } },
+    definitionBlock: { format: 1, reason: "An evidence record is unavailable" } };
+  const finding = definitionDecisions(p, [job])[0]!;
+  assert.equal(finding.label, "Assessment needs attention");
+  const html = renderToStaticMarkup(createElement(DefinitionDecisionCard, { finding, project: p, submissions: [], submit: async () => true, disabled: false }));
+  assert.match(html, /Evidence unavailable/); assert.match(html, /check Logs instead of inventing a product decision/);
+  assert.ok(definitionDecisionPrefix({ ...finding, evidenceIDs: Array(2000).fill("long-evidence-id") }).length < 12000, "Notes reference the retained finding without copying an unbounded evidence list");
+});
 
 test("epic browsing paginates epics independently and explicit targets open the correct requirement page", () => {
   const groups = Array.from({ length: 30 }, (_, epic) => ({ id: `epic-${epic}`, title: `Epic ${epic}`,

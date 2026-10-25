@@ -1,5 +1,41 @@
 # Browser workspace, epics, and estimated completeness
 
+## Resolve assessment findings in Specification (2026-10-25)
+
+**Specification → Needs your decision** now also shows definition review findings,
+even when the assessment produced no requirement proposal or clarification question.
+The Specification badge includes these items. Current partial/needs-review checks
+and the latest stopped, explicitly blocked assessment for each active area show the
+finding and expandable linked evidence. Feature, search and **Needs attention**
+filters apply. Earlier findings are labelled outdated and require a refresh before
+a new correction is submitted from them.
+
+For conflicting answers, write the governing rule and what it replaces or which
+exception applies, then choose **Save clarification**. This records an ordinary
+feature-scoped note through the existing consent/queue path. **Continue project**
+or **Process saved responses** processes saved-only input; then inspect the updated
+specification and **Refresh definition coverage**. Saving does not mark the finding
+resolved, approve a requirement or start coding. Drafts survive filter changes and
+failed saves; saved responses remain visible after reload without another submission.
+Technical/evidence blockers remain neutral assessment findings, not invented missing
+features. The progress notice now points to this review path instead of universally
+suggesting technical help.
+
+This is a read-only projection of existing assessments and the browser's recent job
+window, not a retrospective full-history sweep or automatic question-generation call.
+A stopped review outside that window may need explicit refresh to become visible.
+No schema, saved assessment identity or score changes; existing evidence and history
+remain intact. See [upgrade compatibility](migrations.md#definition-findings-in-specification-2026-10-25).
+
+Verification: all 878 tests (`npm test`: 224 pretests + 654 main tests), 65 targeted
+UI/specification tests, type check, UI build, focused Specification browser runner (including
+mobile, failed saves, filter draft retention and saved-response reload), and diff
+whitespace check passed without live inference. `npm run test:browser` passed the
+workspace-layout and model-selection runners, then stopped at the obsolete
+**Project map** tab assertion in `src/web/browser-check.ts:706`; the aggregate
+browser suite is not passing. The focused screenshot is
+`.reqwizit-state/browser-definition-decision-mobile.png`.
+
 ## Unified run logs (2026-10-25)
 
 **Application menu → Logs** automatically includes definition reviews and older
@@ -15,20 +51,23 @@ the available detail text with credential redaction (before display truncation),
 and reports success or a manual-copy fallback if clipboard access fails. This is
 presentation-only; saved data and migration formats are unchanged.
 
-## Recover an exhausted definition review (2026-10-25)
+## Continue definition reviews through Refresh (2026-10-25)
 
-Open **Overall progress → Reviews that reached the retry limit → Recover
-assessment: [area]**. Confirmation permits one additional AI request, preserving
-completed checks and failure history; it is not an automatic attempt reset.
-Afterwards use Refresh definition coverage to continue remaining stages. See
-[recovery limits](definition-coverage.md#recover-a-review-that-exhausted-its-attempts-2026-10-25).
+Open **Overall progress → Refresh definition coverage**. Successful saved evidence
+gathering is separate from failed/unfinished calls, so ordinary saved work continues
+without navigating a recovery screen. If repeated failures exhaust the allowance,
+Refresh asks inline for one additional request per listed area. **Continue refresh**
+confirms AI usage and resumes the remaining normal steps after that step succeeds;
+**Cancel** or reload starts nothing. Original evidence, calls and completed steps
+stay saved, and genuine evidence/size blockers remain. See
+[allowances and upgrade behavior](definition-coverage.md#refresh-resumes-saved-work-and-owns-extra-usage-confirmation-2026-10-25).
 
 Progress-dialog actions use visibly bordered buttons with consistent padding and
-44px minimum targets. Refresh/history, recovery choices and confirmation actions
+44px minimum targets. Refresh/log and inline confirmation actions
 align in equal-width desktop columns and stack on mobile. Focused recovery browser
 checks verify alignment, wrapped-label heights, spacing and no horizontal overflow;
 desktop/mobile screenshots are saved under `.reqwizit-state/browser-definition-recovery-*.png`.
-This styling change does not affect saved data or request allowances.
+No startup request or silent retry allowance is granted.
 
 ## Consolidated workspace (2026-10-24)
 

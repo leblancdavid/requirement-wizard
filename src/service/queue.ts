@@ -18,6 +18,7 @@ import { definitionAbortReason } from "../core/definition-interruption.js";
 import { maintenanceBasis, maintenanceLimits, observeMaintenance, type MaintenanceView } from "../core/maintenance.js";
 import { WorkflowBudgetPause } from "../core/workflow.js";
 import { canRecoverDefinition } from "../core/definition-recovery.js";
+import type { DefinitionAdditionalRequest } from "../core/definition-budget.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 
 type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" };
@@ -220,7 +221,8 @@ export class DiscoveryQueue {
       this.active.set(id, { controller, promise, kind: "definition" });
     } catch (error) { report(safeMessage(error instanceof Error ? error.message : error)); this.maintenanceArmed.delete(id); }
   }
-  refreshDefinition(id: string, revision: number, focusEpicID?: string, recoveryJobID?: string) {
+  refreshDefinition(id: string, revision: number, focusEpicID?: string, recoveryJobID?: string,
+    additionalRequests: DefinitionAdditionalRequest[] = []) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
@@ -232,6 +234,14 @@ export class DiscoveryQueue {
       if (!focusEpicID) throw new Error("Recovery requires one selected area.");
       const latest = this.service.store.definitionHistory(id, focusEpicID, definitionInputKey(project, focusEpicID))[0];
       if (!latest || latest.id !== recoveryJobID || !canRecoverDefinition(latest)) throw new Error("This assessment is no longer eligible for recovery. Refresh before continuing.");
+    }
+    if (additionalRequests.length > 64 || recoveryJobID && additionalRequests.length
+      || new Set(additionalRequests.map((grant) => grant.epicID)).size !== additionalRequests.length) throw new Error("Choose distinct areas for additional refresh requests.");
+    for (const grant of additionalRequests) {
+      const latest = this.service.store.definitionHistory(id, grant.epicID, definitionInputKey(project, grant.epicID))[0];
+      if (focusEpicID && grant.epicID !== focusEpicID || !latest || latest.id !== grant.jobID || !canRecoverDefinition(latest)) {
+        throw new Error("This refresh allowance is no longer eligible. Refresh before continuing.");
+      }
     }
     const resolved = resolvedReviewAttempts(project, this.service.store.submissions(id));
     if (this.service.store.submissions(id).some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status))) throw new OperationConflictError("Process saved responses before refreshing definition coverage so the assessment includes your latest decisions.");
@@ -251,9 +261,20 @@ export class DiscoveryQueue {
         const areaTitle = snapshot.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID;
         const reportArea = (message: string) => report(`Definition coverage · area ${areaIndex + 1} of ${areas.length} · ${areaTitle}\n${message}`);
         reportArea(`Assessing definition: ${areaTitle}. Complete current area only; no specification changes or gap discovery. ${reused} current areas reused without calls.`);
-        const job = await this.service.analyze(id, snapshot.revision, { definitionEpicID: area.epicID,
-          ...(recoveryJobID ? { definitionRecoveryJobID: recoveryJobID, definitionLimits: { requests: 1, durationMs: 300000 } } : { continuousDefinition: true }),
+        const grant = additionalRequests.find((g) => g.epicID === area.epicID);
+        const extraJobID = grant?.jobID ?? recoveryJobID;
+        const savedSteps = grant ? this.service.store.getJob(grant.jobID).definitionWork!.receipts.length : 0;
+        let job = await this.service.analyze(id, snapshot.revision, { definitionEpicID: area.epicID,
+          ...(extraJobID ? { definitionRecoveryJobID: extraJobID, definitionLimits: { requests: 1, durationMs: 300000 } } : { continuousDefinition: true }),
           signal: controller.signal, onProgress: reportArea });
+        // Confirmation extends only the exhausted step by one request. Once it
+        // succeeds, ordinary Refresh continues the remaining saved work normally.
+        if (grant && job.status === "interrupted" && job.definitionWork?.paused === "request-limit"
+          && job.definitionWork.receipts.length > savedSteps) {
+          controller.signal.throwIfAborted();
+          job = await this.service.analyze(id, this.service.store.get(id).revision, { definitionEpicID: area.epicID,
+            continuousDefinition: true, signal: controller.signal, onProgress: reportArea });
+        }
         if (job.status === "completed") refreshed++;
         else { blocked++; report(`Definition assessment unfinished: ${job.diagnostic ?? job.status}`); }
         if (["cancelled", "stale", "interrupted"].includes(job.status) || job.status === "failed" && !job.definitionBlock) break;

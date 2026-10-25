@@ -5,12 +5,14 @@ import { LazyDetails } from "./lazy-details.js";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { definitionStopSummary, statusLabel } from "./user-messages.js";
 import { LogLink } from "./log-access.js";
+import { canRecoverDefinition } from "../core/definition-recovery.js";
 
 export function DefinitionProgress({ job, project }: { job: Job; project: Project }) {
   const task = job.context?.definitionAssessment, work = job.definitionWork;
   if (!task) return null;
   const interruption = job.definitionInterruption;
   const stopped = ["interrupted", "cancelled"].includes(job.status);
+  const needsAllowance = canRecoverDefinition(job);
   const legacyUnknown = stopped && !interruption && !work?.paused;
   const steps = work ? definitionSteps(work) : [], step = work ? steps[work.receipts.length] : undefined;
   const included = new Set(job.context?.includedIDs ?? []);
@@ -38,7 +40,7 @@ export function DefinitionProgress({ job, project }: { job: Job; project: Projec
     </>}</LazyDetails>}
     {legacyUnknown && <p>This earlier review stopped, but the reason wasn’t recorded. Completed checks are still saved.</p>}
     {stopped && interruption && <p role="status">{definitionStopSummary(interruption.cause)} Use Refresh definition coverage to continue unfinished work.</p>}
-    {(job.definitionBlock?.reason || job.diagnostic) && <DiagnosticNotice detail={job.definitionBlock?.reason ?? job.diagnostic} summary={job.definitionBlock ? "Some project information could not be reviewed within the app’s limits. The review is unfinished." : stopped ? "The review stopped before finishing. Completed checks are saved." : undefined} next={job.definitionBlock ? "Repeating the same review won’t fix this. See Technical details for the cause; you may need technical help to resolve it." : undefined} />}
+    {(job.definitionBlock?.reason || job.diagnostic) && <DiagnosticNotice detail={job.definitionBlock?.reason ?? job.diagnostic} summary={needsAllowance ? "The review paused after repeated unsuccessful requests. Your saved work is kept." : job.definitionBlock ? "The assessment found an issue that needs attention before it can finish." : stopped ? "The review stopped before finishing. Completed checks are saved." : undefined} next={needsAllowance ? "Use Refresh definition coverage to confirm one additional request and continue." : job.definitionBlock ? "Open Specification → Needs your decision to read the finding and record a correction if your answers conflict. For technical or unavailable-evidence problems, see Logs. Repeating an unchanged review does not resolve the issue." : undefined} />}
   </section>;
 }
 

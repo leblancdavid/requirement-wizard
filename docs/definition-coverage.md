@@ -5,6 +5,38 @@ decisions; it is not readiness, code completeness, or verified delivery to main.
 
 ## Refresh the overall view
 
+### Refresh resumes saved work and owns extra-usage confirmation (2026-10-25)
+
+Use **Refresh definition coverage** to continue saved reviews. Successful evidence
+gathering is no longer counted as a failed attempt: each step permits up to eight
+saved evidence requests separately from three failed/unfinished calls. Both consume
+AI usage, and a 12-dispatch hard ceiling, 96k context and 64-step limit still apply.
+The historical calls are retained, not reset. For example, nine saved steps and
+three recorded calls including one successful evidence request can continue with
+call four without a separate recovery action or repeated completed calls.
+
+After three genuinely failed/unfinished calls, Refresh asks inline before allowing
+**one additional request** for each listed area. **Continue refresh** confirms that
+usage; **Cancel** and reload start nothing. If the extra request saves the step,
+remaining normal steps and areas continue in the same refresh. Repeated refresh
+never grants another extension to that exhausted step. Genuine evidence conflicts,
+unfitting records and stale inputs are not bypassed. Automatic maintenance retains
+its own action limits and cannot authorize extra requests.
+
+Restart/rebuild the updated app, then click Refresh normally. Original saved jobs,
+receipts, evidence and valid completed assessments stay intact. Old recovery grants
+remain accounted for conservatively. The old single-request recovery API is kept for
+compatibility, but no separate **Recover assessment** UI navigation is needed. See
+[upgrade and crash recovery](migrations.md#refresh-owned-definition-allowances-2026-10-25).
+
+Verification: type check, `npm test` (including all 652 main tests), 97 final focused
+definition/diagnostic tests, UI build and the focused refresh-allowance browser check
+passed. Workspace layout and model-selection browser checks passed; portable and
+specification browser checks passed separately. `npm run test:browser` still stops
+at the pre-existing missing **Project map** tab assertion in `browser-check.ts:706`.
+That unrelated legacy selector was not changed. Existing bundle-size/React-key
+warnings remain. No live provider call or personal-project write/recovery was run.
+
 ### Exact earlier decisions across batches (2026-10-25)
 
 **Linked-decision follow-up:** the reviewer may now request further exact linked
@@ -18,8 +50,9 @@ For an older **“permitted evidence request has already been used”** blocker,
 rebuild the updated app and explicitly **Refresh definition coverage**. If that saved
 diagnostic names exact record IDs directly linked by supplied records, the app loads
 those records locally and preserves the old block as history. It does not infer their
-meaning. If all three attempts were spent, Refresh still starts no model call: use
-**Recover assessment** if offered to authorize the existing single additional request.
+meaning. The [current Refresh allowance flow](#refresh-resumes-saved-work-and-owns-extra-usage-confirmation-2026-10-25)
+separates saved evidence requests from failed calls and asks inline only if an extra
+request is needed.
 Unsupported/missing/unlinked evidence remains blocked. See
 [compatibility and limits](migrations.md#linked-exact-evidence-follow-ups-2026-10-25).
 
@@ -52,14 +85,14 @@ evidence not supplied in this/another batch can be superseded once when retained
 citations identify other planned records. The old diagnostic, receipts and spent
 attempts stay saved. Automatic/bounded maintenance does not clear legacy blockers;
 already-upgraded blockers do not acquire another retry on unchanged refresh. Exhausted
-attempts still need the separately authorized recovery action.
+failed attempts need the additional-request confirmation within Refresh.
 
 See [compatibility and recovery](migrations.md#cross-batch-exact-definition-evidence-2026-10-25).
 Deterministic tests cover legacy continuation, exact text, saved attempts, SQLite
 reopening, portable replay, malformed references, overflow, cancellation and stale
 results. Live model quality and recovery of the reported personal project remain
 unverified; no personal data or model allowance was used for these checks.
-Verification including the linked-decision follow-up: `npm run check`,
+Earlier backend-only verification including the linked-decision follow-up: `npm run check`,
 `npm test` (including all 652 main tests), 93 focused definition/diagnostic tests,
 `npm run build:ui` and `git diff --check` passed. The existing UI bundle-size warning
 remains. Browser checks were not rerun for this backend/protocol change.
@@ -78,7 +111,7 @@ Restart the updated backend (rebuild/relaunch desktop if applicable), then expli
 refresh/resume. Seven saved steps, for example, stay saved; the rejected response
 does not replace them. Rejected output was not saved, so continuation needs a new
 request for that unfinished step and retains its already-spent attempt. Exhausted
-stages still require the separate explicit recovery action, not an allowance reset.
+stages still require explicit extra-usage confirmation within Refresh, not an allowance reset.
 See [upgrade details](migrations.md#accumulated-definition-explanation-bounds-2026-10-25).
 
 Verification: type check, `npm test` (including all 652 main tests), 69 focused staged/discovery tests and diff whitespace
@@ -137,22 +170,17 @@ for per-area refresh actions, explanations and linked evidence. The refresh:
 
 ### Recover a review that exhausted its attempts (2026-10-25)
 
-Restart the updated backend, then open **Overall progress**. Under **Reviews that
-reached the retry limit**, choose **Recover assessment: [area]**. The confirmation
-explains AI usage and authorizes exactly **one additional request**, not a new
-three-attempt budget. Cancel and reload start no calls. Recovery uses the current
-citation protocol and retains completed checks, original attempts and failure history;
-it does not change requirements or bypass evidence validation.
-
-After a successful recovery step, use **Refresh definition coverage** to finish the
-remaining steps. Only one recovery grant is available per exhausted step; if it
-fails, ordinary Refresh cannot repeat it. Earlier errors may concern AI-generated
-references rather than missing product decisions. Genuine evidence/context blockers
-remain blockers. The action is shown for eligible latest jobs available in the recent
-workspace job list; older jobs outside that list are not surfaced by this control.
+The earlier standalone recovery UI is superseded by the
+[Refresh-owned allowance flow](#refresh-resumes-saved-work-and-owns-extra-usage-confirmation-2026-10-25).
+Refresh now separates evidence gathering from failed calls and requests extra-usage
+consent inline only when needed, then continues remaining normal work automatically.
+Only one extra request is available per genuinely exhausted step. Saved calls and
+checks remain intact, and real evidence/context blockers remain blockers. The older
+single-request recovery API remains compatible for existing clients; it does not
+silently authorize further work.
 See [compatibility and crash handling](migrations.md#explicit-exhausted-definition-stage-recovery-2026-10-25).
 
-Verification: type check, `npm test` (184 pretests and 652 main tests), final focused
+Earlier verification: type check, `npm test` (184 pretests and 652 main tests), final focused
 staged tests (50, including an additional pre-dispatch crash/future-ledger check),
 UI build and focused recovery browser checks passed. Aggregate browser checks passed
 workspace layout and model selection, then stopped at the existing missing

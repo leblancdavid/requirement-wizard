@@ -1,5 +1,85 @@
 # Data migrations and upgrade compatibility
 
+## Definition findings in Specification (2026-10-25)
+
+Source/target: unchanged SQLite, project JSON, job, workspace and portable formats.
+`src/core/definition-decisions.ts` projects existing assessment checks and recent
+explicitly blocked jobs into Specification review cards. No migration, fingerprint
+change, checkpoint invalidation, startup write or startup model call is needed.
+Old saved jobs with the existing `definitionBlock` reason work without a newly
+classified conflict field. Missing/changed input identities are shown as earlier
+findings, not manufactured current provenance. Newer area jobs suppress older job
+blockers; archived areas are excluded. The existing recent-job window still limits
+retrospective visibility; no full-history blocker indexing is introduced.
+
+Explicit human clarifications use the existing note/submission format and queue
+consent. Notes distinguish the quoted AI finding (context only) from the human's
+decision; original evidence, prior answers and accepted work are not rewritten by
+the projection. Pending/failed follow-up stays pending/failed. Saved-only input is
+not replayed on reopen; an affected refresh must establish resolution normally.
+
+Compatibility fixtures cover older saved payloads, repeated projection, unchanged
+records, stale identities, newer jobs, archived areas and neutral technical blockers.
+The focused browser fixture covers failed-save draft retention, filter changes,
+save-only correction/reload and no inference or requirement mutation on save. This
+does not qualify an actual user's database upgrade or live model conflict resolution.
+
+## Refresh-owned definition allowances (2026-10-25)
+
+Source: exact definition ledgers where each dispatch (including a valid evidence
+request) consumed one of three attempts. Target: the same SQLite/job/portable/work
+envelopes with optional strict format-1 `allowancePolicy` (`fromStage`,
+`legacyRecoveryStages`). Raw attempt fields now allow up to 12 only at/after this
+policy boundary; unversioned expanded counters reject. The bounded follow-up ledger
+widens compatibly from 192 to 512 entries to support at most eight valid evidence
+responses per step across 64 steps. These are request accounting changes, not a
+change to assessment meaning, inputs, plan keys, evidence or freshness identities.
+Schema/migration metadata remains separate from project optimistic revisions.
+
+Replay validates original saved receipts/requests before enabling the policy at the
+unfinished step. The policy is not added to prompts, so original request hashes and
+response bytes stay unchanged. Successful **saved and validated**, same-step evidence
+responses are counted separately from failed/unfinished requests. Failure charge is
+raw dispatch count minus those evidence responses, plus any legacy recovery dispatch
+that the old saturated three-attempt counter did not represent. Old issued recovery
+grants are conservatively retained (including pre-dispatch interruption), never
+regranted or refunded. Unknown/unsaved/malformed/interrupted outputs receive no credit.
+There is no app-start rewrite, app-data reset, repeated completed model call or
+automatic startup dispatch. Unsupported future policy formats reject without writes;
+older readers may reject new fields/counters, so do not downgrade after continuation.
+
+Each unfinished step permits three failed/unfinished requests and up to eight valid
+evidence requests, with 12 total dispatches as an independent ceiling (including the
+single explicitly authorized extra request). The current raw counter continues
+increasing: a legacy three-call step with one valid evidence response can make call
+four as part of ordinary Refresh, retaining all three original calls and their
+outcomes. No genuinely failed call is erased. Acceptance advances the step as before;
+indivisible 96k evidence, 64-step, stale revision and genuine model blockers remain.
+
+The main **Refresh definition coverage** flow now owns additional-request consent.
+The authenticated revision-bound API accepts a strict optional list of distinct
+area/latest-job pairs (at most 64), only with `confirmAdditionalRequests: true`.
+Every pair is checked against current exact-input history, selected scope and the
+existing one-grant-per-step eligibility before dispatch. UI Cancel/reload starts no
+calls; metadata/settings/history cannot authorize extra requests. Only listed areas
+receive a single additional dispatch. If it saves the exhausted step, the same
+refresh automatically continues remaining ordinary steps/areas. A failed/unfinished
+extra request cannot acquire another grant. The older `recover-definition` API
+remains a compatible single-request action, but is no longer a separate UI workflow.
+
+Existing transactional checkpoints persist the policy and incremented raw attempts
+before dispatch, the validated evidence before granting credit, and accepted steps
+before continuation. A crash before a result checkpoint keeps its attempt charged;
+after checkpoint it reuses exact saved evidence without redispatch. Original jobs
+remain immutable. Upgrade tests reopen a nine-step, three-call legacy ledger twice,
+complete on call four without recovery, reopen/export/replay again, and verify
+original request/response bytes. Tests also cover eight evidence requests, a ninth
+assessment call, hard limits, genuine repeated failures, legacy spent recovery,
+future policies, invalid IDs and cancellation/stale results. Browser fixtures cover
+inline multi-area consent, auth/origin/revision/scope/job checks, automatic remaining
+continuation, cancellation/reload and desktop/mobile layout. No personal-project
+recovery or live provider call was run.
+
 ## Linked exact evidence follow-ups (2026-10-25)
 
 Source: exact definition work with a single `evidenceRequest` per step/lineage,
@@ -17,7 +97,7 @@ with no supplemental evidence retain their existing contract. Each follow-up sto
 stage, original evidence owner, pre-request split count/context hash, raw validated
 record-ID request, spent attempts and job/model provenance. The bounded ledger permits
 up to 192 follow-up receipts, with at most 20 new exact record IDs per response.
-The existing three-attempt limit, explicit single recovery grant, action allowances,
+The original three-attempt limit (superseded by [separate evidence/failure accounting](#refresh-owned-definition-allowances-2026-10-25)), explicit single recovery grant, action allowances,
 96k request and 64-step bounds remain independent and unchanged. A spent attempt
 cannot return multiple requests except the separately spent authorized recovery
 request at attempt three. No refresh refunds attempts or manufactures provenance.

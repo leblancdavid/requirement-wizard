@@ -17,6 +17,8 @@ import { AttentionInbox } from "./attention.js";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { LogLink } from "./log-access.js";
 import { statusLabel } from "./user-messages.js";
+import { definitionDecisions } from "../core/definition-decisions.js";
+import { DefinitionDecisionCard } from "./definition-decisions.js";
 
 export function pendingReviews(project: Project, submissions: Submission[]) {
   const waiting = new Set(submissions.filter((s) => s.input.type === "review" && ["queued", "saved", "processing"].includes(s.status)).map((s) => s.input.type === "review" ? s.input.requirementID : ""));
@@ -160,12 +162,16 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   focusRequirementID?: string; focusItemID?: string; openIssue?: (submissionID: string) => void;
   draftStore?: React.MutableRefObject<Record<string, ReviewDraft>>;
 }) {
-  const [filter, setFilter] = useState<ReviewFilter>(() => reviewItems(project, submissions, "pending").length ? "pending" : "current");
+  const definitionFindings = useMemo(() => definitionDecisions(project, jobs).filter((f) => epicID === "all" || f.epicID === epicID), [project, jobs, epicID]);
+  const [filter, setFilter] = useState<ReviewFilter>(() => reviewItems(project, submissions, "pending").length || definitionFindings.length ? "pending" : "current");
   const filterChosen = useRef(false);
   const [readinessFilter, setReadinessFilter] = useState<ReviewReadiness | "all">("all");
   const [expanded, setExpanded] = useState<string | null | undefined>(focusItemID);
   const [search, setSearch] = useState("");
+  const visibleFindings = !focusRequirementID && filter === "pending" && ["all", "attention"].includes(readinessFilter)
+    ? definitionFindings.filter((finding) => matchesRequirementSearch(search, [finding.label, finding.explanation, ...finding.evidenceIDs, project.epics.find((e) => e.id === finding.epicID)?.title ?? ""])) : [];
   const localDrafts = useRef<Record<string, ReviewDraft>>({});
+  const definitionDrafts = useRef<Record<string, string>>({});
   const drafts = draftStore ?? localDrafts;
   const [, refreshDrafts] = useState(0);
   const [message, setMessage] = useState("");
@@ -189,7 +195,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   const submitted = reviews.filter((s) => s.status !== "completed" && s.status !== "superseded" && !resolvedAttempts.has(s.id));
   const reviewed = reviewItems(project, submissions, "reviewed", epicID);
   const current = reviewItems(project, submissions, "current", epicID);
-  useEffect(() => { if (!filterChosen.current) setFilter(pending.length ? "pending" : "current"); }, [pending.length]);
+  useEffect(() => { if (!filterChosen.current) setFilter(pending.length || definitionFindings.length ? "pending" : "current"); }, [pending.length, definitionFindings.length]);
   const readinessByID = new Map(pending.map((item) => {
     const draft = item.kind === "requirement" ? drafts.current[item.requirement.id] : undefined;
     const changed = !!draft && item.kind === "requirement" && (draft.fingerprint !== reviewFingerprint(item.requirement) || draft.contextKey !== decisionContextKey(project, [item.requirement.id]));
@@ -369,15 +375,16 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
     {disabled && disabledReason && <p className="save-notice" role="status"><strong>Decisions temporarily paused.</strong> {disabledReason} You can keep reading and writing notes. A paused click will not queue a decision; review the result and choose again when available.</p>}
     {!focusRequirementID && openIssue && <AttentionInbox project={project} submissions={submissions} jobs={jobs} open={openIssue} />}
     {!focusRequirementID && <>
-      <div className="filter-row" aria-label="Review filters">{([ ["current", "Current specification", current.length], ["pending", "Needs your decision", pending.length], ["refinements", "Refinements", refinements.length], ["submitted", "Submitted", submitted.length], ["reviewed", "History", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { filterChosen.current = true; setFilter(key); setExpanded(undefined); }}>{label} <span>{count}</span></button>)}</div>
-      {filter === "pending" && <div className="filter-row review-readiness" aria-label="Review readiness"><button aria-pressed={readinessFilter === "all"} onClick={() => { setReadinessFilter("all"); setExpanded(undefined); }}>All <span>{pending.length}</span></button>{(Object.keys(readinessLabels) as ReviewReadiness[]).map((state) => <button key={state} aria-pressed={readinessFilter === state} onClick={() => { setReadinessFilter(state); setExpanded(undefined); }}>{readinessLabels[state]} <span>{pending.filter((item) => readiness(item) === state).length}</span></button>)}</div>}
+      <div className="filter-row" aria-label="Review filters">{([ ["current", "Current specification", current.length], ["pending", "Needs your decision", pending.length + definitionFindings.length], ["refinements", "Refinements", refinements.length], ["submitted", "Submitted", submitted.length], ["reviewed", "History", reviewed.length] ] as const).map(([key, label, count]) => <button key={key} aria-pressed={filter === key} className={filter === key ? "active" : ""} onClick={() => { filterChosen.current = true; setFilter(key); setExpanded(undefined); }}>{label} <span>{count}</span></button>)}</div>
+      {filter === "pending" && <div className="filter-row review-readiness" aria-label="Review readiness"><button aria-pressed={readinessFilter === "all"} onClick={() => { setReadinessFilter("all"); setExpanded(undefined); }}>All <span>{pending.length + definitionFindings.length}</span></button>{(Object.keys(readinessLabels) as ReviewReadiness[]).map((state) => <button key={state} aria-pressed={readinessFilter === state} onClick={() => { setReadinessFilter(state); setExpanded(undefined); }}>{readinessLabels[state]} <span>{pending.filter((item) => readiness(item) === state).length + (state === "attention" ? definitionFindings.length : 0)}</span></button>)}</div>}
       <label className="requirement-search">Search features and requirements<input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setExpanded(undefined); }} placeholder="Feature, requirement, or example of expected behavior…" maxLength={500} /></label>
     </>}
     {focusRequirementID && !focused && <p role="status">This requirement is no longer available. Its saved attempts remain in history.</p>}
     {message && <p className="save-notice" role="status">{message}</p>}
-    {!focusRequirementID && !visible.length && !history.length && filter !== "submitted" && <div className="empty-card"><h3>{filter === "current" ? "No current specification requirements yet." : filter === "pending" ? pending.length ? "No requirements match this readiness filter." : "No requirements waiting for review." : filter === "refinements" ? "No refinements waiting for review." : "No reviewed requirements yet."}</h3><p>{filter === "pending" && pending.length ? "Choose All to see requirements needing decisions or processing." : filter === "refinements" ? "Use Refine requirements to check existing wording. Earlier decisions remain in History." : "Keep answering in Design. Clear answers update the specification without a second approval."}</p></div>}
-    {!focusRequirementID && <p role="status" aria-label="Specification results">Showing {groups.reduce((total, group) => total + group.items.length, 0)} results in {groups.length} {groups.length === 1 ? "feature" : "features"}.</p>}
-    {!!search.trim() && !groups.length && <p className="empty-card">No requirements match this search and the selected filters. <button type="button" className="secondary" onClick={() => setSearch("")}>Clear search</button></p>}
+    {visibleFindings.length > 0 && <section aria-label="Definition findings needing review"><h3>Definition findings needing review</h3><p>These findings need attention even when no requirement proposal or new question was created.</p>{visibleFindings.map((finding) => <DefinitionDecisionCard key={finding.id} finding={finding} project={project} submissions={submissions} submit={submit} disabled={disabled} processBlocking={processBlocking} drafts={definitionDrafts} />)}</section>}
+    {!focusRequirementID && !visible.length && !visibleFindings.length && !history.length && filter !== "submitted" && <div className="empty-card"><h3>{filter === "current" ? "No current specification requirements yet." : filter === "pending" ? pending.length || definitionFindings.length ? "No items match this readiness filter." : "No requirements waiting for review." : filter === "refinements" ? "No refinements waiting for review." : "No reviewed requirements yet."}</h3><p>{filter === "pending" && (pending.length || definitionFindings.length) ? "Choose All to see requirements and findings needing attention." : filter === "refinements" ? "Use Refine requirements to check existing wording. Earlier decisions remain in History." : "Keep answering in Design. Clear answers update the specification without a second approval."}</p></div>}
+    {!focusRequirementID && <p role="status" aria-label="Specification results">Showing {groups.reduce((total, group) => total + group.items.length, 0)} requirement results in {groups.length} {groups.length === 1 ? "feature" : "features"}{visibleFindings.length ? `, plus ${visibleFindings.length} definition review ${visibleFindings.length === 1 ? "finding" : "findings"}` : ""}.</p>}
+    {!!search.trim() && !groups.length && !visibleFindings.length && <p className="empty-card">No requirements match this search and the selected filters. <button type="button" className="secondary" onClick={() => setSearch("")}>Clear search</button></p>}
     {filter === "submitted" && !submitted.length && <p className="empty-card">No reviews awaiting follow-up.</p>}
     <div ref={list}><EpicRequirements groups={groups} scope={`${project.id}:${epicID}:${filter}:${readinessFilter}:${search}`} label="Specification" itemID={(entry) => entry.id} target={expanded || focusRequirementID ? active : undefined}>{(entry) => entry.item ? renderItem(entry.item) : entry.submission ? renderSubmission(entry.submission) : null}</EpicRequirements></div>
     {!focusRequirementID && <div className="review-toolbar">

@@ -67,6 +67,11 @@ implemented under `src/`. See [decisions.md](decisions.md),
   lineage, using existing spent-attempt limits. Manual upgrade of an old one-request
   block may load explicitly named, directly linked saved records without treating
   their accepted/cleanup labels as proof of human approval.
+  `definition-budget.ts` separates valid same-step evidence responses from failed/
+  unfinished dispatches without rewriting raw history. Versioned allowance boundaries
+  preserve replay and legacy recovery accounting. Refresh owns revision/area/job-bound
+  extra-request consent and continues ordinary remaining work after a successful
+  extension; automatic maintenance cannot grant that extension.
   Existing single-context assessment identities remain unchanged. See
   [large-area assessment](definition-coverage.md#large-area-assessment-and-continuation-follow-up-2026-10-23).
 

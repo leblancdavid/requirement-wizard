@@ -8,6 +8,7 @@ import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { canRecoverDefinition } from "../core/definition-recovery.js";
+import { canDispatchDefinition, definitionFailedAttempts, upgradeDefinitionAllowance } from "../core/definition-budget.js";
 
 /** Ephemeral estimates shared across one explicit refresh, never a new allowance. */
 export type DefinitionSchedule = { deadline: number; collectMs: number; verifyMs: number };
@@ -27,6 +28,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     : planDefinitionStages(project, epicID, (progress) => options.onProgress?.(`Preparing exact definition batches · ${progress.prepared} / ${progress.total} evidence records packaged · ${progress.probes} exact size checks. Local preparation only; no model request is running yet.`));
   delete work.paused;
   let draft = replayDefinitionStages(project, work), calls = 0;
+  upgradeDefinitionAllowance(work);
   upgradeDefinitionDraftPolicy(work);
   upgradeDefinitionResponsePolicy(work);
   upgradeDefinitionCitationPolicy(work);
@@ -78,7 +80,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     if (definitionPhase(work) === "complete") return store.finishJob(job.id, completedDefinitionAssessment(project, work));
     if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline)) return store.pauseDefinition(job.id, calls >= limits.requests ? "request-limit" : "time-limit", limits.durationMs);
     const recovery = work.recovery?.grants.find((g) => g.stage === work.receipts.length);
-    if (work.attempts >= 3 && (!recovery || recovery.spent || recovery.jobID !== job.id)) return store.blockDefinition(job.id, "This exact assessment stage exhausted its request allowance. Completed evidence checks are retained; unchanged refresh does not grant new calls. Use explicit recovery if offered, or review the original failure details.");
+    if (!canDispatchDefinition(work, job.id)) return store.blockDefinition(job.id, "This assessment step reached its failed-request allowance. Successful evidence gathering and saved checks are retained. Refresh can ask for one additional request when eligible; unchanged refresh never resets failed attempts.");
     const steps = definitionSteps(work), step = steps[work.receipts.length]!;
     if (options.schedule && options.schedule.deadline - Date.now() < definitionRequestReserve(options.schedule, step.phase, options.requestTimeoutMs)) {
       options.onProgress?.("Pausing before the next request: estimated request time exceeds the remaining shared refresh window. Completed stages retained; no new attempt spent.");
@@ -88,8 +90,8 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     const evidence = `${project.requirements.filter((r) => included.has(r.id)).length} requirements, ${project.questions.filter((r) => included.has(r.id)).length} questions, ${project.sources.filter((r) => included.has(r.id)).length} source records and ${project.research.filter((r) => included.has(r.id)).length} research records`;
     const requestLabel = `${project.epics.find((e) => e.id === epicID)?.title ?? epicID} · ${step.phase === "collect" ? "reading exact evidence" : "checking findings against evidence"} · batch ${step.batch} / ${work.batches.length} · ${work.receipts.length} / ${steps.length} stages saved`;
     options.onProgress?.(`${requestLabel}\nProcessing ${evidence} · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Coverage remains unpublished until all checks finish. Exact evidence is distributed across batches, never truncated.`);
-    if (work.attempts >= 3) recovery!.spent = true;
-    else work.attempts++;
+    if (definitionFailedAttempts(work) >= 3) recovery!.spent = true;
+    work.attempts++;
     calls++;
     store.checkpointDefinition(job.id, work, context.manifest, lease());
     const requestMs = options.requestTimeoutMs ?? 300000;
