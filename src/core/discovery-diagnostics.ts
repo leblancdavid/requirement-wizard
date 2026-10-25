@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ContextPack } from "./context.js";
 import { definitionInterruptionCauses } from "./definition-interruption.js";
+import { definitionStageLimit } from "./definition-continuation.js";
 
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const duration = z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -35,7 +36,7 @@ export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.
   planningProgress: planningProgressSchema.optional(),
   initialContext: diagnosticContextSchema.nullable(),
   requests: z.array(z.object({ durationMs: duration.nullable(), outcome: z.enum(["in-flight", "returned", "failed", "cancelled"]),
-    response: z.enum(["analysis", "search", "load", "blocked", "other"]).nullable(), context: diagnosticContextSchema }).strict()).max(32),
+    response: z.enum(["analysis", "search", "load", "blocked", "other"]).nullable(), context: diagnosticContextSchema }).strict()).max(definitionStageLimit),
 }).strict();
 export type DiscoveryMetrics = z.infer<typeof discoveryMetricsSchema>;
 

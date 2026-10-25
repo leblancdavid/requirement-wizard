@@ -9,7 +9,7 @@ import { DiscoveryService } from "./discovery.js";
 import { DiscoveryQueue } from "./queue.js";
 import { coverage } from "../core/coverage.js";
 import { dimensions } from "../core/epics.js";
-import { definitionContext, validateDefinitionAssessment } from "../core/definition-assessment.js";
+import { definitionContext, validateDefinitionAssessment, validateDefinitionCitations } from "../core/definition-assessment.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 import { projectSchema, type Analysis, type Project } from "../core/model.js";
@@ -101,6 +101,31 @@ test("malformed, partial, out-of-scope and unauthorized definition responses can
       const job = await new DiscoveryService(store, { async analyze() { return invalid; } }).analyze(p.id, p.revision, { definitionEpicID: "orders" });
       assert.equal(job.status, "failed", job.diagnostic); assert.deepEqual(store.get(p.id), p);
     }
+  } finally { store.close(); }
+});
+
+test("citation diagnostics distinguish missing records from excluded evidence and bound untrusted values", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), missing = randomUUID(), outside = p.requirements[0]!.id;
+    const checks = result("orders", p.sources[0]!.id).assessments![0]!.checks;
+    checks[6]!.evidenceIDs = [missing, outside];
+    assert.throws(() => validateDefinitionCitations(p, [p.sources[0]!.id], checks), (error: unknown) => {
+      const message = (error as Error).message;
+      assert.match(message, /1 missing; 1 outside allowed evidence/);
+      assert.ok(message.includes(`checks[6] (failures).evidenceIDs[0]: ${missing} — missing record`));
+      assert.ok(message.includes(`evidenceIDs[1]: ${outside} — outside allowed evidence`));
+      return true;
+    });
+    const privateValue = "Bearer private-credential\r\nD:\\private\\human-decision " + "x".repeat(10000);
+    checks[6]!.evidenceIDs = Array(20).fill(privateValue);
+    assert.throws(() => validateDefinitionCitations(p, [p.sources[0]!.id], checks), (error: unknown) => {
+      const message = (error as Error).message;
+      assert.ok(message.length < 1200); assert.match(message, /non-UUID sha256:[a-f0-9]{16}/);
+      assert.match(message, /more rejected citations not shown/);
+      assert.doesNotMatch(message, /private|Bearer|human-decision|\r|\n/); return true;
+    });
+    validateDefinitionCitations(p, [p.sources[0]!.id], result("orders", p.sources[0]!.id).assessments![0]!.checks);
   } finally { store.close(); }
 });
 

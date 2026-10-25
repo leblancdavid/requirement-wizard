@@ -2,7 +2,7 @@ import { z } from "zod";
 import { folderPreviewSchema } from "./folder-preview.js";
 import type { GapReport, gapCheckSchema } from "./gap-types.js";
 import { wordingKey } from "./similarity.js";
-import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal } from "./epics.js";
+import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal, accumulatedAssessmentProposal } from "./epics.js";
 
 const text = z.string().trim().min(1).max(12000);
 export const answerScopeSchema = z.object({ format: z.literal(1), questionID: z.string().min(1), requirementIDs: z.array(z.string().min(1)).min(1).max(8).refine((ids) => new Set(ids).size === ids.length, "Scoped target IDs must be unique") }).strict();
@@ -183,6 +183,10 @@ export const analysisSchema = z.object({
   ])).max(30).optional(),
 }).strict();
 export type Analysis = z.infer<typeof analysisSchema>;
+
+/** Engine-built result only. Never use this schema for a model response: the
+ * write boundary independently reconstructs and compares the complete ledger. */
+export const stagedDefinitionAnalysisSchema = analysisSchema.extend({ assessments: z.array(accumulatedAssessmentProposal).length(1) });
 
 /** Tooltips are explanatory metadata; malformed entries must not discard product proposals. */
 export function parseDiscoveryAnalysis(raw: unknown): { result: Analysis; omittedConcepts: number } {

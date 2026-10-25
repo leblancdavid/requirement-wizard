@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Project } from "./model.js";
+import { definitionStageLimit } from "./definition-continuation.js";
 
 const text = z.string().trim().min(1).max(4000);
 export const dimensions = ["purpose", "workflows", "rules", "data", "permissions", "dependencies", "failures", "quality", "acceptance"] as const;
@@ -16,14 +17,19 @@ export const checkSchema = z.object({
   status: z.enum(["unknown", "partial", "defined", "needs-review", "not-applicable"]),
   explanation: text, evidenceIDs: z.array(z.string()).max(20),
 });
+// Model responses remain bounded at 20 citations per check. The engine can
+// accumulate one such contribution per exact stage without losing earlier IDs.
+export const accumulatedAssessmentEvidenceLimit = 20 * definitionStageLimit;
+const accumulatedCheckSchema = checkSchema.extend({ evidenceIDs: z.array(z.string()).max(accumulatedAssessmentEvidenceLimit) });
 export const assessmentSchema = z.object({
   epicID: z.string(), confidence: z.enum(["low", "medium", "high"]), explanation: text,
-  checks: z.array(checkSchema).max(9), atRevision: z.number().int().positive(),
+  checks: z.array(accumulatedCheckSchema).max(9), atRevision: z.number().int().positive(),
   answerVersions: z.record(z.string().nullable()).default({}),
   inputBasis: z.object({ format: z.literal(1), key: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
   stagedReview: z.object({ format: z.literal(1), batches: z.number().int().min(1).max(16), policy: z.literal("exact-batches-v1") }).strict().optional(),
 });
-export const assessmentProposal = assessmentSchema.omit({ atRevision: true, answerVersions: true, inputBasis: true, stagedReview: true }).strict();
+export const accumulatedAssessmentProposal = assessmentSchema.omit({ atRevision: true, answerVersions: true, inputBasis: true, stagedReview: true }).strict();
+export const assessmentProposal = accumulatedAssessmentProposal.extend({ checks: z.array(checkSchema).max(9) });
 export const organizationSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("upsert"), epicID: z.string(), title: text, purpose: text, dependencies: z.array(z.string()).max(20) }).strict(),
   z.object({ type: z.literal("move"), recordID: z.string(), epicID: z.string() }).strict(),

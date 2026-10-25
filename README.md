@@ -61,8 +61,11 @@ revision—make it outdated. The dialog also separates discovery blockers from a
 definition gaps. Large areas use resumable exact evidence batches; indivisible
 evidence and stage-limit blockers stay explicitly unfinished. See
 [definition coverage](docs/definition-coverage.md) for bounds and upgrade behavior.
-The fifteen-minute refresh window is shared across areas: a later area can pause
-after a shorter run. Completed stages are retained; Resume continues unfinished work.
+Definition refresh now continues through all selected pending areas until finished
+or paused, with no shared fifteen-minute or ten-area cutoff. Requests consume your
+AI allowance; **Pause assessment** saves completed work. Individual request timeouts,
+evidence/attempt limits and stale-result protection remain. Restart requires explicit
+continuation. Automatic maintenance and coordinated workflow keep separate allowances.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
 Use **Settings → Project settings
 → Automatic maintenance** to opt in to definition updates after relevant decisions change: edits settle for

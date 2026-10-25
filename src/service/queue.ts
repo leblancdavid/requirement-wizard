@@ -17,6 +17,8 @@ import { coverage } from "../core/coverage.js";
 import { definitionAbortReason } from "../core/definition-interruption.js";
 import { maintenanceBasis, maintenanceLimits, observeMaintenance, type MaintenanceView } from "../core/maintenance.js";
 import { WorkflowBudgetPause } from "../core/workflow.js";
+import { canRecoverDefinition } from "../core/definition-recovery.js";
+import { definitionInputKey } from "../core/definition-identity.js";
 
 type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" };
 
@@ -218,7 +220,7 @@ export class DiscoveryQueue {
       this.active.set(id, { controller, promise, kind: "definition" });
     } catch (error) { report(safeMessage(error instanceof Error ? error.message : error)); this.maintenanceArmed.delete(id); }
   }
-  refreshDefinition(id: string, revision: number, focusEpicID?: string) {
+  refreshDefinition(id: string, revision: number, focusEpicID?: string, recoveryJobID?: string) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
@@ -226,6 +228,11 @@ export class DiscoveryQueue {
     const project = this.service.store.get(id);
     if (project.revision !== revision) throw new Error("Project changed. Refresh it before retrying.");
     if (focusEpicID && !project.epics.some((e) => e.id === focusEpicID && !e.archived)) throw new Error("Focused epic does not exist.");
+    if (recoveryJobID) {
+      if (!focusEpicID) throw new Error("Recovery requires one selected area.");
+      const latest = this.service.store.definitionHistory(id, focusEpicID, definitionInputKey(project, focusEpicID))[0];
+      if (!latest || latest.id !== recoveryJobID || !canRecoverDefinition(latest)) throw new Error("This assessment is no longer eligible for recovery. Refresh before continuing.");
+    }
     const resolved = resolvedReviewAttempts(project, this.service.store.submissions(id));
     if (this.service.store.submissions(id).some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status))) throw new OperationConflictError("Process saved responses before refreshing definition coverage so the assessment includes your latest decisions.");
     const areas = coverage(project).epics.filter((e) => (!focusEpicID || e.epicID === focusEpicID) && (e.epicID !== "inbox" ||
@@ -234,10 +241,6 @@ export class DiscoveryQueue {
     const controller = new AbortController();
     const progress: string[] = []; this.messages.set(id, progress); this.refinementRuns.delete(id);
     const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
-    const timer = setTimeout(() => controller.abort(definitionAbortReason("refresh-time-limit")), 900_000);
-    // Initial estimates are deliberately conservative, not promised finish times.
-    // Completed requests refine them during this action only.
-    const definitionSchedule = { deadline: Date.now() + 900_000, collectMs: 90000, verifyMs: 20000 };
     const promise = Promise.resolve().then(async () => {
       let refreshed = 0, blocked = 0, reused = 0;
       for (const [areaIndex, area] of areas.entries()) {
@@ -245,18 +248,19 @@ export class DiscoveryQueue {
         const snapshot = this.service.store.get(id);
         const current = coverage(snapshot).epics.find((e) => e.epicID === area.epicID);
         if (current?.assessed && !current.stale) { reused++; continue; }
-        if (refreshed + blocked >= 10) { report("Paused: ten-area assessment action limit reached. Refresh definition coverage again to continue unfinished areas; current assessments are reused."); break; }
         const areaTitle = snapshot.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID;
         const reportArea = (message: string) => report(`Definition coverage · area ${areaIndex + 1} of ${areas.length} · ${areaTitle}\n${message}`);
         reportArea(`Assessing definition: ${areaTitle}. Complete current area only; no specification changes or gap discovery. ${reused} current areas reused without calls.`);
-        const job = await this.service.analyze(id, snapshot.revision, { definitionEpicID: area.epicID, signal: controller.signal, onProgress: reportArea, definitionSchedule });
+        const job = await this.service.analyze(id, snapshot.revision, { definitionEpicID: area.epicID,
+          ...(recoveryJobID ? { definitionRecoveryJobID: recoveryJobID, definitionLimits: { requests: 1, durationMs: 300000 } } : { continuousDefinition: true }),
+          signal: controller.signal, onProgress: reportArea });
         if (job.status === "completed") refreshed++;
         else { blocked++; report(`Definition assessment unfinished: ${job.diagnostic ?? job.status}`); }
-        if (["cancelled", "stale", "interrupted"].includes(job.status)) break;
+        if (["cancelled", "stale", "interrupted"].includes(job.status) || job.status === "failed" && !job.definitionBlock) break;
       }
       report(`Definition refresh: ${refreshed} areas refreshed · ${reused} current assessments reused · ${blocked} unfinished. Unassessed or outdated areas remain unknown; this does not certify readiness.`);
     }).catch((error) => report(controller.signal.aborted ? "Definition refresh interrupted; completed area assessments are saved. Refresh explicitly to continue without repeating current areas." : safeMessage(error instanceof Error ? error.message : error)))
-      .finally(() => { clearTimeout(timer); this.active.delete(id); });
+      .finally(() => { this.active.delete(id); });
     this.active.set(id, { controller, promise, kind: "definition" });
   }
   scan(id: string, revision: number, resumeJobID?: string) {

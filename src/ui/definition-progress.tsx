@@ -24,6 +24,7 @@ export function DefinitionProgress({ job, project }: { job: Job; project: Projec
   return <section aria-label="Definition assessment progress">
     <p>Latest area assessment: {project.epics.find((e) => e.id === task.epicID)?.title ?? task.epicID} · {label}.</p>
     {work && <p>{work.receipts.length} of {steps.length} review steps saved. {job.status === "completed" ? "The review is finished. This is an estimate of how clearly the area is defined, not a guarantee that nothing is missing." : job.definitionBlock ? "The review needs attention before it can finish. Your progress score has not been updated with partial results." : "The progress score updates when the whole review finishes. Use Refresh definition coverage to continue; completed work is kept."}</p>}
+    {work?.recovery && <p>{work.recovery.grants.filter((grant) => grant.spent).length} explicitly authorized recovery requests spent. Original attempts and completed checks are retained; Refresh does not grant more recovery requests.</p>}
     {job.status === "running" && step && <p role="status">{step.phase === "collect" ? "Reading your project information" : "Checking the findings against your project information"}. Larger reviews may need extra steps, so the step count can change.</p>}
     <LogLink target={job.id} />
     {included.size > 0 && <LazyDetails summary={<>Evidence in this request · {requirements.length} requirements · {questions.length} questions · {sources.length} sources · {research.length} research records</>}>{() => <>

@@ -1,12 +1,13 @@
 import type { Job, Project } from "../core/model.js";
 import { StaleRevisionError } from "../core/model.js";
 import { acceptDefinitionStage, completedDefinitionAssessment, definitionBlockedSchema, definitionPhase, definitionStageContext,
-  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, DefinitionEvidenceBlocked, definitionSteps, splitDefinitionStage } from "../core/definition-stages.js";
+  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, upgradeDefinitionCitationPolicy, DefinitionEvidenceBlocked, definitionSteps, splitDefinitionStage } from "../core/definition-stages.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
+import { canRecoverDefinition } from "../core/definition-recovery.js";
 
 /** Ephemeral estimates shared across one explicit refresh, never a new allowance. */
 export type DefinitionSchedule = { deadline: number; collectMs: number; verifyMs: number };
@@ -16,8 +17,9 @@ export function definitionRequestReserve(schedule: DefinitionSchedule, phase: "c
 
 export async function runDefinitionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job,
   epicID: string, options: { signal: AbortSignal; onProgress?: (message: string) => void; measurement?: DiscoveryMeasurement;
-    limits?: { requests: number; durationMs: number }; requestTimeoutMs?: number; schedule?: DefinitionSchedule }): Promise<Job> {
-  const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
+    limits?: { requests: number; durationMs: number }; requestTimeoutMs?: number; schedule?: DefinitionSchedule; continuous?: boolean; recoveryJobID?: string }): Promise<Job> {
+  const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = options.continuous ? Infinity : Date.now() + limits.durationMs;
+  const lease = () => options.continuous ? { leaseUntil: Date.now() + 360_000 } : {};
   const prior = store.definitionHistory(project.id, epicID, definitionInputKey(project, epicID)).find((j) => j.id !== job.id);
   const preparationStarted = Date.now();
   options.onProgress?.(`Preparing definition evidence for ${project.epics.find((e) => e.id === epicID)?.title ?? epicID} · ${prior?.definitionWork?.receipts.length ?? 0} saved stages available. Gathering exact area, project-wide and declared dependency evidence; no model request is running yet.`);
@@ -27,6 +29,12 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   let draft = replayDefinitionStages(project, work), calls = 0;
   upgradeDefinitionDraftPolicy(work);
   upgradeDefinitionResponsePolicy(work);
+  upgradeDefinitionCitationPolicy(work);
+  if (options.recoveryJobID) {
+    if (prior?.id !== options.recoveryJobID || !canRecoverDefinition(prior)) throw new Error("This assessment is no longer eligible for recovery. Refresh before continuing.");
+    work.recovery ??= { format: 1, grants: [] };
+    work.recovery.grants.push({ stage: work.receipts.length, sourceJobID: prior.id, jobID: job.id, spent: false });
+  }
   // Completed receipts may have been checkpointed just before a publication crash.
   const currentContext = () => {
     if (definitionPhase(work) !== "complete") return definitionStageContext(project, work, draft);
@@ -60,8 +68,9 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
     if (work.blocked) return store.blockDefinition(job.id, work.blocked);
     if (definitionPhase(work) === "complete") return store.finishJob(job.id, completedDefinitionAssessment(project, work));
-    if (calls >= limits.requests || Date.now() >= deadline) return store.pauseDefinition(job.id, calls >= limits.requests ? "request-limit" : "time-limit", limits.durationMs);
-    if (work.attempts >= 3) return store.blockDefinition(job.id, "This exact assessment stage exhausted three attempts. Completed evidence checks are retained; unchanged refresh does not grant new calls. Review missing evidence or changed decisions before retrying.");
+    if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline)) return store.pauseDefinition(job.id, calls >= limits.requests ? "request-limit" : "time-limit", limits.durationMs);
+    const recovery = work.recovery?.grants.find((g) => g.stage === work.receipts.length);
+    if (work.attempts >= 3 && (!recovery || recovery.spent || recovery.jobID !== job.id)) return store.blockDefinition(job.id, "This exact assessment stage exhausted its request allowance. Completed evidence checks are retained; unchanged refresh does not grant new calls. Use explicit recovery if offered, or review the original failure details.");
     const steps = definitionSteps(work), step = steps[work.receipts.length]!;
     if (options.schedule && options.schedule.deadline - Date.now() < definitionRequestReserve(options.schedule, step.phase, options.requestTimeoutMs)) {
       options.onProgress?.("Pausing before the next request: estimated request time exceeds the remaining shared refresh window. Completed stages retained; no new attempt spent.");
@@ -71,8 +80,10 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     const evidence = `${project.requirements.filter((r) => included.has(r.id)).length} requirements, ${project.questions.filter((r) => included.has(r.id)).length} questions, ${project.sources.filter((r) => included.has(r.id)).length} source records and ${project.research.filter((r) => included.has(r.id)).length} research records`;
     const requestLabel = `${project.epics.find((e) => e.id === epicID)?.title ?? epicID} · ${step.phase === "collect" ? "reading exact evidence" : "checking findings against evidence"} · batch ${step.batch} / ${work.batches.length} · ${work.receipts.length} / ${steps.length} stages saved`;
     options.onProgress?.(`${requestLabel}\nProcessing ${evidence} · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Coverage remains unpublished until all checks finish. Exact evidence is distributed across batches, never truncated.`);
-    work.attempts++; calls++;
-    store.checkpointDefinition(job.id, work, context.manifest);
+    if (work.attempts >= 3) recovery!.spent = true;
+    else work.attempts++;
+    calls++;
+    store.checkpointDefinition(job.id, work, context.manifest, lease());
     const requestMs = options.requestTimeoutMs ?? 300000;
     const remainingMs = deadline - Date.now(), areaTimeoutFirst = remainingMs <= requestMs;
     const requestTimeout = AbortSignal.timeout(Math.max(1, Math.min(requestMs, remainingMs)));

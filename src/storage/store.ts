@@ -23,7 +23,7 @@ import { definitionTaskSchema, validateDefinitionAssessment } from "../core/defi
 import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
 import { applySpecificationUpdates } from "../core/specification.js";
-import { specificationUpdatesSchema } from "../core/model.js";
+import { specificationUpdatesSchema, stagedDefinitionAnalysisSchema } from "../core/model.js";
 import { wordingKey } from "../core/similarity.js";
 import { refinementIsStale, validateResolutionEvidence } from "../core/resolution.js";
 import { planIncrementalResolution } from "../core/incremental-resolution.js";
@@ -1382,9 +1382,11 @@ export class ProjectStore {
   }
 
   finishJob(id: string, raw: unknown): Job {
-    const { result, omittedConcepts } = parseDiscoveryAnalysis(raw);
     return this.db.transaction(() => {
       const job = this.getJob(id);
+      const { result, omittedConcepts } = job.definitionWork
+        ? { result: stagedDefinitionAnalysisSchema.parse(raw), omittedConcepts: 0 }
+        : parseDiscoveryAnalysis(raw);
       if (job.helpRequest || job.kind === "scan") throw new Error("Question help and scans cannot apply ordinary discovery proposals.");
       if (job.status !== "running") throw new Error("Job is no longer running; result was not applied.");
       if ((job.leaseUntil ?? 0) <= Date.now()) {
@@ -1593,12 +1595,16 @@ export class ProjectStore {
       AND json_extract(payload, '$.definitionWork.inputKey') = ? ORDER BY rowid DESC LIMIT 20`).all(projectID, epicID, inputKey) as { payload: string }[]).map((row) => readStoredJob(row.payload));
   }
 
-  checkpointDefinition(id: string, input: DefinitionWork, context: NonNullable<Job["context"]>) {
+  checkpointDefinition(id: string, input: DefinitionWork, context: NonNullable<Job["context"]>, options: { leaseUntil?: number } = {}) {
     this.db.transaction(() => {
       const job = this.getJob(id), work = definitionWorkSchema.parse(input);
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Definition worker is no longer live; saved work retained.");
       if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
       if (context.definitionAssessment?.staged?.planKey !== work.planKey) throw new Error("Definition checkpoint requires its saved exact plan.");
+      if (options.leaseUntil !== undefined) {
+        if (!Number.isSafeInteger(options.leaseUntil) || options.leaseUntil <= Date.now()) throw new Error("Definition lease renewal must have a future deadline.");
+        job.leaseUntil = Math.max(job.leaseUntil!, options.leaseUntil);
+      }
       job.definitionWork = work; job.context = context; this.saveJob(job);
     }).immediate();
   }

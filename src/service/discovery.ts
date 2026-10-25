@@ -12,6 +12,7 @@ import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
 import { epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
 import { definitionContext } from "../core/definition-assessment.js";
+import { canRecoverDefinition } from "../core/definition-recovery.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { readinessQuestionContext, readinessQuestionTaskSchema, type ReadinessQuestionTask } from "../core/readiness-questions.js";
 import { definitionAbortCause } from "../core/definition-interruption.js";
@@ -224,7 +225,7 @@ export class DiscoveryService {
 
   async analyze(projectID: string, expectedRevision: number, options: {
     signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
-    definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule;
+    definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule; continuousDefinition?: boolean; definitionRecoveryJobID?: string;
     readinessQuestions?: ReadinessQuestionTask;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
@@ -238,6 +239,19 @@ export class DiscoveryService {
         throw new Error("Readiness clarification requires a separate questions-only task.");
     }
     if (options.definitionEpicID !== undefined) z.string().min(1).max(200).parse(options.definitionEpicID);
+    if (options.definitionRecoveryJobID !== undefined) {
+      z.string().uuid().parse(options.definitionRecoveryJobID);
+      if (!options.definitionEpicID || options.continuousDefinition || options.definitionSchedule || this.navigation.workflow
+        || options.definitionLimits?.requests !== 1) throw new Error("Recovery requires a separate manual one-request definition action.");
+      const snapshot = this.store.get(projectID);
+      if (snapshot.revision !== expectedRevision) throw new StaleRevisionError();
+      const latest = this.store.definitionHistory(projectID, options.definitionEpicID, definitionInputKey(snapshot, options.definitionEpicID))[0];
+      if (!latest || latest.id !== options.definitionRecoveryJobID || !canRecoverDefinition(latest)) throw new Error("This assessment is no longer eligible for recovery. Refresh before continuing.");
+    }
+    if (options.continuousDefinition !== undefined) z.boolean().parse(options.continuousDefinition);
+    if (options.continuousDefinition && (!options.definitionEpicID || options.definitionLimits || options.definitionSchedule || this.navigation.workflow)) {
+      throw new Error("Continuous definition refresh requires a separate manual assessment, not a bounded maintenance or coordinated task.");
+    }
     if (options.definitionSchedule) {
       if (!options.definitionEpicID) throw new Error("Definition scheduling requires an assessment-only task.");
       z.object({ deadline: z.number().finite().positive(), collectMs: z.number().finite().nonnegative(),
@@ -283,9 +297,9 @@ export class DiscoveryService {
     const inferenceAdapter: DiscoveryAdapter = this.navigation.workflow ? { ...this.adapter, analyze: (snapshot, request) => {
       this.navigation.workflow!.beforeRequest(job.id); return this.adapter.analyze(snapshot, request);
     } } : this.adapter;
-    // Ordinary calls retain five minutes. Staged packages may continue within a
-    // fifteen-minute action, including preparation, with a one-minute lease margin.
-    this.store.claimJob(job.id, Date.now() + (options.gapMode || options.definitionEpicID ? stagedRunLeaseMs : 360_000));
+    // Continuous manual assessments renew a finite lease at each staged dispatch.
+    // Ordinary requests retain five minutes; bounded workflows keep their own lease.
+    this.store.claimJob(job.id, Date.now() + (options.continuousDefinition ? 360_000 : options.gapMode || options.definitionEpicID ? stagedRunLeaseMs : 360_000));
     const measurement = !options.helpRequest && !options.refinementOnly
       ? new DiscoveryMeasurement((value) => this.store.saveDiscoveryMetrics(job.id, value)) : undefined;
     const completeMeasurement = (result: Job): Job => {
@@ -308,18 +322,20 @@ export class DiscoveryService {
       if (options.definitionEpicID) {
         options.onProgress?.(`Preparing definition evidence for ${project.epics.find((e) => e.id === options.definitionEpicID)?.title ?? options.definitionEpicID}\nGathering exact current area records and linked project/dependency evidence. Local preparation only; no model request is running yet.`);
         if (this.store.definitionHistory(project.id, options.definitionEpicID, definitionInputKey(project, options.definitionEpicID)).length) {
-          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
+          clearTimeout(timer);
+          if (!options.continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition, recoveryJobID: options.definitionRecoveryJobID }));
         }
         try { definition = definitionContext(project, options.definitionEpicID); }
         catch (error) {
           if (!(error instanceof ContextBudgetError)) throw error;
           this.store.attachContext(job.id, error.manifest);
           options.onProgress?.("The complete area exceeds one request. Preparing exact evidence batches; no assessment has been published and no evidence will be truncated.");
-          clearTimeout(timer); timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
+          clearTimeout(timer);
+          if (!options.continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition }));
         }
         if (options.definitionSchedule && options.definitionSchedule.deadline - Date.now() < definitionRequestReserve(options.definitionSchedule, "collect")) {
           this.store.attachContext(job.id, definition!.manifest);

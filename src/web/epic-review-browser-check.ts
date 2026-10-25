@@ -377,7 +377,7 @@ try {
   await page.reload(); await page.locator(".progress-trigger").click();
   await expect(batchProgress).toContainText("1 of"); assert.equal(largeAssessmentCalls, 2, "Reload does not repeat a saved batch or start another model request");
   await page.getByRole("button", { name: "Close progress", exact: true }).click();
-  await page.locator(".queue-header").getByRole("button", { name: "Stop assessment", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Pause assessment", exact: true }).click();
   await expect.poll(() => store.jobs(large.id).at(-1)!.status).toBe("cancelled");
   const stoppedAssessment = structuredClone(store.jobs(large.id).at(-1)!);
   assert.equal(stoppedAssessment.definitionInterruption!.cause, "user-stop");

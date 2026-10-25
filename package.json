@@ -38,6 +38,8 @@
     "test:browser:workflow": "npm run build:ui && tsx src/web/workflow-browser-check.ts",
     "test:browser:workspace": "npm run build:ui && tsx src/web/workspace-layout-browser-check.ts",
     "test:browser:definition-history": "npm run build:ui && tsx src/web/definition-history-browser-check.ts",
+    "test:browser:definition-recovery": "npm run build:ui && tsx src/web/definition-recovery-browser-check.ts",
+    "test:browser:definition-continuous": "npm run build:ui && tsx src/web/definition-continuous-browser-check.ts",
     "test:browser:all": "npm run build:ui && tsx src/web/browser-reliability-check.ts && tsx src/web/browser-check.ts && tsx src/web/portable-browser-check.ts && tsx src/web/gap-retrieval-browser-check.ts && tsx src/web/gap-navigation-browser-check.ts && tsx src/web/retrieval-pilot-browser-check.ts && tsx src/web/epic-review-browser-check.ts && tsx src/web/specification-browser-check.ts && tsx src/web/maintenance-browser-check.ts && tsx src/web/workflow-browser-check.ts"
   },
   "dependencies": {

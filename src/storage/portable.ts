@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { analysisSchema, scanAnalysisSchema, projectSchema, modelSelection, researchEvidenceSchema, reviewFingerprint, type Project, type Job, type Submission, type ModelSelection } from "../core/model.js";
+import { analysisSchema, stagedDefinitionAnalysisSchema, scanAnalysisSchema, projectSchema, modelSelection, researchEvidenceSchema, reviewFingerprint, type Project, type Job, type Submission, type ModelSelection } from "../core/model.js";
 import { emptyExecution, executionConfigSchema, assessmentOutputSchema, type ExecutionState } from "../core/execution.js";
 import { executionSchemaVersion, canonicalJSON } from "../core/assessment-identity.js";
 import { implementationPlanningSchema } from "../core/implementation-planning.js";
@@ -210,7 +210,7 @@ const executionSchema = z.object({ schemaVersion: z.literal(executionSchemaVersi
 }).strict();
 const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string().min(1), expectedRevision: z.number().int().positive(),
   status: z.enum(["completed", "failed", "cancelled", "interrupted", "stale"]), model: modelSelection.omit({ connectionID: true }).strict(), leaseUntil: z.null(),
-  kind: z.literal("scan").optional(), result: analysisSchema.optional(), researchEvidence: z.array(researchEvidenceSchema).optional(),
+  kind: z.literal("scan").optional(), result: z.union([analysisSchema, stagedDefinitionAnalysisSchema]).optional(), researchEvidence: z.array(researchEvidenceSchema).optional(),
   portableReceipt: z.literal(1).optional(),
   context: z.object({ revision: z.number().int().positive(), focusEpicID: z.string().nullable(), characters: z.number().nonnegative(), budget: z.number().nonnegative(),
     includedIDs: z.array(z.string()), omittedIDs: z.array(z.string()), definitionAssessment: definitionTaskSchema.optional(),
@@ -226,7 +226,8 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
   scanProgress: z.object({ completed: z.number().int().nonnegative(), total: z.number().int().nonnegative(), capturedAt: z.string(), resumable: z.boolean() }).strict().optional(),
 }).strict().refine((job) => !job.definitionWork || job.context?.definitionAssessment?.staged?.planKey === job.definitionWork.planKey
   && job.context.definitionAssessment.epicID === job.definitionWork.epicID && job.context.definitionAssessment.inputKey === job.definitionWork.inputKey,
-"Definition continuation must retain its original exact staged task identity.");
+"Definition continuation must retain its original exact staged task identity.").refine((job) => !job.result || !!job.definitionWork || analysisSchema.safeParse(job.result).success,
+"Only staged definition results can contain accumulated assessment citations.");
 
 export type PortableProject = { project: Project; execution: ExecutionState; continuation: Continuation; snapshots: () => Generator<Project> };
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {

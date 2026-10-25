@@ -1,5 +1,165 @@
 # Data migrations and upgrade compatibility
 
+## Explicit exhausted-definition-stage recovery (2026-10-25)
+
+Source: saved `exact-batches-v1` work, including exhausted legacy UUID-citation
+failures. Target: the same work/SQLite/portable formats with optional versioned
+`recovery: { format: 1, grants: [{ stage, sourceJobID, jobID, spent }] }`.
+No startup migration, revision increment, evidence-fingerprint change or reassessment
+of completed work is needed. Older records remain readable unchanged. Older apps
+reject the new strict work field; do not downgrade after authorizing recovery.
+Unknown recovery formats fail closed without rewriting saved data.
+
+The authenticated manual action requires the current project revision, exact latest
+matching-input job, selected area and explicit additional-request consent. It creates
+a new job rather than changing the historical failed job. Original partitions,
+receipt/context hashes, raw responses, model provenance and three spent ordinary
+attempts remain intact. Replay precedes enabling the current citation-label protocol.
+A versioned append-only grant records one additional request for this stage; its
+spent flag is checkpointed with the live lease before dispatch. Receipt `attempts`
+continues to count ordinary attempts; the separate recovery ledger records the
+additional allowance. Portable continuation preserves both.
+
+One recovery action runs at most one request, then pauses if further stages remain.
+Ordinary Refresh may continue subsequent stages but never grants recovery allowance.
+Failure, timeout, cancellation or a crash after dispatch do not restore the grant.
+A crash after grant checkpoint but before dispatch conservatively retains an
+unspent authorization tied to that original job; a new worker does not dispatch it
+or grant another. There is at most one grant per stage. Explicit model evidence
+blocks, complete tasks, stale inputs and previously granted stages are ineligible.
+Context/evidence bounds and complete-ledger publication checks remain unchanged.
+Recovery is offered for exhausted requests generally, not proof that a citation
+upgrade will fix the error. No original rejected response is reconstructed.
+
+Upgrade tests cover a legacy failed checkpoint with an accepted stage, unchanged
+history and accepted receipt bytes, repeated SQLite reopen, portable replay, labeled
+recovery, subsequent completion, failure/cancellation spending and refusal to grant
+again. Browser checks cover authentication/origin/revision/consent, cancellation,
+reload without calls, one-request dispatch and mobile. No personal-project mutation
+or live model request is part of this upgrade.
+
+## Short staged-definition citation labels (2026-10-24)
+
+Source: `exact-batches-v1` work without `citationPolicy`. Target: the same work
+format/SQLite schema/portable format, with optional
+`citationPolicy: { format: 1, fromStage }`. This is a versioned request/receipt
+interpretation boundary, not a change to optimistic revision counters, definition
+input freshness or the saved original partition/plan key.
+
+New staged reviews enable labels from stage zero. Explicit continuation first
+replays the old receipts unchanged, then enables labels at the next unfinished stage.
+Earlier contexts/prompts and raw responses retain their original bytes and hashes.
+Previously dispatched but rejected attempts stay spent, including when the unfinished
+request gains labels; the original failed job is not rewritten. Complete legacy jobs
+are not upgraded or reassessed. Startup alone never starts calls or rewrites work.
+
+Each request annotates exact evidence records with `citationLabel` and supplies a
+`definitionStage.citationLabels` map (`E1`, `E2`, … to canonical IDs). Collection
+allows the current exact batch plus previously cited draft evidence; verification
+allows only its current exact batch. Labels are local to the request and may change
+at the next step/subdivision. Raw responses/receipts retain labels; deterministic
+replay resolves them before existing validation and stores canonical assessment IDs.
+Exact allowed canonical IDs remain compatible with existing adapters, but numeric
+indexes, fabricated labels, partial UUIDs and guessed combinations are not repaired.
+There is no fuzzy matching or removal of invalid citations. Individual response
+citation limits, complete-ledger publication and evidence allowlists are unchanged.
+
+Failed response validation creates no receipt/publication; spent-attempt checkpoints
+remain durable. Failed publication retains all accepted raw receipts for explicit
+recovery. Label overhead participates in normal bounded-context planning and exact
+subdivision; it cannot justify truncating evidence. Portable export/import preserves
+the new policy, raw labels and old/new contexts. Unknown policy formats fail closed
+without overwriting saved rows. Older apps reject the new work field, so do not
+downgrade after creating labeled checkpoints; keep backups/current app available.
+
+Tests cover label-to-record ownership, collection/update/verification resolution,
+unknown labels and spliced UUID rejection, raw response bounds, old receipt/context
+preservation, attempts already spent before upgrade, repeated SQLite reopen, portable
+replay, future-format refusal and canonical-ID-only publication. No personal-project
+retry or live model inference is part of this upgrade.
+
+## Definition citation failure details (2026-10-24)
+
+Diagnostic-only extension: new citation failures distinguish missing records from
+existing records outside the allowed detailed evidence, identify check/dimension
+and citation positions, and include phase/batch for staged requests. At most four
+examples are shown with total counts. UUID citations are displayed; other model
+strings are represented by a short SHA-256 fingerprint to avoid recording arbitrary
+private text or credentials. Existing message redaction/size bounds still apply.
+
+No schema, prompt, context, freshness or receipt identity changes; no migration or
+data rewrite is needed. Existing diagnostics remain unchanged because rejected
+responses were not retained. Completed receipts and spent attempts are preserved;
+startup does not infer or retry. Validation remains fail-closed and no assessment is
+published on failure. Tests cover classification, bounded/private malformed values,
+collection/verification stage details, unchanged attempts/receipts and SQLite reopen.
+
+## Accumulated definition citations (2026-10-24)
+
+Source/target: unchanged SQLite schema, portable format 1 and `exact-batches-v1`
+ledgers. Individual model responses/receipts still allow at most 20 evidence IDs
+per check. Engine-built verification unions and stored assessments now allow up to
+1,280 (20 times the existing 64-stage limit), preserving every distinct citation.
+Only staged definition job results use the expanded publication schema; publication
+still reconstructs and compares the complete exact ledger before applying anything.
+Ordinary model analysis, compact collection/update and raw verdict schemas retain
+their original limits and evidence allowlists.
+
+No SQL rewrite, identity/fingerprint change, prompt change or new protocol version
+is needed. Old checkpoints, context hashes, receipt bytes, spent attempts and current
+completed work remain valid. Reopening does not start inference. Explicit resume
+reconstructs the seven saved stages in the reported failure and spends the remaining
+third attempt only on final verification; rejected historical model responses were
+not checkpointed and cannot be recovered. Failed publication remains transactional.
+No attempt reset, data reset or repeat of completed model calls is required.
+
+Portable job results and project assessments accept the accumulated representation;
+expanded job results without their definition ledger are rejected. Older readers
+with the 20-ID storage restriction cannot read new expanded assessments safely;
+do not downgrade after saving these results. Unsupported future formats retain their
+existing fail-closed behavior. Tests cover SQLite reopen before/after recovery,
+unchanged historical receipts, exact final request bytes, third-attempt accounting,
+portable export/decode/replay, further verification after accumulation, raw-response
+limits, invalid citations, over-bound storage and forged publication rollback.
+The user's actual project has not been resumed or modified as part of verification.
+
+## Continuous manual definition refresh (2026-10-24)
+
+Source/target: the same SQLite/project schema, `exact-batches-v1` definition ledgers,
+receipt/input/plan identities, optimistic revisions and interruption format 1.
+Manual refresh/assessment resume now continues through its selected scope without
+the old shared fifteen-minute, ten-area or 32-request staged-action budget. This is
+an explicit-operation workflow change, not an automatic data rewrite, new setting,
+evidence/freshness change or permission to reset attempts. Automatic maintenance
+and coordinated workflow retain their existing preferences, consent and budgets.
+
+Completed saved work remains current under the same input basis. Explicit manual
+continuation replay-validates older deadline/reserve/request-limit checkpoints,
+retains their original partitions, context hashes, receipts, provenance and spent
+attempts, then proceeds from the unfinished step. Historical jobs/warnings are not
+rewritten. Restart never automatically starts calls. Genuinely changed evidence
+remains stale and unsupported future checkpoint formats still fail closed.
+
+Active continuous jobs use the existing `leaseUntil` field with a finite six-minute
+lease, atomically renewed with each request checkpoint. Renewal requires the same
+running unexpired job and exact current revision/plan; it cannot shorten a lease,
+resurrect an expired/stale worker or overwrite another worker's evidence. Failed
+writes roll back renewal and checkpoint together; a crash retains the previous
+durable checkpoint and finite lease. Earlier jobs remain the historical backup;
+existing startup/expired-job recovery continues to require explicit resume.
+
+Metadata diagnostics remain `format: 1`; their compatible request-array bound grows
+from 32 to 64 (the existing exact-stage maximum). Existing measurements are accepted
+unchanged, not regenerated. A new job with 33–64 measurements cannot be reopened by
+older app versions enforcing the old bound; those readers fail validation rather
+than safely resuming it, so do not downgrade after creating such a job. The 20-run/
+256,000-byte export cap, allowlisted metadata and no-prose privacy policy remain.
+No eager SQL migration, data reset, replayed completed model calls or manufactured
+historical timings are required. Repeated SQLite reopen/export and rejection of
+over-bound/future formats preserve the saved rows. See
+[continuous refresh](definition-coverage.md#continuous-manual-refresh-by-default-2026-10-24)
+for checks actually run and live-verification gaps.
+
 ## Definition assessment history visibility (2026-10-24)
 
 Source and target persisted formats are identical. This adds a read-only SQL/API/UI

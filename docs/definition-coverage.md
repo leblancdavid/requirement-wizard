@@ -16,15 +16,108 @@ for per-area refresh actions, explanations and linked evidence. The refresh:
 - Reuses current assessments without model calls. Unassessed/outdated areas get a
   bounded assessment covering all nine dimensions; large areas use exact batches. Missing evidence
   remains unknown; proposals/delegation/research do not establish human decisions.
-- Runs at most ten attempted areas/fifteen minutes per action, using ordinary
-  five-minute per-request bounds. Stop retains completed areas. Explicit refresh
-  continues unfinished areas; startup/reload never initiates calls.
+- Continues through all selected pending areas until finished or paused, without a
+  shared fifteen-minute, ten-area or per-area action-request cutoff. Each request
+  still has a five-minute timeout. Pause retains completed checks; explicit refresh
+  continues unfinished work. Startup/reload never initiates calls.
 - When a complete area exceeds 96k, partitions the complete prepared evidence set
   into exact-record batches, never a sample or a truncated human constraint. Every
   batch is read to accumulate a bounded nine-dimension draft, then every batch
   checks that draft before publication. Verification can downgrade findings or raise
   importance, never add positive coverage. Indispensable unresolved relationships
   block rather than being guessed. See the staged protocol below.
+
+### Recover a review that exhausted its attempts (2026-10-25)
+
+Restart the updated backend, then open **Overall progress**. Under **Reviews that
+reached the retry limit**, choose **Recover assessment: [area]**. The confirmation
+explains AI usage and authorizes exactly **one additional request**, not a new
+three-attempt budget. Cancel and reload start no calls. Recovery uses the current
+citation protocol and retains completed checks, original attempts and failure history;
+it does not change requirements or bypass evidence validation.
+
+After a successful recovery step, use **Refresh definition coverage** to finish the
+remaining steps. Only one recovery grant is available per exhausted step; if it
+fails, ordinary Refresh cannot repeat it. Earlier errors may concern AI-generated
+references rather than missing product decisions. Genuine evidence/context blockers
+remain blockers. The action is shown for eligible latest jobs available in the recent
+workspace job list; older jobs outside that list are not surfaced by this control.
+See [compatibility and crash handling](migrations.md#explicit-exhausted-definition-stage-recovery-2026-10-25).
+
+Verification: type check, `npm test` (184 pretests and 652 main tests), final focused
+staged tests (50, including an additional pre-dispatch crash/future-ledger check),
+UI build and focused recovery browser checks passed. Aggregate browser checks passed
+workspace layout and model selection, then stopped at the existing missing
+**Project map** tab assertion in `browser-check.ts:706`; later runners did not run.
+Existing bundle-size warnings remain. No live inference or personal-project writes
+were made; successful recovery of the reported project is not yet verified.
+
+### Accumulated verification citations (2026-10-24)
+
+Fixed an app-side failure where valid verification responses merged more than 20
+distinct citations into a check, then failed the model-response limit on the merged
+result. Each model response remains capped at 20 citations per check; engine-built
+results and stored assessments allow up to 1,280, retaining evidence rather than
+truncating it. All exact stages and reference checks still precede publication.
+
+After restarting the updated backend, explicitly resume/refresh the assessment.
+Compatible saved stages are reused and spent attempts remain spent. A regression
+reproduces four batches, seven saved stages and two spent attempts: after SQLite
+reopen, only final verification runs, is recorded as attempt three, and publishes
+the merged citations. No personal-project recovery or live model call has been run.
+See [compatibility details](migrations.md#accumulated-definition-citations-2026-10-24).
+
+Verification: type check, all 177 pretests and 652 main tests, UI build, focused
+continuous-refresh/history browser checks and `git diff --check` passed. The broader
+browser suite was not rerun for this schema fix; its previously reported stale
+**Project map** assertions remain unresolved. Existing bundle-size warnings remain.
+
+### Citation failure details (2026-10-24)
+
+New invalid-citation failures name the check/dimension and citation position,
+distinguish a missing record from an existing record outside allowed detailed
+evidence, and identify collection/verification phase and batch for staged reviews.
+Counts cover all rejected citations; at most four examples are shown. UUIDs are
+shown verbatim; non-UUID model values use a short SHA-256 fingerprint so arbitrary
+private response text is not copied into errors. These details appear through the
+existing Failure details/task diagnostic views after restarting the updated backend.
+Older failures cannot be expanded retrospectively: rejected responses were not saved.
+No automatic retries, extra attempts or broader citation authority are introduced.
+
+Verification: type check, 179 pretests, 652 main tests and diff whitespace check
+passed. Tests exercise saved first-batch failures through SQLite reopen, verification
+scope errors, bounded/private malformed values and preservation of decisions,
+receipts and spent attempts. No live calls or personal-project retries were made;
+browser checks were not rerun for this backend-only diagnostic change.
+
+### Short citation labels in staged reviews (2026-10-24)
+
+Staged definition requests now give each allowed evidence record a short label
+(`E1`, `E2`, …), attached to the exact record and listed in the request's citation
+map. Models are instructed to use these labels instead of copying long UUIDs,
+reducing opportunities to splice unrelated IDs. Labels are request-local, not new
+project record identities. The app resolves them to exact IDs before validation;
+unknown labels or invented IDs fail, never fuzzy-match or silently drop evidence.
+Existing adapters may still return exact allowed canonical IDs. Small single-context
+assessments keep their existing protocol.
+
+Previously saved stages retain their original response/context bytes. Explicit
+resume enables labels only at the unfinished stage and retains spent attempts—even
+when the rejected request used the old UUID protocol. Raw labeled responses remain
+in receipts; saved assessment evidence and linked UI records always use canonical
+IDs. No extra model calls, automatic retry or reset of exhausted attempts is granted.
+The protocol reduces copying risk, not a guarantee of valid model output. See
+[upgrade/recovery details](migrations.md#short-staged-definition-citation-labels-2026-10-24).
+
+Verification: type check, all 182 pretests and 652 main tests, UI build, focused
+continuous-definition browser check (now returning short labels), and diff check
+passed. The tests include legacy upgrade with two spent attempts, unchanged older
+request bytes/receipts, portable replay, repeated SQLite reopen and refusal of
+unknown future policy formats. A read-only reconstruction of the reported failed
+job confirmed that labels fit its existing first batch without subdivision; no
+personal-project writes or live model requests were made. Live reduction of model
+copying errors remains unqualified. The broad browser suite was not rerun; its
+previous stale-tab assertions and existing bundle warnings remain unresolved.
 
 Definition freshness now compares versioned SHA-256 identities of relevant saved
 inputs, not the optimistic-concurrency revision counter. Inputs conservatively
@@ -38,6 +131,50 @@ When completed areas are current but other areas have no assessment, the aggrega
 label is **Assessment incomplete**, not **Assessment outdated**. Old evidence is
 labelled outdated only when it actually needs rechecking. Per-area states remain
 current/outdated/not assessed; partial batch work cannot make one current.
+
+## Continuous manual refresh by default (2026-10-24)
+
+**Refresh definition coverage** and manual **Resume this assessment** now run to the
+end of their selected scope without an overall time budget, area count cap or
+32-request staged-action stop. There is no separate opt-in mode. The UI explains
+that requests consume AI allowance and offers **Pause assessment** in the active
+header. A refresh finishes when its initially selected pending areas are checked;
+it does not start a perpetual background loop or grant coding/discovery authority.
+
+Current areas are reused without calls. Evidence-blocked areas are reported and
+skipped, without repeating unchanged blocked stages. Connection/invalid-response
+failures, individual request timeouts, cancellation and stale results stop the run
+for attention. No automatic retry or spent-attempt reset is introduced. Per-request
+timeouts remain five minutes; sixteen original batches, 64 exact subdivided stages,
+three spent attempts per unfinished stage and the 96,000-character input bound
+remain intact. All read/check stages must finish before coverage is published.
+
+Continuous staged workers renew a finite six-minute lease atomically with each
+request checkpoint. Expired, stale or replaced workers cannot renew; another
+worker's live lease cannot be stolen. An app crash leaves a finite expiry, not an
+unbounded lock. Restart requires explicit continuation. Existing partitions, hashes,
+responses, original model provenance and spent attempts are reused. Historical
+deadline/reserve warnings keep their original meaning but no longer govern a new
+manual refresh. Metadata measurements now accept up to 64 requests per job, matching
+the stage bound; the export remains metadata-only and byte-bounded.
+
+Automatic-maintenance preferences and its eight-request/five-minute/three-area
+bursts are unchanged. Coordinated **Continue project** retains its separate consent
+and allowance. Those bounded callers cannot use the internal continuous-manual
+dispatch option. See [upgrade compatibility](migrations.md#continuous-manual-definition-refresh-2026-10-24).
+
+Verification on Windows Node 22.23.4: type check, UI build, 174 pretests and 652 main
+tests passed. Mock-clock checks cross fifteen minutes within/across areas while
+preserving live leases; other tests cover more than ten areas, 33 exact stages with
+SQLite reopen/export, blocked-area skipping, failure stops, request timeout,
+historical deadline-pause recovery without repeated completed calls, and expired/
+stale lease rejection. The focused continuous-definition and coordinated-workflow
+browser checks passed, including Pause/reload/explicit resume, stage reuse, all-area
+completion, usage guidance and mobile width. Aggregate browser checks passed workspace
+layout and model selection, then still stopped at the missing **Project map** tab
+in `browser-check.ts:706`; the focused epic runner has the same stale-tab assertion
+at line 122. Later aggregate portable/specification runners did not execute. Existing
+bundle warnings remain. No live model calls or personal-project edits were made.
 
 ## Finding earlier failures (2026-10-24)
 
@@ -90,7 +227,9 @@ are rejected. Every batch is still read and verified before publication. This re
 repeated output, not the evidence reviewed, verification requirements or request count.
 It is not delta-only evidence review and does not promise a live speedup.
 
-Explicit global/per-area refreshes now share in-memory request-duration estimates.
+Before continuous manual refresh, explicit global/per-area refreshes shared
+in-memory request-duration estimates. This historical scheduling policy remains
+available only to explicitly bounded internal callers, not the default manual path.
 Initial estimates are 90 seconds for reading and 20 seconds for verification;
 completed requests update the corresponding estimate. Admission reserves the estimate
 plus 20% and five seconds (bounded by the request timeout). When less time remains,
@@ -188,9 +327,10 @@ needs-review, not artificially defined.
 
 There are at most sixteen original batches / 32 original stages (up to 64 exact
 subdivided stages under the continuation policy above), a 12k accumulated assessment draft
-target/reserve, three spent attempts per unfinished stage, and 32 requests per explicit staged
-area action within the existing fifteen-minute refresh window. Each request also
-has a five-minute timeout. Oversized individual records, over-sixteen-batch areas,
+target/reserve and three spent attempts per unfinished stage. The original
+32-request/fifteen-minute staged-action budget is superseded for manual refresh by
+continuous processing above; explicitly bounded callers retain their allowances.
+Each request still has a five-minute timeout. Oversized individual records, over-sixteen-batch areas,
 missing records and model-identified indispensable missing evidence stay explicit
 **Evidence blocked** outcomes, not successful reviews or silent truncation.
 
@@ -238,9 +378,9 @@ Resume uses the saved assessment area unless the feature filter selects another;
 the drawer labels that scope explicitly. To continue all other areas, use the global
 **Refresh definition coverage** action; already-current areas need no new calls.
 
-### Why a later area can pause after only a few minutes
+### Historical shared-window pauses
 
-The fifteen-minute window is shared across the whole **Refresh definition coverage**
+Before continuous manual refresh, the fifteen-minute window was shared across the whole **Refresh definition coverage**
 action, not restarted for each area. Earlier completed or failed areas consume that
 window. A later area may therefore pause during its second request even though its
 own job has run for only two minutes and its five-minute request timeout was not
@@ -248,10 +388,10 @@ reached. Completed stages remain saved; unfinished in-flight attempts remain spe
 
 New runs record separate causes for that shared deadline, the area's own deadline,
 an individual request timeout, explicit Stop, app shutdown and unspecified external
-interruption. Time limits display **Paused—progress saved**, not an apparent user
+interruption. Historical time limits display **Paused—progress saved**, not an apparent user
 cancellation; Stop displays **Stopped—progress saved**. The drawer says definition
-processing is paused, not discovery. The same bounded Resume/Refresh actions continue
-unfinished work; there are no automatic repeated model calls or larger allowances.
+processing is paused, not discovery. Explicit manual Resume/Refresh now continues
+under the continuous default without repeating completed calls or resetting attempts.
 
 Older cancelled runs did not record which cause occurred. Their exact saved job and
 checks are preserved; the UI calls the cause unknown rather than guessing, and new

@@ -178,6 +178,13 @@ records, over-sixteen-batch areas and indispensable missing evidence still block
 this does not complete readiness/baseline or exhaustive impact-analysis work. See
 [definition coverage](definition-coverage.md) for bounds and upgrade behavior.
 
+2026-10-24: manual definition refresh now continues to completion/pause without the
+shared fifteen-minute, ten-area or staged-action request budget. Finite rolling
+leases, per-request timeouts, exact stage/attempt limits and saved-call reuse remain;
+automatic maintenance/coordinated allowances are unchanged. Deterministic tests and
+a focused browser runner verify the continuous path; this does not qualify live
+latency or complete the readiness/baseline milestone exits.
+
 Next-gap scalability foundation: general discovery after initial interpretation now
 uses a durable evidence-keyed workflow/failure/acceptance backlog and read-only current-
 decision projection. Compatible checks survive unrelated changes/restarts; exact human

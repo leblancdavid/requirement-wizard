@@ -52,6 +52,9 @@ try {
   await queue.getByRole("button", { name: "View logs", exact: true }).last().click();
   const logs = page.getByRole("dialog", { name: "Logs", exact: true });
   await expect(queue).toHaveCount(0);
+  const diagnostics = logs.locator("summary").filter({ hasText: /^Export discovery diagnostics$/ });
+  await expect(diagnostics).toBeInViewport();
+  assert.equal(await diagnostics.evaluate((element) => Boolean(element.compareDocumentPosition(document.querySelector("#logs .log-filters")!) & Node.DOCUMENT_POSITION_FOLLOWING)), true, "Diagnostics precede the log filters and entries");
   await logs.getByLabel("Search logs", { exact: true }).fill("Original review diagnostic");
   await logs.getByText("Log details", { exact: true }).click();
   await expect(logs.locator("pre")).toContainText("<script>not executable</script>");
@@ -61,6 +64,8 @@ try {
   await logs.getByLabel("Problems only", { exact: true }).check();
   await expect(logs.locator(".log-record")).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });
+  await logs.locator(".logs-panel").evaluate((element) => { element.scrollTop = 0; });
+  await expect(diagnostics).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-workspace-logs-mobile.png", fullPage: true });
   await page.keyboard.press("Escape"); await expect(logs).toHaveCount(0);

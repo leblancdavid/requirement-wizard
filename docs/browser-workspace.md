@@ -1,5 +1,20 @@
 # Browser workspace, epics, and estimated completeness
 
+## Recover an exhausted definition review (2026-10-25)
+
+Open **Overall progress → Reviews that reached the retry limit → Recover
+assessment: [area]**. Confirmation permits one additional AI request, preserving
+completed checks and failure history; it is not an automatic attempt reset.
+Afterwards use Refresh definition coverage to continue remaining stages. See
+[recovery limits](definition-coverage.md#recover-a-review-that-exhausted-its-attempts-2026-10-25).
+
+Progress-dialog actions use visibly bordered buttons with consistent padding and
+44px minimum targets. Refresh/history, recovery choices and confirmation actions
+align in equal-width desktop columns and stack on mobile. Focused recovery browser
+checks verify alignment, wrapped-label heights, spacing and no horizontal overflow;
+desktop/mobile screenshots are saved under `.reqwizit-state/browser-definition-recovery-*.png`.
+This styling change does not affect saved data or request allowances.
+
 ## Consolidated workspace (2026-10-24)
 
 Specification now owns feature organization and requirement review; the separate
@@ -159,6 +174,14 @@ this focused check is not a claim that every legacy browser flow passed.
 
 ## Saved-response context blockers
 
+**Refresh definition coverage** now runs continuously by default across the selected
+pending areas—no shared fifteen-minute, ten-area or staged-action request cutoff.
+Use the active header's **Pause assessment** control to stop; completed checks are
+saved. Per-request five-minute timeouts, exact evidence/stage limits, spent attempts
+and stale-result checks remain. Restart requires explicit continuation; automatic
+maintenance and coordinated workflow retain their own allowances. See
+[continuous refresh](definition-coverage.md#continuous-manual-refresh-by-default-2026-10-24).
+
 **Overall progress → View assessment history** (also in Logs) reads saved definition
 attempts beyond the recent-task window. Group/filter by area, distinguish failed
 responses from pauses and evidence blockers, and open each earlier attempt's
@@ -186,8 +209,8 @@ Verified with type checking, UI build and the focused workflow browser runner,
 including computed button styling, keyboard focus and mobile layout. The full
 browser command still stops at the known **Approve resolution** assertion; no
 live model calls were used.
-Definition freshness now follows relevant saved inputs. New timeout receipts
-distinguish the shared fifteen-minute refresh window across
+Definition freshness now follows relevant saved inputs. Historical timeout receipts
+distinguish the former shared fifteen-minute refresh window across
 all areas from individual request timeouts, Stop and shutdown. Deadline stops show
 **Paused—progress saved**; historical cancelled runs without a cause stay explicitly
 unknown. Definition processing no longer inherits the generic **Discovery is paused**

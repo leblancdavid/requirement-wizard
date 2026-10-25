@@ -55,6 +55,9 @@ links and bounded browser-session state are in `log-access.tsx`.
   output can remain sensitive: review before sharing.
 - The existing metadata-only discovery export lives in Logs, with its authenticated
   API, bounded selection and privacy contract unchanged.
+  Its disclosure appears above the log filters and entries so exporting does not
+  require scrolling through the logs. This ordering-only change does not affect
+  saved formats, evidence, assessment freshness or migration requirements.
 
 Consequential information stays inline: saved/unfinished states, recovery guidance,
 unverified scope, AI usage and build authorization. Requirements, acceptance

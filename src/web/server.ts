@@ -310,6 +310,13 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         queue.refreshDefinition(id, input.revision, input.focusEpicID);
         json(res, 202, { started: true }); return;
       }
+      if (action === "recover-definition") {
+        if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
+        const input = z.object({ revision, focusEpicID: z.string().min(1).max(200), jobID: z.string().uuid(), confirmAdditionalRequest: z.literal(true) }).strict().parse(raw);
+        if (project.revision !== input.revision) throw new StaleRevisionError();
+        queue.refreshDefinition(id, input.revision, input.focusEpicID, input.jobID);
+        json(res, 202, { started: true }); return;
+      }
       if (action === "maintenance") {
         const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["enable", "disable", "pause", "resume"]) }).strict().parse(raw);
         if (["enable", "resume"].includes(input.action) && project.revision !== input.revision) throw new StaleRevisionError();

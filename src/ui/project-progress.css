@@ -17,7 +17,15 @@
 .progress-epics li > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
 .local-code-progress { margin-top: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--soft); }
 .definition-assessment { margin-top: 12px; }
-.progress-dialog .definition-refresh { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; max-width: 100%; margin-top: 12px; padding: 10px 16px; border: 1px solid var(--accent); border-radius: 7px; font-weight: 600; white-space: normal; overflow-wrap: anywhere; text-align: center; }
-@media (max-width: 540px) { .progress-dialog .definition-refresh { width: 100%; } }
+.progress-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+.progress-dialog button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 0; max-width: 100%; padding: 10px 16px; border: 1px solid var(--border); border-radius: 7px; font-weight: 600; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; text-align: center; }
+.progress-dialog .quiet { background: var(--soft); color: var(--accent); }
+.progress-dialog .progress-action.primary { border-color: var(--accent); }
+.progress-actions > .progress-action { width: 100%; height: 100%; }
+.progress-dialog .definition-refresh { margin-top: 12px; }
+.progress-recovery-confirmation { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--soft); }
+.progress-recovery-confirmation > p { margin-bottom: 12px; }
+.progress-recovery-confirmation .progress-actions { margin-bottom: 0; }
+@media (max-width: 540px) { .progress-actions { grid-template-columns: minmax(0, 1fr); } .progress-dialog .definition-refresh { width: 100%; } }
 .definition-check { margin: 10px 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; }
 .definition-check p, .definition-assessment > p { margin: 10px 0; overflow-wrap: anywhere; }

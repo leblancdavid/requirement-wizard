@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import type { Analysis, Project } from "./model.js";
 import { dimensions } from "./epics.js";
 import { planContext } from "./working-set.js";
@@ -58,7 +59,28 @@ export function validateDefinitionResult(project: Project, epicID: string, inclu
   const assessment = output.assessments?.[0];
   if (output.assessments?.length !== 1 || assessment?.epicID !== epicID
     || assessment.checks.length !== dimensions.length || new Set(assessment.checks.map((c) => c.dimension)).size !== dimensions.length) throw new Error("Definition refresh needs one assessment covering all nine dimensions of the selected area.");
-  const evidence = new Set([...project.sources, ...project.questions, ...project.requirements, ...project.research].map((r) => r.id));
-  if (assessment.checks.some((c) => c.evidenceIDs.some((id) => !includedIDs.includes(id) || !evidence.has(id)))) throw new Error("Definition assessment cites missing evidence or evidence outside its detailed context.");
+  validateDefinitionCitations(project, includedIDs, assessment.checks);
   return assessment;
+}
+
+export class DefinitionCitationError extends Error {}
+
+/** Bounded diagnostics only: arbitrary model strings are not safe record IDs or
+ * diagnostic prose. Show UUIDs verbatim; fingerprint other values without logging
+ * potential prompts, paths or credentials supplied in a citation field. */
+export function validateDefinitionCitations(project: Project, includedIDs: string[], checks: NonNullable<Analysis["assessments"]>[number]["checks"],
+  prefix = "Definition assessment cites missing evidence or evidence outside its detailed context.") {
+  const evidence = new Set([...project.sources, ...project.questions, ...project.requirements, ...project.research].map((r) => r.id)), included = new Set(includedIDs);
+  let missing = 0, outside = 0; const samples: string[] = [];
+  checks.forEach((check, checkIndex) => check.evidenceIDs.forEach((id, citationIndex) => {
+    const reason = !evidence.has(id) ? "missing record" : !included.has(id) ? "outside allowed evidence" : undefined;
+    if (!reason) return;
+    if (reason === "missing record") missing++; else outside++;
+    if (samples.length < 4) {
+      const label = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)
+        ? id : `non-UUID sha256:${createHash("sha256").update(id).digest("hex").slice(0, 16)}`;
+      samples.push(`checks[${checkIndex}] (${check.dimension}).evidenceIDs[${citationIndex}]: ${label} — ${reason}`);
+    }
+  }));
+  if (missing + outside) throw new DefinitionCitationError(`${prefix} ${missing} missing; ${outside} outside allowed evidence. ${samples.join("; ")}${missing + outside > samples.length ? `; ${missing + outside - samples.length} more rejected citations not shown.` : "."} No assessment was published.`);
 }
