@@ -1,6 +1,6 @@
 import { StaleRevisionError, type Job, type Project } from "../core/model.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
-import { acceptReadinessStage, planReadinessStages, readinessMaterials, readinessProgress, readinessStageContext, readinessStep, replayReadinessStages } from "../core/readiness-stages.js";
+import { acceptReadinessStage, planReadinessStages, readinessMaterials, readinessProgress, readinessStageContext, readinessStep, replayReadinessStages, upgradeReadinessRead } from "../core/readiness-stages.js";
 import type { ReadinessQuestionTask } from "../core/readiness-questions.js";
 import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
@@ -23,6 +23,7 @@ export async function runReadinessStages(store: ProjectStore, adapter: Discovery
     && JSON.stringify(j.readinessWork.task) === JSON.stringify(task));
   const work = previous?.readinessWork ? structuredClone(previous.readinessWork) : planReadinessStages(materials);
   let { draft, blocked } = replayReadinessStages(project, materials, work);
+  upgradeReadinessRead(work);
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;
   const current = () => {
@@ -51,7 +52,7 @@ export async function runReadinessStages(store: ProjectStore, adapter: Discovery
     if (blocked) throw new Error(`Clarification needs specific evidence: ${blocked} Saved steps remain; unchanged retry does not repeat this response.`);
     if (calls >= limits.requests || Date.now() >= deadline) return store.pauseReadiness(job.id,
       `Clarification paused after ${calls} request(s) in this action; ${readinessStep(work)} / ${work.batches.length * 2} steps saved. Use Continue clarification in Design; completed requests will not repeat.`);
-    if (work.attempts >= 3) throw new Error("This clarification step exhausted three requests. Exact responses and spent attempts are saved; unchanged retry cannot grant another request.");
+    if (work.attempts >= (work.indexedRead ? 4 : 3)) throw new Error("This clarification step exhausted its finite request allowance (four with indexed question retention). Exact responses and spent attempts are saved; unchanged retry cannot grant another request.");
     work.attempts++; calls++;
     store.checkpointReadiness(job.id, work, context.manifest); // Durable before dispatch.
     const progress = readinessProgress(work);

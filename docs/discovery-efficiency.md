@@ -1,5 +1,28 @@
 # Graph-backed discovery and current-specification contexts
 
+## Citation failure during staged clarification (2026-10-25)
+
+A reported live run fitted every request (59k–86k characters) and saved four read
+steps, then rejected a new/revised question citing evidence outside its current
+batch. The original read protocol required exact whole-record reproduction to keep
+prior draft questions, making incidental explanation/tooltip edits trigger the same
+strict citation gate as real behavior changes. The supplied diagnostic does not
+identify the returned question, so its precise cause remains unknown.
+
+New/resumed manual stages now request indexed retention: `keepQuestions` copies
+unchanged prior draft records in the engine; `questions` contains only new/revised
+proposals with currently loaded citations. Evidence/navigation permissions are not
+broadened. Completed receipts replay with their original instructions and hashes.
+An additive forward boundary upgrades only future requests, with four total requests
+per unfinished step (one more than the old bound), keeping all spent attempts and
+the existing per-action limit. See [compatibility and recovery](migrations.md#indexed-clarification-draft-retention-2026-10-25).
+
+Verification: all **900 tests** passed (`npm test`: 240 pretests + 660 main), as did
+type checking, UI build, the focused clarification/portable tests and Specification
+browser continuation. Actual saved-project/live-provider recovery remains unverified;
+no live allowance was consumed for these checks. The broader browser blockers recorded
+below were not addressed or rerun by this protocol-only change.
+
 ## Oversized Clarify in Design: exact staged evidence (2026-10-25)
 
 The later supplied **416,761 / 144,000-character** failure was confirmed to be
@@ -21,7 +44,8 @@ replays the saved ledger against current material/plan identity and checks compl
 mandatory coverage. Requirements, assessments and pending responses stay unchanged.
 
 One action defaults to 32 requests/15 minutes, with five-minute request timeouts and
-three attempts per unfinished step. Attempts are saved before dispatch and accepted
+originally three attempts per unfinished step (four after the indexed-read upgrade
+above). Attempts are saved before dispatch and accepted
 responses before preparing the next request. Explicit continuation retains both
 spent attempts and completed steps across restart or portable adoption. Oversized
 indivisible/supplemental evidence and more than 32 batches remain specific blockers;

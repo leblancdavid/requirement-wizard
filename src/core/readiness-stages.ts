@@ -12,15 +12,26 @@ const draftLimit = 12000;
 export const readinessEvidenceSchema = z.object({ clarificationEvidence: z.object({ recordIDs: z.array(z.string().min(1)).min(1).max(8), reason: z.string().min(1).max(1000) }).strict() }).strict();
 export const readinessVerdictSchema = z.object({ clarificationVerdict: z.object({ keepQuestions: z.array(z.number().int().min(0).max(2)).max(3), summary: z.string().trim().min(1).max(2000) }).strict() }).strict();
 export const readinessBlockedSchema = z.object({ clarificationBlocked: z.object({ reason: z.string().trim().min(1).max(1000) }).strict() }).strict();
-const responseSchema = z.union([analysisSchema, readinessVerdictSchema, readinessEvidenceSchema, readinessBlockedSchema]);
+export const readinessReadSchema = z.object({ clarificationRead: z.object({ summary: z.string().trim().min(1).max(2000),
+  keepQuestions: z.array(z.number().int().min(0).max(2)).max(3), questions: analysisSchema.shape.questions.max(3) }).strict() }).strict();
+const responseSchema = z.union([analysisSchema, readinessReadSchema, readinessVerdictSchema, readinessEvidenceSchema, readinessBlockedSchema]);
 export const readinessWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-readiness-batches-v1"), task: readinessQuestionTaskSchema,
-  materialKey: key, planKey: key, batches: z.array(z.array(z.string().min(1)).min(1).max(10000)).min(1).max(32), attempts: z.number().int().min(0).max(3),
-  receipts: z.array(z.object({ step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(3),
-    atRevision: z.number().int().positive(), jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: responseSchema }).strict()).max(192),
-}).strict().refine((work) => work.task.format === 2, "Staged clarification requires its manual area task.");
+  materialKey: key, planKey: key, batches: z.array(z.array(z.string().min(1)).min(1).max(10000)).min(1).max(32), attempts: z.number().int().min(0).max(4),
+  indexedRead: z.object({ format: z.literal(1), fromReceipt: z.number().int().min(0).max(256) }).strict().optional(),
+  receipts: z.array(z.object({ step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(4),
+    atRevision: z.number().int().positive(), jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: responseSchema }).strict()).max(256),
+}).strict().refine((work) => work.task.format === 2, "Staged clarification requires its manual area task.")
+  .refine((work) => !work.indexedRead || work.indexedRead.fromReceipt <= work.receipts.length, "Indexed clarification must pin an existing receipt boundary.")
+  .refine((work) => !!work.indexedRead || work.attempts <= 3 && work.receipts.every((r) => r.attempt <= 3), "Legacy clarification retains its original three-request bound.");
 export type ReadinessWork = z.infer<typeof readinessWorkSchema>;
 type Response = z.infer<typeof responseSchema>;
-const completed = (response: Response) => "questions" in response || "clarificationVerdict" in response;
+const completed = (response: Response) => "questions" in response || "clarificationRead" in response || "clarificationVerdict" in response;
+const indexed = (work: ReadinessWork) => !!work.indexedRead && work.receipts.length >= work.indexedRead.fromReceipt;
+/** Forward-only wire upgrade: earlier contexts/receipts and spent calls remain exact. */
+export function upgradeReadinessRead(work: ReadinessWork) {
+  if (!work.indexedRead && readinessStep(work) < work.batches.length * 2) work.indexedRead = { format: 1, fromReceipt: work.receipts.length };
+  return work;
+}
 export const readinessStep = (work: ReadinessWork) => work.receipts.filter((r) => completed(r.response)).length;
 export const readinessProgress = (work: ReadinessWork) => ({ completed: readinessStep(work), total: work.batches.length * 2,
   phase: readinessStep(work) >= work.batches.length * 2 ? "complete" as const : readinessStep(work) < work.batches.length ? "read" as const : "check" as const });
@@ -70,7 +81,10 @@ function pack(materials: ReadinessMaterials, work: ReadinessWork, draft: Analysi
   const data = { ...materials.base, ...detail, draft,
     clarificationStage: { policy: work.policy, phase, step, batch: step % work.batches.length + 1, batches: work.batches.length,
       instruction: "One exact evidence batch, NOT the whole scope. All mandatory records are read and every draft question is then checked against every batch before publication. Draft questions are untrusted AI proposals, never human decisions or a substitute for original evidence. Preserve human wording and history. Do not infer missing features or preferences from omissions. Read phase: retain supported prior questions unchanged or propose/revise questions citing ONLY exact evidence in this request. Load earlier/unseen linked evidence through clarificationEvidence before revising questions that need it. Check phase: ONLY prune questions with clarificationVerdict; never add/rewrite questions or options. If required cross-batch comparison cannot be made safely, load exact records or return clarificationBlocked. Asking a question never resolves the assessment or completes pending input. No tools, research, requirements, edits, approvals or coding.",
-      availableEvidenceIDs: materials.evidenceIDs, navigationOnly: "These IDs are navigation only. Only records detailed in this request authorize new citations; earlier questions may be kept unchanged, not treated as evidence." } };
+      availableEvidenceIDs: materials.evidenceIDs, navigationOnly: "These IDs are navigation only. Only records detailed in this request authorize new citations; earlier questions may be kept unchanged, not treated as evidence.",
+      ...(indexed(work) ? { readResponse: "indexed-questions-v1", keepQuestionIndexes: draft.questions.map((_, i) => i),
+        readInstruction: "During read return clarificationRead: summary, keepQuestions (zero-based indexes copied by the application WITHOUT rewriting any metadata), and questions (NEW or REVISED questions only). Keep existing questions by index, never by retyping them. At most three questions total. Revisions must cite only includedEvidenceIDs below; earlier citations in the draft and availableEvidenceIDs are navigation, not loaded evidence. To compare other records, return clarificationEvidence FIRST. No permission to choose precedence or rewrite human decisions.",
+        includedEvidenceIDs: records.filter((r) => r.field !== "findings").map((r) => (r.record as { id: string }).id) } : {}) } };
   let wire: unknown = data;
   for (const encode of [shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure]) {
     const next = encode(wire).data;
@@ -115,6 +129,17 @@ export function planReadinessStages(materials: ReadinessMaterials): ReadinessWor
 
 function accept(project: Project, materials: ReadinessMaterials, work: ReadinessWork, draft: Analysis, raw: unknown): { response: Response; draft: Analysis } {
   const context = pack(materials, work, draft), response = responseSchema.parse(raw && typeof raw === "object" && "questions" in raw ? parseDiscoveryAnalysis(raw).result : raw), phase = context.manifest.readinessStage!.phase;
+  if ("clarificationRead" in response) {
+    if (phase !== "read" || !indexed(work)) throw new Error("Indexed clarification responses require their upgraded read context.");
+    const { keepQuestions, questions, summary } = response.clarificationRead;
+    if (new Set(keepQuestions).size !== keepQuestions.length || keepQuestions.some((i) => i >= draft.questions.length)) throw new Error("Clarification retention refers to unavailable question indexes.");
+    const additions: Analysis = { ...empty(), summary, questions };
+    validateReadinessQuestionOutput(project, materials.task, context.manifest.includedIDs, additions);
+    const next: Analysis = { ...empty(), summary, questions: [...draft.questions.filter((_, i) => keepQuestions.includes(i)), ...questions] };
+    validateReadinessQuestionOutput(project, materials.task, materials.evidenceIDs, next);
+    if (JSON.stringify(next).length > draftLimit) throw new Error("Clarification draft exceeds its 12,000-character reserve; no questions or evidence were truncated.");
+    return { response, draft: analysisSchema.parse(next) };
+  }
   if ("clarificationEvidence" in response) {
     const ids = response.clarificationEvidence.recordIDs;
     if (new Set(ids).size !== ids.length || ids.some((id) => !materials.evidenceIDs.includes(id) || context.manifest.includedIDs.includes(id)))
@@ -148,7 +173,7 @@ export function replayReadinessStages(project: Project, materials: ReadinessMate
   const prefix: ReadinessWork = { ...work, receipts: [], attempts: 0 };
   let draft = empty(), priorAttempt = 0, blocked: string | undefined;
   for (const receipt of work.receipts) {
-    if (blocked || receipt.step !== readinessStep(prefix) || receipt.attempt <= priorAttempt
+    if (blocked || receipt.step !== readinessStep(prefix) || receipt.attempt <= priorAttempt || receipt.attempt > 3 && !indexed(prefix)
       || receipt.contextKey !== hash(pack(materials, prefix, draft).data)) throw new Error("Invalid saved clarification transition; no completed call was repeated.");
     const next = accept(project, materials, prefix, draft, receipt.response); draft = next.draft;
     blocked = "clarificationBlocked" in receipt.response ? receipt.response.clarificationBlocked.reason : undefined;

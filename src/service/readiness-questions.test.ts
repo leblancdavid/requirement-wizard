@@ -11,7 +11,7 @@ import { definitionInputKey } from "../core/definition-identity.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 import { ContextBudgetError } from "../core/context.js";
 import type { Analysis } from "../core/model.js";
-import { acceptReadinessStage, planReadinessStages, readinessMaterials, readinessStageContext, readinessStep, replayReadinessStages, validateReadinessStagePublication, readinessWorkSchema } from "../core/readiness-stages.js";
+import { acceptReadinessStage, planReadinessStages, readinessMaterials, readinessStageContext, readinessStep, replayReadinessStages, validateReadinessStagePublication, readinessWorkSchema, upgradeReadinessRead } from "../core/readiness-stages.js";
 import { runReadinessStages } from "./readiness-stages.js";
 import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
@@ -424,8 +424,8 @@ test("spent attempts, cancellation, stale results and zero-duration actions cann
         assert.equal(job.status, mode === "cancel" ? "cancelled" : mode === "stale" ? "stale" : "failed", job.diagnostic);
         assert.equal(job.readinessWork!.attempts, 1); assert.equal(readinessStep(job.readinessWork!), 0);
         if (mode === "malformed") {
-          for (let i = 0; i < 3; i++) await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
-          assert.equal(calls, 3); assert.match(f.store.jobs(f.project.id).at(-1)!.diagnostic!, /exhausted three/);
+          for (let i = 0; i < 4; i++) await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
+          assert.equal(calls, 4); assert.match(f.store.jobs(f.project.id).at(-1)!.diagnostic!, /exhausted.*allowance/);
         }
       }
       assert.equal(f.store.get(f.project.id).questions.length, 0);
@@ -477,5 +477,70 @@ test("oversized exact supplemental evidence preserves the accepted request and b
     const next = await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
     assert.equal(next.status, "failed"); assert.match(next.diagnostic!, /No evidence was dropped or summarized/); assert.equal(calls, 1);
     assert.deepEqual(f.store.getJob(first.id).readinessWork, first.readinessWork);
+  } finally { f.store.close(); }
+});
+
+test("indexed read upgrade resumes a legacy third-attempt citation failure without repeating saved reads or rewriting retained questions", async () => {
+  const f = largeFixture(); let calls = 0;
+  try {
+    const original = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(original.id, Date.now() + 60000);
+    let draft = replayReadinessStages(f.project, f.materials, f.work).draft;
+    for (let step = 0; step < 4; step++) {
+      f.work.attempts = 1; draft = acceptReadinessStage(f.project, f.materials, f.work, draft, f.result(), original);
+    }
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const context = readinessStageContext(f.project, f.materials, f.work, draft);
+      const id = f.materials.evidenceIDs.find((id) => !context.manifest.includedIDs.includes(id) && id !== f.project.sources[0]!.id)!;
+      f.work.attempts = attempt;
+      acceptReadinessStage(f.project, f.materials, f.work, draft, { clarificationEvidence: { recordIDs: [id], reason: "Exact comparison" } }, original);
+    }
+    f.work.attempts = 3;
+    const changed = f.result(); changed.questions[0]!.whyItMatters += " (rewritten metadata)";
+    assert.throws(() => acceptReadinessStage(f.project, f.materials, f.work, draft, changed, original), /loaded in this request/);
+    const oldReceipts = structuredClone(f.work.receipts);
+    f.store.checkpointReadiness(original.id, f.work, readinessStageContext(f.project, f.materials, f.work, draft).manifest);
+    f.store.failJob(original.id, "failed", "New or revised clarification questions must cite exact evidence loaded in this request.");
+    const service = new DiscoveryService(f.store, { async analyze(_p, { context }) {
+      calls++;
+      if (calls === 1) {
+        const saved = f.store.jobs(f.project.id).at(-1)!.readinessWork!;
+        assert.equal(saved.attempts, 4, "Three spent requests remain; correction is the fourth, not a reset");
+        assert.deepEqual(saved.receipts, oldReceipts);
+      }
+      if (context.manifest.readinessStage!.phase === "read") assert.match(discoveryPrompt(f.project, context), /Keep prior draft questions by zero-based index ONLY/);
+      else assert.doesNotMatch(discoveryPrompt(f.project, context), /READ RESPONSE: use clarificationRead/);
+      return context.manifest.readinessStage!.phase === "read"
+        ? { clarificationRead: { summary: "Keep the existing question unchanged", keepQuestions: [0], questions: [] } }
+        : { clarificationVerdict: { summary: "Checked exact batch", keepQuestions: [0] } };
+    } });
+    let result = await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
+    while (result.status === "interrupted") result = await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
+    assert.equal(result.status, "completed", result.diagnostic);
+    assert.equal(calls, f.work.batches.length * 2 - 4);
+    assert.deepEqual(result.result!.questions, draft.questions);
+    assert.deepEqual(result.readinessWork!.receipts.slice(0, oldReceipts.length), oldReceipts);
+    assert.equal(result.readinessWork!.indexedRead!.fromReceipt, oldReceipts.length);
+    assert.deepEqual(f.store.getJob(original.id).readinessWork, f.work, "Original saved evidence is never migrated in place");
+  } finally { f.store.close(); }
+});
+
+test("indexed retention rejects forged indexes, unloaded new citations and question-check rewrites", () => {
+  const f = largeFixture();
+  try {
+    const job = f.store.beginJob(f.project.id, f.project.revision).job;
+    let draft = replayReadinessStages(f.project, f.materials, f.work).draft;
+    f.work.attempts = 1; draft = acceptReadinessStage(f.project, f.materials, f.work, draft, f.result(), job);
+    upgradeReadinessRead(f.work); const marker = structuredClone(f.work.indexedRead); upgradeReadinessRead(f.work);
+    assert.deepEqual(f.work.indexedRead, marker, "Repeated upgrade never moves the boundary or renews attempts");
+    f.work.attempts = 1;
+    for (const keepQuestions of [[1], [0, 0]]) assert.throws(() => acceptReadinessStage(f.project, f.materials, f.work, draft,
+      { clarificationRead: { summary: "Invalid retention", keepQuestions, questions: [] } }, job), /unavailable question indexes/);
+    assert.throws(() => acceptReadinessStage(f.project, f.materials, f.work, draft,
+      { clarificationRead: { summary: "Do not retype earlier proposals", keepQuestions: [], questions: f.result().questions } }, job), /exact detailed evidence/);
+    const kept = acceptReadinessStage(f.project, f.materials, f.work, draft,
+      { clarificationRead: { summary: "Preserve exact earlier question", keepQuestions: [0], questions: [] } }, job);
+    assert.deepEqual(kept.questions, draft.questions);
+    assert.deepEqual(replayReadinessStages(f.project, f.materials, f.work).draft, kept);
+    assert.throws(() => readinessWorkSchema.parse({ ...f.work, indexedRead: { format: 2, fromReceipt: 0 } }), /Invalid literal/);
   } finally { f.store.close(); }
 });

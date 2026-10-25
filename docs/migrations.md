@@ -1,5 +1,39 @@
 # Data migrations and upgrade compatibility
 
+## Indexed clarification draft retention (2026-10-25)
+
+Source: format-1 `exact-readiness-batches-v1` work without `indexedRead`. Target:
+the same envelope with optional `indexedRead: {format: 1, fromReceipt: N}`. On an
+explicit continuation only, after successful legacy replay, N pins the existing
+receipt count. Earlier requests retain their exact wire hashes, material/plan keys,
+responses and model provenance; no old row is rewritten or successful call repeated.
+The indexed instruction is added only to requests at/after this boundary. Completed
+legacy work needs no upgrade. No startup inference or optimistic-revision reset occurs.
+
+Read responses may use `clarificationRead {summary, keepQuestions, questions}`:
+the engine copies kept draft questions by zero-based index with all metadata intact.
+Only new/revised questions require citations loaded in the current request. Retained
+AI questions are still untrusted proposals; every final question must survive the
+unchanged all-batch check pass. Duplicate/out-of-range indexes, unloaded new citations,
+unauthorized edits and read responses during checking reject atomically. Canonical
+analysis parsing preserves publication equality and stable question metadata.
+
+Indexed work has a fixed **four total dispatched requests per unfinished step**
+(including evidence retrieval and failed requests), versus the legacy three. This is
+an explicit bounded protocol allowance change, not an attempt reset: an old failure
+at three keeps its three spent calls and can use only the fourth. Repeated continuation,
+reopen or import cannot renew that allowance. The receipt ceiling is 256 (64 steps ×
+four); legacy unupgraded receipts still cannot claim a fourth request. Per-action
+32-request/15-minute and 96k context limits remain unchanged. Portable continuation
+validates and retains the boundary; unknown future marker formats reject unchanged.
+Older app versions reject the new field, so do not downgrade upgraded work.
+
+Regression tests reconstruct four legacy completed reads plus evidence follow-ups and
+third-attempt citation failure, then resume with one fourth request without replaying
+the earlier calls. The actual reported question response was not supplied, so this
+does not establish whether that particular response reworded a prior question or
+introduced a genuinely new unloaded citation. Live-project recovery remains unverified.
+
 ## Resumable exact Design clarification (2026-10-25)
 
 Source: existing SQLite JSON jobs and unchanged format-1/2 question tasks. Target:
@@ -13,8 +47,9 @@ oversize failures remain dated; another explicit Clarify action can start this p
 The ledger pins exact original records, task/material/plan hashes, accepted
 responses, model identity and spent attempts. Every mandatory record occurs in one
 read batch and is checked again against the final draft. Requests remain bounded to
-96k characters, with at most 32 batches, 192 receipts and three dispatched requests
-per unfinished step. An action defaults to 32 requests/15 minutes; completed steps
+96k characters, originally with at most 32 batches, 192 receipts and three dispatched
+requests per unfinished step (superseded for indexed work by the four-request/256-receipt
+upgrade above). An action defaults to 32 requests/15 minutes; completed steps
 and pre-dispatch attempts survive pause, cancellation, failure and restart. No
 partial draft publishes. Supplemental exact evidence that cannot fit is a specific
 blocker, not silently dropped. Semantic evidence changes reject old work as current;
