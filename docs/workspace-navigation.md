@@ -32,6 +32,51 @@ the full attention inbox. Workflow decisions keep their existing destinations.
 
 ## Logs
 
+### Unified run timeline and timing (2026-10-25)
+
+**Application menu → Logs** now automatically includes saved definition attempts in
+the same timeline as discovery, folder scans, question help, response diagnostics,
+build planning (including earlier plans), code assessments, coding/delivery and
+browser app errors. There is no nested assessment-history screen or extra **View
+assessment history** button. **Overall progress → View logs** opens this same viewer.
+Legacy assessment-history targets still resolve to the common timeline/filter.
+
+The authenticated read-only `GET /api/projects/:id/log-history` endpoint selects up
+to 25 task summaries in SQLite, plus one lookahead for **Older saved tasks**. It
+reaches all saved job types beyond the workspace's recent 20 jobs. Source, area,
+problem-state, task-ID and diagnostic/title/source search filters apply to full saved
+job history before paging. Implementation/response/browser records already available
+in the workspace share the common filters/list; this is not a backend stdout archive.
+Older model prompts, response bodies, sessions and account details are not loaded by
+this endpoint. Diagnostics remain bounded (16k per field), authenticated and redacted
+for display. The existing specialized history API is retained for compatibility.
+
+New jobs durably record creation, first claim/start and terminal-state transition
+times. Build planning uses its already recorded creation time and now also records
+generation finish/failure times. Code-assessment start/finish times and response/coding
+creation times are reused. Browser errors/selected details receive an explicitly
+**Recorded** event time, not a fabricated task start. Live messages are labelled a
+live snapshot, not a saved run. Starts/finishes, revision, area, measured or calculable
+duration and current-run request counts make runs distinguishable. Saved step counts
+explicitly include reused checks; they do not represent calls made in that run.
+
+For old failed/interrupted jobs, an existing activity event's actual **Recorded**
+time can be shown read-only when no lifecycle time exists. It is not used as a start
+or to manufacture duration. Existing measured elapsed durations can be shown without
+claiming a known wall-clock start. Old missing values remain unknown; they are not
+filled from file modification times, lease expiry, project revision or view time.
+Records sort by known start/recorded time; entries with unknown timing remain below
+dated records. Earlier failures remain history, not proof that a later run failed.
+See [compatibility](migrations.md#unified-logs-and-recorded-run-times-2026-10-25).
+
+Verification: type check, all 197 pretests and 652 main tests, UI build, focused
+unified-history/workspace browser checks and final diagnostic tests passed. The
+aggregate browser command passed workspace layout and model selection, then hit
+the existing missing **Project map** assertion (`browser-check.ts:706`); later
+runners did not execute. A concurrent-build Windows file lock was resolved by a
+serial rerun of the focused check. Existing bundle-size warnings remain. No live
+inference or personal-project writes were made.
+
 `src/ui/log-records.ts` derives read-only projections from currently loaded saved
 jobs, response diagnostics and implementation state. The viewer is `src/ui/logs.tsx`;
 links and bounded browser-session state are in `log-access.tsx`.
@@ -45,9 +90,9 @@ links and bounded browser-session state are in `log-access.tsx`.
 - API failures, including connection/startup requests without a project, are held
   in browser memory (latest 250 identities). Selected diagnostics are added when
   opened. They are not persisted or included in portable state.
-- Saved jobs keep their existing persistence and availability bounds. This is not
-  a complete backend stdout/provider/process transcript. Missing historical times
-  remain **Time not recorded**.
+- Saved jobs keep their existing persistence, with SQL-paged diagnostic history now
+  available beyond recent workspace tasks. This is not a complete backend stdout/
+  provider/process transcript. Missing historical times/durations remain not recorded.
 - Per-entry previews stop at 64,000 characters with an explicit notice. Original
   evidence is unchanged. Rows are paginated.
 - Common bearer/token/password patterns are redacted on display, and React escapes

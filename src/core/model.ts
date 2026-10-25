@@ -275,6 +275,8 @@ export const telemetrySchema = z.object({
 export type Telemetry = z.infer<typeof telemetrySchema>;
 
 export type Job = {
+  /** Recorded lifecycle times, optional for older/portable saved jobs. */
+  createdAt?: string; startedAt?: string; finishedAt?: string;
   id: string; projectID: string; expectedRevision: number;
   kind?: "scan";
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";

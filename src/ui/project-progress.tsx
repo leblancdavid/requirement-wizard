@@ -45,7 +45,7 @@ function ProjectProgressView({ progress, definition, project, jobs = [], refresh
         <details><summary>Review limits and AI usage</summary><p>No overall time or area-count cutoff. Requests consume your AI plan’s usage; use Pause assessment to stop. Each request still has a five-minute timeout. An area can have up to sixteen original batches and 64 subdivided read/check steps, with three ordinary attempts per unfinished step. Explicit recovery can authorize one additional request for an exhausted step, never an automatic reset. Evidence blockers are skipped and reported; connection/response failures stop the refresh for attention. Restart requires explicit continuation. Automatic maintenance and coordinated workflow keep their separate allowances.</p></details>
         <div className="progress-actions">
           {refreshDefinition && <button type="button" className="primary progress-action" disabled={disabled} title={disabledReason || "Assess all pending areas until finished or paused, using your AI allowance. Current assessments are reused; evidence-blocked areas are reported, not endlessly retried. No specification changes."} onClick={() => refreshDefinition()}>Refresh definition coverage</button>}
-          <button type="button" className="secondary progress-action" onClick={() => { setOpen(false); openLogs("definition-history"); }}>View assessment history</button>
+          <button type="button" className="secondary progress-action" onClick={() => { setOpen(false); openLogs(); }}>View logs</button>
         </div>
         {assessment && <DefinitionProgress job={assessment} project={project} />}
         {recoverDefinition && recoverable.length > 0 && <section aria-label="Assessment recovery">

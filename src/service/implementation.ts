@@ -15,7 +15,8 @@ import { assessmentPrompt, assessmentContextFingerprint, checkExecutionContext, 
 import { assessmentSkill } from "../core/execution-skills.js";
 import { assessmentCompatibility } from "../core/assessment-identity.js";
 import { planningConfigFingerprint, planningCurrent, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanning } from "../core/implementation-planning.js";
-import { implementationPlanningContext } from "./planning-context.js";
+import { implementationPlanningContext, PlanningContextOverflow } from "./planning-context.js";
+import { runImplementationStages, PlanningBudgetPause } from "./planning-stages.js";
 
 const codeResult = z.object({ outcome: z.enum(["complete", "blocked"]), summary: z.string().min(1).max(12000) }).strict();
 type Scope = { requirementID?: string; epicID?: string };
@@ -127,7 +128,8 @@ export class ImplementationService {
     if (state.planning) (state.planningHistory ??= []).push(structuredClone(state.planning));
     const plan: ImplementationPlanning = state.planning = { format: 1, id: randomUUID(), revision, bindingID: binding.bindingID!, createdAt: new Date().toISOString(),
       status: "generating", configFingerprint: planningConfigFingerprint(state), output: resumable ? structuredClone(previous.output) : undefined,
-      sessions: resumable ? [...previous.sessions ?? []] : [], model: { providerID: state.config!.providerID, modelID: state.config!.modelID } };
+      sessions: resumable ? [...previous.sessions ?? []] : [], stageWork: resumable ? structuredClone(previous.stageWork) : undefined,
+      model: { providerID: state.config!.providerID, modelID: state.config!.modelID } };
     const save = (checkInputs = false) => this.store.saveExecution(id, state, owner, checkInputs ? { revision, bindingID: binding.bindingID } : undefined);
     const timer = setInterval(() => { try { this.store.renewExecution(id, owner); } catch { this.stop(id); } }, 30_000);
     try {
@@ -136,22 +138,34 @@ export class ImplementationService {
       await git.localPreflight();
       this.store.bindExecution(id, directoryKey(await git.git(["rev-parse", "--path-format=absolute", "--git-common-dir"])), owner);
       const requirements = eligibleRequirements(project);
+      let stagedRequests = 0;
       const current = () => {
         signal.throwIfAborted();
         if (this.store.get(id).revision !== revision || this.store.workspace(id)?.bindingID !== binding.bindingID) throw new Error("Specification or workspace changed during planning. Prepare a new plan.");
       };
-      // One fresh bounded request per target; optional exact dependency candidates
-      // cannot displace mandatory evidence. Omitted scope requires human review.
+      // Prefer one bounded request per target; oversized mandatory evidence uses
+      // resumable exact read/check stages. Omitted scope requires human review.
       for (const r of requirements) {
         current();
         if (plan.output?.packages.some((p) => p.requirementID === r.id)) continue;
-        const { prompt, evidenceIDs: allowedIDs, requirementIDs, reviewQuestion } = implementationPlanningContext(project, state, r.id);
-        checkExecutionContext(prompt, false, r.id, 0, true);
-        const result = await this.adapter.perform({ directory: binding.path, config: state.config!, prompt, coding: false, planning: true, signal, requirementID: r.id,
+        const request = (prompt: string) => this.adapter.perform({ directory: binding.path, config: state.config!, prompt, coding: false, planning: true, signal, requirementID: r.id,
           onSession: (sessionID) => { plan.sessionID = sessionID; plan.sessions!.push(sessionID); save(); }, onProgress: () => {} });
-        current();
-        const output = validateImplementationPlanning(JSON.parse(result), project, allowedIDs, [r.id]);
-        if (output.packages.some((p) => p.prerequisites.some((d) => !requirementIDs.has(d.requirementID)))) throw new Error("Planning prerequisite references behavior omitted from the supplied context.");
+        let output: ReturnType<typeof validateImplementationPlanning>, reviewQuestion: string | undefined;
+        try {
+          if (plan.stageWork?.[r.id]) throw new PlanningContextOverflow("Resume saved exact stages");
+          const context = implementationPlanningContext(project, state, r.id);
+          checkExecutionContext(context.prompt, false, r.id, 0, true);
+          const result = await request(context.prompt); current();
+          output = validateImplementationPlanning(JSON.parse(result), project, context.evidenceIDs, [r.id]);
+          if (output.packages.some((p) => p.prerequisites.some((d) => !context.requirementIDs.has(d.requirementID)))) throw new Error("Planning prerequisite references behavior omitted from the supplied context.");
+          reviewQuestion = context.reviewQuestion;
+        } catch (error) {
+          if (!(error instanceof PlanningContextOverflow)) throw error;
+          ({ output, reviewQuestion } = await runImplementationStages(project, state, r.id, () => save(true), current, request, () => {
+            if (stagedRequests >= 32) throw new PlanningBudgetPause("Planning paused after 32 staged requests. Completed packages and exact checks are saved. Choose Prepare plan explicitly to continue; completed calls will not repeat.");
+            stagedRequests++;
+          }));
+        }
         // App-owned limitation cannot be suppressed by a model returning no questions.
         // Keep within the existing format's twelve-question bound.
         if (reviewQuestion) {
@@ -172,9 +186,9 @@ export class ImplementationService {
         const order = suggestedPlanningOrder(project, state, plan.output);
         plan.output.packages.sort((a, b) => order.indexOf(a.requirementID) - order.indexOf(b.requirementID));
       } catch { /* Retain cyclic hard-edge proposals for explicit review. */ }
-      plan.status = "proposed"; save(true);
+      plan.status = "proposed"; plan.finishedAt = new Date().toISOString(); save(true);
     } catch (error) {
-      plan.status = signal.aborted ? "interrupted" : "failed"; plan.diagnostic = safeMessage(error instanceof Error ? error.message : error); save();
+      plan.status = signal.aborted || error instanceof PlanningBudgetPause ? "interrupted" : "failed"; plan.finishedAt = new Date().toISOString(); plan.diagnostic = safeMessage(error instanceof Error ? error.message : error); save();
       throw error;
     } finally { clearInterval(timer); }
   }

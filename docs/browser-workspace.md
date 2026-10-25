@@ -1,5 +1,15 @@
 # Browser workspace, epics, and estimated completeness
 
+## Unified run logs (2026-10-25)
+
+**Application menu → Logs** automatically includes definition reviews and older
+saved attempts alongside discovery and implementation diagnostics. **Overall progress
+→ View logs** opens the same timeline. Filter by source/area/problems or load older
+saved tasks; there is no extra assessment-log screen. New jobs record start/finish
+times, old planning entries use already saved creation times, and available durations
+are shown without guessing missing historical timing. See
+[run timing and retention](workspace-navigation.md#unified-run-timeline-and-timing-2026-10-25).
+
 ## Recover an exhausted definition review (2026-10-25)
 
 Open **Overall progress → Reviews that reached the retry limit → Recover

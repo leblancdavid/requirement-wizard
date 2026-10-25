@@ -15,6 +15,14 @@ export const implementationPlanningSchema = z.object({
   }).strict()).min(1).max(500),
 }).strict();
 export type ImplementationPlanningOutput = z.infer<typeof implementationPlanningSchema>;
+export const implementationPlanningWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-planning-batches-v1"),
+  requirementID: z.string().min(1), inputKey: z.string().regex(/^[a-f0-9]{64}$/),
+  batches: z.array(z.array(z.string().min(1)).min(1)).min(1).max(32),
+  attempts: z.number().int().min(0).max(3),
+  receipts: z.array(z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), output: implementationPlanningSchema,
+    attempts: z.number().int().min(1).max(3) }).strict()).max(64),
+}).strict();
+export type ImplementationPlanningWork = z.infer<typeof implementationPlanningWorkSchema>;
 export type ImplementationPlanning = {
   format: 1; id: string; revision: number; bindingID: string; createdAt: string;
   status: "generating" | "proposed" | "approved" | "dismissed" | "failed" | "interrupted";
@@ -22,7 +30,22 @@ export type ImplementationPlanning = {
   output?: ImplementationPlanningOutput; diagnostic?: string; sessionID?: string;
   approvedAt?: string; acceptedEdges?: string[]; resolution?: string;
   sessions?: string[];
+  finishedAt?: string;
+  stageWork?: Record<string, ImplementationPlanningWork>;
 };
+/** Cheap read/write gate; full exact ledgers are validated on replay/portable decode. */
+export function assertImplementationPlanningFormats(state: Pick<ExecutionState, "planning" | "planningHistory">) {
+  for (const plan of [state.planning, ...state.planningHistory ?? []]) {
+    if (!plan) continue;
+    if (plan.format !== 1) throw new Error("Unsupported implementation planning format. Saved work was not overwritten.");
+    if (plan.stageWork !== undefined) {
+      if (!plan.stageWork || typeof plan.stageWork !== "object" || Array.isArray(plan.stageWork)
+        || Object.values(plan.stageWork).some((work) => !work || work.format !== 1 || work.policy !== "exact-planning-batches-v1")) {
+        throw new Error("Unsupported staged implementation planning format. Saved work was not overwritten.");
+      }
+    }
+  }
+}
 export const planningEdgeID = (target: string, prerequisite: string) => JSON.stringify([target, prerequisite]);
 export function planningConfigFingerprint(state: ExecutionState) {
   const config = state.config;

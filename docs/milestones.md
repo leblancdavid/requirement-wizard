@@ -28,6 +28,12 @@ guardrails remain. Multi-requirement packages, executable subpackages, adaptive 
 dependency discovery and live planning qualification remain follow-on checks. This does
 not complete portable handoff/readiness milestones.
 
+The 2026-10-25 planning-context follow-up adds exact resumable read/check batches for
+oversized mandatory evidence, lossless encoding, non-evidentiary historical-assessment
+metadata and a 32-staged-request action pause. Deterministic upgrade/recovery tests and
+the focused planning browser check passed; live model quality and coding qualification
+remain unverified. See [planning contexts](implementation-workspace.md#large-planning-contexts-and-exact-stage-continuation-2026-10-25).
+
 DEC-031 adds opt-in, bounded changed-area assessment
 maintenance. This is a workflow slice, not completion of readiness or discovery
 milestones. True delta-only evidence review and live maintenance qualification remain

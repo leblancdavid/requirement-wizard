@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { definitionReviewHistory } from "./definition-review-history.js";
+import { logHistory } from "./log-history.js";
 import { activityPage, activitySnapshot, saveActivity } from "./activity.js";
 import { readMaintenance, saveMaintenance } from "./maintenance.js";
 import type { MaintenanceState } from "../core/maintenance.js";
@@ -19,6 +20,7 @@ import { dirname, join } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { assertImplementationPlanningFormats } from "../core/implementation-planning.js";
 import { definitionTaskSchema, validateDefinitionAssessment } from "../core/definition-assessment.js";
 import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
@@ -197,10 +199,13 @@ export class ProjectStore {
   execution(id: string): ExecutionState {
     if (!this.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(id)) throw new Error("Project or revision not found.");
     const row = this.db.prepare("SELECT payload FROM execution_state WHERE project_id = ?").get(id) as { payload: string } | undefined;
-    return row ? JSON.parse(row.payload) as ExecutionState : emptyExecution();
+    const state = row ? JSON.parse(row.payload) as ExecutionState : emptyExecution();
+    assertImplementationPlanningFormats(state);
+    return state;
   }
 
   saveExecution(id: string, state: ExecutionState, owner?: string, expected?: { revision: number; bindingID?: string }) {
+    assertImplementationPlanningFormats(state);
     if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution data format. Refresh before saving.");
     this.db.transaction(() => {
       if (expected && this.get(id).revision !== expected.revision) throw new StaleRevisionError();
@@ -924,7 +929,7 @@ export class ProjectStore {
         if (!project.questions.some((q) => q.id === helpRequest!.questionID && q.status !== "retired")) throw new Error("Question is missing or retired.");
         if (this.jobs(id).some((j) => j.helpRequest && (j.status === "pending" || (j.status === "running" && (j.leaseUntil ?? 0) > Date.now())))) throw new Error("This project already has an active question-help request.");
       }
-      const job: Job = { id: randomUUID(), projectID: id, expectedRevision: revision,
+      const job: Job = { id: randomUUID(), projectID: id, expectedRevision: revision, createdAt: new Date().toISOString(),
         status: "pending", model: project.model, leaseUntil: Date.now() + 360_000, ...(helpRequest ? { helpRequest } : {}), ...(scan ? { kind: "scan" as const } : {}) };
       this.db.prepare("INSERT INTO jobs VALUES (?, ?, ?)").run(job.id, id, JSON.stringify(job));
       this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(id);
@@ -1039,6 +1044,12 @@ export class ProjectStore {
 
   private saveJob(job: Job) {
     this.db.transaction(() => {
+      // Never fabricate historical start times. Record terminal observation only
+      // when a job actually transitions from pending/running in this process.
+      if (!job.finishedAt && !["pending", "running"].includes(job.status)) {
+        const previous = this.db.prepare("SELECT json_extract(payload, '$.status') AS status FROM jobs WHERE id = ?").get(job.id) as { status: string } | undefined;
+        if (previous && ["pending", "running"].includes(previous.status)) job.finishedAt = new Date().toISOString();
+      }
       this.db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(job), job.id);
       this.db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(job.projectID);
       if (["failed", "cancelled", "interrupted", "stale"].includes(job.status)) {
@@ -1224,6 +1235,7 @@ export class ProjectStore {
       const job = this.getJob(id);
       if (job.status !== "pending" || (job.leaseUntil ?? 0) <= Date.now() || leaseUntil <= Date.now()) throw new Error("Job cannot be claimed.");
       job.status = "running";
+      job.startedAt = new Date().toISOString();
       job.leaseUntil = leaseUntil;
       this.saveJob(job);
     }).immediate();
@@ -1594,6 +1606,8 @@ export class ProjectStore {
     return (this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND json_extract(payload, '$.definitionWork.epicID') = ?
       AND json_extract(payload, '$.definitionWork.inputKey') = ? ORDER BY rowid DESC LIMIT 20`).all(projectID, epicID, inputKey) as { payload: string }[]).map((row) => readStoredJob(row.payload));
   }
+
+  logHistory(projectID: string, query: unknown) { return logHistory(this.db, projectID, query); }
 
   checkpointDefinition(id: string, input: DefinitionWork, context: NonNullable<Job["context"]>, options: { leaseUntil?: number } = {}) {
     this.db.transaction(() => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { mkdir, mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
@@ -55,7 +55,7 @@ test("planning bounds optional exact candidates, retains mandatory evidence, and
     assert.equal(JSON.stringify(p), before, "No original evidence is rewritten");
     p.requirements = [target];
     assert.equal(implementationPlanningContext(p, state, target.id).reviewQuestion, undefined);
-    target.statement = "mandatory human behavior ".repeat(3000);
+    target.statement = Array.from({ length: 1500 }, (_, i) => createHash("sha256").update(`mandatory-${i}`).digest("hex")).join("");
     assert.throws(() => implementationPlanningContext(p, state, target.id), /Mandatory planning context alone.*Section characters/);
   } finally { store.close(); }
 });
@@ -191,7 +191,10 @@ test("planning rejects stale and malformed responses, supports cancellation, and
     const service = new ImplementationService(store, adapter, fakeGit);
     try {
       let p = seed(store, 1); store.connectWorkspace(p.id, p.revision, root);
-      if (scenario === "oversized") for (let i = 0; i < 5; i++) p = store.note(p.id, p.revision, "Mandatory human constraint. ".repeat(400));
+      if (scenario === "oversized") {
+        p.requirements[0]!.statement = Array.from({ length: 1600 }, (_, i) => createHash("sha256").update(`indivisible-${i}`).digest("hex")).join("");
+        const get = store.get.bind(store); store.get = (id) => id === p.id ? structuredClone(p) : get(id);
+      }
       service.configure(p.id, p.revision, config());
       const original = structuredClone(store.execution(p.id).config);
       service.start(p.id, p.revision, "plan");

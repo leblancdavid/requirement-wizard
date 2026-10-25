@@ -5,6 +5,7 @@ import { decisionIdentity, executionSchemaVersion } from "../core/assessment-ide
 import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
 import { workflowSchema, workflowReadinessSchema } from "../core/workflow.js";
+import { implementationPlanningWorkSchema } from "../core/implementation-planning.js";
 
 export const databaseSchemaVersion = 7;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
@@ -17,7 +18,7 @@ const savedAssessment = savedIdentity.extend({ contextPolicy: z.string().optiona
   semanticOrigin: z.object({ scope: z.enum(["workspace", "main"]), head: z.string(), capturedAt: z.string() }).strict().optional(),
   skill: z.object({ name: z.string(), version: z.string() }).passthrough().optional() });
 const executionEnvelope = z.object({ schemaVersion: z.number().int().nonnegative().optional(), version: z.number().int().nonnegative(),
-  planning: z.object({ format: z.literal(1) }).passthrough().optional(), planningHistory: z.array(z.object({ format: z.literal(1) }).passthrough()).optional(),
+  planning: z.object({ format: z.literal(1), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough().optional(), planningHistory: z.array(z.object({ format: z.literal(1), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough()).optional(),
   assessments: z.record(savedAssessment), workspaceAssessments: z.record(savedAssessment).optional(), mainAssessments: z.record(savedAssessment).optional(),
   delivered: z.record(savedIdentity), deliveryHistory: z.array(savedIdentity).optional(), history: z.array(z.unknown()) }).passthrough();
 

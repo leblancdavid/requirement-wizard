@@ -3,7 +3,7 @@ import { z } from "zod";
 import { analysisSchema, stagedDefinitionAnalysisSchema, scanAnalysisSchema, projectSchema, modelSelection, researchEvidenceSchema, reviewFingerprint, type Project, type Job, type Submission, type ModelSelection } from "../core/model.js";
 import { emptyExecution, executionConfigSchema, assessmentOutputSchema, type ExecutionState } from "../core/execution.js";
 import { executionSchemaVersion, canonicalJSON } from "../core/assessment-identity.js";
-import { implementationPlanningSchema } from "../core/implementation-planning.js";
+import { implementationPlanningSchema, implementationPlanningWorkSchema } from "../core/implementation-planning.js";
 import { retrievalWorkSchema } from "../core/gap-retrieval.js";
 import { definitionWorkSchema } from "../core/definition-stages.js";
 import { definitionTaskSchema } from "../core/definition-assessment.js";
@@ -205,10 +205,11 @@ const executionSchema = z.object({ schemaVersion: z.literal(executionSchemaVersi
   }).strict()).optional(),
   planning: z.object({ format: z.literal(1), id: z.string(), revision: z.number().int(), bindingID: z.literal("portable"), createdAt: z.string(),
     status: z.enum(["proposed", "approved", "dismissed", "failed", "interrupted"]), configFingerprint: z.string(), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
-    output: implementationPlanningSchema.optional(), approvedAt: z.string().optional(), acceptedEdges: z.array(z.string()).optional(), resolution: z.string().optional(),
+    output: implementationPlanningSchema.optional(), stageWork: z.record(implementationPlanningWorkSchema).optional(), finishedAt: z.string().optional(), approvedAt: z.string().optional(), acceptedEdges: z.array(z.string()).optional(), resolution: z.string().optional(),
   }).strict().optional(),
 }).strict();
 const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string().min(1), expectedRevision: z.number().int().positive(),
+  createdAt: z.string().optional(), startedAt: z.string().optional(), finishedAt: z.string().optional(),
   status: z.enum(["completed", "failed", "cancelled", "interrupted", "stale"]), model: modelSelection.omit({ connectionID: true }).strict(), leaseUntil: z.null(),
   kind: z.literal("scan").optional(), result: z.union([analysisSchema, stagedDefinitionAnalysisSchema]).optional(), researchEvidence: z.array(researchEvidenceSchema).optional(),
   portableReceipt: z.literal(1).optional(),

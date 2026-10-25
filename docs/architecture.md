@@ -6,6 +6,13 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/service/planning-context.ts` / `planning-stages.ts`: lossless bounded planning
+  contexts and exact staged read/check fallback for mandatory implementation evidence.
+  Versioned ledgers in the existing planning envelope preserve accepted requests and
+  spent attempts through SQLite/portable continuation. Packages publish only after
+  all stages and still require human planning approval; see
+  [large planning contexts](implementation-workspace.md#large-planning-contexts-and-exact-stage-continuation-2026-10-25).
+
 - `src/core/workflow.ts`, `src/storage/workflow.ts`, `src/service/workflow.ts`:
   coordinator over existing discovery/queue publication paths, separate settings and
   scheduler CAS, worker exclusion, shared pre-dispatch accounting, provenance reuse

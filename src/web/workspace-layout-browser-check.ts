@@ -60,7 +60,8 @@ try {
   await expect(logs.locator("pre")).toContainText("<script>not executable</script>");
   await expect(logs.locator("pre")).not.toContainText("private-secret");
   await expect(logs.locator("script")).toHaveCount(0);
-  await expect(logs).toContainText("Time not recorded");
+  await expect(logs).toContainText("Started:");
+  await expect(logs).toContainText("Finished:");
   await logs.getByLabel("Problems only", { exact: true }).check();
   await expect(logs.locator(".log-record")).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });

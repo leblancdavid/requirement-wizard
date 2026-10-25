@@ -85,11 +85,14 @@ new code, fetch main, run checks, modify source or establish branch availability
   candidates do not prevent smaller ones from fitting. Ranking is not proof of dependency
   coverage: omitted candidates are counted explicitly, cannot be cited or proposed as
   prerequisites, and cause an app-owned unresolved question requiring human resolution
-  before approval. This remains one request per target, not exhaustive dependency analysis.
-  Other targets' human histories are explicitly omitted. Oversized mandatory context
-  still blocks before inference, with section sizes; splitting a target may not reduce
-  shared evidence or guardrails. No mandatory evidence is truncated.
-  Each request consumes provider allowance; the UI explains the per-requirement calls.
+   before approval. The single-context path uses one request per target, not exhaustive dependency analysis.
+  Other targets' unrelated human histories are explicitly omitted. Mandatory context
+  first uses lossless text/identifier/record-table sharing; historical assessment
+  bodies are replaced by explicitly non-evidentiary current/status metadata. Original
+  assessments remain saved and are not reclassified as current inspected code.
+  If mandatory evidence still exceeds one request, the staged protocol below applies.
+  No mandatory evidence is truncated. Each request consumes provider allowance; the
+  UI explains that larger requirements can need many reading/checking requests.
 - Package checkpoints and session IDs persist after each successful response. Explicit
   retry skips completed packages only when specification revision, workspace binding and
   saved settings still match. Cancellation, malformed output and stale responses retain
@@ -113,6 +116,62 @@ new code, fetch main, run checks, modify source or establish branch availability
   prerequisite workflow. Legacy projects acquire no implicit AI dependencies or approval
   requirement on upgrade. Changing specification, workspace or settings makes a plan
   stale; completed code/evidence is retained. Replacement proposals retain prior plans.
+
+### Large planning contexts and exact-stage continuation (2026-10-25)
+
+**Prepare plan** now falls back to exact staged planning when the mandatory target
+closure cannot fit one 48,000-character request after lossless encoding. The target,
+project policy and configured dependencies remain exact in each request. Complete
+guardrail/supporting requirement records, human sources, questions and research are
+partitioned into at most 32 exact-record batches, without sampling or truncation.
+Every batch is read into a bounded draft, then every batch verifies that draft before
+the package can be exposed as a proposal. Verification may remove unsupported
+prerequisites and add unresolved questions; it cannot rewrite steps/verification,
+add positive prerequisite findings or erase existing questions. Unsupported steps
+must be raised for human resolution, not silently accepted as established behavior.
+
+Each request includes only its exact batch, the target/global constraints and a saved
+proposal draft. Cross-batch links are navigation, not authority to infer unavailable
+evidence. Citations and prerequisite targets must be supported by supplied/read
+records. Indispensable cross-batch uncertainty remains a question. Staged packages
+always carry an app-owned review warning, including the count of optional approved
+dependency candidates not reviewed by this mandatory-only protocol. Human review
+and explicit question-resolution notes remain required before approval/coding.
+This is bounded proposal preparation, not exhaustive dependency proof.
+
+There are at most 64 stages and three spent attempts per unfinished stage. Draft
+headroom is reserved during exact partitioning, but no draft/evidence is truncated
+if it later grows too large. An indivisible record, target/global envelope, growing
+draft, or the batch bound can still block before dispatch. The existing full request
+preflight includes schema, skill and runtime reserve; its 48k cap is unchanged.
+One action pauses after 32 staged requests across targets. This cap is separate from
+the existing single-context per-target path. Stop/cancellation, stale inputs and
+connection/validation failures retain completed stages and spent attempts. Restart
+does not initiate calls. Choose **Prepare plan** explicitly to continue compatible
+unfinished work; completed packages and accepted requests are not repeated.
+
+New partial ledgers are versioned inside the existing planning envelope and portable
+projection; see [migration/recovery](migrations.md#exact-staged-implementation-planning-2026-10-25).
+Existing compatible completed packages, approved plans, assessments and delivery
+evidence are not invalidated by this representation change.
+
+Verification includes deterministic wire round trips, complete record read/check
+coverage, verification restrictions, failure/cancellation/staleness, spent attempts,
+32-request pause/resume, SQLite reopen, portable replay and future-format rejection.
+The focused `npm run test:browser:planning` checks usage guidance, saved-step progress,
+Stop/reload/explicit continuation, retained history, review questions and 390px layout.
+Screenshot: `.reqwizit-state/browser-planning-stages-mobile.png`. A read-only local
+reconstruction of the reported Rust Grind Galaxy target planned 175 mandatory records
+in 15 batches/30 stages. This is not live planning qualification: no personal-project
+writes or live model/GitHub requests were made, and actual model output may still
+expose a context/validation/relationship blocker.
+
+Checks run on Windows Node 22.23.4: type check, all 192 pretests and 652 main tests,
+UI build, focused staged-planning browser checks and diff whitespace checks passed.
+Aggregate browser checks passed workspace layout and model selection, then stopped
+at the existing missing **Project map** tab assertion (`browser-check.ts:706`); later
+portable/specification browser runners did not execute. Existing bundle-size warnings
+remain. No live planning or coding/delivery qualification is claimed.
 
 Planning format 1 is additive within execution schema 1; see [migrations.md](migrations.md).
 Deterministic service/runtime and browser checks cover validation, cyclic-edge rejection,

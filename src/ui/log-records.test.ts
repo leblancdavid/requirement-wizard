@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { logLimit, logPreview, projectLogs, redactLog, retainLog, type LogRecord } from "./log-records.js";
+import { logLimit, logPreview, logTiming, projectLogs, redactLog, retainLog, type LogRecord } from "./log-records.js";
+import { emptyExecution } from "../core/execution.js";
 import type { Job } from "../core/model.js";
 
 test("diagnostic redaction covers headers, JSON tokens and query credentials", () => {
@@ -42,4 +43,22 @@ test("job context and report provenance are retained in the log projection", () 
   assert.equal(record.title, "Project review"); assert.match(record.detail, /Indivisible evidence/);
   assert.match(record.detail, /evidence/); assert.ok(!record.detail.includes("private-secret"));
   assert.equal(job.diagnostic, "access_token=private-secret");
+});
+
+test("log timing uses real lifecycle times or measured durations without treating recorded events as starts", () => {
+  const record: LogRecord = { id: "timed", title: "Review", source: "Discovery", detail: "", at: "2026-10-25T12:00:00.000Z", atLabel: "Started", finishedAt: "2026-10-25T12:00:02.500Z" };
+  assert.match(logTiming(record), /Started:.*Finished:.*Duration: 2.5s/);
+  assert.match(logTiming({ ...record, atLabel: "Recorded" }), /Duration not recorded/);
+  assert.match(logTiming({ ...record, at: undefined, finishedAt: undefined, durationMs: 1200 }), /Start time not recorded.*Duration: 1.2s/);
+  assert.ok(!logTiming({ ...record, at: "invalid", finishedAt: "invalid" }).includes("Invalid Date"));
+});
+
+test("build planning and its earlier attempts use already saved creation times and retain run identity", () => {
+  const state = emptyExecution();
+  state.planning = { format: 1, id: "current", revision: 5, bindingID: "local", createdAt: "2026-10-25T12:00:00.000Z", finishedAt: "2026-10-25T12:00:03.000Z", status: "failed", configFingerprint: "fixture", model: { providerID: "openai", modelID: "fixture" } };
+  state.planningHistory = [{ ...state.planning, id: "previous", createdAt: "2026-10-24T12:00:00.000Z", finishedAt: undefined }];
+  const before = structuredClone(state), records = projectLogs([], [], state);
+  assert.equal(records.length, 2); assert.equal(records[0]!.at, state.planning.createdAt);
+  assert.match(logTiming(records[0]!), /Duration: 3.0s/); assert.match(logTiming(records[1]!), /Duration not recorded/);
+  assert.deepEqual(state, before);
 });

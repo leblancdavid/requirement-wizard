@@ -1,5 +1,96 @@
 # Data migrations and upgrade compatibility
 
+## Unified logs and recorded run times (2026-10-25)
+
+Source: existing jobs/planning/execution and browser-session diagnostics. Target:
+the same SQLite/execution/portable versions with optional job `createdAt`, `startedAt`,
+`finishedAt` ISO strings and optional planning-generation `finishedAt`. Metadata is
+separate from spec revision, execution CAS and assessment/checkpoint identities. No
+startup data rewrite/backfill, schema reset or model reassessment is required.
+
+New jobs get creation time at insertion, start time only when claimed, and finish
+time only on their first persisted transition from pending/running to terminal.
+Later telemetry/metrics saves do not rewrite that terminal timestamp. Recovery's
+terminal time is the observed state transition, not a claim about when a provider
+or crashed worker actually stopped. New planning generation success/failure records
+an end time, while previously saved creation dates remain unchanged. Existing
+assessments, receipts, selected models, stable IDs, spent attempts and completed work
+are preserved. Timing fields survive portable continuation for retained jobs/plans;
+the portable job/planning validators explicitly permit them. Do not downgrade
+portable readers that reject these added strict fields.
+
+Historical jobs are never stamped merely because they are read. The unified history
+API can read an already saved activity-event **Recorded** timestamp, but does not
+persist it as a start/end or infer duration from it. Missing starts/finishes/durations
+stay unknown. Previously recorded measured durations and existing planning/code-run
+creation times are used as their actual evidence permits. Browser-only diagnostics
+record their observation time with a distinct label and remain session-only; startup
+does not recreate them. There is no full stdout/provider transcript migration.
+
+The new read-only `log-history` API and common viewer replace the separate assessment
+history screen, not its underlying data. All saved job types can be searched/paged
+in SQL with bounded diagnostic-only responses. Existing `definition-history` API and
+older navigation targets remain compatible. No original prompts, responses, account
+data or sessions are added to this endpoint. The metadata-only discovery export's
+no-timestamps/no-prose contract remains unchanged.
+
+Upgrade tests use legacy payloads without timestamps, repeated SQLite reopen and
+unchanged original bytes, portable timing round trips, deterministic transition times,
+bounded old-history paging, source/area/search filters, API authentication/origin
+checks and absence of model output in summaries. UI tests cover recorded-vs-started
+semantics, unknown dates/durations and earlier planning creation times. Unified-log
+browser checks cover automatic assessment/discovery visibility, older failures,
+filters, timings, redaction/escaping, reload/error retry and mobile without inference.
+
+## Exact staged implementation planning (2026-10-25)
+
+Source: planning format 1 in execution schema 1, including older context-blocked or
+partially completed plans. Target: the same envelopes/SQLite schema/portable format,
+with optional `stageWork: Record<requirementID, work>`. Each work has `format: 1`,
+`policy: exact-planning-batches-v1`, target/input identity, exact record-key batches,
+spent unfinished-stage attempts and append-only receipts containing request hashes,
+validated output and attempts. The plan retains its original selected-model provenance.
+No optimistic revision, assessment fingerprint, completed-package identity or existing
+approval is changed. Startup alone does not convert data or initiate inference.
+
+New requests omit full historical assessment bodies from prompts (retained unchanged
+in execution state), explicitly supplying only non-evidentiary current/status metadata.
+Exact source/requirement/question text may use lossless existing encodings. This is a
+request representation/scale change, not permission to infer preferences, bypass
+review or change completion semantics. Compatible prior completed packages are reused
+without calls. Old failures and previous plan objects remain historical in SQLite.
+
+On explicit retry, existing revision/settings/workspace compatibility gates still
+apply. Saved batches and receipts are copied into the new plan, then replayed against
+the exact versioned input identity and context hashes before dispatch. Every accepted
+response and every spent attempt is checkpointed with the existing execution lease,
+expected revision/binding and CAS protections. A crash after a dispatch checkpoint
+does not refund the attempt; an accepted response checkpoint before publication can
+be replayed/published without repeating it. Up to 32 staged requests run per action;
+budget pause spends no new attempt. Completed work is never recreated solely because
+the app switched from one-context to staged requests. Genuinely changed inputs retain
+previous dated work and require a current plan under existing freshness rules.
+
+Portable execution preserves exact stage ledgers but continues excluding machine-local
+session IDs and full plan/activity histories. Read/check requests are fresh read-only
+sessions, not saved transcript continuations. Input identities exclude machine-local
+paths/bindings so identical portable records can replay after explicit clone adoption;
+the normal new binding/settings/revision checks remain required. The staged protocol
+and wire rendering must remain immutable for format/policy 1, or receive a new
+versioned compatibility boundary in a future change.
+
+Unsupported future stage formats/policies fail on startup, execution reads/writes,
+replay and portable decode without overwriting saved payloads. Do not downgrade while
+using staged work: older portable parsers reject the added strict field, and older
+SQLite clients may ignore it and repeat unfinished requests rather than honor it.
+Recovery is explicit restart/Prepare plan with the current app, never reset/delete.
+
+Upgrade tests exercise old context-blocked plans, retained prior packages/history,
+partial stage failure and repeated SQLite reopen, portable exact replay, third-party
+future-format bytes left unchanged, cancellation/stale rejection, pre-dispatch attempt
+accounting and the 32-request pause/continuation boundary. No app-data reset, personal
+project write or paid model call is required by this migration.
+
 ## Explicit exhausted-definition-stage recovery (2026-10-25)
 
 Source: saved `exact-batches-v1` work, including exhausted legacy UUID-citation

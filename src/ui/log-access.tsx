@@ -6,7 +6,7 @@ let state: LogState = { open: false, records: [] };
 const listeners = new Set<() => void>();
 export const LogProject = createContext<string | undefined>(undefined);
 function publish(next: LogState) { state = next; for (const listener of listeners) listener(); }
-export function recordLog(record: LogRecord) { publish({ ...state, records: retainLog(state.records, record) }); }
+export function recordLog(record: LogRecord) { publish({ ...state, records: retainLog(state.records, { ...record, at: record.at ?? new Date().toISOString(), atLabel: record.atLabel ?? "Recorded" }) }); }
 export function openLogs(target?: string) { publish({ ...state, open: true, target }); }
 export function closeLogs() { publish({ ...state, open: false, target: undefined }); }
 export function useLogs() {

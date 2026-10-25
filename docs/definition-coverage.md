@@ -178,14 +178,15 @@ bundle warnings remain. No live model calls or personal-project edits were made.
 
 ## Finding earlier failures (2026-10-24)
 
-Open **Overall progress → View assessment history**, or **Logs → View assessment
-history**. Saved assessment attempts are grouped by area, with area/unfinished-only
-filters and older-page navigation. Failed responses, evidence blockers and pauses
-have distinct labels. Each attempt identifies whether it is the latest saved task
-for that area or earlier history; this does not establish current evidence freshness
-or that an earlier failure is resolved. Expand **Failure details** for its original
-saved diagnostic, or use its **View logs** link. A newer paused task no longer hides
-older response errors. Opening any of these views starts no model calls.
+Updated 2026-10-25: open **Overall progress → View logs** or **Application menu →
+Logs**. Definition attempts load automatically alongside other run logs; there is
+no separate assessment-history screen. Select **Source → Definition review**, an
+area and **Problems only** if needed; use **Older saved tasks** to reach earlier
+attempts. Expand an entry's **Log details** for the original bounded diagnostic.
+Each entry shows its task identity, revision, area, recorded timing and saved-step/
+current-run request counts where known. An earlier failure is historical, not proof
+that a newer task failed; current coverage freshness remains separate. Opening,
+filtering or paging logs starts no model calls. See [unified timeline](workspace-navigation.md#unified-run-timeline-and-timing-2026-10-25).
 
 The authenticated read-only `GET /api/projects/:id/definition-history` endpoint
 selects at most 25 summaries per page in SQLite before returning them, rather than

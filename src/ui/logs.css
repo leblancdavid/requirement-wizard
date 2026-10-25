@@ -1,6 +1,13 @@
 .logs-panel { overflow-wrap: anywhere; }
-.log-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-block: 16px; }
-.log-filters label { flex: 1 1 140px; }
+.log-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; margin-block: 16px; }
+.log-filters label { min-width: 0; }
+.log-filters label:has(input[type="checkbox"]) { grid-column: 1 / -1; }
+.logs-panel .log-filters select, .logs-panel .log-filters input[type="search"] { height: 44px; min-width: 0; }
+.logs-panel .log-filters select { white-space: nowrap; text-overflow: ellipsis; }
 .log-record { padding-block: 16px; border-bottom: 1px solid var(--border); }
 .log-record h3 { margin: 0 0 8px; }
+.log-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-block: 12px; }
+.logs-panel button.secondary { min-height: 44px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 7px; }
+.log-timing { margin: 6px 0; font-variant-numeric: tabular-nums; color: var(--muted); }
+@media (max-width: 540px) { .log-actions, .log-filters { display: grid; grid-template-columns: minmax(0, 1fr); } }
 .log-record pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; padding: 12px; background: var(--surface); font-size: .85rem; }
