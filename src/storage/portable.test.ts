@@ -16,6 +16,10 @@ import { command } from "../service/git-delivery.js";
 import { emptyExecution, type ExecutionConfig } from "../core/execution.js";
 import { assessmentCaptureFingerprint, assessmentFootprint } from "./assessment.js";
 import { captureWorkspace } from "./scan.js";
+import { definitionQuestionTask } from "../core/readiness-questions.js";
+import { definitionInputKey } from "../core/definition-identity.js";
+import { DiscoveryQueue } from "../service/queue.js";
+import { runReadinessStages } from "../service/readiness-stages.js";
 
 const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
 const selection = { providerID: "openai", modelID: "fixture", connectionID: "local-private-account" } as const;
@@ -41,6 +45,60 @@ function rewrite(root: string, name: string, mutate: (value: any) => void) {
   const manifest = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8")); manifest.hashes[name] = hash(content);
   writeFileSync(join(directory, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
 }
+
+test("portable definition clarification retains current receipts and exact blocker provenance without replay or full activity history", async () => {
+  const f = fixture(); let clone: ProjectStore | undefined, queue: DiscoveryQueue | undefined;
+  try {
+    const p = f.store.get(f.project.id), { job } = f.store.beginJob(p.id, p.revision);
+    f.store.claimJob(job.id, Date.now() + 60000);
+    f.store.attachContext(job.id, { revision: p.revision, focusEpicID: "project", includedIDs: [p.sources[0]!.id], omittedIDs: [], budget: 48000, characters: 0,
+      definitionAssessment: { format: 1, epicID: "project", inputKey: definitionInputKey(p, "project") } });
+    const blocked = f.store.blockDefinition(job.id, "Review the settled release scope before inventing a new decision.");
+    const task = definitionQuestionTask(p, "project", blocked);
+    const service = new DiscoveryService(f.store, { async analyze() { return { summary: "No new human decision is needed.", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] }; } });
+    const completed = await service.analyze(p.id, p.revision, { readinessQuestions: task });
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    const current = f.store.get(p.id);
+    f.store.connectWorkspace(p.id, current.revision, f.root); assert.equal(f.store.syncWorkspace(p.id)?.status, "saved");
+    const bundle = readPortableWorkspace(f.root), decoded = decodePortable(bundle.files, selection);
+    assert.ok(decoded.continuation.jobs.some((j) => j.id === job.id), "Keep exact source blocker needed by the task");
+    assert.ok(decoded.continuation.jobs.some((j) => j.id === completed.id), "Keep the completed no-question receipt");
+    assert.equal(decoded.continuation.jobs.length, 2, "Do not export unrelated interpretation/approval activity");
+    const future = structuredClone(bundle.files), payload = JSON.parse(future["continuation.json"]!);
+    payload.jobs.find((j: { id: string }) => j.id === completed.id).context.readinessQuestions.format = 99;
+    future["continuation.json"] = JSON.stringify(payload);
+    assert.throws(() => decodePortable(future, selection), /discriminator|Expected/);
+    clone = new ProjectStore(":memory:"); const opened = clone.openWorkspace(f.root, selection);
+    queue = new DiscoveryQueue(new DiscoveryService(clone, { async analyze() { assert.fail("Cloned compatible clarification must be reused"); } }));
+    const reused = queue.clarifyDefinition(opened.id, opened.revision, "project");
+    assert.equal(reused.reused, true); assert.match(reused.result!.summary, /No new human decision/);
+    assert.deepEqual(clone.get(opened.id).sources, current.sources);
+    assert.deepEqual(clone.get(opened.id).requirements, current.requirements);
+  } finally { await queue?.close(); clone?.close(); f.cleanup(); }
+});
+
+test("portable staged clarification resumes in an empty store without repeating a completed read", async () => {
+  const f = fixture(); let clone: ProjectStore | undefined;
+  try {
+    const p = f.project, source = f.store.beginJob(p.id, p.revision).job;
+    f.store.claimJob(source.id, Date.now() + 60000);
+    f.store.attachContext(source.id, { revision: p.revision, focusEpicID: "project", includedIDs: [p.sources[0]!.id], omittedIDs: [], characters: 0, budget: 48000,
+      definitionAssessment: { format: 1, epicID: "project", inputKey: definitionInputKey(p, "project") } });
+    const blocked = f.store.blockDefinition(source.id, "Compare original product rules"), task = definitionQuestionTask(p, "project", blocked);
+    const job = f.store.beginJob(p.id, p.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    await runReadinessStages(f.store, { async analyze() { return { summary: "Saved reading", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] }; } },
+      p, job, task, { signal: new AbortController().signal, blockedJob: blocked, limits: { requests: 1, durationMs: 60000 } });
+    f.store.connectWorkspace(p.id, p.revision, f.root); assert.equal(f.store.syncWorkspace(p.id)?.status, "saved");
+    clone = new ProjectStore(":memory:"); const opened = clone.openWorkspace(f.root, selection); let calls = 0;
+    const service = new DiscoveryService(clone, { async analyze(_p, { context }) {
+      calls++; assert.equal(context.manifest.readinessStage!.phase, "check", "Completed read must not repeat");
+      return { clarificationVerdict: { keepQuestions: [], summary: "No human question remains" } };
+    } });
+    const completed = await service.analyze(opened.id, opened.revision, { readinessQuestions: task });
+    assert.equal(completed.status, "completed", completed.diagnostic); assert.equal(calls, 1);
+    assert.deepEqual(clone.get(opened.id).requirements, p.requirements);
+  } finally { clone?.close(); f.cleanup(); }
+});
 
 test("release gate: partial assessment -> commit -> actual clone -> empty database -> reuse completed calls", async () => {
   const f = fixture(); let producer: ImplementationService | undefined, consumer: ImplementationService | undefined, clonedStore: ProjectStore | undefined;

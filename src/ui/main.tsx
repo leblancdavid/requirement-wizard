@@ -24,6 +24,7 @@ import { queueActivities } from "./queue-activity.js";
 import { ImplementationTab } from "./implementation.js";
 import { ProjectProgress } from "./project-progress.js";
 import { definitionDecisions } from "../core/definition-decisions.js";
+import type { ReadinessQuestionTask } from "../core/readiness-questions.js";
 import { ProjectActivityFeed } from "./project-activity.js";
 import { LazyDetails } from "./lazy-details.js";
 import { projectProgress } from "../core/progress.js";
@@ -154,6 +155,8 @@ function App() {
   const issueDrafts = useRef<Record<string, ReviewDraft>>({});
   const openIssue = (submissionID: string) => { if (project) setIssue({ projectID: project.id, submissionID }); };
   const [savedMessage, setSavedMessage] = useState<{ id: string; text: string } | null>(null);
+  const [definitionClarification, setDefinitionClarification] = useState<{ projectID: string; task: ReadinessQuestionTask; reused: boolean; result?: Job["result"] }>();
+  const openedClarification = useRef<string>(undefined);
   const project = data?.project;
   const openProcessingQueue = () => { if (project) setQueueRequest((previous) => ({ projectID: project.id, value: (previous?.value ?? 0) + 1 })); };
   const openMaintenanceSettings = () => { setMaintenanceSettingsRequested(true); navigate("settings"); };
@@ -366,6 +369,23 @@ function App() {
   // changes arriving through polling. Explicit navigation can still open another.
   const activeQuestionID = pagedQuestions.some((question) => question.id === expandedQuestion)
     ? expandedQuestion : questionFilter === "open" ? pagedQuestions[0]?.id ?? null : null;
+  useEffect(() => {
+    if (!project || definitionClarification?.projectID === project.id) return;
+    const saved = [...(data?.jobs ?? [])].reverse().find((job) => job.readinessProgress && job.status !== "completed" && job.context?.readinessQuestions);
+    if (saved?.context?.readinessQuestions) setDefinitionClarification({ projectID: project.id, task: saved.context.readinessQuestions, reused: false });
+  }, [project?.id, data?.jobs, definitionClarification?.projectID]);
+  const clarificationJob = definitionClarification?.projectID === project?.id ? [...(data?.jobs ?? [])].reverse()
+    .find((job) => JSON.stringify(job.context?.readinessQuestions) === JSON.stringify(definitionClarification?.task)) : undefined;
+  const clarificationResult = clarificationJob?.result ?? definitionClarification?.result;
+  const clarificationFinished = clarificationJob?.status === "completed" || definitionClarification?.reused;
+  useEffect(() => {
+    if (!project || definitionClarification?.projectID !== project.id || !clarificationFinished) return;
+    const token = JSON.stringify(definitionClarification.task);
+    if (openedClarification.current === token) return;
+    const question = project.questions.find((q) => q.epicID === definitionClarification.task.epicID && q.status === "pending"
+      && clarificationResult?.questions.some((newQuestion) => newQuestion.text === q.text));
+    if (question) { setExpandedQuestion(question.id); openedClarification.current = token; }
+  }, [project, definitionClarification, clarificationFinished, clarificationResult]);
   const latestSubmission = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status));
   const requirements = project?.requirements.filter((item) => epicID === "all" || item.epicID === epicID) ?? [];
   const implementationRemaining = useMemo(() => {
@@ -399,10 +419,23 @@ function App() {
     const source = project.sources.find((s) => s.id === question.sourceID);
     return <QuestionCard key={`${project.id}:review:${question.id}:${question.sourceID ?? "new"}`} inline question={question} area={areaTitle(epics.find((e) => e.id === question.epicID))} expanded={true} onToggle={() => {}} onCancel={() => { drafts.current.delete(question.id); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={source?.text} initialKind="answer" number={0} disabled={sending.includes(question.id)} dismissDisabled={true} onSave={(kind, text) => saveAnswer(question, kind, text)} notice={<ItemProcessingNotice error={itemErrors[question.id]} />} />;
   };
+  async function clarifyDefinition(epicID: string) {
+    if (!project) return;
+    setPending(true);
+    try {
+      const result = await api<{ task: ReadinessQuestionTask; reused: boolean; result?: Job["result"] }>(`projects/${project.id}/clarify-definition`, {
+        revision: project.revision, epicID, confirmAIUsage: true,
+      });
+      setDefinitionClarification({ projectID: project.id, ...result });
+      setIssue(undefined); setEpicID(epicID); setQuestionFilter("open"); setExpandedQuestion(null); setTab("discover");
+      await load();
+    } finally { setPending(false); }
+  }
   const renderReview = (focusRequirementID?: string) => {
     if (!project || !data) return null;
     return <ReviewQueue key={`${project.id}:${focusRequirementID ?? "list"}`} draftStore={focusRequirementID ? issueDrafts : undefined} focusRequirementID={focusRequirementID} openIssue={openIssue} visible={!!focusRequirementID || tab === "review"} project={project} submissions={data.submissions} jobs={data.jobs} epicID={focusRequirementID ? "all" : epicID} sending={sending} submit={submit} itemErrors={itemErrors} resume={() => focusRequirementID ? processBlocking(data.submissions.filter((s) => s.input.type === "review" && s.input.requirementID === focusRequirementID && s.status === "needs-attention" && !s.conflict).map((s) => s.id)) : void act(explore)}
       processBlocking={processBlocking} renderClarification={focusRequirementID || tab === "review" ? renderClarification : undefined}
+      clarifyDefinition={clarifyDefinition}
       openQuestion={(questionID) => { const q = project.questions.find((q) => q.id === questionID); if (!q) return; setIssue(undefined); setEpicID(q.epicID); setTab("discover"); setQuestionFilter(queuedQuestionIDs.has(questionID) ? "submitted" : q.status === "answered" ? "answered" : q.status === "pending" ? "open" : "later"); setExpandedQuestion(questionID); }}
       disabled={busy || connectionChanged || needsInitialization} disabledReason={discoveryReason}
       refine={() => void act(async () => { await api(`projects/${project.id}/analyze`, { revision: project.revision, refinementOnly: true, research: false, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) }); })}
@@ -525,6 +558,14 @@ function App() {
             {tab === "implementation" && <ImplementationTab key={project.id} project={project} state={data.execution} evaluation={evaluation!} executionIndex={executionIndex!} active={data.implementationActive} disabled={pending || data.active} discoveryActive={data.active} connected={!!data.workspace} workspaceID={data.workspace?.bindingID} epicID={epicID} inspectRepository={inspectRepository} action={implementationAction} />}
             {(tab === "history" || tab === "research") && <div className="filter-row"><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Changes & outcomes</button><button className={tab === "research" ? "active" : ""} onClick={() => setTab("research")}>Research sources</button></div>}
             {tab === "discover" && <>
+              {definitionClarification?.projectID === project.id && (epicID === "all" || epicID === definitionClarification.task.epicID) && <section className="save-notice" role="status" aria-label="Definition clarification">
+                {clarificationFinished ? clarificationResult?.questions.length ? <><strong>Focused questions are ready.</strong><p>Choose an answer option below or write your own answer, then save the response. Earlier decisions stay saved; asking a question does not resolve the assessment.</p></>
+                  : <><strong>No new product question was established.</strong><p>{clarificationResult?.summary ?? "The findings did not establish a new choice for you. No answer or specification change is required by this result."}</p></>
+                  : clarificationJob?.readinessProgress && !data.active && ["interrupted", "cancelled", "failed"].includes(clarificationJob.status) ? <><strong>Clarification paused.</strong><p>{clarificationJob.readinessProgress.completed} / {clarificationJob.readinessProgress.total} exact read/check steps saved. No partial questions were published. Continuing uses your AI allowance; completed requests and spent attempts are retained.</p><p>{clarificationJob.diagnostic}</p><ActionButton disabled={busy || connectionChanged} onClick={() => void act(() => clarifyDefinition(definitionClarification.task.epicID), "Continuing saved clarification…")}>Continue clarification</ActionButton></>
+                  : (clarificationJob && ["failed", "cancelled", "interrupted", "stale"].includes(clarificationJob.status) || !pending && !data.active && !clarificationJob) ? <><strong>Clarification could not finish.</strong><p>Your earlier decisions are unchanged. See Processing &amp; queue and Logs before explicitly trying again.</p></>
+                    : <><strong>Preparing focused questions…</strong><p>AI is checking whether this area's findings actually need a human decision. You do not need to type a correction from assessment prose.</p></>}
+                {clarificationJob?.readinessProgress && data.active && <p>{clarificationJob.readinessProgress.phase === "read" ? "Reading exact evidence" : "Checking proposed questions"}: {clarificationJob.readinessProgress.completed} / {clarificationJob.readinessProgress.total} steps saved. No questions publish before all batches finish.</p>}
+              </section>}
               <SpecificationChanges project={project} inspect={() => setTab("review")} />
               <QuestionCleanup project={project} disabled={busy || connectionChanged} queuedIDs={protectedQuestionIDs} replaceDisabled={!project.scans.length} retire={(ids, regenerate) => act(() => dismissQuestions(ids, regenerate))} />
               <div className="filter-row" aria-label="Question filters">{([ ["open", "To answer"], ["answered", "Previous answers"], ["later", "Deferred / delegated"], ["submitted", "Submitted"] ] as const).map(([key, label]) => <button key={key} aria-pressed={questionFilter === key} className={questionFilter === key ? "active" : ""} onClick={() => { setQuestionFilter(key); setExpandedQuestion(null); }}>{label} <span>{scopedQuestions.filter((q) => key === "submitted" ? queuedQuestionIDs.has(q.id) : !queuedQuestionIDs.has(q.id) && (key === "open" ? q.status === "pending" : key === "answered" ? q.status === "answered" : ["deferred", "delegated"].includes(q.status))).length}</span></button>)}</div>

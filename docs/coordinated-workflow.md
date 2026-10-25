@@ -91,6 +91,14 @@ Semantic paraphrase duplication cannot be ruled out deterministically. Automatic
 plan preparation, true delta-only assessment and broader delegated-choice automation
 remain follow-on work.
 
+Manual **Specification → Clarify in Design** also provides explicit area triage
+without enabling coordination. Partial assessment categories no longer count as
+individual human decision tasks. One consented request can propose up to three
+answer-option questions, or explain that no new human choice was established.
+Existing dimension tasks remain supported, and equivalent completed no-question
+receipts are reused. See [browser workflow](browser-workspace.md#resolve-assessment-findings-in-specification-2026-10-25)
+and the [format/upgrade ledger](migrations.md#area-clarification-and-assessment-inbox-correction-2026-10-25).
+
 Deterministic tests cover faithful activation, legacy choices, readiness, bounded
 consent/restart, leases/Stop, stale output, API authorization and transactional schema
 6 → 7 recovery. The coordinated browser runner covers answers, corrections/rechecks,

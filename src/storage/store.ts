@@ -45,6 +45,7 @@ import { decisionAvailability, decisionContextKey } from "../core/decision-avail
 import { readinessQuestionTaskSchema, validateReadinessQuestions } from "../core/readiness-questions.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
 import { dismissibleReviewAttempt, reviewAttemptBatchLimit } from "../core/review-attempts.js";
+import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
 import { questionReviewFingerprint, reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
@@ -65,6 +66,11 @@ function readStoredJob(payload: string): Job {
   if (job.context?.epicReview !== undefined) epicReviewSchema.parse(job.context.epicReview);
   if (job.context?.definitionAssessment !== undefined) definitionTaskSchema.parse(job.context.definitionAssessment);
   if (job.context?.readinessQuestions !== undefined) readinessQuestionTaskSchema.parse(job.context.readinessQuestions);
+  if (job.readinessWork !== undefined) {
+    const work = readinessWorkSchema.parse(job.readinessWork);
+    if (JSON.stringify(job.context?.readinessQuestions) !== JSON.stringify(work.task) || job.context?.readinessStage?.planKey !== work.planKey)
+      throw new Error("Clarification checkpoint does not match its task; saved work was not overwritten.");
+  }
   if (job.definitionWork !== undefined) {
     const work = definitionWorkSchema.parse(job.definitionWork), task = job.context?.definitionAssessment;
     if (task?.epicID !== work.epicID || task.inputKey !== work.inputKey || task.staged?.planKey !== work.planKey) throw new Error("Definition checkpoint does not match its saved task policy; original evidence was not overwritten.");
@@ -1279,6 +1285,27 @@ export class ProjectStore {
     }).immediate();
   }
 
+  checkpointReadiness(id: string, input: ReadinessWork, context: NonNullable<Job["context"]>) {
+    this.db.transaction(() => {
+      const job = this.getJob(id), work = readinessWorkSchema.parse(input);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Clarification worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (JSON.stringify(context.readinessQuestions) !== JSON.stringify(work.task) || context.readinessStage?.planKey !== work.planKey)
+        throw new Error("Clarification checkpoint requires its exact task and plan.");
+      job.readinessWork = structuredClone(work); job.context = context;
+      job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 360000); this.saveJob(job);
+    }).immediate();
+  }
+
+  pauseReadiness(id: string, reason: string): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Clarification worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      job.status = "interrupted"; job.leaseUntil = null; job.diagnostic = reason; this.saveJob(job); return job;
+    }).immediate();
+  }
+
   attachScan(id: string, scan: NonNullable<Job["scan"]>) {
     const job = this.getJob(id);
     if (job.status !== "running") throw new Error("Scan is no longer running.");
@@ -1424,7 +1451,11 @@ export class ProjectStore {
             return;
           }
           const before = structuredClone(project);
-          if (job.context?.readinessQuestions) validateReadinessQuestions(project, job.context, result);
+          if (job.context?.readinessQuestions) {
+            const source = job.context.readinessQuestions.format === 2 && job.context.readinessQuestions.blockedJobID ? this.getJob(job.context.readinessQuestions.blockedJobID) : undefined;
+            if (job.readinessWork) validateReadinessStagePublication(project, job, result, source);
+            else validateReadinessQuestions(project, job.context, result, source);
+          }
           if (job.context?.gapExploration?.check || job.context?.epicReview) {
             // Older/deterministic adapters may omit the optional area field.
             // A bounded gap task defaults to its detailed target, never an unseen inbox.

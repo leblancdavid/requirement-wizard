@@ -3,7 +3,7 @@ import { StaleRevisionError, parseDiscoveryAnalysis, reviewFingerprint, type Que
 import { ProjectStore } from "../storage/store.js";
 import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
-import { planContext } from "../core/working-set.js";
+import { planContext, planExactTaskContext } from "../core/working-set.js";
 import { questionHelpContext } from "../core/question-help-context.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
 import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
@@ -17,6 +17,7 @@ import { definitionInputKey } from "../core/definition-identity.js";
 import { readinessQuestionContext, readinessQuestionTaskSchema, type ReadinessQuestionTask } from "../core/readiness-questions.js";
 import { definitionAbortCause } from "../core/definition-interruption.js";
 import { runDefinitionStages, DefinitionEvidenceBlocked, definitionRequestReserve, type DefinitionSchedule } from "./definition-stages.js";
+import { runReadinessStages } from "./readiness-stages.js";
 import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages } from "../core/epic-stages.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
@@ -380,17 +381,40 @@ export class DiscoveryService {
         options.onProgress?.("No pending epic packages: review saved blockers or answer waiting decisions. No model request made.");
         return completeMeasurement(this.store.attachEpicReviewReport(job.id, epicPlan.report, true));
       }
-      let context = options.readinessQuestions ? readinessQuestionContext(project, options.readinessQuestions) : definition ? definition
+      const taskPlanner = options.refinementOnly || options.isolatedTask && options.submissionIDs?.length === 1 ? planExactTaskContext : planContext;
+      let readiness: ContextPack | undefined;
+      if (options.readinessQuestions) {
+        const task = options.readinessQuestions;
+        const source = task.format === 2 && task.blockedJobID ? this.store.getJob(task.blockedJobID) : undefined;
+        const staged = this.store.jobs(projectID).some((j) => j.id !== job.id && j.readinessWork && JSON.stringify(j.readinessWork.task) === JSON.stringify(task));
+        const run = async (overflow?: ContextBudgetError) => {
+          clearTimeout(timer);
+          timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
+          return completeMeasurement(await runReadinessStages(this.store, inferenceAdapter, project, job, task, {
+            signal: controller.signal, blockedJob: source, overflow, limits: workflowLimits ?? this.navigation.stagedLimits,
+            onProgress: options.onProgress, measurement,
+          }));
+        };
+        if (task.format === 2 && staged) return await run();
+        try { readiness = readinessQuestionContext(project, task, source); }
+        catch (error) {
+          if (!(error instanceof ContextBudgetError) || task.format !== 2) throw error;
+          options.onProgress?.("This area needs several exact evidence batches. Preparing saved read/check steps; no questions or specification changes have been published.");
+          return await run(error);
+        }
+      }
+      let context = readiness ? readiness : definition ? definition
         : options.helpRequest ? questionHelpContext(project, options.helpRequest, options.helpRequest.action === "define" ? [] : this.store.jobs(projectID))
         : continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
         : epicPlan?.task?.context ? epicPlan.task.context
         : generalExploration ? planGapContext(project, this.store.gapHistory(projectID), options.focusEpicID, (revision) => this.store.get(projectID, revision))
-        : planContext(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
+        : taskPlanner(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
         requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
         recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
         supportingRecordIDs: refinementRecords,
         isolatedTask: options.refinementOnly || options.isolatedTask,
         submissionFollowup: !!options.savedOverlapSubmissionID || options.isolatedTask && options.submissionIDs?.length === 1,
+        refinementFollowup: !!options.refinementOnly,
         budget: 48000, expandMandatory: true });
       if (pair || refinementTarget) assertRefinementEvidence(project, pair ?? [refinementTarget!.id], context.manifest.includedIDs);
       if (continuationSource?.gapReport) context.gapReport = structuredClone(continuationSource.gapReport);
@@ -757,7 +781,8 @@ export class DiscoveryService {
         this.store.attachContext(job.id, error.manifest);
       }
       const cancelled = controller.signal.aborted;
-      const retainedAttempts = this.store.getJob(job.id).retrievalWork?.attempts ?? 0;
+      const savedWork = this.store.getJob(job.id);
+      const retainedAttempts = (savedWork.retrievalWork?.attempts ?? 0) + (savedWork.readinessWork?.attempts ?? 0) + (savedWork.readinessWork?.receipts.length ?? 0);
       const overlapDiagnostic = options.savedOverlapSubmissionID
         ? "Your response was already processed and saved. Its duplicate/conflict follow-up did not complete; resume retries the unfinished check, not the completed response. " : "";
       this.store.failJob(job.id, cancelled ? "cancelled" : error instanceof StaleRevisionError ? "stale" : "failed",

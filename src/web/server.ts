@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ProjectStore } from "../storage/store.js";
+import { readinessProgress } from "../core/readiness-stages.js";
 import { activityQuerySchema } from "../storage/activity.js";
 import { OperationConflictError, discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 import { browseDirectories } from "../storage/workspace.js";
@@ -187,7 +188,9 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const known = rawTokens === undefined ? undefined : parseSnapshotTokens(rawTokens);
         const current = revisionSnapshot(project);
         const recent = options.store.workspaceJobs(id);
-        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, ...job }) => ({ ...job,
+        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, ...job }) => ({ ...job,
+          ...(readinessWork ? { readinessProgress: readinessProgress(readinessWork) } : {}),
+          ...(job.context?.readinessQuestions && _ ? { result: _ } : {}),
           gapContinuationAvailable: canContinueGapExploration({ ...job, retrievalWork }),
           ...(retrievalWork ? { retrievalWork: { format: retrievalWork.format, research: retrievalWork.research, stages: retrievalWork.stages, attempts: retrievalWork.attempts, originJobID: retrievalWork.originJobID, reuse: retrievalWork.reuse, continuation: retrievalWork.continuation, ...(retrievalWork.stagedRun ? { stagedRun: retrievalWork.stagedRun } : {}), ...(retrievalWork.requestedPolicy ? { requestedPolicy: retrievalWork.requestedPolicy } : {}) } } : {}),
           ...(scan ? { scan: { ...scan, sources: [] } } : {}),
@@ -315,6 +318,12 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         if (project.revision !== input.revision) throw new StaleRevisionError();
         queue.refreshDefinition(id, input.revision, input.focusEpicID, undefined, input.additionalRequests);
         json(res, 202, { started: true }); return;
+      }
+      if (action === "clarify-definition") {
+        if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
+        const input = z.object({ revision, epicID: z.string().min(1).max(200), confirmAIUsage: z.literal(true) }).strict().parse(raw);
+        if (project.revision !== input.revision) throw new StaleRevisionError();
+        json(res, 202, queue.clarifyDefinition(id, input.revision, input.epicID)); return;
       }
       if (action === "recover-definition") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);

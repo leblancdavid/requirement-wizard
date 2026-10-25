@@ -13,6 +13,10 @@ export type ContextTask = {
   isolatedTask?: boolean;
   /** Saved response or receipt-validated overlap check: larger mandatory-only cap. */
   submissionFollowup?: boolean;
+  /** New isolated refinement fallback only, after exact wire compaction. */
+  refinementFollowup?: boolean;
+  /** Manual questions-only area clarification; legacy dimension tasks keep 96k. */
+  clarificationFollowup?: boolean;
   /** Bounded general gap exploration, not follow-up on a human submission. */
   gapExploration?: boolean;
   gapLens?: GapLens;
@@ -204,6 +208,25 @@ export function contextPreparationIndex(project: Project, graph = evidenceGraph(
     workspaceIDs: new Set(project.sources.filter((s) => s.kind === "workspace").map((s) => s.id)) };
 }
 export type ContextPreparationIndex = ReturnType<typeof contextPreparationIndex>;
+
+/** New saved-input/refinement requests only. Preserve every exact evidence record;
+ * completed/staged contexts still reconstruct through their original planner. */
+export function planExactTaskContext(project: Project, task: ContextTask): ContextPack {
+  const { refinementFollowup: _refinement, ...legacyTask } = task;
+  try { return planContext(project, legacyTask); }
+  catch (original) {
+    if (!(original instanceof ContextBudgetError) || !task.isolatedTask) throw original;
+    try {
+      const result = planContext(project, { ...task, compactReviewSnapshots: true, preferCompactEvidence: true });
+      result.manifest.selectionReason += " Oversized single-task fallback used exact approval-snapshot references and literal phrase sharing; human evidence and record scope are unchanged, with no optional records added.";
+      return result;
+    } catch (optimized) {
+      if (!(optimized instanceof ContextBudgetError)) throw optimized;
+      // Report the smaller exact representation, never a larger or truncated one.
+      throw optimized.manifest.characters < original.manifest.characters ? optimized : original;
+    }
+  }
+}
 
 /** Plan locally before inference. Exact human guardrails are never summarized away. */
 export function planContext(project: Project, task: ContextTask = {}, graph?: EvidenceGraph, preparation?: ContextPreparationIndex): ContextPack {
@@ -660,6 +683,11 @@ export function planContext(project: Project, task: ContextTask = {}, graph?: Ev
       if (task.submissionFollowup && task.isolatedTask && !task.gapExploration) {
         result.manifest.budget = 144000;
         result.manifest.selectionReason += " Expanded single saved-response mandatory-evidence allowance to 144,000 characters after the 96,000-character fallback was exhausted; no optional records added.";
+        if (result.manifest.characters <= result.manifest.budget) return result;
+      }
+      if ((task.refinementFollowup || task.clarificationFollowup) && task.isolatedTask && task.compactReviewSnapshots && task.preferCompactEvidence && !task.gapExploration) {
+        result.manifest.budget = 144000;
+        result.manifest.selectionReason += ` Expanded isolated ${task.clarificationFollowup ? "manual clarification" : "refinement"} mandatory-evidence allowance to 144,000 characters only after exact snapshot and phrase compaction; no optional records added. This is an application allowance, not a model capacity guarantee.`;
         if (result.manifest.characters <= result.manifest.budget) return result;
       }
     }

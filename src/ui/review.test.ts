@@ -20,6 +20,7 @@ import { EpicRequirements, matchesRequirementSearch } from "./epic-requirements.
 import { definitionDecisionPrefix, definitionDecisions } from "../core/definition-decisions.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { DefinitionDecisionCard } from "./definition-decisions.js";
+import { dimensions } from "../core/epics.js";
 
 test("saved blocked assessments appear in Specification without manufacturing a question, approval or product gap", () => {
   const p = fixture();
@@ -62,11 +63,11 @@ test("saved blocked assessments appear in Specification without manufacturing a 
   assert.doesNotMatch(pending, /<textarea/);
 });
 
-test("technical assessment blockers stay neutral and current completed review findings also reach Specification", () => {
+test("technical blockers stay neutral; partial assessment categories are not human input tasks", () => {
   const p = fixture();
   p.assessments = [{ epicID: "project", atRevision: p.revision, confidence: "low", explanation: "Review", answerVersions: {},
     checks: [{ dimension: "failures", status: "needs-review", importance: "critical", explanation: "Human decisions conflict", evidenceIDs: ["idea"] }] }];
-  assert.equal(definitionDecisions(p, []).length, 1);
+  assert.equal(definitionDecisions(p, []).length, 0);
   p.epics.find((e) => e.id === "project")!.archived = true;
   assert.equal(definitionDecisions(p, []).length, 0, "Archived areas do not create inbox work");
   const job: Job = { id: "technical", projectID: p.id, expectedRevision: p.revision, model: p.model, status: "failed", leaseUntil: null,
@@ -76,8 +77,25 @@ test("technical assessment blockers stay neutral and current completed review fi
   const finding = definitionDecisions(p, [job])[0]!;
   assert.equal(finding.label, "Assessment needs attention");
   const html = renderToStaticMarkup(createElement(DefinitionDecisionCard, { finding, project: p, submissions: [], submit: async () => true, disabled: false }));
-  assert.match(html, /Evidence unavailable/); assert.match(html, /check Logs instead of inventing a product decision/);
+  assert.match(html, /Evidence unavailable/); assert.match(html, /check Logs instead/);
   assert.ok(definitionDecisionPrefix({ ...finding, evidenceIDs: Array(2000).fill("long-evidence-id") }).length < 12000, "Notes reference the retained finding without copying an unbounded evidence list");
+});
+
+test("large assessment summaries never become hundreds of correction forms or decision counts", () => {
+  const p = fixture(); p.requirements = []; p.refinements = [];
+  p.epics = Array.from({ length: 20 }, (_, i) => ({ ...p.epics[0]!, id: `area-${i}`, title: `Area ${i}` }));
+  p.assessments = p.epics.map((epic) => ({ epicID: epic.id, atRevision: p.revision, confidence: "medium", answerVersions: {},
+    explanation: "Retain the previously evidenced computer release and human-directed 3D conversion.",
+    checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "partial", evidenceIDs: ["idea"], explanation: "Already settled scope, not a question." })) }));
+  const before = JSON.stringify(p);
+  const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], jobs: [], epicID: "all", sending: [], disabled: false,
+    refine: () => assert.fail("No inference"), submit: async () => { assert.fail("No automatic human note"); }, reviewRefinement: async () => true,
+    clarifyDefinition: async () => { assert.fail("Explicit confirmation required"); } }));
+  assert.match(html, /Needs your decision <span>0/);
+  assert.match(html, /Let AI turn definition findings into Design questions/);
+  assert.match(html, /Assessment categories are not a to-do list/);
+  assert.doesNotMatch(html, /Save clarification|<textarea|Definition findings needing review/);
+  assert.equal(JSON.stringify(p), before);
 });
 
 test("epic browsing paginates epics independently and explicit targets open the correct requirement page", () => {

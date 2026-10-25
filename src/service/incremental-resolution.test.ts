@@ -14,6 +14,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { SubmissionOverlapStatus } from "../ui/submission-overlap.js";
 import { createHash } from "node:crypto";
+import { planContext } from "../core/working-set.js";
+import { ContextBudgetError } from "../core/context.js";
 
 const empty = (): Analysis => ({ summary: "Reports", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 const resolution = (outcome: "distinct" | "blocked" = "distinct"): Analysis => ({ ...empty(), resolutionCheck: { format: 1, outcome, explanation: outcome === "blocked" ? "Clarification is blocked until existing questions are answered" : "Different policy scopes" } });
@@ -274,8 +276,20 @@ test("legacy 96k overlap blocker reopens and retries at 144k without repeating i
     const item = store.submissions(p.id)[0]!, receipt = structuredClone(item.overlapFollowup!);
     assert.equal(receipt.state, "pending");
     const pair = receipt.pairs[0]!;
-    const old = await new DiscoveryService(store, { async analyze() { assert.fail("Ordinary pair cannot use larger allowance"); } })
-      .analyze(p.id, store.get(p.id).revision, { refinementOnly: true, refinementPair: pair.requirementIDs, includeUnapproved: true, resolutionTriggerSourceIDs: receipt.triggerSourceIDs });
+    // Curate the old CPU-only failure with its original planner, not today's
+    // refinement service (which now has a compacted 144k fallback).
+    const legacyProject = store.get(p.id), legacyJob = store.beginJob(p.id, legacyProject.revision).job;
+    store.claimJob(legacyJob.id, Date.now() + 60000);
+    assert.throws(() => planContext(legacyProject, { isolatedTask: true, recordIDs: pair.requirementIDs,
+      requiredEpicIDs: [...new Set(legacyProject.requirements.filter((r) => pair.requirementIDs.includes(r.id)).map((r) => r.epicID))], expandMandatory: true }), (error) => {
+      assert.ok(error instanceof ContextBudgetError);
+      store.attachContext(legacyJob.id, { ...error.manifest, refinementOnly: true, refinementPair: {
+        requirementIDs: pair.requirementIDs, includeUnapproved: true, triggerSourceIDs: receipt.triggerSourceIDs,
+        contextKey: resolutionContextKey(legacyProject, pair.requirementIDs, receipt.triggerSourceIDs),
+      } });
+      store.failJob(legacyJob.id, "failed", error.message); return true;
+    });
+    const old = store.getJob(legacyJob.id);
     assert.equal(old.status, "failed"); assert.equal(old.context!.budget, 96000);
     assert.ok(old.context!.characters > 96000 && old.context!.characters < 144000);
     item.status = "needs-attention"; item.jobID = old.id; item.diagnostic = old.diagnostic; item.overlapFollowup!.pairs[0]!.jobID = old.id; store.saveSubmission(item);

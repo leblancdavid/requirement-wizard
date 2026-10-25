@@ -26,6 +26,16 @@ implemented under `src/`. See [decisions.md](decisions.md),
   coordinator shares its allowance/lease; runtime prompts and the storage publication
   boundary forbid edits or assessment upgrades. Original findings and exact evidence
   remain in saved jobs; answers use the existing input and definition-refresh paths.
+  Explicit manual format-2 tasks inspect a whole area's findings or a current stopped
+  review for actual human choices, rather than treating each partial category as a
+  correction task. The queue/API offer a bounded, consented questions-only path to
+  Design, reusing current old/new receipts and preserving source-blocker provenance.
+  Oversized manual tasks use `src/core/readiness-stages.ts` for exact mandatory-record
+  batching, bounded drafts, cross-batch evidence loading, all-batch pruning and
+  publication replay. `src/service/readiness-stages.ts` saves accepted steps and
+  pre-dispatch attempts through the store, enforces finite action/request bounds and
+  resumes only on explicit action. Browser snapshots carry derived progress, not the
+  full receipt ledger; portable continuation retains the exact resumable ledger.
 
 - `src/core/maintenance.ts`, `src/storage/maintenance.ts`, `src/service/queue.ts`:
   opt-in decision-triggered area scheduling with durable CAS dispatch receipts,

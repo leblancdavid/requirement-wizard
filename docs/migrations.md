@@ -1,6 +1,118 @@
 # Data migrations and upgrade compatibility
 
+## Resumable exact Design clarification (2026-10-25)
+
+Source: existing SQLite JSON jobs and unchanged format-1/2 question tasks. Target:
+the same database/project/portable envelopes, with optional `Job.readinessWork`
+format 1, policy `exact-readiness-batches-v1`, and matching `context.readinessStage`.
+No database schema, project revision, evidence ID, assessment identity or successful
+old receipt is rewritten on startup. Fitting one-shot tasks keep their original
+behavior; oversized manual format-2 tasks stage only after explicit consent. Old
+oversize failures remain dated; another explicit Clarify action can start this path.
+
+The ledger pins exact original records, task/material/plan hashes, accepted
+responses, model identity and spent attempts. Every mandatory record occurs in one
+read batch and is checked again against the final draft. Requests remain bounded to
+96k characters, with at most 32 batches, 192 receipts and three dispatched requests
+per unfinished step. An action defaults to 32 requests/15 minutes; completed steps
+and pre-dispatch attempts survive pause, cancellation, failure and restart. No
+partial draft publishes. Supplemental exact evidence that cannot fit is a specific
+blocker, not silently dropped. Semantic evidence changes reject old work as current;
+an optimistic revision change alone does not invalidate exact receipt hashes.
+
+Portable continuation keeps the latest useful ledger rather than the full activity
+archive, with matching task/plan validation and no runtime session/lease/account
+secrets. Unsupported future work formats reject on local read/import without
+overwriting saved work. Browser snapshots omit the ledger and expose only completed,
+total and phase progress. Old readers may reject this additive job field; do not
+downgrade after creating staged work. Interrupted work requires explicit **Continue
+clarification**, never startup inference or automatic replay.
+
+Deterministic checks cover >416k distributed evidence, full read/check coverage,
+last-batch pruning, exact retrieval/replay, malformed output, spent attempts,
+stale/cancelled results, bounded actions, file-backed reopen and portable
+continuation in an empty store. Actual user-project and live-provider qualification
+remain outstanding; this migration does not establish either.
+
+## Exact task context and read-only pending input (2026-10-25)
+
+Source/target: unchanged SQLite schema, project records, submissions, workspace and
+portable envelopes. Existing fitting single-task contexts are attempted first and
+retain their original bytes/identities. New overflow-only saved-input/refinement
+planning opts into existing exact snapshot references and literal phrase sharing;
+historical/staged context reconstruction still uses its original policies. Saved
+responses keep their existing 144k mandatory cap; new isolated refinement/manual
+area-clarification fallbacks may use 144k only after exact compaction. No attempt,
+lease, successful receipt, score or source identity is reset. Indivisible evidence
+above the applicable cap remains blocked without a call. This supersedes the older
+ordinary-refinement 96k boundary only for this new, explicitly compacted fallback.
+
+Format-2 area tasks add optional bounded `pendingSourceIDs` (at most 128 unique,
+canonical sorted IDs). Absent fields preserve existing format-1/2 task/context
+identities exactly. Present fields pin already recorded human evidence whose AI
+follow-up remains unfinished; task input hashes still bind current exact project
+evidence. A dated assessment/blocker may be inspected with those sources as a
+hypothesis, never relabelled current. The source blocker hash additionally binds its
+original input key when this pending-input mode is used. Unknown/foreign/missing
+sources reject; no omitted input is treated as read. Publication remains questions-
+only and cannot complete submissions or rewrite requirements. Old readers may reject
+the new optional task field; do not downgrade after using it.
+
+The gate excludes unrelated/resolved/archived/explicitly superseded submissions but
+still blocks relevant unapplied or conflicted input. Already applied input is reused
+verbatim, not reapplied. No startup write/model retry or personal-data repair is
+performed. Existing failed diagnostics stay dated; explicit action replans unfinished
+work. Portable task validation accepts the additive field through the shared task
+schema while retaining its exact source IDs; no activity archive export is added.
+
+Regression fixtures cover a 161,713-character mandatory context reduced to 107,479
+with exact independent decoding, unchanged fitting-context bytes, genuine oversize
+failure, file-backed blocked-input reopen/explicit retry/no duplicate sources, scoped
+gating, and read-only clarification preserving applied failure status and dated
+assessment evidence. Real supplied-project and live-provider recovery remain
+unqualified; no personal database was changed or paid probe repeated.
+
+## Area clarification and assessment inbox correction (2026-10-25)
+
+Source: unchanged SQLite/project/workspace formats and format-1
+`readiness-questions-v1` dimension tasks. Target: the same envelopes, accepting both
+the unchanged format-1 task and additive format-2 `definition-area-questions-v1`
+tasks (`dimension: area-review`, input/check hashes, optional `blockedJobID`). No
+schema version or optimistic revision reset is needed. Task formats remain separate
+from project/settings concurrency counters. Future task formats reject without
+overwriting saved work. Older app versions may reject new task variants; do not
+downgrade after creating them.
+
+The excessive partial-category inbox is corrected by projection only: no assessment
+is deleted, marked defined, re-fingerprinted, or reassessed on startup. Existing human
+clarification notes stay ordinary input and are never retracted or replayed. Current
+stopped job blockers retain their optional manual editor, with explicit AI clarification
+as the primary path. Area requests do not authorize specification updates or coding.
+
+Format-1 task identity and exact context instruction bytes remain unchanged. Existing
+completed area receipts are reused; when exact current format-1 no-question receipts
+cover every unresolved dimension, manual area clarification also reuses those results
+without repeating equivalent model calls. Format-2 blocker contexts verify the source
+job's project, area, input identity, reason and evidence hash at preparation/publication.
+Stale/foreign/missing/oversized evidence cannot become an invented user preference.
+Failures/cancellation preserve original evidence and need explicit continuation.
+
+Portable continuation now retains current format-1/2 clarification receipts and any
+exact source blocker needed by a current format-2 task, without exporting unrelated
+activity history. Existing exported checkpoints that already omitted such receipts
+cannot recover evidence that was never shared. No startup/model replay or full archive
+export is introduced; sessions and account selection remain excluded.
+
+Tests cover large category lists without correction forms/counts, exact old/new receipt
+reuse across repeated SQLite reopen, malformed/stale/cancelled publication, source-job
+validation, bounded evidence, authenticated/revision-bound consent, and portable
+receipt/source retention with clone reuse and unsupported future-format rejection.
+Actual user-database upgrades and live model reconciliation remain unqualified.
+
 ## Definition findings in Specification (2026-10-25)
+
+Historical initial manual projection; the excessive category inbox is superseded by
+the area-clarification correction above.
 
 Source/target: unchanged SQLite, project JSON, job, workspace and portable formats.
 `src/core/definition-decisions.ts` projects existing assessment checks and recent

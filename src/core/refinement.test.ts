@@ -617,7 +617,8 @@ test("pair cancellation and oversized mandatory evidence preserve both approvals
       controller.abort(); return { ...empty(), refinements: [resolutionProposal(snapshot, pair)], resolutionCheck: { format: 1, outcome: "proposal", explanation: "Cancelled fixture" } };
     } }).analyze(p.id, p.revision, { refinementOnly: true, refinementPair: pair, signal: controller.signal });
     assert.equal(cancelled.status, "cancelled"); assert.deepEqual(store.get(p.id), p);
-    for (let i = 0; i < 9; i++) p = store.note(p.id, p.revision, String.fromCharCode(65 + i).repeat(12000));
+    // Exceed the new compacted 144k ceiling with distinct exact human notes.
+    for (let i = 0; i < 13; i++) p = store.note(p.id, p.revision, String.fromCharCode(65 + i).repeat(12000));
     let calls = 0;
     const blocked = await new DiscoveryService(store, { async analyze() { calls++; return empty(); } }).analyze(p.id, p.revision, { refinementOnly: true, refinementPair: pair });
     assert.equal(blocked.status, "failed"); assert.equal(calls, 0); assert.deepEqual(store.get(p.id), p);

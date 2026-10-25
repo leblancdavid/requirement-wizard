@@ -1,5 +1,85 @@
 # Graph-backed discovery and current-specification contexts
 
+## Oversized Clarify in Design: exact staged evidence (2026-10-25)
+
+The later supplied **416,761 / 144,000-character** failure was confirmed to be
+**Clarify in Design**, not Continue or response processing. Another one-shot limit
+increase would not fix that distributed evidence load. Manual format-2 clarification
+now falls back to `exact-readiness-batches-v1`: exact original mandatory records are
+partitioned into saved batches, followed by a separate all-batch check pass. No
+question publishes before both passes finish. Global interpretation is explicitly
+dated; goals, actors, assumptions, area purposes and pending organization remain
+exact, not silently omitted to make the batch fit. Finding records are hypotheses,
+not citable human evidence. Unseen cross-batch records can be explicitly loaded by
+ID; navigation IDs alone cannot authorize new citations.
+
+Each encoded request is measured against 96k characters with a 12k draft reserve.
+Read steps can retain or revise up to three questions; revised questions must cite
+currently loaded exact evidence. Check steps can only retain/prune unchanged
+questions, not rewrite options or choose rule precedence. The final write boundary
+replays the saved ledger against current material/plan identity and checks complete
+mandatory coverage. Requirements, assessments and pending responses stay unchanged.
+
+One action defaults to 32 requests/15 minutes, with five-minute request timeouts and
+three attempts per unfinished step. Attempts are saved before dispatch and accepted
+responses before preparing the next request. Explicit continuation retains both
+spent attempts and completed steps across restart or portable adoption. Oversized
+indivisible/supplemental evidence and more than 32 batches remain specific blockers;
+no summary substitutes for omitted evidence. This does not change ordinary saved
+response or refinement policies below. See [migration/recovery details](migrations.md#resumable-exact-design-clarification-2026-10-25).
+
+Verification: `npm test` passed all **898 tests** (238 pretests + 660 main), as did
+type checking, UI build, focused clarification/portable tests and the Specification
+browser runner, including reload/explicit continuation and progress-only snapshots.
+The aggregate browser command passed layout/model selection, then stopped at the
+obsolete **Project map** assertion (`src/web/browser-check.ts:706`). Separately, the
+portable browser runner failed on an ambiguous **Open shared checkpoint** locator
+(`src/web/portable-browser-check.ts:37`); portable engine/import continuation tests
+passed, but this browser path is not qualified by that result. The supplied actual
+project and live-provider staged reasoning remain untested. No paid probe was run.
+
+## Saved-input/clarification dead-end recovery (2026-10-25)
+
+The supplied 159,757/96,000-character diagnostic is a local context-preparation
+failure, not a provider rejection or missing human decision. The original input is
+retained and the reported request made no model call. Retrying the same wire package
+does not resolve it; splitting unrelated requirements cannot shrink shared evidence.
+
+New single-response and isolated refinement requests try their original context
+first. On overflow only, `planExactTaskContext` compares exact canonical approval-
+snapshot references and literal phrase sharing, preserving record scope, every human
+source, normative wording/scenarios and selected evidence. Saved responses retain
+their existing 144k mandatory-only fallback. Isolated refinements and manual format-2
+questions-only clarifications may now also use at most 144k, only after exact snapshot/
+phrase compaction; there is no optional-context refill. Legacy dimension tasks and
+staged gap/definition policies retain their own bounds. These are application input
+allowances, not claims about provider/model token capacity. Oversized indivisible
+human evidence still blocks rather than being truncated or summarized away.
+
+The clarification gate is now area/dependency/evidence-scoped and ignores resolved,
+archived or explicitly superseded submissions. Unrelated input does not block it.
+Relevant unapplied/conflicted input must still be recorded/resolved. Already applied
+human sources with unfinished AI follow-up can be included exactly in a read-only
+clarification: their source IDs are pinned, original input and failed status remain,
+and an older finding is labelled a dated hypothesis rather than a current assessment.
+The request cannot apply specification changes or complete/retry those submissions.
+
+A synthetic 80-requirement approval fixture shrank from 161,713 to 107,479 characters
+while independent decoding recovered every human source, requirement statement/
+scenario/link and question/option/answer link. A file-backed older blocked response
+reopens unchanged and completes one response round on explicit retry without
+reapplying human input; ordinary required overlap checks remain separate. This is
+representative deterministic evidence, not qualification of the supplied project.
+See [upgrade policy](migrations.md#exact-task-context-and-read-only-pending-input-2026-10-25).
+
+Verification: all 888 tests (`npm test`: 229 pretests + 659 main), type check, UI
+build, focused Specification browser runner and diff whitespace check passed. The
+browser fixture now exercises clarification with a recorded size-blocked response
+and outdated findings, preserving the failed input while showing Design options or
+a no-question result. The aggregate browser command passes workspace/model runners
+but still stops at the obsolete **Project map** assertion in
+`src/web/browser-check.ts:706`. No live model call or personal-project write was run.
+
 ## Implemented first slice (2026-10-22)
 
 Storage and inference context have separate responsibilities. SQLite revisions,

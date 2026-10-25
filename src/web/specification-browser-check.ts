@@ -8,6 +8,9 @@ import { type Analysis } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { dimensions } from "../core/epics.js";
+import { definitionQuestionTask } from "../core/readiness-questions.js";
+import { runReadinessStages } from "../service/readiness-stages.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -27,6 +30,15 @@ const connections: Connections = {
 let calls = 0;
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(snapshot, { context }) {
   calls++;
+  if (context.manifest.readinessStage?.phase === "check") return { clarificationVerdict: { keepQuestions: [], summary: "Every saved evidence batch checked; no new question remains." } };
+  if (context.manifest.readinessQuestions) {
+    const task = context.manifest.readinessQuestions;
+    if (snapshot.name === "Definition questions: settled scope") return { ...empty(), summary: "Computer release and the human-directed 3D conversion are already settled. No new human decision is needed." };
+    return { ...empty(), summary: "A reward minimum needs reconciliation", questions: [{ epicID: task.epicID,
+      text: "Which minimum governs the combination reward for a single-trick landing?", whyItMatters: "Earlier answers use conflicting minimums; this question does not choose precedence.",
+      evidenceIDs: [snapshot.sources[0]!.id], options: [{ label: "One trick earns both rewards", consequence: "Replaces the earlier two-trick and two-move minimums" },
+        { label: "Two tricks required", consequence: "Single-trick landings earn only the individual reward; replaces the earlier both-rewards decision" }] }] };
+  }
   const source = snapshot.sources.at(-1)!;
   if (source.changeRequest) return { ...empty(),
     reviewResponses: [{ sourceID: source.id, text: "Recorded local encryption from your explicit request" }],
@@ -168,9 +180,11 @@ try {
   await expect(finding).toContainText("which minimum governs");
   await expect(finding).toContainText("not proof of a missing feature");
   const decision = "One successful trick earns both individual and completed-combination rewards. This replaces the earlier two-trick and two-move minimums.";
+  await finding.getByText("I already know the correction", { exact: true }).click();
   await finding.getByLabel("Your decision or correction", { exact: true }).fill(decision);
   await panel.getByRole("button", { name: /^Current specification/ }).click();
   await panel.getByRole("button", { name: /^Needs your decision/ }).click();
+  await finding.getByText("I already know the correction", { exact: true }).click();
   await expect(finding.getByLabel("Your decision or correction", { exact: true })).toHaveValue(decision);
   await page.route(`**/api/projects/${p.id}/submit`, (route) => route.fulfill({ status: 409, json: { error: "Saved version changed" } }));
   await finding.getByRole("button", { name: "Save clarification", exact: true }).click();
@@ -191,6 +205,82 @@ try {
   await panel.getByRole("button", { name: /^Needs your decision/ }).click();
   await expect(finding).toContainText("Your clarification is saved");
   await expect(finding.getByRole("button", { name: "Save clarification", exact: true })).toHaveCount(0);
-  console.log("Specification/browser lists passed: answer → current requirement → correction; both tabs have epic-first lists, independent pagination, search, retained drafts, filters and mobile layout. No browsing model calls.");
+  // Category findings are not human tasks; AI turns an area into real Design choices.
+  for (const settled of [false, true]) {
+    let review = store.create(settled ? "Definition questions: settled scope" : "Definition questions: reward conflict",
+      settled ? "Retain computer release and the approved 3D conversion." : "Earlier answers specify one trick, two tricks and two moves, and both rewards for one trick.",
+      { providerID: "openai", modelID: "fixture" });
+    const seed = store.beginJob(review.id, review.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+    store.finishJob(seed.id, { ...empty(), assessments: [{ epicID: "project", confidence: "medium", explanation: "Saved scope findings, not necessarily decisions",
+      checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "partial", explanation: settled
+        ? "Retain the previously evidenced computer release and human-directed 3D conversion." : "The reward minimum is unresolved between earlier human answers.", evidenceIDs: [review.sources[0]!.id] })) }] });
+    review = store.get(review.id);
+    const pendingInput = store.enqueue(review.id, { id: crypto.randomUUID(), auto: false, research: false,
+      input: { type: "note", epicID: "project", text: "Preserve this exact recorded human constraint while its AI follow-up is size-blocked." } });
+    store.applyQueued(review.id); review = store.get(review.id);
+    const blockedInput = store.submissions(review.id).find((s) => s.id === pendingInput.id)!;
+    blockedInput.status = "needs-attention"; blockedInput.contextBlock = { revision: review.revision, characters: 159757, budget: 96000 };
+    blockedInput.diagnostic = "No model call was made; exact saved follow-up exceeds the input budget."; store.saveSubmission(blockedInput);
+    await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: review.name, exact: true }).click();
+    await page.getByRole("tab", { name: /^Specification/ }).click();
+    await expect(panel.getByRole("button", { name: /^Needs your decision/ })).toContainText("0");
+    await expect(panel.getByRole("button", { name: "Save clarification", exact: true })).toHaveCount(0);
+    await panel.getByText("Let AI turn definition findings into Design questions", { exact: true }).click();
+    const before: number = calls;
+    await panel.getByRole("button", { name: "Clarify in Design", exact: true }).click();
+    assert.equal(calls, before, "Opening confirmation never authorizes inference");
+    await panel.getByRole("button", { name: "Prepare questions in Design", exact: true }).click();
+    await expect(page.getByRole("tab", { name: /^Design/ })).toHaveAttribute("aria-selected", "true");
+    const notice = page.getByRole("status", { name: "Definition clarification", exact: true });
+    if (settled) {
+      await expect(notice).toContainText("No new product question was established");
+      await expect(notice).toContainText("already settled");
+      assert.equal(store.get(review.id).questions.length, 0);
+      await page.getByRole("tab", { name: /^Specification/ }).click();
+      await panel.getByRole("button", { name: "Prepare questions in Design", exact: true }).click();
+      await expect(notice).toContainText("No new product question was established");
+      assert.equal(calls, before + 1, "Unchanged no-question result is reused without another call");
+    } else {
+      await expect(notice).toContainText("Focused questions are ready");
+      await page.getByRole("button", { name: /Choose One trick earns both rewards\./ }).click();
+      await page.getByRole("button", { name: "Save response →", exact: true }).click();
+      await expect.poll(() => store.submissions(review.id).filter((s) => s.input.type === "answer").length).toBe(1);
+      assert.ok(["saved", "queued"].includes(store.submissions(review.id).find((s) => s.input.type === "answer")!.status));
+      assert.equal(store.get(review.id).requirements.length, 0, "Question generation and save-only answers never choose or apply a rule");
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      await page.screenshot({ path: ".reqwizit-state/browser-definition-design-clarification-mobile.png", fullPage: true });
+    }
+    assert.equal(calls, before + 1);
+    assert.deepEqual(store.submissions(review.id).find((s) => s.id === blockedInput.id), blockedInput, "Read-only clarification does not complete or replay blocked saved follow-up");
+  }
+  // Reload restores staged clarification progress without exposing full saved model responses.
+  let staged = store.create("Staged Design continuation", "Preserve original decisions", p.model);
+  const blockedJob = store.beginJob(staged.id, staged.revision).job; store.claimJob(blockedJob.id, Date.now() + 60000);
+  store.attachContext(blockedJob.id, { revision: staged.revision, focusEpicID: "project", includedIDs: [staged.sources[0]!.id], omittedIDs: [], characters: 0, budget: 48000,
+    definitionAssessment: { format: 1, epicID: "project", inputKey: definitionInputKey(staged, "project") } });
+  const blocked = store.blockDefinition(blockedJob.id, "Read exact original decisions before asking another question"), task = definitionQuestionTask(staged, "project", blocked);
+  const workJob = store.beginJob(staged.id, staged.revision).job; store.claimJob(workJob.id, Date.now() + 60000);
+  await runReadinessStages(store, { async analyze() { return empty(); } }, staged, workJob, task,
+    { signal: new AbortController().signal, blockedJob: blocked, limits: { requests: 1, durationMs: 60000 } });
+  let sawProgress = false;
+  await page.route(`**/api/projects/${staged.id}`, async (route) => {
+    const { "x-reqwizit-snapshot": _tokens, ...headers } = route.request().headers();
+    const response = await route.fetch({ headers }), snapshot = await response.json();
+    const saved = snapshot.jobs.find((job: { id: string }) => job.id === workJob.id);
+    assert.equal(saved.readinessWork, undefined); assert.equal(saved.readinessProgress.completed, 1); sawProgress = true;
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: staged.name, exact: true }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  const stagedNotice = page.getByRole("status", { name: "Definition clarification", exact: true });
+  await expect(stagedNotice).toContainText("1 / 2 exact read/check steps saved");
+  const beforeContinuation = calls;
+  await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
+  await expect(stagedNotice).toContainText("Clarification paused"); assert.equal(calls, beforeContinuation);
+  await stagedNotice.getByRole("button", { name: "Continue clarification", exact: true }).click();
+  await expect(stagedNotice).toContainText("No new product question was established");
+  assert.equal(calls, beforeContinuation + 1); assert.ok(sawProgress);
+  console.log("Specification/browser lists and staged Design continuation passed, including reload recovery, explicit continuation and bounded snapshot progress.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-continuous-specification-failure")); throw error; }
 finally { await browser?.close(); await app.close(); store.close(); }

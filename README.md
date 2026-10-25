@@ -27,6 +27,11 @@ remain. Passed checks lead to planning, not automatic coding. See
 [coordinated workflow](docs/coordinated-workflow.md) for consent and limitations.
 Unresolved definition behavior can now produce targeted questions; answers trigger
 affected rechecks using the same allowance.
+Partial assessment categories are not individual human input tasks. In Specification,
+**Clarify in Design** can turn an area's findings into focused questions with answer
+options, or explain that no new decision is needed, after explicit AI-usage confirmation.
+Large clarifications use saved exact-evidence read/check batches; Design offers
+**Continue clarification** after a pause without repeating completed steps.
 
 **Specification** now replaces routine Review: explicit answers, notes and targeted
 change requests can maintain current requirements without another approval. Design

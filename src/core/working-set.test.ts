@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildContext, ContextBudgetError } from "./context.js";
-import { planContext, shareRepeatedText } from "./working-set.js";
+import { planContext, planExactTaskContext, shareRepeatedText } from "./working-set.js";
 import { analysisSchema, reviewFingerprint, type Analysis, type Project } from "./model.js";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
@@ -245,6 +245,80 @@ test("distributed project-wide approval history fits without dropping questions,
     assert.ok(workflow.manifest.characters <= 96000); assert.match(JSON.stringify(workflow.data), /reviewSnapshotReference/);
     console.log(JSON.stringify({ comparison: "lossless-project-wide-approval-snapshots", requirements: p.requirements.length, originalCharacters, characters: workflow.manifest.characters }));
   } finally { store.close(); }
+});
+
+test("oversized saved-response and refinement tasks use exact snapshot/phrase fallback and a bounded mandatory-only allowance", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    for (const [count, submissionFollowup, refinementFollowup] of [[65, false, false], [80, true, false], [80, false, true]] as const) {
+      const p = snapshotHeavyProject(store, count), before = structuredClone(p);
+      const task = { isolatedTask: true, submissionFollowup, refinementFollowup, focusEpicID: "project", recordIDs: [p.requirements[0]!.id], expandMandatory: true };
+      let previousCharacters = 0;
+      assert.throws(() => planContext(p, task), (error) => { assert.ok(error instanceof ContextBudgetError); previousCharacters = error.manifest.characters; return true; });
+      const context = planExactTaskContext(p, task);
+      assert.ok(context.manifest.characters <= (submissionFollowup || refinementFollowup ? 144000 : 96000));
+      assert.ok(context.manifest.characters < previousCharacters);
+      const exact = decodeContext<{ sources: Project["sources"]; questions: Project["questions"]; requirements: Project["requirements"] }>(context.data);
+      for (const source of p.sources) assert.deepEqual(exact.sources.find((s) => s.id === source.id), source);
+      for (const r of p.requirements) {
+        const record = exact.requirements.find((item) => item.id === r.id)!;
+        assert.equal(record.statement, r.statement); assert.deepEqual(record.acceptance, r.acceptance); assert.deepEqual(record.sourceIDs, r.sourceIDs);
+      }
+      for (const q of p.questions) {
+        const record = exact.questions.find((item) => item.id === q.id)!;
+        assert.equal(record.text, q.text); assert.deepEqual(record.options, q.options); assert.equal(record.sourceID, q.sourceID);
+      }
+      assert.deepEqual(p, before);
+      console.log(JSON.stringify({ comparison: "oversized-exact-task-recovery", count, previousCharacters, characters: context.manifest.characters, budget: context.manifest.budget }));
+    }
+    const small = snapshotHeavyProject(store, 2), task = { isolatedTask: true, recordIDs: [small.requirements[0]!.id], expandMandatory: true };
+    assert.deepEqual(planExactTaskContext(small, task), planContext(small, task), "Already fitting tasks retain their original bytes and identities");
+    small.sources.push({ id: "indivisible-input", epicID: "project", kind: "note", text: createHash("sha256").update("unique").digest("hex").repeat(3000) });
+    assert.throws(() => planExactTaskContext(small, { ...task, submissionFollowup: true }), ContextBudgetError, "Oversized indivisible human evidence remains blocked");
+  } finally { store.close(); }
+});
+
+test("large legacy size-blocked saved input reopens and finishes exactly once without reapplying human evidence", async () => {
+  const parent = join(process.cwd(), ".reqwizit-state", "tests"); mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "saved-input-exact-upgrade-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file); let queue: DiscoveryQueue | undefined;
+  try {
+    const fixture = snapshotHeavyProject(store, 80); store.close();
+    const db = new Database(file);
+    db.transaction(() => {
+      db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(fixture), fixture.id);
+      db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(fixture), fixture.id, fixture.revision);
+    })(); db.close(); store = new ProjectStore(file);
+    const q = fixture.questions[0]!;
+    const input = store.enqueue(fixture.id, { id: crypto.randomUUID(), auto: false, research: false, input: {
+      type: "answer", questionID: q.id, questionText: q.text, sourceID: q.sourceID, answer: { kind: "answer", text: "  Preserve the explicit recovery rule, including this exception.\r\n" },
+    } });
+    store.applyQueued(fixture.id); const project = store.get(fixture.id), saved = store.submissions(fixture.id).find((s) => s.id === input.id)!;
+    assert.throws(() => planContext(project, { isolatedTask: true, submissionFollowup: true, requiredEpicIDs: ["project"], recordIDs: [saved.appliedSourceID!, q.id], expandMandatory: true }), (error) => {
+      assert.ok(error instanceof ContextBudgetError); saved.status = "needs-attention";
+      const { revision, characters, budget, epicIDs, sectionCharacters } = error.manifest;
+      saved.contextBlock = { revision, characters, budget, epicIDs, sectionCharacters }; saved.diagnostic = error.message; return true;
+    });
+    store.saveSubmission(saved); store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.get(project.id), project); assert.deepEqual(store.submissions(project.id)[0], saved);
+    let calls = 0, discoveryCalls = 0;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, { context }) {
+      calls++; assert.ok(context.manifest.characters <= 144000);
+      const data = decodeContext<{ sources: Project["sources"] }>(context.data);
+      for (const source of project.sources) assert.deepEqual(data.sources.find((s) => s.id === source.id), source);
+      if (context.manifest.refinementPair) return { ...empty(), goals: [], scopeAssessment: undefined,
+        resolutionCheck: { format: 1, outcome: "distinct", explanation: "Fixture behaviors have distinct scopes." } };
+      discoveryCalls++; assert.deepEqual(snapshot, project);
+      return empty();
+    } }));
+    assert.equal(calls, 0);
+    queue.resume(project.id, { processOnly: true, submissionIDs: [saved.id] }); await idle(queue, project.id);
+    assert.equal(discoveryCalls, 1); assert.equal(store.submissions(project.id)[0]!.status, "completed");
+    assert.equal(store.submissions(project.id)[0]!.appliedSourceID, saved.appliedSourceID);
+    assert.deepEqual(store.get(project.id).sources, project.sources);
+    await queue.close(); queue = undefined; store.close(); store = new ProjectStore(file);
+    assert.equal(store.submissions(project.id)[0]!.status, "completed"); assert.equal(discoveryCalls, 1);
+  } finally { await queue?.close(); store.close(); rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
 });
 
 test("near-limit workflow contexts compact only generated instructions and include the final envelope in the cap", () => {

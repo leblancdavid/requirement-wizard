@@ -18,7 +18,7 @@ import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { LogLink } from "./log-access.js";
 import { statusLabel } from "./user-messages.js";
 import { definitionDecisions } from "../core/definition-decisions.js";
-import { DefinitionDecisionCard } from "./definition-decisions.js";
+import { DefinitionDecisionCard, DefinitionReviewSuggestions } from "./definition-decisions.js";
 
 export function pendingReviews(project: Project, submissions: Submission[]) {
   const waiting = new Set(submissions.filter((s) => s.input.type === "review" && ["queued", "saved", "processing"].includes(s.status)).map((s) => s.input.type === "review" ? s.input.requirementID : ""));
@@ -149,7 +149,7 @@ function DuplicateRemoval({ project, submissions, jobs, removeID, keepID, disabl
     : <ActionButton className="secondary" disabled={disabled} onClick={() => setOpen(true)}>Remove as duplicate…</ActionButton>;
 }
 
-export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, renderClarification, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, focusItemID, openIssue, draftStore }: {
+export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, submit, disabled, disabledReason, refine, reviewRefinement, refreshRefinement, removeDuplicate, openQuestion, renderClarification, processBlocking, visible: isVisible = true, itemErrors = {}, resume, focusRequirementID, focusItemID, openIssue, draftStore, clarifyDefinition }: {
   project: Project; submissions: Submission[]; jobs?: Job[]; epicID: string; sending: string[];
   submit: (input: Submission["input"], key: string) => Promise<boolean>;
   disabled: boolean; disabledReason?: string; refine: () => void; reviewRefinement: (proposalID: string, accept: boolean) => Promise<boolean>;
@@ -161,6 +161,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   itemErrors?: Record<string, string>; resume?: () => void;
   focusRequirementID?: string; focusItemID?: string; openIssue?: (submissionID: string) => void;
   draftStore?: React.MutableRefObject<Record<string, ReviewDraft>>;
+  clarifyDefinition?: (epicID: string) => Promise<void>;
 }) {
   const definitionFindings = useMemo(() => definitionDecisions(project, jobs).filter((f) => epicID === "all" || f.epicID === epicID), [project, jobs, epicID]);
   const [filter, setFilter] = useState<ReviewFilter>(() => reviewItems(project, submissions, "pending").length || definitionFindings.length ? "pending" : "current");
@@ -381,7 +382,8 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
     </>}
     {focusRequirementID && !focused && <p role="status">This requirement is no longer available. Its saved attempts remain in history.</p>}
     {message && <p className="save-notice" role="status">{message}</p>}
-    {visibleFindings.length > 0 && <section aria-label="Definition findings needing review"><h3>Definition findings needing review</h3><p>These findings need attention even when no requirement proposal or new question was created.</p>{visibleFindings.map((finding) => <DefinitionDecisionCard key={finding.id} finding={finding} project={project} submissions={submissions} submit={submit} disabled={disabled} processBlocking={processBlocking} drafts={definitionDrafts} />)}</section>}
+    {!focusRequirementID && clarifyDefinition && <DefinitionReviewSuggestions project={project} submissions={submissions} epicID={epicID} disabled={disabled} clarify={clarifyDefinition} />}
+    {visibleFindings.length > 0 && <section aria-label="Definition findings needing review"><h3>Definition findings needing review</h3><p>These reviews stopped before finishing. Let AI help identify the next decision rather than writing a correction from assessment prose.</p>{visibleFindings.map((finding) => <DefinitionDecisionCard key={finding.id} finding={finding} project={project} submissions={submissions} submit={submit} disabled={disabled} processBlocking={processBlocking} drafts={definitionDrafts} clarify={clarifyDefinition} />)}</section>}
     {!focusRequirementID && !visible.length && !visibleFindings.length && !history.length && filter !== "submitted" && <div className="empty-card"><h3>{filter === "current" ? "No current specification requirements yet." : filter === "pending" ? pending.length || definitionFindings.length ? "No items match this readiness filter." : "No requirements waiting for review." : filter === "refinements" ? "No refinements waiting for review." : "No reviewed requirements yet."}</h3><p>{filter === "pending" && (pending.length || definitionFindings.length) ? "Choose All to see requirements and findings needing attention." : filter === "refinements" ? "Use Refine requirements to check existing wording. Earlier decisions remain in History." : "Keep answering in Design. Clear answers update the specification without a second approval."}</p></div>}
     {!focusRequirementID && <p role="status" aria-label="Specification results">Showing {groups.reduce((total, group) => total + group.items.length, 0)} requirement results in {groups.length} {groups.length === 1 ? "feature" : "features"}{visibleFindings.length ? `, plus ${visibleFindings.length} definition review ${visibleFindings.length === 1 ? "finding" : "findings"}` : ""}.</p>}
     {!!search.trim() && !groups.length && !visibleFindings.length && <p className="empty-card">No requirements match this search and the selected filters. <button type="button" className="secondary" onClick={() => setSearch("")}>Clear search</button></p>}

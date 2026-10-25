@@ -295,6 +295,7 @@ export type Job = {
     epicReview?: import("./epic-review-types.js").EpicReview;
     definitionAssessment?: { format: 1; epicID: string; inputKey: string; staged?: { policy: "exact-batches-v1"; planKey: string } };
     readinessQuestions?: import("./readiness-questions.js").ReadinessQuestionTask;
+    readinessStage?: { policy: "exact-readiness-batches-v1"; planKey: string; step: number; phase: "read" | "check" };
     decisionProjection?: { format: 1; omittedReviewSourceIDs: string[]; retainedReviewNoteSourceIDs: string[]; projectedReceiptSourceIDs?: string[] };
     refinementOnly?: boolean;
     /** Soft stopping target; a completed package may exceed it. */
@@ -318,6 +319,8 @@ export type Job = {
   scan?: { workspaceKey: string; snapshot: Project["scans"][number]; sources: Project["sources"] };
   scanWork?: ScanWork;
   definitionWork?: import("./definition-stages.js").DefinitionWork;
+  readinessWork?: import("./readiness-stages.js").ReadinessWork;
+  readinessProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
   definitionBlock?: { format: 1; reason: string };
   definitionInterruption?: import("./definition-interruption.js").DefinitionInterruption;
   /** Browser-safe checkpoint summary; batch outputs remain in the local store. */

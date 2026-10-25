@@ -13,6 +13,46 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ActivityPage } from "../core/project-activity.js";
 import { snapshotHeader } from "./snapshot.js";
+import { definitionInputKey } from "../core/definition-identity.js";
+
+test("definition clarification requires explicit local consent, targets blocked reviews, and reuses no-question results", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const p = store.create("Clarify blocked answers", "Preserve the original scope", { providerID: "openai", modelID: "fixture" });
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.attachContext(job.id, { revision: p.revision, focusEpicID: "project", includedIDs: [p.sources[0]!.id], omittedIDs: [], budget: 48000, characters: 0,
+    definitionAssessment: { format: 1, epicID: "project", inputKey: definitionInputKey(p, "project") } });
+  store.blockDefinition(job.id, "Retain the previously evidenced computer release and 3D conversion. No new release decision was specified.");
+  let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+  const app = await startApp({ store, port: 0, adapter: { async analyze(_snapshot, { context, research }) {
+    calls++; assert.equal(research, false); assert.equal(context.manifest.readinessQuestions?.format, 2); await gate;
+    return { summary: "The release scope is already settled. No new human decision is needed.", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] };
+  } } });
+  const headers = { "X-Reqwizit-Token": app.token, Origin: app.origin, "Content-Type": "application/json" };
+  const input = { revision: p.revision, epicID: "project", confirmAIUsage: true };
+  const post = (body: unknown, auth: Record<string, string> = headers) => fetch(`${app.origin}/api/projects/${p.id}/clarify-definition`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+  try {
+    assert.equal((await post(input, {})).status, 403);
+    assert.equal((await post(input, { ...headers, Origin: "https://example.invalid" })).status, 403);
+    assert.equal((await post({ ...input, confirmAIUsage: false })).status, 400);
+    assert.equal((await post({ revision: p.revision, epicID: "project" })).status, 400);
+    assert.equal((await post({ ...input, revision: p.revision + 1 })).status, 409);
+    assert.equal((await post({ ...input, research: true })).status, 400);
+    assert.equal((await post({ ...input, epicID: "missing" })).status, 400);
+    assert.equal(calls, 0);
+    const response = await post(input); assert.equal(response.status, 202); assert.equal((await response.json()).reused, false);
+    await until(() => calls === 1);
+    assert.equal((await post(input)).status, 409, "Concurrent clarification is excluded");
+    release();
+    await until(() => store.jobs(p.id).at(-1)?.status === "completed");
+    const current = store.get(p.id);
+    const reused = await post({ ...input, revision: current.revision }); assert.equal(reused.status, 202);
+    const result = await reused.json(); assert.equal(result.reused, true); assert.match(result.result.summary, /already settled/);
+    const snapshot = await (await fetch(`${app.origin}/api/projects/${p.id}`, { headers })).json();
+    assert.match(snapshot.jobs.at(-1).result.summary, /No new human decision/);
+    assert.equal(calls, 1); assert.deepEqual(current.sources, p.sources); assert.deepEqual(current.requirements, p.requirements);
+    assert.equal(current.questions.length, 0);
+  } finally { release(); await app.close(); store.close(); }
+});
 
 test("OpenCode catalog is authenticated metadata only, refreshable, safe on failure, and closed with the app", async () => {
   const store = new ProjectStore(":memory:"); let calls = 0, refreshed = false, closed = false, fail = false;

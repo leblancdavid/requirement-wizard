@@ -2,7 +2,7 @@ import { reviewFingerprint, type Project, type Submission } from "../core/model.
 import { refinementCandidates, type RefinementProgress } from "../core/refinement.js";
 import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
-import { planContext } from "../core/working-set.js";
+import { planContext, planExactTaskContext } from "../core/working-set.js";
 import { ContextBudgetError } from "../core/context.js";
 import { refinementEvidenceRecords } from "../core/refinement-context.js";
 import { refinementCheckCurrent, resolutionPairEligible } from "./refinement-tasks.js";
@@ -20,6 +20,8 @@ import { WorkflowBudgetPause } from "../core/workflow.js";
 import { canRecoverDefinition } from "../core/definition-recovery.js";
 import type { DefinitionAdditionalRequest } from "../core/definition-budget.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionQuestionTask, readinessQuestionContext, readinessQuestionTask } from "../core/readiness-questions.js";
+import { definitionClarificationInputs } from "../core/definition-clarification-inputs.js";
 
 type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" };
 
@@ -284,6 +286,50 @@ export class DiscoveryQueue {
       .finally(() => { this.active.delete(id); });
     this.active.set(id, { controller, promise, kind: "definition" });
   }
+  clarifyDefinition(id: string, revision: number, epicID: string) {
+    this.service.store.assertNoExecution(id);
+    this.service.assertCanDiscover(id);
+    if (this.closing || this.isActive(id)) throw new OperationConflictError("Wait for the current task before asking for clarification.");
+    const project = this.service.store.get(id);
+    if (project.revision !== revision) throw new Error("Project changed. Refresh before asking for clarification.");
+    const inputs = definitionClarificationInputs(project, epicID, this.service.store.submissions(id));
+    if (inputs.blocked.length) throw new OperationConflictError(`${inputs.blocked.length} related saved response(s) still need to be recorded or their input conflict resolved before this area can be clarified. Unrelated responses do not block this action. Use Process saved responses for the related area; no AI call was made.`);
+    const history = [...this.service.store.jobs(id)].reverse();
+    const inputKey = definitionInputKey(project, epicID);
+    const latest = history.find((j) => j.context?.definitionAssessment?.epicID === epicID);
+    const blocker = latest && (latest.definitionBlock || latest.definitionWork?.blocked) && latest.status !== "completed"
+      && (latest.context!.definitionAssessment!.inputKey === inputKey || inputs.sourceIDs.length) ? latest : undefined;
+    const task = definitionQuestionTask(project, epicID, blocker, inputs.sourceIDs);
+    const previous = history.find((j) => j.status === "completed"
+      && JSON.stringify(j.context?.readinessQuestions) === JSON.stringify(task));
+    if (previous) return { task, reused: true, result: previous.result };
+    if (!blocker && !inputs.sourceIDs.length) {
+      const unresolved = coverage(project).epics.find((a) => a.epicID === epicID)!.checks.filter((c) => !["defined", "not-applicable"].includes(c.status));
+      const receipts = unresolved.map((check) => {
+        const oldTask = readinessQuestionTask(project, epicID, check.dimension);
+        return history.find((j) => j.status === "completed" && j.result?.questions.length === 0
+          && JSON.stringify(j.context?.readinessQuestions) === JSON.stringify(oldTask));
+      });
+      if (receipts.length && receipts.every((receipt) => receipt)) return { task, reused: true, result: {
+        summary: receipts.map((receipt) => receipt!.result!.summary).join("\n\n"), questions: [], requirements: [], retireQuestions: [], goals: [], actors: [], assumptions: [],
+      } };
+    }
+    try { readinessQuestionContext(project, task, blocker); }
+    catch (error) { if (!(error instanceof ContextBudgetError) || task.format !== 2) throw error; } // Oversized manual tasks stage inside their durable job.
+    this.service.store.pauseQueue(id, true);
+    const controller = new AbortController();
+    const progress: string[] = ["Checking this area's findings for actual unresolved choices. At most three Design questions; no specification changes."];
+    this.messages.set(id, progress); this.refinementRuns.delete(id);
+    const promise = Promise.resolve().then(async () => {
+      const job = await this.service.analyze(id, revision, { readinessQuestions: task, research: false, signal: controller.signal,
+        onProgress: (message) => { progress.push(message); if (progress.length > 20) progress.shift(); } });
+      progress.push(job.status === "completed" ? job.result?.questions.length ? "Questions are ready in Design. Choose an option or write your answer."
+        : `No new product question was established. ${job.result?.summary ?? "Review the saved finding; no decision was invented."}` : job.diagnostic ?? "Clarification stopped. Saved evidence is unchanged.");
+    }).catch((error) => { progress.push(safeMessage(error instanceof Error ? error.message : error)); }).finally(() => this.active.delete(id));
+    this.active.set(id, { controller, promise });
+    return { task, reused: false };
+  }
+
   scan(id: string, revision: number, resumeJobID?: string) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
@@ -651,6 +697,7 @@ export class DiscoveryQueue {
           const pair = resolutionTask?.requirementIDs;
           const planned = { focusEpicID,
           ...(pair ? { refinementOnly: true, refinementPair: pair, includeUnapproved: project.requirements.some((r) => pair.includes(r.id) && r.status !== "accepted"), resolutionTriggerSourceIDs: resolutionTask?.triggerSourceIDs } : {}),
+           refinementFollowup: !!pair,
            isolatedTask: items.length === 1,
            submissionFollowup: items.length === 1,
           requiredEpicIDs: [...new Set([...project.requirements.filter((r) => pair?.includes(r.id)).map((r) => r.epicID), ...items.map((item) => {
@@ -682,7 +729,7 @@ export class DiscoveryQueue {
         const batch: Submission[] = [];
         for (const item of saved) {
           try {
-            planContext(project, { ...task([item]), expandMandatory: true });
+            planExactTaskContext(project, { ...task([item]), expandMandatory: true });
             batch.push(item);
             break;
           } catch (error) {

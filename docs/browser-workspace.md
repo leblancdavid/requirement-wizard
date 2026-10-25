@@ -2,32 +2,70 @@
 
 ## Resolve assessment findings in Specification (2026-10-25)
 
-**Specification → Needs your decision** now also shows definition review findings,
-even when the assessment produced no requirement proposal or clarification question.
-The Specification badge includes these items. Current partial/needs-review checks
-and the latest stopped, explicitly blocked assessment for each active area show the
-finding and expandable linked evidence. Feature, search and **Needs attention**
-filters apply. Earlier findings are labelled outdated and require a refresh before
-a new correction is submitted from them.
+**Blocked saved-response follow-up:** you can use **Clarify in Design** directly
+when related human input is already recorded, even if its AI follow-up hit a size
+limit. Those exact sources are included and an older finding remains a dated
+hypothesis; the failed/pending response is not marked complete. Unrelated saved
+responses no longer block this action. Relevant input that is still unapplied or
+conflicted must be recorded/resolved first. Do not delete or resubmit saved answers
+to clear the gate. See [size/gate recovery](discovery-efficiency.md#saved-inputclarification-dead-end-recovery-2026-10-25).
 
-For conflicting answers, write the governing rule and what it replaces or which
-exception applies, then choose **Save clarification**. This records an ordinary
-feature-scoped note through the existing consent/queue path. **Continue project**
-or **Process saved responses** processes saved-only input; then inspect the updated
-specification and **Refresh definition coverage**. Saving does not mark the finding
-resolved, approve a requirement or start coding. Drafts survive filter changes and
-failed saves; saved responses remain visible after reload without another submission.
-Technical/evidence blockers remain neutral assessment findings, not invented missing
-features. The progress notice now points to this review path instead of universally
-suggesting technical help.
+Partial/needs-review assessment categories are **not individual human input tasks**.
+The initial projection of every category into **Needs your decision** produced a
+misleading large correction backlog and has been removed. Saved assessments, scores,
+answers, manually submitted clarifications and review history remain unchanged.
 
-This is a read-only projection of existing assessments and the browser's recent job
-window, not a retrospective full-history sweep or automatic question-generation call.
+In **Specification**, expand **Let AI turn definition findings into Design questions**,
+pick an area and choose **Clarify in Design → Prepare questions in Design**. The
+confirmation explains AI usage; opening the control alone starts no call. A bounded,
+questions-only workflow reviews the area's current findings and exact evidence,
+proposing up to three focused questions with answer options. It opens **Design** and
+focuses a resulting question. Choose an option or type your own answer, then **Save
+response**. Ordinary response consent/queue processing still applies; use **Continue
+project** or **Process saved responses** when input is waiting.
+
+Large manual clarifications use exact evidence batches instead of raising the
+one-request limit. Every batch is read, then proposed questions are checked against
+every batch before any questions publish. Requests target 96,000 characters; an
+action uses at most 32 requests or 15 minutes by default. Design shows saved
+read/check progress and **Continue clarification** after a pause/reload. Continuing
+consumes allowance only for unfinished work; completed steps and spent attempts
+persist. No requirement, assessment or pending saved response is resolved by this
+read-only workflow. Indivisible or oversized supplemental evidence remains an
+explicit blocker rather than truncated input. See the [migration ledger](migrations.md#resumable-exact-design-clarification-2026-10-25).
+
+Settled scope summaries need no reconfirmation. If no new product question is
+established, Design shows the saved explanation instead of demanding a correction.
+An unchanged completed result is reused without another request. Missing/indivisible
+evidence and technical limitations remain blockers, not invented preferences. A new
+reconciliation question can explain conflicting original rules and ask which governs
+or is an exception, without choosing precedence or rewriting answers.
+
+The latest stopped, explicitly blocked assessment for each active area still appears
+under **Needs your decision**, with evidence and **Clarify in Design** as its primary
+path. **I already know the correction** retains the optional manual note editor.
+Earlier findings require refresh before submitting a new correction from them.
+Saving/asking a question never marks an assessment resolved, approves a requirement
+or starts coding. Inspect resulting specification updates and refresh affected
+definition coverage after processing answers.
+
+This uses existing assessments and the browser's recent job window, not a retrospective
+full-history sweep or automatic bulk question-generation call.
 A stopped review outside that window may need explicit refresh to become visible.
-No schema, saved assessment identity or score changes; existing evidence and history
-remain intact. See [upgrade compatibility](migrations.md#definition-findings-in-specification-2026-10-25).
+No SQLite schema, saved assessment identity or score changes; existing evidence and history
+remain intact. The additive format-2 clarification task and preserved older receipts
+are documented in [upgrade compatibility](migrations.md#area-clarification-and-assessment-inbox-correction-2026-10-25).
 
-Verification: all 878 tests (`npm test`: 224 pretests + 654 main tests), 65 targeted
+Area-clarification verification: all 884 tests (`npm test`: 227 pretests + 657 main
+tests), type check, UI build and the focused Specification browser runner passed.
+The browser fixture covers explicit consent, an answer-option question in Design,
+save-only answers, a settled-scope no-question result and unchanged-result reuse,
+plus mobile layout. Screenshots include
+`.reqwizit-state/browser-definition-design-clarification-mobile.png`. No live model
+calls or personal-project changes were made. The aggregate browser command still
+stops at the existing **Project map** assertion noted below.
+
+Earlier manual-path verification: all 878 tests (`npm test`: 224 pretests + 654 main tests), 65 targeted
 UI/specification tests, type check, UI build, focused Specification browser runner (including
 mobile, failed saves, filter draft retention and saved-response reload), and diff
 whitespace check passed without live inference. `npm run test:browser` passed the
