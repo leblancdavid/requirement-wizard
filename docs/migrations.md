@@ -1,5 +1,143 @@
 # Data migrations and upgrade compatibility
 
+## Linked exact evidence follow-ups (2026-10-25)
+
+Source: exact definition work with a single `evidenceRequest` per step/lineage,
+including saved model blockers saying the permitted evidence request was already
+used. Target: the same SQLite/job/portable/work envelopes with optional strict
+format-1 `evidenceFollowupPolicy` and append-only `evidenceFollowups`. No startup
+rewrite, schema counter, plan/input/freshness change or reassessment of completed
+work is required. Unsupported future policy formats reject without overwrites;
+older strict readers may reject the added fields, so do not downgrade readers.
+
+Replay precedes enabling the policy at the unfinished `fromStage`. `priorRequests`
+records how many original requests preceded the new contract, so their original
+contexts can replay without the added instruction. Already-attempted legacy steps
+with no supplemental evidence retain their existing contract. Each follow-up stores
+stage, original evidence owner, pre-request split count/context hash, raw validated
+record-ID request, spent attempts and job/model provenance. The bounded ledger permits
+up to 192 follow-up receipts, with at most 20 new exact record IDs per response.
+The existing three-attempt limit, explicit single recovery grant, action allowances,
+96k request and 64-step bounds remain independent and unchanged. A spent attempt
+cannot return multiple requests except the separately spent authorized recovery
+request at attempt three. No refresh refunds attempts or manufactures provenance.
+
+Follow-ups accumulate full exact evidence for the unfinished lineage. Additional
+subdivisions keep all already requested/restored records alongside each remaining
+child. Stage boundaries exclude later evidence from earlier accepted contexts;
+pre-request split counts reconstruct each follow-up's original context before later
+repacking. Original request/child response hashes and bytes are retained. Earlier
+accepted children do not replay model calls or gain evidence retroactively.
+
+An explicit continuous/manual refresh can supersede an old **one-request protocol**
+block only when its diagnostic names saved canonical IDs directly linked by supplied
+records' `sourceIDs`, `sourceID` or `evidenceIDs`. Up to 20 named unsupplied planned
+records are loaded locally; this is evidence retrieval, not approval inference. The
+policy retains the old diagnostic and the restored IDs, evidence owner and pre-upgrade
+split count. Replay independently checks those IDs against the exact saved links and
+diagnostic. Unlinked/invented/out-of-plan IDs, genuine unrelated blockers and
+already-upgraded blocks are not silently cleared. Bounded/automatic maintenance does
+not clear old blockers. Historical jobs remain immutable.
+
+An exhausted three-attempt step remains exhausted after local restoration. Manual
+refresh can then expose the existing explicit **Recover assessment** action; only its
+separate one-request consent permits inference. Loading exact records never establishes
+that accepted cleanup wording was approved by a human, extends body-collision approval
+to a separate hurt-detection region, or declares a product feature missing.
+
+Existing transactional checkpoints save the policy and each follow-up before the
+next dispatch. A crash/reopen after checkpoint does not repeat the saved request;
+an interruption before checkpoint retains its spent attempt, not an unsaved response.
+Startup does not dispatch. Tests cover repeated SQLite reopen, portable replay,
+legacy policy/request bytes, linked diagnostic restoration, genuine blocks, explicit
+exhausted recovery, later-child repacking, tampered hashes, future formats, invalid
+IDs, cancellation/stale responses and unpublished partial work. No personal-project
+recovery or live model call was run.
+
+## Exact supplemental evidence repacking (2026-10-25)
+
+Source: exact-batch work with saved `evidenceRequests`, including a 96k supplemental
+overflow before any supplemented assessment was dispatched. Target: the same work,
+SQLite and portable formats, with an optional `evidenceRequestStage` on append-only
+format-1 continuation splits. This binds each child to the original request's full
+exact supplemental records. No startup rewrite, input/plan/freshness change, schema
+counter bump, or repetition of completed assessment/model calls is required. Older
+strict readers may reject the added split field; use the updated reader, not a downgrade.
+Unknown future continuation formats and invalid inheritance reject without overwrites.
+
+On explicit continuation the saved ledger replays first. If the combined context
+exceeds 96k, only the unfinished base batch is bisected. Every child retains the entire
+requested evidence group, the current complete assessment draft, and all exact base
+records in its own partition. Children cannot request that group again. The original
+one-request restriction is superseded by the [linked follow-up policy](#linked-exact-evidence-follow-ups-2026-10-25),
+within existing spent-attempt allowances. Original base records remain scheduled exactly once;
+all read/check steps still finish before publication. The original unfinished child's
+spent attempts remain spent (e.g. two saved attempts means its next call is attempt
+three); subsequent children use the existing per-step allowance, not a reset of that
+unfinished step. No paid request is used to find a fitting local partition.
+
+Replay reconstructs the original evidence-request context **before** its marked
+repacking splits, while accepted child contexts include only the subdivisions active
+at their receipt boundary. This preserves original context hashes, response bytes,
+provenance and retrieval IDs rather than overwriting the original request or treating
+its summary as evidence. Existing transactional checkpoints persist each split before
+dispatch. A crash before checkpoint leaves the previous ledger eligible for the same
+local repacking; after checkpoint it resumes the saved schedule. Accepted child steps
+and the original evidence request are not redispatched after reopening/export/import.
+
+The 96k and 64-stage limits stay in force. If the full requested group plus draft and
+one indivisible base record cannot fit, or no further stage is available, retain the
+block without truncation or partial publication. Old overflow diagnostics remain in
+their immutable jobs; continuation does not claim those earlier runs succeeded.
+
+Regression tests seed nine completed steps, two spent attempts and a saved legacy
+supplemental overflow, reopen SQLite twice, repack and pause after the first child,
+reopen/portable-replay and finish without repeating saved calls. They verify original
+job/request/receipt bytes, exact supplemental text in each child, complete base-record
+coverage, bounded request sizes, corrupt inheritance and genuinely indivisible groups.
+No personal-project recovery or live model call was run.
+
+## Cross-batch exact definition evidence (2026-10-25)
+
+Source: `exact-batches-v1` definition work without cross-batch evidence support.
+Target: the same SQLite/job/portable envelopes with optional strict format-1
+`evidencePolicy` (`fromStage`, optional `supersededBlock`) and `evidenceRequests`.
+Each request records its stage, original context hash, canonical record IDs/reason,
+spent attempts, selected model and job provenance. No startup rewrite, schema counter
+or input/plan/freshness identity changes, reassessment of completed work, or automatic
+model call is required. Unsupported policy formats reject rather than overwrite;
+older strict readers may reject these optional fields, so do not downgrade readers.
+
+Original receipts replay before enabling the new contract at the unfinished boundary.
+Earlier contexts/responses remain byte-identical. One request of 1–20 distinct records
+per stage may supplement the current batch, only from the saved area's complete plan.
+Invented/current/duplicate references reject. Returned records are exact, losslessly
+encoded and reflected in context manifests/citation authority. All original batches
+still require collection and verification before publication. Supplementation does
+not certify supersession, expand an approval's scope or waive a real contradiction.
+
+Only an explicit continuous/manual refresh supersedes an old model blocker that
+mentions earlier/retained exact evidence not supplied/included/repeated (or in another
+batch), with a retained draft citation outside the current batch. This diagnostic-based
+rule replaces the old protocol limitation, not a human decision; its original reason
+is preserved in the historical job and `supersededBlock`. Other legacy blockers and
+all already-upgraded model blockers remain blocked. Exhausted budgets do not reset.
+
+Evidence requests consume the existing three-attempt limit (or an already authorized
+single recovery grant), timeout and action allowance. The existing transactional
+checkpoint saves the request before dispatching a supplemented assessment; a crash
+after it reopens without repeating that request. A crash before the response checkpoint
+retains the spent attempt, not an unsaved response. Replay validates each evidence
+request's original context and final accepted-stage context. No partial score publishes.
+The original implementation kept combined requests over 96k blocked with requested
+IDs retained. The [repacking follow-up](#exact-supplemental-evidence-repacking-2026-10-25)
+can subdivide unfinished base records without rewriting the retrieval context.
+
+Upgrade/regression tests cover legacy receipts and blocked diagnostics, exact source
+text, attempt accounting, repeated SQLite reopen, portable replay, tampered hashes,
+future policy rejection, invalid references, overflow, cancellation and stale results.
+No personal-project recovery or live inference was run.
+
 ## Accumulated definition explanation bounds (2026-10-25)
 
 Source: compact exact-batch definition responses and stored assessment checks with

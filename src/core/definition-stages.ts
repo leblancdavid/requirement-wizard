@@ -16,6 +16,9 @@ export const definitionVerdictSchema = z.object({ definitionVerdict: z.array(che
   status: z.enum(["unknown", "partial", "needs-review"]), explanation: z.string().trim().min(1).max(2000),
 })).max(9) }).strict();
 export const definitionBlockedSchema = z.object({ definitionBlocked: z.object({ reason: z.string().trim().min(1).max(1000) }).strict() }).strict();
+export const definitionEvidenceSchema = z.object({ definitionEvidence: z.object({
+  recordIDs: z.array(z.string().min(1).max(1000)).min(1).max(20), reason: z.string().trim().min(1).max(1000),
+}).strict() }).strict();
 const collectionCheckSchema = checkSchema.extend({ explanation: z.string().trim().min(1).max(accumulatedAssessmentExplanationLimit) }).strict();
 export const definitionAssessmentResponseSchema = z.object({ definitionAssessment: assessmentProposal.extend({ checks: z.array(collectionCheckSchema).length(9) }) }).strict();
 export const definitionUpdateSchema = z.object({ definitionUpdate: z.object({
@@ -36,10 +39,29 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   citationPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1) }).strict().optional(),
   collectionCitationPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
     supersededBlock: z.string().min(1).max(1000).optional() }).strict().optional(),
+  evidencePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
+    supersededBlock: z.string().min(1).max(1000).optional() }).strict().optional(),
+  evidenceRequests: z.array(z.object({ stage: z.number().int().min(0).max(maxStages - 1),
+    contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
+    jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
+    response: definitionEvidenceSchema,
+  }).strict()).max(maxStages).optional(),
+  evidenceFollowupPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
+    priorRequests: z.number().int().min(0).max(maxStages), supersededBlock: z.string().min(1).max(1000).optional(),
+    restored: z.object({ evidenceStage: z.number().int().min(0).max(maxStages - 1),
+      splitCount: z.number().int().min(0).max(maxStages - 2),
+      recordIDs: z.array(z.string().min(1)).min(1).max(20) }).strict().optional(),
+  }).strict().optional(),
+  evidenceFollowups: z.array(z.object({ stage: z.number().int().min(0).max(maxStages - 1),
+    evidenceStage: z.number().int().min(0).max(maxStages - 1), splitCount: z.number().int().min(0).max(maxStages - 2),
+    contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
+    jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: definitionEvidenceSchema,
+  }).strict()).max(maxStages * 3).optional(),
   // Append-only continuation boundaries. Original batches and earlier request
   // hashes remain unchanged; each event bisects only the unfinished exact step.
   continuation: z.object({ format: z.literal(1), splits: z.array(z.object({
     fromStage: z.number().int().min(0).max(maxStages - 1), at: z.number().int().min(1).max(9999),
+    evidenceRequestStage: z.number().int().min(0).max(maxStages - 1).optional(),
   }).strict()).max(maxStages - 2) }).strict().optional(),
   receipts: z.array(z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
     jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
@@ -60,6 +82,80 @@ const boundedWireDraft = (work: DefinitionWork) => !!work.draftPolicy && work.re
 const compactResponse = (work: DefinitionWork) => !!work.responsePolicy && work.receipts.length >= work.responsePolicy.fromStage;
 const labeledCitations = (work: DefinitionWork) => !!work.citationPolicy && work.receipts.length >= work.citationPolicy.fromStage;
 const additiveCollectionCitations = (work: DefinitionWork) => !!work.collectionCitationPolicy && work.receipts.length >= work.collectionCitationPolicy.fromStage;
+const evidenceEnabled = (work: DefinitionWork) => !!work.evidencePolicy && work.receipts.length >= work.evidencePolicy.fromStage;
+const supplementalRequest = (work: DefinitionWork) => work.evidenceRequests?.find((r) => r.stage ===
+  (definitionSteps(work)[work.receipts.length]?.evidenceStage ?? work.receipts.length));
+const followupsEnabled = (work: DefinitionWork) => !!work.evidenceFollowupPolicy && work.receipts.length >= work.evidenceFollowupPolicy.fromStage;
+const evidenceOwner = (work: DefinitionWork) => definitionSteps(work)[work.receipts.length]?.evidenceStage ?? work.receipts.length;
+const activeFollowups = (work: DefinitionWork) => work.evidenceFollowups?.filter((r) => r.evidenceStage === evidenceOwner(work) && r.stage <= work.receipts.length) ?? [];
+const restoredEvidenceIDs = (work: DefinitionWork) => followupsEnabled(work) && work.evidenceFollowupPolicy?.restored?.evidenceStage === evidenceOwner(work)
+  ? work.evidenceFollowupPolicy.restored.recordIDs : [];
+const stageEvidenceIDs = (work: DefinitionWork) => [...new Set([...definitionSteps(work)[work.receipts.length]!.ids,
+  ...supplementalRequest(work)?.response.definitionEvidence.recordIDs ?? [], ...restoredEvidenceIDs(work),
+  ...activeFollowups(work).flatMap((r) => r.response.definitionEvidence.recordIDs)])];
+
+function blockedLinkedEvidence(project: Project, work: DefinitionWork) {
+  const included = new Set(stageEvidenceIDs(work)), available = new Set(work.batches.flat()), links = new Set<string>();
+  for (const record of [...project.sources, ...project.requirements, ...project.questions, ...project.research]) {
+    if (!included.has(record.id)) continue;
+    if ("sourceIDs" in record) for (const id of record.sourceIDs) links.add(id);
+    if ("evidenceIDs" in record) for (const id of record.evidenceIDs ?? []) links.add(id);
+    if ("sourceID" in record && record.sourceID) links.add(record.sourceID);
+  }
+  return [...links].filter((id) => available.has(id) && !included.has(id) && work.blocked?.includes(id));
+}
+
+/** Replay first. Only explicitly named, saved, directly linked records can resolve
+ * the old one-request protocol block locally; this never establishes approval. */
+export function upgradeDefinitionEvidenceFollowups(project: Project, work: DefinitionWork, manual = false) {
+  if (work.evidenceFollowupPolicy || !evidenceEnabled(work) || definitionPhase(work) === "complete") return;
+  const block = work.blocked;
+  const named = block && /evidence request.*(?:already|used|limit)|(?:permitted|allowed|single|one).*evidence request/i.test(block)
+    ? blockedLinkedEvidence(project, work) : [];
+  if (block && (!manual || !named.length || named.length > 20 || !supplementalRequest(work))) return;
+  if (!block && work.attempts && !supplementalRequest(work)) return;
+  work.evidenceFollowupPolicy = { format: 1, fromStage: work.receipts.length, priorRequests: work.evidenceRequests?.length ?? 0,
+    ...(block ? { supersededBlock: block, restored: { evidenceStage: evidenceOwner(work), splitCount: work.continuation?.splits.length ?? 0, recordIDs: named } } : {}) };
+  if (block) delete work.blocked;
+}
+
+/** Explicit continuation after legacy replay; never waive an actual conflict or
+ * missing saved record. Only the old no-cross-batch-evidence protocol is replaced. */
+export function upgradeDefinitionEvidencePolicy(work: DefinitionWork, draft?: Analysis, manual = false) {
+  if (work.evidencePolicy || definitionPhase(work) === "complete") return;
+  const block = work.blocked;
+  const crossBatchBlock = !!block && /earlier|retained/i.test(block) && /exact/i.test(block)
+    && /not supplied|not included|not repeated|another batch|other batch/i.test(block)
+    && draft?.assessments?.some((a) => a.checks.some((c) => c.evidenceIDs.some((id) => !definitionSteps(work)[work.receipts.length]!.ids.includes(id))));
+  if (block && (!manual || !crossBatchBlock)) return;
+  work.evidencePolicy = { format: 1, fromStage: work.receipts.length, ...(block ? { supersededBlock: block } : {}) };
+  if (block) delete work.blocked;
+}
+
+export function requestDefinitionEvidence(project: Project, work: DefinitionWork, draft: Analysis | undefined, raw: unknown, jobID: string) {
+  const supplemental = supplementalRequest(work);
+  if (!evidenceEnabled(work) || supplemental && !followupsEnabled(work)) {
+    throw new DefinitionEvidenceBlocked("This exact stage cannot request further cross-batch evidence. No partial assessment was published.");
+  }
+  if ((work.evidenceFollowups?.length ?? 0) >= maxStages * 3) throw new DefinitionEvidenceBlocked("The bounded exact evidence follow-up ledger is full. No partial assessment was published.");
+  if (work.attempts < 1) throw new Error("Exact evidence requests require a spent stage attempt.");
+  const responses = [...work.evidenceRequests ?? [], ...work.evidenceFollowups ?? []]
+    .filter((r) => r.stage === work.receipts.length && r.attempts === work.attempts).length;
+  const recovery = work.attempts === 3 && work.recovery?.grants.some((g) => g.stage === work.receipts.length && g.spent);
+  if (responses >= (recovery ? 2 : 1)) throw new DefinitionEvidenceBlocked("This spent attempt already returned an exact evidence request; a follow-up needs a separately spent request.");
+  const response = definitionEvidenceSchema.parse(raw), ids = response.definitionEvidence.recordIDs;
+  const context = definitionStageContext(project, work, draft), available = new Set(work.batches.flat());
+  if (new Set(ids).size !== ids.length || ids.some((id) => !available.has(id) || context.manifest.includedIDs.includes(id))) {
+    throw new DefinitionEvidenceBlocked("Cross-batch evidence requests must name distinct unread canonical record IDs from this area's saved exact plan.");
+  }
+  work.evidenceRequests ??= [];
+  const request = { stage: work.receipts.length, contextKey: digest(context.data), attempts: work.attempts,
+    jobID, model: { providerID: project.model.providerID, modelID: project.model.modelID }, response };
+  if (supplemental) {
+    work.evidenceFollowups ??= [];
+    work.evidenceFollowups.push({ ...request, evidenceStage: evidenceOwner(work), splitCount: work.continuation?.splits.length ?? 0 });
+  } else work.evidenceRequests.push(request);
+}
 
 /** Explicit continuation only, after replay. The older replacement contract and
  * its blocked diagnostic remain historical; spent requests are never reset. */
@@ -86,7 +182,7 @@ export function upgradeDefinitionCitationPolicy(work: DefinitionWork) {
 }
 
 function citationLabels(work: DefinitionWork, draft?: Analysis) {
-  const ids = definitionSteps(work)[work.receipts.length]!.ids;
+  const ids = stageEvidenceIDs(work);
   const allowed = [...new Set([...ids, ...(definitionPhase(work) === "collect"
     ? draft?.assessments?.flatMap((a) => a.checks.flatMap((c) => c.evidenceIDs)) ?? [] : [])])];
   return Object.fromEntries(allowed.map((id, index) => [`E${index + 1}`, id]));
@@ -131,7 +227,7 @@ export function planDefinitionStages(project: Project, epicID: string, onProgres
   const records = new Map([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => [r.id, r]));
   if (ids.some((id) => !records.has(id))) throw new DefinitionEvidenceBlocked("Required linked evidence is missing from saved records. Restore or correct that evidence before assessing this area; no model call was made.");
   const work: DefinitionWork = { format: 1, policy: "exact-batches-v1", epicID, inputKey: definitionInputKey(project, epicID), planKey: "0".repeat(64), batches: [], receipts: [], attempts: 0,
-    draftPolicy: { format: 1, fromStage: 0 }, responsePolicy: { format: 1, fromStage: 0 }, citationPolicy: { format: 1, fromStage: 0 }, collectionCitationPolicy: { format: 1, fromStage: 0 } };
+    draftPolicy: { format: 1, fromStage: 0 }, responsePolicy: { format: 1, fromStage: 0 }, citationPolicy: { format: 1, fromStage: 0 }, collectionCitationPolicy: { format: 1, fromStage: 0 }, evidencePolicy: { format: 1, fromStage: 0 } };
   // Related supporting records follow each requirement/question when possible.
   const remaining = new Set(ids), ordered: string[] = [];
   const add = (id: string) => { if (remaining.delete(id)) ordered.push(id); };
@@ -186,6 +282,17 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
   if (work.responsePolicy && work.responsePolicy.fromStage > work.receipts.length) throw new Error("Definition response policy begins after its saved receipt boundary.");
   if (work.citationPolicy && work.citationPolicy.fromStage > work.receipts.length) throw new Error("Definition citation policy begins after its saved receipt boundary.");
   if (work.collectionCitationPolicy && work.collectionCitationPolicy.fromStage > work.receipts.length) throw new Error("Definition collection citation policy begins after its saved receipt boundary.");
+  if (work.evidencePolicy && work.evidencePolicy.fromStage > work.receipts.length) throw new Error("Definition evidence policy begins after its saved receipt boundary.");
+  if (work.evidenceFollowupPolicy && (work.evidenceFollowupPolicy.fromStage > work.receipts.length
+    || work.evidenceFollowupPolicy.priorRequests > (work.evidenceRequests?.length ?? 0)
+    || (work.evidenceFollowupPolicy.restored?.splitCount ?? 0) > (work.continuation?.splits.length ?? 0))) throw new Error("Invalid definition evidence follow-up policy boundary.");
+  if (work.evidenceFollowups?.some((r, i, all) => !work.evidenceFollowupPolicy || r.stage < work.evidenceFollowupPolicy.fromStage
+    || r.stage > work.receipts.length || r.evidenceStage > r.stage || r.splitCount > (work.continuation?.splits.length ?? 0)
+    || !work.evidenceRequests?.some((original) => original.stage === r.evidenceStage)
+    || i > 0 && r.stage < all[i - 1]!.stage)) throw new Error("Invalid definition evidence follow-up boundary.");
+  if (work.evidenceRequests?.some((r, i, all) => !work.evidencePolicy || r.stage < work.evidencePolicy.fromStage
+    || r.stage > work.receipts.length || !definitionSteps(work)[r.stage]
+    || i > 0 && r.stage <= all[i - 1]!.stage)) throw new Error("Invalid definition evidence request boundary.");
   if (work.recovery && (new Set(work.recovery.grants.map((g) => g.stage)).size !== work.recovery.grants.length
     || work.recovery.grants.some((g) => g.stage > work.receipts.length || g.stage < work.receipts.length && !g.spent))) {
     throw new Error("Invalid definition recovery ledger; saved evidence was not changed.");
@@ -199,7 +306,7 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
   if (!step) throw new Error("Definition assessment has no unfinished evidence stage.");
   const { phase } = step;
   const wireDraft = boundedWireDraft(work);
-  const ids = step.ids, included = new Set(ids);
+  const ids = stageEvidenceIDs(work), included = new Set(ids);
   const labels = labeledCitations(work) ? citationLabels(work, draft) : undefined;
   const byIDLabel = labels ? new Map(Object.entries(labels).map(([label, id]) => [id, label])) : undefined;
   const labelRecords = <T extends { id: string }>(records: T[]) => byIDLabel ? records.map((r) => ({ ...r, citationLabel: byIDLabel.get(r.id) })) : records;
@@ -210,6 +317,17 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
     sources: labelRecords(project.sources.filter((r) => included.has(r.id)).sort(byID)), requirements: labelRecords(project.requirements.filter((r) => included.has(r.id)).sort(byID)),
     questions: labelRecords(project.questions.filter((r) => included.has(r.id)).sort(byID)), research: labelRecords(project.research.filter((r) => included.has(r.id)).sort(byID)),
     definitionStage: { policy: work.policy, phase, batch: step.batch, batches: work.batches.length,
+      ...(evidenceEnabled(work) ? { evidencePolicy: "exact-cross-batch-v1", evidenceInstruction:
+        "This instruction permits app-local exact evidence requests despite the generic no-retrieval instruction. If an indispensable earlier decision or superseding relationship is not supplied in this batch, request its exact saved records with {definitionEvidence:{recordIDs:[canonical record IDs],reason}} BEFORE returning definitionBlocked or replacing supported constraints. Use IDs from retained draft citations or explicit record links; do not guess. One request of at most 20 distinct records per stage is allowed, within the existing attempt and 96k bounds. The app supplies full records, not summaries, without changing human decisions. After supplementation, assess the combined exact evidence; if still unsafe, block. Missing unread evidence is not a product gap. No tools or external retrieval are authorized." } : {}),
+      ...(supplementalRequest(work) ? {
+        supplementalEvidence: supplementalRequest(work)!.response.definitionEvidence,
+        evidenceRequestRemaining: followupsEnabled(work),
+      } : {}),
+      ...(followupsEnabled(work) ? { evidenceFollowupPolicy: "linked-exact-v1", evidenceFollowupInstruction:
+        "This follow-up policy overrides the earlier one-request restriction. You may request further exact saved records with definitionEvidence when supplied records reveal indispensable linked human decisions or scope/supersession relationships. Every request must add distinct records not already supplied, at most 20 per response. Requests consume the EXISTING stage/action/recovery allowance; no extra attempts are granted. The app retains earlier exact evidence and repacks base records if needed within 96k/64 steps. Use explicit links or retained citations, never guessed IDs. Accepted status or cleanup wording alone does not prove human approval; inspect exact human provenance without extending limited approvals. If the relationship remains unsafe or the allowance is exhausted, block without alleging a missing feature.",
+        ...(restoredEvidenceIDs(work).length ? { restoredLinkedEvidence: restoredEvidenceIDs(work) } : {}),
+        ...(activeFollowups(work).length ? { supplementalFollowups: activeFollowups(work).map((r) => r.response.definitionEvidence) } : {}),
+      } : {}),
       ...(labels ? { citationLabels: labels, citationInstruction: "In evidenceIDs cite the owning record's short citationLabel (E1, E2, etc.) from citationLabels, not copied UUIDs. Labels are scoped to THIS request and may change next stage. Do not invent, combine or guess labels/IDs. For a retained draft citation, use its matching entry in this request's citationLabels. Unchanged checks should be omitted from updates." } : {}),
       ...(compactResponse(work) && phase === "collect" ? { responseFormat: draft ? "definition-update-v1" : "definition-assessment-v1" } : {}),
       ...(additiveCollectionCitations(work) && phase === "collect" ? { collectionCitationPolicy: "additive-v1" } : {}),
@@ -250,7 +368,7 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
 
 function advanceDraft(project: Project, work: DefinitionWork, draft: Analysis | undefined, raw: unknown): Analysis {
   raw = resolveCitations(work, draft, raw);
-  const ids = definitionSteps(work)[work.receipts.length]!.ids;
+  const ids = stageEvidenceIDs(work);
   if (definitionPhase(work) === "collect") {
     let next: Analysis;
     if (compactResponse(work) && raw && typeof raw === "object" && "definitionAssessment" in raw) {
@@ -316,11 +434,58 @@ export function replayDefinitionStages(project: Project, work: DefinitionWork): 
   validateDefinitionPlan(project, work);
   let draft: Analysis | undefined;
   for (let index = 0; index < work.receipts.length; index++) {
-    const prefix = { ...work, receipts: work.receipts.slice(0, index) }, receipt = work.receipts[index]!;
+    const receipt = work.receipts[index]!;
+    const prefix = { ...work, receipts: work.receipts.slice(0, index), attempts: receipt.attempts };
+    validateFollowupPolicy(project, prefix);
+    validateEvidenceRequest(project, prefix, draft);
+    validateEvidenceFollowups(project, prefix, draft);
     if (receipt.contextKey !== digest(definitionStageContext(project, prefix, draft).data)) throw new Error("Saved definition stage does not match its exact evidence/draft. Original work retained; no completed call replayed.");
     draft = advanceDraft(project, prefix, draft, receipt.response);
   }
+  if (definitionPhase(work) !== "complete") {
+    validateFollowupPolicy(project, work);
+    validateEvidenceRequest(project, work, draft);
+    validateEvidenceFollowups(project, work, draft);
+  }
   return draft;
+}
+
+function validateEvidenceRequest(project: Project, work: DefinitionWork, draft?: Analysis) {
+  const request = work.evidenceRequests?.find((r) => r.stage === work.receipts.length);
+  if (!request) return;
+  if (request.attempts > (work.receipts[request.stage]?.attempts ?? work.attempts)) throw new Error("Saved evidence request exceeds its spent stage attempts.");
+  const before = { ...work, attempts: request.attempts, evidenceRequests: work.evidenceRequests!.filter((r) => r.stage !== request.stage),
+    evidenceFollowups: work.evidenceFollowups?.filter((r) => r.stage < request.stage),
+    ...(work.evidenceFollowupPolicy && work.evidenceRequests!.indexOf(request) < work.evidenceFollowupPolicy.priorRequests
+      ? { evidenceFollowupPolicy: undefined } : {}),
+    ...(work.continuation ? { continuation: { ...work.continuation,
+      splits: work.continuation.splits.filter((s) => s.evidenceRequestStage !== request.stage) } } : {}) };
+  const context = definitionStageContext(project, before, draft);
+  if (request.contextKey !== digest(context.data)) throw new Error("Saved cross-batch evidence request does not match its original context.");
+  requestDefinitionEvidence(project, before, draft, request.response, request.jobID);
+}
+
+function validateFollowupPolicy(project: Project, work: DefinitionWork) {
+  const policy = work.evidenceFollowupPolicy;
+  if (!policy?.restored || policy.fromStage !== work.receipts.length) return;
+  if (!policy.supersededBlock || policy.restored.evidenceStage !== evidenceOwner(work)) throw new Error("Invalid restored linked evidence provenance.");
+  const before = { ...work, evidenceFollowupPolicy: undefined, evidenceFollowups: work.evidenceFollowups?.filter((r) => r.stage < policy.fromStage), blocked: policy.supersededBlock,
+    ...(work.continuation ? { continuation: { ...work.continuation, splits: work.continuation.splits.slice(0, policy.restored.splitCount) } } : {}) };
+  const linked = blockedLinkedEvidence(project, before);
+  if (!linked.length || JSON.stringify(linked) !== JSON.stringify(policy.restored.recordIDs)) throw new Error("Restored evidence must match exact saved links named by the original protocol blocker.");
+}
+
+function validateEvidenceFollowups(project: Project, work: DefinitionWork, draft?: Analysis) {
+  for (const [index, request] of (work.evidenceFollowups ?? []).entries()) {
+    if (request.stage !== work.receipts.length) continue;
+    if (request.attempts > work.attempts) throw new Error("Saved evidence follow-up exceeds its spent stage attempts.");
+    const before = { ...work, attempts: request.attempts, evidenceFollowups: work.evidenceFollowups!.slice(0, index),
+      ...(work.continuation ? { continuation: { ...work.continuation, splits: work.continuation.splits.slice(0, request.splitCount) } } : {}) };
+    if (evidenceOwner(before) !== request.evidenceStage || request.contextKey !== digest(definitionStageContext(project, before, draft).data)) {
+      throw new Error("Saved evidence follow-up does not match its original exact context.");
+    }
+    requestDefinitionEvidence(project, before, draft, request.response, request.jobID);
+  }
 }
 
 export function completedDefinitionAssessment(project: Project, work: DefinitionWork): Analysis {

@@ -96,7 +96,9 @@ function LogDetails({ record, open }: { record: LogRecord; open: boolean }) {
   async function copy() {
     setCopyState("copying");
     try {
-      await navigator.clipboard.writeText(redactLog(record.detail));
+      const text = redactLog(record.detail);
+      if (window.reqwizitDesktop) await window.reqwizitDesktop.copyText(text);
+      else await navigator.clipboard.writeText(text);
       setCopyState("copied");
     } catch { setCopyState("failed"); }
   }

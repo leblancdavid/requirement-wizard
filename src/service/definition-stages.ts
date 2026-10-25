@@ -1,7 +1,7 @@
 import type { Job, Project } from "../core/model.js";
 import { StaleRevisionError } from "../core/model.js";
 import { acceptDefinitionStage, completedDefinitionAssessment, definitionBlockedSchema, definitionPhase, definitionStageContext,
-  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, upgradeDefinitionCitationPolicy, upgradeDefinitionCollectionCitations, DefinitionEvidenceBlocked, definitionSteps, splitDefinitionStage } from "../core/definition-stages.js";
+  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, upgradeDefinitionCitationPolicy, upgradeDefinitionCollectionCitations, upgradeDefinitionEvidencePolicy, upgradeDefinitionEvidenceFollowups, requestDefinitionEvidence, DefinitionEvidenceBlocked, definitionSteps, splitDefinitionStage } from "../core/definition-stages.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import type { ProjectStore } from "../storage/store.js";
@@ -31,7 +31,9 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   upgradeDefinitionResponsePolicy(work);
   upgradeDefinitionCitationPolicy(work);
   upgradeDefinitionCollectionCitations(work, draft, options.continuous === true);
-  if (prior?.definitionWork?.blocked && !work.blocked) options.onProgress?.(`The saved 20-citation protocol blocker has been superseded by citation-addition updates. All ${work.receipts.length} completed responses and spent attempts are retained. Preparing the unfinished step; no new model request has started yet.`);
+  upgradeDefinitionEvidencePolicy(work, draft, options.continuous === true);
+  upgradeDefinitionEvidenceFollowups(project, work, options.continuous === true);
+  if (prior?.definitionWork?.blocked && !work.blocked) options.onProgress?.(`The saved protocol blocker has been superseded by the updated evidence/citation contract. All ${work.receipts.length} completed responses and spent attempts are retained. Preparing the unfinished step; no new model request has started yet.`);
   if (options.recoveryJobID) {
     if (prior?.id !== options.recoveryJobID || !canRecoverDefinition(prior)) throw new Error("This assessment is no longer eligible for recovery. Refresh before continuing.");
     work.recovery ??= { format: 1, grants: [] };
@@ -55,6 +57,10 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
           continue;
         }
         store.checkpointDefinition(job.id, work, error.manifest);
+        const supplemental = definitionSteps(work)[work.receipts.length]?.evidenceStage ?? work.receipts.length;
+        if (work.evidenceRequests?.some((r) => r.stage === supplemental)) {
+          return store.blockDefinition(job.id, "The requested cross-batch exact evidence plus the retained assessment and the smallest available batch still exceeds 96,000 characters after lossless encoding. Further exact subdivision cannot help within the 64-stage limit. The request, completed steps and spent attempts are retained; no evidence was truncated or partial assessment published.");
+        }
         const indivisible = definitionSteps(work)[work.receipts.length]?.ids.length === 1;
         return store.blockDefinition(job.id, `The next exact evidence batch plus the complete assessment draft still exceeds 96,000 characters after lossless encoding (${error.manifest.characters.toLocaleString("en-US")}). ${indivisible ? "One indivisible evidence record plus the saved findings cannot fit; further record-level splitting cannot help." : "The 64-stage exact subdivision limit was reached."} All ${work.receipts.length} completed responses and spent attempts are saved; no findings or evidence were truncated and partial coverage was not published. Unchanged Resume cannot make this request fit and will not repeat completed calls.`);
       }
@@ -112,6 +118,14 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     if (options.schedule) options.schedule[step.phase === "collect" ? "collectMs" : "verifyMs"] = Date.now() - requestStarted;
     options.signal.throwIfAborted();
     if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
+    if (raw && typeof raw === "object" && "definitionEvidence" in raw) {
+      requestDefinitionEvidence(project, work, draft, raw, job.id);
+      store.checkpointDefinition(job.id, work, context.manifest);
+      const next = prepareContext();
+      if (!("manifest" in next)) return next;
+      context = next;
+      continue;
+    }
     if (raw && typeof raw === "object" && "definitionBlocked" in raw) {
       work.blocked = definitionBlockedSchema.parse(raw).definitionBlocked.reason;
       store.checkpointDefinition(job.id, work, context.manifest);

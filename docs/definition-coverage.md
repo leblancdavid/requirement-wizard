@@ -5,6 +5,65 @@ decisions; it is not readiness, code completeness, or verified delivery to main.
 
 ## Refresh the overall view
 
+### Exact earlier decisions across batches (2026-10-25)
+
+**Linked-decision follow-up:** the reviewer may now request further exact linked
+records when the first evidence request reveals another indispensable human decision.
+Each request must add new saved records and consumes the existing attempt allowance;
+this is not an unlimited search or a new approval. Accepted status or a cleanup note
+alone does not prove a human approved the behavior. Body-collision approval must not
+be extended to a separate hurt-detection region without its exact decision evidence.
+
+For an older **“permitted evidence request has already been used”** blocker, restart/
+rebuild the updated app and explicitly **Refresh definition coverage**. If that saved
+diagnostic names exact record IDs directly linked by supplied records, the app loads
+those records locally and preserves the old block as history. It does not infer their
+meaning. If all three attempts were spent, Refresh still starts no model call: use
+**Recover assessment** if offered to authorize the existing single additional request.
+Unsupported/missing/unlinked evidence remains blocked. See
+[compatibility and limits](migrations.md#linked-exact-evidence-follow-ups-2026-10-25).
+
+**Supplemental overflow follow-up:** if the requested evidence plus the current batch
+exceeds 96k (for example 106,445 characters), continuation now locally subdivides the
+unfinished batch while keeping the full requested evidence beside each smaller piece.
+It does not repeat the evidence request, truncate decisions, or restart completed
+steps. Restart/rebuild the updated backend/desktop, then explicitly **Refresh definition
+coverage**. Saved overflow jobs remain historical; the next run reuses their ledger.
+The first smaller step retains its spent attempts. If even one base record plus the
+complete requested group and assessment cannot fit, or the 64-stage bound is reached,
+the review still blocks safely. See [upgrade/recovery](migrations.md#exact-supplemental-evidence-repacking-2026-10-25).
+
+An accumulated assessment can refer to earlier constraints whose exact human text
+is in another batch. The reviewer can now request up to twenty saved records by
+canonical ID per request before deciding whether a later approval replaces or
+limits those constraints. The next request includes the full exact records and the
+current batch, not just the earlier assessment's summary. No new product approval
+is inferred, and no questions, external tools or requirement edits are authorized.
+
+Requests consume the existing stage/action allowance; they do not reset attempts.
+Each combined request must fit 96k after lossless encoding, using smaller base-record
+partitions where possible, or remain blocked without truncation/publication.
+Completed read/check steps are never repeated. A genuinely unresolved relationship
+can still block after the exact records are supplied.
+
+Restart the updated backend (rebuild/relaunch desktop if applicable), then explicitly
+choose **Refresh definition coverage**. A legacy block describing exact earlier
+evidence not supplied in this/another batch can be superseded once when retained
+citations identify other planned records. The old diagnostic, receipts and spent
+attempts stay saved. Automatic/bounded maintenance does not clear legacy blockers;
+already-upgraded blockers do not acquire another retry on unchanged refresh. Exhausted
+attempts still need the separately authorized recovery action.
+
+See [compatibility and recovery](migrations.md#cross-batch-exact-definition-evidence-2026-10-25).
+Deterministic tests cover legacy continuation, exact text, saved attempts, SQLite
+reopening, portable replay, malformed references, overflow, cancellation and stale
+results. Live model quality and recovery of the reported personal project remain
+unverified; no personal data or model allowance was used for these checks.
+Verification including the linked-decision follow-up: `npm run check`,
+`npm test` (including all 652 main tests), 93 focused definition/diagnostic tests,
+`npm run build:ui` and `git diff --check` passed. The existing UI bundle-size warning
+remains. Browser checks were not rerun for this backend/protocol change.
+
 ### Accumulated explanation field limit (2026-10-25)
 
 A staged `definitionUpdate.checks[…].explanation` could exceed the ordinary

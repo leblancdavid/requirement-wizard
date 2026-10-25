@@ -9,6 +9,9 @@ await mkdir(resolve(".reqwizit-state"), { recursive: true });
 const directory = await mkdtemp(resolve(".reqwizit-state/desktop-check-"));
 const seed = new ProjectStore(join(directory, "projects.sqlite"));
 const project = seed.create("Desktop continuity fixture", "Keep my saved requirements", { providerID: "openai", modelID: "fixture" });
+const failed = seed.beginJob(project.id, project.revision).job;
+seed.claimJob(failed.id, Date.now() + 60000);
+seed.failJob(failed.id, "failed", "Clipboard fixture error access_token=private-secret");
 seed.close();
 const executablePath = process.env.REQWIZIT_DESKTOP_EXECUTABLE;
 const appDirectory = resolve(process.env.REQWIZIT_DESKTOP_APP_DIRECTORY ?? "dist/desktop-app");
@@ -26,6 +29,26 @@ try {
   assert.equal(await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require), "undefined");
   assert.equal(await page.evaluate(() => typeof window.reqwizitDesktop?.chooseDirectory), "function");
   assert.equal(await page.evaluate(() => typeof window.reqwizitDesktop?.quit), "function");
+  // Exercise the real log button, preload, IPC and native clipboard API boundary.
+  // Capture the native write without replacing the user's clipboard contents.
+  await desktop.evaluate(({ clipboard }) => {
+    clipboard.writeText = async (text) => { (globalThis as unknown as { copiedLog: string }).copiedLog = text; };
+  });
+  await page.getByRole("button", { name: "Application menu", exact: true }).click();
+  await page.getByRole("button", { name: "Logs", exact: true }).click();
+  const logs = page.getByRole("dialog", { name: "Logs", exact: true });
+  const failure = logs.locator(".log-record").filter({ hasText: failed.id });
+  await failure.getByText("Log details", { exact: true }).click();
+  await failure.getByRole("button", { name: "Copy details", exact: true }).click();
+  await expect(failure.getByRole("status")).toHaveText("Copied to clipboard.");
+  const copied = await desktop.evaluate(() => (globalThis as unknown as { copiedLog: string }).copiedLog);
+  assert.ok(copied.includes("Clipboard fixture error"));
+  assert.ok(!copied.includes("private-secret"));
+  assert.equal(copied, await failure.locator("pre").textContent());
+  assert.equal(await page.evaluate(async () => {
+    try { await window.reqwizitDesktop!.copyText("x".repeat(4_000_001)); return false; } catch { return true; }
+  }), true);
+  await page.keyboard.press("Escape");
   assert.equal(await page.evaluate(() => typeof (window as unknown as { process?: unknown }).process), "undefined");
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/reqwizit.svg");
   assert.equal((await page.request.get(new URL("/reqwizit.svg", page.url()).href)).status(), 200);

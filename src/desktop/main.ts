@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, session, shell } from "electron";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultDataDirectory } from "../storage/paths.js";
@@ -91,6 +91,11 @@ else {
     ipcMain.handle("reqwizit:quit", (event) => {
       trusted(event);
       void shutdown();
+    });
+    ipcMain.handle("reqwizit:copy-text", async (event, text: unknown) => {
+      trusted(event);
+      if (typeof text !== "string" || text.length > 4_000_000) throw new Error("Invalid clipboard text.");
+      await clipboard.writeText(text);
     });
     ipcMain.handle("reqwizit:title-bar-colors", (event, color: unknown, symbolColor: unknown) => {
       trusted(event);

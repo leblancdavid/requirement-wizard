@@ -57,6 +57,16 @@ implemented under `src/`. See [decisions.md](decisions.md),
   response identities; checkpointed work retains spent attempts, origin and model
   provenance through SQLite/portable continuation. The queue, progress dialog and
   processing drawer show unpublished stage counts and explicit blocked/paused states.
+  Optional boundary-versioned cross-batch evidence requests rehydrate exact planned
+  records for indispensable decision relationships, retaining original request hashes
+  and spent attempts; they never invoke external tools or change human decisions.
+  Marked continuation splits can repack unfinished base records while pinning the
+  entire supplemental evidence group to every child; replay retains the original
+  pre-split retrieval context and all accepted child contexts independently.
+  Boundary-versioned linked follow-ups retain pre-request split counts and evidence
+  lineage, using existing spent-attempt limits. Manual upgrade of an old one-request
+  block may load explicitly named, directly linked saved records without treating
+  their accepted/cleanup labels as proof of human approval.
   Existing single-context assessment identities remain unchanged. See
   [large-area assessment](definition-coverage.md#large-area-assessment-and-continuation-follow-up-2026-10-23).
 

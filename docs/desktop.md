@@ -45,6 +45,15 @@ dependencies: a process holding a native SQLite module can block `npm ci`.
   Settings instead of a persistent left sidebar. Quit is desktop-only.
 - **Browse folders** uses the native directory picker in both project creation and
   project Settings. Browser clients keep their existing folder browser.
+- **Copy details** in Logs uses a write-only native clipboard action, since desktop
+  browser permissions remain denied. Only the app's main frame at its owned origin
+  can send bounded text; no clipboard-reading API is exposed to the renderer.
+  Log credential redaction is preserved. No saved data or migration changes.
+  Verification (2026-10-25): type check, desktop build and browser log checks
+  passed. Real Electron log-button/preload/IPC checks passed with the native write
+  captured (without altering the user's clipboard), including redaction and oversized
+  input rejection. The desktop runner then stopped at an unrelated title-bar layout
+  assertion (`0px` versus `36px`); the full desktop suite is not claimed passing.
 - ChatGPT authorization and external web links open in the system browser. The
   desktop renderer never becomes a provider sign-in window.
 - The backend runs in an owned Node worker thread, not Electron's native-window
@@ -95,7 +104,7 @@ from those in the user's web browser. Tokens stay in the local provider service,
 outside renderer APIs and project exports.
 
 The renderer is sandboxed, context-isolated, and has no Node integration. Its
-CommonJS preload exposes directory selection, opening HTTP(S) links, Quit, strictly
+CommonJS preload exposes directory selection, opening HTTP(S) links, Quit, text copying, strictly
 validated title-bar colors and a platform capability flag. It does not expose
 arbitrary window operations or IPC channels.
 IPC checks the owning window, main frame, and local origin. Web permissions and
