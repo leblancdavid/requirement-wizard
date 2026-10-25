@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { analysisSchema, stagedDefinitionAnalysisSchema, parseDiscoveryAnalysis, type Analysis, type Job, type Project } from "./model.js";
-import { checkSchema, assessmentProposal } from "./epics.js";
+import { checkSchema, assessmentProposal, accumulatedAssessmentExplanationLimit } from "./epics.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
 import { definitionContext, validateDefinitionResult, validateDefinitionCitations, DefinitionCitationError } from "./definition-assessment.js";
 import { definitionInputKey, definitionAreas } from "./definition-identity.js";
@@ -16,9 +16,10 @@ export const definitionVerdictSchema = z.object({ definitionVerdict: z.array(che
   status: z.enum(["unknown", "partial", "needs-review"]), explanation: z.string().trim().min(1).max(2000),
 })).max(9) }).strict();
 export const definitionBlockedSchema = z.object({ definitionBlocked: z.object({ reason: z.string().trim().min(1).max(1000) }).strict() }).strict();
-export const definitionAssessmentResponseSchema = z.object({ definitionAssessment: assessmentProposal.extend({ checks: z.array(checkSchema.strict()).length(9) }) }).strict();
+const collectionCheckSchema = checkSchema.extend({ explanation: z.string().trim().min(1).max(accumulatedAssessmentExplanationLimit) }).strict();
+export const definitionAssessmentResponseSchema = z.object({ definitionAssessment: assessmentProposal.extend({ checks: z.array(collectionCheckSchema).length(9) }) }).strict();
 export const definitionUpdateSchema = z.object({ definitionUpdate: z.object({
-  checks: z.array(checkSchema.strict()).max(9), confidence: assessmentProposal.shape.confidence.optional(),
+  checks: z.array(collectionCheckSchema).max(9), confidence: assessmentProposal.shape.confidence.optional(),
   explanation: assessmentProposal.shape.explanation.optional(),
 }).strict() }).strict();
 export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-batches-v1"),
@@ -33,6 +34,8 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   draftPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxBatches * 2) }).strict().optional(),
   responsePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1) }).strict().optional(),
   citationPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1) }).strict().optional(),
+  collectionCitationPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
+    supersededBlock: z.string().min(1).max(1000).optional() }).strict().optional(),
   // Append-only continuation boundaries. Original batches and earlier request
   // hashes remain unchanged; each event bisects only the unfinished exact step.
   continuation: z.object({ format: z.literal(1), splits: z.array(z.object({
@@ -56,6 +59,25 @@ export const definitionPhase = (work: DefinitionWork) => definitionSteps(work)[w
 const boundedWireDraft = (work: DefinitionWork) => !!work.draftPolicy && work.receipts.length >= work.draftPolicy.fromStage;
 const compactResponse = (work: DefinitionWork) => !!work.responsePolicy && work.receipts.length >= work.responsePolicy.fromStage;
 const labeledCitations = (work: DefinitionWork) => !!work.citationPolicy && work.receipts.length >= work.citationPolicy.fromStage;
+const additiveCollectionCitations = (work: DefinitionWork) => !!work.collectionCitationPolicy && work.receipts.length >= work.collectionCitationPolicy.fromStage;
+
+/** Explicit continuation only, after replay. The older replacement contract and
+ * its blocked diagnostic remain historical; spent requests are never reset. */
+export function upgradeDefinitionCollectionCitations(work: DefinitionWork, draft?: Analysis, allowProtocolRecovery = false) {
+  if (work.collectionCitationPolicy || definitionPhase(work) === "complete") return;
+  const citationLimitBlock = definitionPhase(work) === "collect" && !!work.blocked
+    && /\b20\b/.test(work.blocked) && /citation/i.test(work.blocked) && /response limit/i.test(work.blocked)
+    && /retained assessment/i.test(work.blocked)
+    && /No missing product decision or product gap is established by this blocker\./.test(work.blocked)
+    && !!draft?.assessments?.some((a) => a.checks.some((c) => c.evidenceIDs.length >= 20));
+  if (citationLimitBlock && !allowProtocolRecovery) return;
+  work.collectionCitationPolicy = { format: 1, fromStage: work.receipts.length,
+    ...(citationLimitBlock ? { supersededBlock: work.blocked } : {}) };
+  if (citationLimitBlock) {
+    if (!compactResponse(work)) work.responsePolicy = { format: 1, fromStage: work.receipts.length };
+    delete work.blocked;
+  }
+}
 
 /** Enable only after replay. Rejected attempts stay spent; accepted contexts and
  * raw responses before this boundary remain byte-identical. */
@@ -109,7 +131,7 @@ export function planDefinitionStages(project: Project, epicID: string, onProgres
   const records = new Map([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => [r.id, r]));
   if (ids.some((id) => !records.has(id))) throw new DefinitionEvidenceBlocked("Required linked evidence is missing from saved records. Restore or correct that evidence before assessing this area; no model call was made.");
   const work: DefinitionWork = { format: 1, policy: "exact-batches-v1", epicID, inputKey: definitionInputKey(project, epicID), planKey: "0".repeat(64), batches: [], receipts: [], attempts: 0,
-    draftPolicy: { format: 1, fromStage: 0 }, responsePolicy: { format: 1, fromStage: 0 }, citationPolicy: { format: 1, fromStage: 0 } };
+    draftPolicy: { format: 1, fromStage: 0 }, responsePolicy: { format: 1, fromStage: 0 }, citationPolicy: { format: 1, fromStage: 0 }, collectionCitationPolicy: { format: 1, fromStage: 0 } };
   // Related supporting records follow each requirement/question when possible.
   const remaining = new Set(ids), ordered: string[] = [];
   const add = (id: string) => { if (remaining.delete(id)) ordered.push(id); };
@@ -163,6 +185,7 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
   if (work.draftPolicy && work.draftPolicy.fromStage > work.receipts.length) throw new Error("Definition draft policy begins after its saved receipt boundary.");
   if (work.responsePolicy && work.responsePolicy.fromStage > work.receipts.length) throw new Error("Definition response policy begins after its saved receipt boundary.");
   if (work.citationPolicy && work.citationPolicy.fromStage > work.receipts.length) throw new Error("Definition citation policy begins after its saved receipt boundary.");
+  if (work.collectionCitationPolicy && work.collectionCitationPolicy.fromStage > work.receipts.length) throw new Error("Definition collection citation policy begins after its saved receipt boundary.");
   if (work.recovery && (new Set(work.recovery.grants.map((g) => g.stage)).size !== work.recovery.grants.length
     || work.recovery.grants.some((g) => g.stage > work.receipts.length || g.stage < work.receipts.length && !g.spent))) {
     throw new Error("Invalid definition recovery ledger; saved evidence was not changed.");
@@ -189,13 +212,16 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
     definitionStage: { policy: work.policy, phase, batch: step.batch, batches: work.batches.length,
       ...(labels ? { citationLabels: labels, citationInstruction: "In evidenceIDs cite the owning record's short citationLabel (E1, E2, etc.) from citationLabels, not copied UUIDs. Labels are scoped to THIS request and may change next stage. Do not invent, combine or guess labels/IDs. For a retained draft citation, use its matching entry in this request's citationLabels. Unchanged checks should be omitted from updates." } : {}),
       ...(compactResponse(work) && phase === "collect" ? { responseFormat: draft ? "definition-update-v1" : "definition-assessment-v1" } : {}),
+      ...(additiveCollectionCitations(work) && phase === "collect" ? { collectionCitationPolicy: "additive-v1" } : {}),
       // Only the assessment affects subsequent findings. Ignored analysis wrapper
       // fields remain in the receipt, not duplicated in every future request.
       draft: draft ? wireDraft ? { assessments: draft.assessments } : draft : null,
       ...(wireDraft ? { draftPolicy: "bounded-wire-v1", draftCharacterTarget: definitionDraftLimit } : { draftCharacterLimit: definitionDraftLimit }),
       instruction: stageInstructions + (phase === "collect" && compactResponse(work)
          ? draft
-           ? " COLLECT: return {definitionUpdate:{checks:[]}} with ONLY dimensions changed by this batch. Omitted dimensions, confidence and explanation are retained exactly by the app. Each changed check replaces that dimension: retain all still-supported earlier findings and citations, adding this batch's findings; never erase constraints just because their evidence is in another batch. Cite only this batch or previously cited draft evidence. An unchanged batch needs an empty checks array. No analysis wrapper or repeated unchanged checks. Keep changed explanations concise (target 700 characters), but never drop findings or citations to meet a size target."
+            ? additiveCollectionCitations(work)
+              ? " COLLECT: return {definitionUpdate:{checks:[]}} with ONLY dimensions changed by this batch. Omitted dimensions, confidence and explanation are retained exactly by the app. A changed check replaces the dimension's status, importance and explanation: retain all still-supported earlier findings while incorporating this batch; never erase constraints because their evidence is in another batch. Its evidenceIDs are ADDITIONS, not a replacement: return at most 20 relevant citations for the update. The app automatically unions them with ALL prior citations for that dimension (up to 1,280 accumulated citations). Do NOT repeat the retained citation list; reaching 20 retained citations is NOT a blocker. Cite only this batch or previously cited draft evidence. An unchanged batch needs an empty checks array. Keep changed explanations concise (target 700 characters), never dropping findings to meet a size target. No analysis wrapper or repeated unchanged checks."
+              : " COLLECT: return {definitionUpdate:{checks:[]}} with ONLY dimensions changed by this batch. Omitted dimensions, confidence and explanation are retained exactly by the app. Each changed check replaces that dimension: retain all still-supported earlier findings and citations, adding this batch's findings; never erase constraints just because their evidence is in another batch. Cite only this batch or previously cited draft evidence. An unchanged batch needs an empty checks array. No analysis wrapper or repeated unchanged checks. Keep changed explanations concise (target 700 characters), but never drop findings or citations to meet a size target."
            : " COLLECT: return {definitionAssessment:{epicID,confidence,explanation,checks}} with exactly one check for each of the nine dimensions. Cite only this exact batch. Later batches may resolve uncertainty; do not treat unread evidence as missing decisions. Keep explanations concise (target 700 characters per dimension), without dropping findings or citations. No analysis wrapper or unrelated fields."
          : phase === "collect"
          ? " COLLECT: return ordinary analysis with exactly one nine-dimension assessment, accumulating the current batch's exact findings into the displayed draft. Keep all non-assessment arrays empty. Evidence citations may name this exact batch or previously cited draft evidence ONLY. Do not erase earlier supported constraints or findings just because their evidence is in another batch. Later batches may answer earlier uncertainties. " + (wireDraft
@@ -229,7 +255,7 @@ function advanceDraft(project: Project, work: DefinitionWork, draft: Analysis | 
     let next: Analysis;
     if (compactResponse(work) && raw && typeof raw === "object" && "definitionAssessment" in raw) {
       if (draft) throw new Error("A subsequent definition batch must update the saved draft, not replace it.");
-      next = analysisSchema.parse({ summary: "Definition evidence review", goals: [], actors: [], assumptions: [],
+      next = stagedDefinitionAnalysisSchema.parse({ summary: "Definition evidence review", goals: [], actors: [], assumptions: [],
         questions: [], requirements: [], retireQuestions: [], assessments: [definitionAssessmentResponseSchema.parse(raw).definitionAssessment] });
     } else if (compactResponse(work) && raw && typeof raw === "object" && "definitionUpdate" in raw) {
       if (!draft) throw new Error("Definition updates require an existing complete draft.");
@@ -239,11 +265,12 @@ function advanceDraft(project: Project, work: DefinitionWork, draft: Analysis | 
       const assessment = next.assessments![0]!;
       for (const check of update.checks) {
         const index = assessment.checks.findIndex((c) => c.dimension === check.dimension);
-        assessment.checks[index] = check;
+        assessment.checks[index] = additiveCollectionCitations(work)
+          ? { ...check, evidenceIDs: [...new Set([...assessment.checks[index]!.evidenceIDs, ...check.evidenceIDs])] } : check;
       }
       if (update.confidence !== undefined) assessment.confidence = update.confidence;
       if (update.explanation !== undefined) assessment.explanation = update.explanation;
-      next = analysisSchema.parse(next);
+      next = stagedDefinitionAnalysisSchema.parse(next);
     } else next = parseDiscoveryAnalysis(raw).result;
     validateDefinitionResult(project, work.epicID, [...ids, ...draft?.assessments?.flatMap((a) => a.checks.flatMap((c) => c.evidenceIDs)) ?? []], next);
     if (!boundedWireDraft(work) && JSON.stringify(next).length > definitionDraftLimit) throw new Error("Staged definition draft exceeds 12,000 characters; nothing was truncated or published.");

@@ -5,6 +5,55 @@ decisions; it is not readiness, code completeness, or verified delivery to main.
 
 ## Refresh the overall view
 
+### Accumulated explanation field limit (2026-10-25)
+
+A staged `definitionUpdate.checks[…].explanation` could exceed the ordinary
+4,000-character field limit as findings accumulated, even when the full request
+was below 96k. Compact definition collection and stored accumulated checks now
+allow longer explanations, up to the 96k request ceiling per check. Ordinary
+discovery and verification response limits are unchanged. Explanations still target
+concise wording; every complete evidence-plus-draft request must independently fit
+96k, or block without truncating evidence/findings or publishing partial coverage.
+
+Restart the updated backend (rebuild/relaunch desktop if applicable), then explicitly
+refresh/resume. Seven saved steps, for example, stay saved; the rejected response
+does not replace them. Rejected output was not saved, so continuation needs a new
+request for that unfinished step and retains its already-spent attempt. Exhausted
+stages still require the separate explicit recovery action, not an allowance reset.
+See [upgrade details](migrations.md#accumulated-definition-explanation-bounds-2026-10-25).
+
+Verification: type check, `npm test` (including all 652 main tests), 69 focused staged/discovery tests and diff whitespace
+check passed. Tests preserve seven legacy receipts, spent attempts and verbatim
+long explanations across repeated SQLite reopen and portable replay, and retain
+the independent field/context bounds. No live model request or personal-project
+recovery was run; browser checks were not rerun for this backend/schema change.
+
+### Collection citation-limit blocker (2026-10-25)
+
+Fixed contradictory collection instructions requiring retention of every earlier
+citation while limiting each response to 20 per dimension. Changed compact checks
+now send citation additions; the engine retains and deduplicates all earlier
+citations, up to the existing 1,280 accumulated limit. Explanations still retain
+supported earlier findings. The response limit remains 20 additions per dimension.
+All exact batches must still be verified before coverage can be published.
+
+After restarting the updated backend (or rebuilding/relaunching desktop), explicitly
+choose **Refresh definition coverage** or **Resume this assessment**. The recognized
+saved 20-citation protocol blocker can then be superseded without replaying saved
+steps or resetting spent attempts. Other evidence/attempt/context blockers stay
+blocked. See [compatibility details](migrations.md#additive-definition-collection-citations-2026-10-25).
+
+If Logs says **0 model request attempts this run**, the run did not receive a new
+model rejection: it stopped locally with retained evidence. Saved steps can be reused
+from earlier runs. Selected-task logs are not necessarily the latest run; use
+**Show all logs**, clear filters, and **Latest saved tasks** when on an older page.
+The newest dated task in the current view is identified separately from live status.
+
+Verification: type check, `npm test`, 61 final focused staged/log tests and the
+focused unified-log browser check/UI build passed, including latest-task identity and zero-request
+blocker wording. No personal-project recovery or live model call was run. Existing
+UI bundle-size warnings remain.
+
 Open **Overall progress → Refresh definition coverage**. Expand Definition coverage
 for per-area refresh actions, explanations and linked evidence. The refresh:
 

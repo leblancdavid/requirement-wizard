@@ -6,7 +6,7 @@ import type { LogHistoryPage } from "../core/log-history.js";
 import { Modal } from "./modal.js";
 import { PagedList } from "./pagination.js";
 import { closeLogs, openLogs, useLogs } from "./log-access.js";
-import { jobHistoryLog, logPreview, logTiming, projectLogs, type LogRecord } from "./log-records.js";
+import { jobHistoryLog, logPreview, logTiming, projectLogs, redactLog, type LogRecord } from "./log-records.js";
 import { DiscoveryDiagnostics } from "./discovery-diagnostics.js";
 import { statusLabel } from "./user-messages.js";
 import type { DefinitionHistoryRequest } from "./definition-review-history.js";
@@ -48,6 +48,7 @@ export function Logs({ project, jobs = [], submissions = [], execution, progress
     detail: [progress.length ? `Processing messages:\n${progress.join("\n")}` : "No current processing messages.", workflowMessage ? `Coordinated workflow status (separate from definition coverage):\n${workflowMessage}` : "", workspaceDiagnostic].filter(Boolean).join("\n\n") }] : [];
   const records = new Map<string, LogRecord>();
   const pageIDs = new Set(history?.entries.map((entry) => entry.id));
+  const historyOrder = new Map(history?.entries.map((entry, index) => [entry.id, index]));
   for (const record of [...state.records.filter((r) => !r.projectID || r.projectID === project?.id || r.id === state.target), ...current,
     ...saved.filter((r) => !request || !jobs.some((job) => job.id === r.id) || !history || pageIDs.has(r.id)), ...history?.entries.map(jobHistoryLog) ?? []]) {
     const id = record.id.replace(/^definition-history:/, ""), old = records.get(id);
@@ -57,12 +58,15 @@ export function Logs({ project, jobs = [], submissions = [], execution, progress
     && (scope !== "app" || !r.projectID) && (scope !== "project" || r.projectID === project?.id) && (!source || r.source === source)
     && (!area || r.epicID === area) && (!problems || !!r.status && ["failed", "blocked", "interrupted", "cancelled", "needs-attention", "stale"].includes(r.status))
     && `${r.title} ${r.detail} ${r.id}`.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0));
+    .sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0)
+      || (historyOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (historyOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER));
   const sources = [...new Set([...jobSources, ...[...records.values()].map((r) => r.source)])];
+  const newestDatedTask = filtered.find((record) => record.projectID && record.source !== "Live status" && record.at && Number.isFinite(Date.parse(record.at)));
   return <Modal id="logs" titleID="logs-title" title="Logs" close={closeLogs} closeLabel="Close logs" bodyClassName="logs-panel">
     <p>One timeline for definition reviews, discovery, planning, code checks, delivery and app diagnostics. Saved history loads automatically. Opening logs never starts AI work.</p>
     <details><summary>Timing, privacy and retention</summary><p>Times show recorded starts, finishes or recorded-event times—not guesses. Older missing timing stays unknown. Saved-step counts can include checks reused from earlier attempts; model request counts describe only this run. Browser-session diagnostics retain up to 250 entries. Logs can contain project text and paths; review before sharing.</p></details>
-    {target && <p role="status">Showing the selected task or diagnostic. <button type="button" className="secondary" onClick={() => openLogs()}>Show all logs</button></p>}
+    {target && <p role="status">Showing the selected task or diagnostic—not necessarily the latest run. <button type="button" className="secondary" onClick={() => openLogs()}>Show all logs</button></p>}
+    {!target && <p>Tasks are ordered newest first by recorded start or creation time. Filters and older-history pages can hide newer runs. “Current processing messages” is a live snapshot, not the last saved task.</p>}
     {exportDiagnostics && <details><summary>Export discovery diagnostics</summary><p>This bounded metadata-only export excludes original text and credentials. Review it before sharing.</p><DiscoveryDiagnostics jobs={jobs} load={exportDiagnostics} /></details>}
     <div className="log-filters">
       <label>Scope<select aria-label="Scope" value={scope} onChange={(e) => { setScope(e.target.value); latest(); }}><option value="all">App & current project</option><option value="app">App only</option>{project && <option value="project">Current project</option>}</select></label>
@@ -74,13 +78,34 @@ export function Logs({ project, jobs = [], submissions = [], execution, progress
     {project && request && <div className="log-actions"><button type="button" className="secondary" disabled={loading} onClick={latest}>Reload logs</button><button type="button" className="secondary" disabled={loading || !history?.nextBefore} onClick={() => setNavigation((n) => ({ ...n, before: history!.nextBefore! }))}>Older saved tasks</button>{navigation.before && <button type="button" className="secondary" disabled={loading} onClick={latest}>Latest saved tasks</button>}</div>}
     {loading && <p role="status">Loading saved task logs…</p>}
     {error && <p role="alert">{error}</p>}
+    {!loading && newestDatedTask && <p role="status">{target ? "Selected dated task" : "Most recent dated task in this view"}: <strong>{newestDatedTask.title}{newestDatedTask.epicID ? ` · ${project?.epics.find((epic) => epic.id === newestDatedTask.epicID)?.title ?? newestDatedTask.epicID}` : ""}</strong> · {statusLabel(newestDatedTask.status ?? "unknown")} · {logTiming(newestDatedTask)} · Run {newestDatedTask.id}</p>}
     {!loading && !filtered.length && <p role="status">No matching logs. Try another filter or Show all logs.</p>}
     <PagedList key={`${state.target}:${scope}:${source}:${area}:${search}:${problems}:${navigation.before}`} items={filtered} itemID={(r) => r.id} label="Logs">{(record) => <article className="log-record">
       <h3>{record.title}{record.epicID ? ` · ${project?.epics.find((epic) => epic.id === record.epicID)?.title ?? record.epicID}` : ""}</h3>
       <small>{record.source}{record.status ? ` · ${statusLabel(record.status)}` : ""}{record.revision ? ` · revision ${record.revision}` : ""}</small>
       <p className="log-timing">{record.source === "Live status" ? "Live snapshot—not a saved run." : logTiming(record)}</p>
       {record.summary && <p>{record.summary}</p>}
-      <details open={record.id === target}><summary>Log details</summary><small>{record.id.startsWith("detail:") ? "Selected diagnostic" : record.id}</small><pre>{logPreview(record.detail)}</pre></details>
+      <LogDetails record={record} open={record.id === target} />
     </article>}</PagedList>
   </Modal>;
+}
+
+function LogDetails({ record, open }: { record: LogRecord; open: boolean }) {
+  const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "failed">("idle");
+  useEffect(() => { setCopyState("idle"); }, [record.detail]);
+  async function copy() {
+    setCopyState("copying");
+    try {
+      await navigator.clipboard.writeText(redactLog(record.detail));
+      setCopyState("copied");
+    } catch { setCopyState("failed"); }
+  }
+  return <details open={open}><summary>Log details</summary>
+    <div className="log-detail-toolbar">
+      <small>{record.id.startsWith("detail:") ? "Selected diagnostic" : record.id}</small>
+      <button type="button" className="secondary" disabled={copyState === "copying"} onClick={() => void copy()}>Copy details</button>
+    </div>
+    <span role="status">{copyState === "copied" ? "Copied to clipboard." : copyState === "failed" ? "Could not copy. Select the log text and copy it manually." : ""}</span>
+    <pre>{logPreview(record.detail)}</pre>
+  </details>;
 }

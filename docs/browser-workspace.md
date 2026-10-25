@@ -10,6 +10,11 @@ times, old planning entries use already saved creation times, and available dura
 are shown without guessing missing historical timing. See
 [run timing and retention](workspace-navigation.md#unified-run-timeline-and-timing-2026-10-25).
 
+Expanded **Log details** has a **Copy details** button at the top right. It copies
+the available detail text with credential redaction (before display truncation),
+and reports success or a manual-copy fallback if clipboard access fails. This is
+presentation-only; saved data and migration formats are unchanged.
+
 ## Recover an exhausted definition review (2026-10-25)
 
 Open **Overall progress → Reviews that reached the retry limit → Recover

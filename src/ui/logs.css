@@ -9,5 +9,8 @@
 .log-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-block: 12px; }
 .logs-panel button.secondary { min-height: 44px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 7px; }
 .log-timing { margin: 6px 0; font-variant-numeric: tabular-nums; color: var(--muted); }
+.log-detail-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.log-detail-toolbar small { min-width: 0; }
+.log-detail-toolbar button { flex-shrink: 0; }
 @media (max-width: 540px) { .log-actions, .log-filters { display: grid; grid-template-columns: minmax(0, 1fr); } }
 .log-record pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; padding: 12px; background: var(--surface); font-size: .85rem; }

@@ -1,5 +1,76 @@
 # Data migrations and upgrade compatibility
 
+## Accumulated definition explanation bounds (2026-10-25)
+
+Source: compact exact-batch definition responses and stored assessment checks with
+4,000-character per-check explanations. Target: the same SQLite, job and portable
+formats with up to 96,000 characters per accumulated check explanation. Only compact
+definition collection response schemas and stored/engine-built checks widen;
+ordinary discovery responses remain at 4,000 and verification verdicts at 2,000.
+The full exact evidence-plus-draft request must still fit 96,000 after lossless
+encoding; a valid explanation is not permission to omit evidence or bypass this
+independent bound. Such an overflow retains the original response and blocks without
+publishing partial coverage. Concise explanation targets remain unchanged.
+
+This is a compatible validator widening, not a freshness/meaning change. There is
+no startup rewrite, schema-counter bump, reset or reassessment of completed work.
+Original contexts, plan/input keys, response bytes, citations, IDs and attempt
+counts are unchanged. Explicit resume reuses every accepted stage; a previously
+rejected oversized response was not saved and cannot be recovered retrospectively.
+Its spent attempt remains spent; no automatic repeat or extra allowance is granted.
+Existing checkpoint transactions handle interruption as before. Unsupported future
+formats still reject. Older readers may reject new explanations longer than 4,000;
+use the updated reader when reopening/exporting this work, not a downgrade.
+
+Regression tests seed seven old-format accepted steps and one failed attempt,
+reopen SQLite twice, continue with >4k Unicode/CRLF explanations, and verify original
+jobs/receipts, attempt two, final SQLite reopening and portable replay without
+completed-call repetition. Additional checks cover long initial findings, the 96k
+field and exact-context bounds, private rejected text, and unpublished partial work.
+New validation diagnostics identify numeric string/array limits without echoing
+rejected model values; old diagnostics remain historical.
+
+## Additive definition collection citations (2026-10-25)
+
+Source: exact-batch definition ledgers without `collectionCitationPolicy`. Target:
+the same ledger/SQLite/portable versions with optional strict format-1
+`collectionCitationPolicy` (`fromStage`, optional `supersededBlock`). Completed work
+and freshness identities are unchanged. No startup rewrite or inference is needed.
+Future policy formats reject rather than overwrite. Older readers may reject the
+new optional strict field; do not downgrade portable readers after continuation.
+
+After replaying the original receipts, continuation enables additive citations at
+the unfinished stage. Compact collection updates still return at most 20 citations
+per changed dimension; the engine unions these with all retained citations, using
+the existing 1,280-citation accumulated-result validator. Status/importance/explanation
+updates still replace that dimension's finding; omitted checks remain unchanged.
+Exact citation authority, full evidence verification and the 96k request bound stay
+in force. Collection must preserve supported earlier findings, not just citations.
+
+Only a manual continuous definition refresh can supersede the reported legacy
+protocol block: the saved collection draft must already contain at least 20
+citations in a dimension, and the diagnostic must mention 20, citations, the
+response limit, the retained assessment, and explicitly state that no missing
+product decision or product gap is established by the blocker. This narrow
+diagnostic-based compatibility rule does not waive general model evidence blocks.
+The old job remains immutable; its reason is also retained in `supersededBlock`.
+Legacy full-analysis collection switches to compact updates at that same receipt
+boundary, even if an unfinished attempt was spent. Original request hashes,
+responses, partition and spent attempts are preserved; no new allowance is granted.
+Automatic/bounded callers retain the recognized blocker without retrying it.
+
+Checkpointing saves the upgraded boundary with the existing transactional job write.
+An interruption before that write leaves the old ledger eligible for the same
+explicit upgrade; an interruption after it replays the saved boundary. No completed
+call is repeated. Tests cover compact/full-analysis old ledgers, repeated SQLite
+reopen, original job/receipt preservation, spent attempts, accumulated citations,
+portable replay, genuine blocks, invalid boundaries and future-format rejection.
+
+Logs now explain a zero-request blocked run as stopping before a new model request,
+not a fresh rejection. Selected-task views explicitly warn that they may not show
+the latest run; the newest dated task within the current view is identified without
+inventing missing historical times. These are read-only display changes.
+
 ## Unified logs and recorded run times (2026-10-25)
 
 Source: existing jobs/planning/execution and browser-session diagnostics. Target:

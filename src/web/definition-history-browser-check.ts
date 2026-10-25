@@ -20,6 +20,7 @@ store.failJob(failed.id, "failed", "Definition response validation failed: dupli
 const blocked = store.beginJob(p.id, p.revision).job; store.claimJob(blocked.id, Date.now() + 60000);
 const work = planDefinitionStages(p, "skating"); store.checkpointDefinition(blocked.id, work, definitionStageContext(p, work).manifest);
 store.blockDefinition(blocked.id, "Legacy request exceeds 96,000 characters (98,959). Original completed responses retained.");
+store.saveDiscoveryMetrics(blocked.id, { format: 1, state: "finished", elapsedMs: 1541, planningMs: 1481, planningDecisions: null, initialContext: null, requests: [] });
 for (let i = 0; i < 27; i++) {
   const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
   store.attachContext(job.id, definitionContext(p, i % 2 ? "project" : "skating").manifest);
@@ -44,6 +45,7 @@ try {
   const logs = page.getByRole("dialog", { name: "Logs", exact: true });
   await expect(logs.getByText("Loading saved task logs…", { exact: true })).toHaveCount(0);
   await expect(logs).toContainText("Definition review"); await expect(logs).toContainText("Project review");
+  await expect(logs.getByRole("status").filter({ hasText: "Most recent dated task in this view" })).toContainText(discovery.id);
   await expect(logs.getByRole("button", { name: "View assessment history", exact: true })).toHaveCount(0);
   await expect(logs.locator(".log-timing").filter({ hasText: "Started:" }).first()).toContainText("Finished:");
   await logs.getByRole("combobox", { name: "Source", exact: true }).selectOption("Definition review");
@@ -51,10 +53,29 @@ try {
   await logs.getByRole("button", { name: "Older saved tasks", exact: true }).click();
   const failure = logs.locator(".log-record").filter({ hasText: failed.id });
   await expect(failure).toHaveCount(1);
+  await expect(logs.locator(".log-record").filter({ hasText: blocked.id })).toContainText("Stopped before any new model request");
   await failure.getByText("Log details", { exact: true }).click();
   await expect(failure.locator("pre")).toContainText("duplicate dimensions <script>not executable</script>");
   await expect(failure.locator("pre")).not.toContainText("private-secret");
   await expect(failure.locator("script")).toHaveCount(0);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      async writeText(text: string) { document.documentElement.dataset.copiedLog = text; },
+    } });
+  });
+  await failure.getByRole("button", { name: "Copy details", exact: true }).click();
+  await expect(failure.getByRole("status")).toHaveText("Copied to clipboard.");
+  const copied = await page.evaluate(() => document.documentElement.dataset.copiedLog);
+  assert.equal(copied, await failure.locator("pre").textContent());
+  assert.ok(copied?.includes("duplicate dimensions <script>not executable</script>"));
+  assert.ok(!copied?.includes("private-secret"));
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      async writeText() { throw new Error("Clipboard access denied"); },
+    } });
+  });
+  await failure.getByRole("button", { name: "Copy details", exact: true }).click();
+  await expect(failure.getByRole("status")).toContainText("Could not copy. Select the log text");
   await expect(failure.locator(".log-timing")).toContainText("Duration:");
   await logs.getByRole("combobox", { name: "Log area", exact: true }).selectOption("skating");
   await expect(logs.locator(".log-record")).toHaveCount(16);

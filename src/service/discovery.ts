@@ -52,7 +52,8 @@ function schemaDiagnostic(error: z.ZodError): string {
     const reason = issue.code === "invalid_type" ? `expected ${issue.expected}`
       : issue.code === "invalid_enum_value" ? `expected one of ${issue.options.join(", ")}`
       : issue.code === "too_small" ? "too few items or characters"
-      : issue.code === "too_big" ? "too many items or characters" : issue.code;
+      : issue.code === "too_big" ? issue.type === "string" ? `exceeds ${issue.maximum}-character limit`
+        : issue.type === "array" ? `exceeds ${issue.maximum}-item limit` : "too many items or characters" : issue.code;
     return `${path}: ${reason}`;
   }).join("; ");
   return safeMessage(`Model output failed schema validation. No proposals were applied; saved human input was preserved. ${details}${error.issues.length > 4 ? `; ${error.issues.length - 4} more issues` : ""}`);

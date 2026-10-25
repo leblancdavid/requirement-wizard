@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { logLimit, logPreview, logTiming, projectLogs, redactLog, retainLog, type LogRecord } from "./log-records.js";
+import { jobHistoryLog, logLimit, logPreview, logTiming, projectLogs, redactLog, retainLog, type LogRecord } from "./log-records.js";
+import type { JobLogEntry } from "../core/log-history.js";
 import { emptyExecution } from "../core/execution.js";
 import type { Job } from "../core/model.js";
 
@@ -25,6 +26,21 @@ test("browser-session logs deduplicate by identity, bound retention, and never m
 test("large log previews explicitly disclose their display bound", () => {
   assert.match(logPreview("x".repeat(70_000)), /Display limited to 64,000 characters/);
   assert.equal(logPreview("exact diagnostic"), "exact diagnostic");
+});
+
+test("zero-request blocked runs explain retained blockers without claiming a new model rejection", () => {
+  const entry: JobLogEntry = { id: "latest", projectID: "project", epicID: "area", revision: 2016, source: "Definition review", title: "Definition review", status: "failed",
+    createdAt: null, startedAt: "2026-10-25T10:39:25.000Z", finishedAt: "2026-10-25T10:39:26.000Z", recordedAt: null,
+    durationMs: 1541, diagnostic: "Evidence blocked", blockReason: "Retained citation limit", detailLimited: false,
+    savedSteps: 5, batches: 14, attempts: 1, requests: 0, interruptionCause: null };
+  const original = structuredClone(entry), record = jobHistoryLog(entry);
+  assert.match(record.summary!, /Stopped before any new model request/);
+  assert.match(record.summary!, /not receive a new model rejection/);
+  assert.match(record.summary!, /0 model request attempts this run.*5 review steps saved/);
+  assert.doesNotMatch(jobHistoryLog({ ...entry, requests: 1 }).summary!, /saved blocker was retained/);
+  assert.doesNotMatch(jobHistoryLog({ ...entry, requests: null }).summary!, /Stopped before/);
+  assert.doesNotMatch(jobHistoryLog({ ...entry, blockReason: null }).summary!, /Stopped before/);
+  assert.deepEqual(entry, original);
 });
 
 test("older saved jobs remain readable without fabricated timestamps or mutations", () => {

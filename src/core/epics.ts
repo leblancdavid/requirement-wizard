@@ -20,7 +20,12 @@ export const checkSchema = z.object({
 // Model responses remain bounded at 20 citations per check. The engine can
 // accumulate one such contribution per exact stage without losing earlier IDs.
 export const accumulatedAssessmentEvidenceLimit = 20 * definitionStageLimit;
-const accumulatedCheckSchema = checkSchema.extend({ evidenceIDs: z.array(z.string()).max(accumulatedAssessmentEvidenceLimit) });
+// A staged finding can incorporate many exact batches. Its explanation is
+// bounded by the full request ceiling, not the ordinary single-response field.
+// The next exact evidence + draft must still fit the independent context bound.
+export const accumulatedAssessmentExplanationLimit = 96_000;
+const accumulatedCheckSchema = checkSchema.extend({ evidenceIDs: z.array(z.string()).max(accumulatedAssessmentEvidenceLimit),
+  explanation: z.string().trim().min(1).max(accumulatedAssessmentExplanationLimit) });
 export const assessmentSchema = z.object({
   epicID: z.string(), confidence: z.enum(["low", "medium", "high"]), explanation: text,
   checks: z.array(accumulatedCheckSchema).max(9), atRevision: z.number().int().positive(),

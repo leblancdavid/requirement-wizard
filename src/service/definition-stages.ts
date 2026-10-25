@@ -1,7 +1,7 @@
 import type { Job, Project } from "../core/model.js";
 import { StaleRevisionError } from "../core/model.js";
 import { acceptDefinitionStage, completedDefinitionAssessment, definitionBlockedSchema, definitionPhase, definitionStageContext,
-  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, upgradeDefinitionCitationPolicy, DefinitionEvidenceBlocked, definitionSteps, splitDefinitionStage } from "../core/definition-stages.js";
+  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, upgradeDefinitionCitationPolicy, upgradeDefinitionCollectionCitations, DefinitionEvidenceBlocked, definitionSteps, splitDefinitionStage } from "../core/definition-stages.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import type { ProjectStore } from "../storage/store.js";
@@ -30,6 +30,8 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   upgradeDefinitionDraftPolicy(work);
   upgradeDefinitionResponsePolicy(work);
   upgradeDefinitionCitationPolicy(work);
+  upgradeDefinitionCollectionCitations(work, draft, options.continuous === true);
+  if (prior?.definitionWork?.blocked && !work.blocked) options.onProgress?.(`The saved 20-citation protocol blocker has been superseded by citation-addition updates. All ${work.receipts.length} completed responses and spent attempts are retained. Preparing the unfinished step; no new model request has started yet.`);
   if (options.recoveryJobID) {
     if (prior?.id !== options.recoveryJobID || !canRecoverDefinition(prior)) throw new Error("This assessment is no longer eligible for recovery. Refresh before continuing.");
     work.recovery ??= { format: 1, grants: [] };

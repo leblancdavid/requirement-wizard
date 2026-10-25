@@ -20,8 +20,14 @@ export function jobHistoryLog(entry: JobLogEntry): LogRecord {
     source: entry.source, status: entry.status, epicID: entry.epicID ?? undefined, revision: entry.revision,
     at: entry.startedAt ?? entry.createdAt ?? entry.recordedAt ?? undefined,
     atLabel: entry.startedAt ? "Started" : entry.createdAt ? "Created" : "Recorded", finishedAt: entry.finishedAt ?? undefined, durationMs: entry.durationMs ?? undefined,
-    summary: [entry.requests !== null ? `${entry.requests} model request attempts this run` : "Model request count not recorded", entry.savedSteps !== null ? `${entry.savedSteps} review steps saved (including reused work) · ${entry.batches ?? "Unknown"} evidence batches${entry.interruptionCause === "request-limit" ? " · Request allowance reached; progress retained. Refresh definition coverage to continue." : ""}` : ""].filter(Boolean).join(" · "),
+    summary: [definitionRunOutcome(entry.requests, entry.blockReason), entry.requests !== null ? `${entry.requests} model request attempts this run` : "Model request count not recorded", entry.savedSteps !== null ? `${entry.savedSteps} review steps saved (including reused work) · ${entry.batches ?? "Unknown"} evidence batches${entry.interruptionCause === "request-limit" ? " · Request allowance reached; progress retained. Refresh definition coverage to continue." : ""}` : ""].filter(Boolean).join(" · "),
     detail: logPreview(JSON.stringify(entry, null, 2)) };
+}
+
+function definitionRunOutcome(requests: number | null | undefined, blockReason?: string | null) {
+  return requests === 0 && blockReason
+    ? "Stopped before any new model request. The saved blocker was retained; this run did not receive a new model rejection."
+    : "";
 }
 
 /** Defense in depth for displayed diagnostics, never a rewrite of original evidence. */
@@ -43,6 +49,7 @@ export function retainLog(records: LogRecord[], record: LogRecord): LogRecord[] 
 export function projectLogs(jobs: Job[], submissions: Submission[], execution?: ExecutionState): LogRecord[] {
   const records: LogRecord[] = jobs.map((job) => ({ id: job.id, projectID: job.projectID, source: job.context?.definitionAssessment ? "Definition review" : job.helpRequest ? "Question help" : job.kind === "scan" ? "Folder scan" : "Discovery", title: job.context?.definitionAssessment ? "Definition review" : job.helpRequest ? "Question help" : job.kind === "scan" ? "Folder scan" : "Project review", status: job.status,
     at: job.startedAt ?? job.createdAt, atLabel: job.startedAt ? "Started" : "Created", finishedAt: job.finishedAt, durationMs: job.discoveryMetrics?.elapsedMs ?? undefined, epicID: job.context?.definitionAssessment?.epicID ?? job.context?.focusEpicID ?? undefined, revision: job.expectedRevision,
+    summary: definitionRunOutcome(job.discoveryMetrics?.requests.length, job.definitionBlock?.reason),
     detail: JSON.stringify({ diagnostic: job.diagnostic, context: job.context, definitionBlock: job.definitionBlock, definition: job.definitionWork ? { batches: job.definitionWork.batches.length, savedSteps: job.definitionWork.receipts.length, attempts: job.definitionWork.attempts, exactSubdivisions: job.definitionWork.continuation?.splits.length ?? 0 } : undefined, interruption: job.definitionInterruption, metrics: job.discoveryMetrics, gapReport: job.gapReport, workflowReport: job.epicReviewReport, retrieval: job.retrievalWork, scanProgress: job.scanProgress }, null, 2) }));
   for (const item of submissions) if (item.diagnostic) records.push({ id: item.id, projectID: item.projectID, title: "Saved-response review", source: "Responses", status: item.status, at: item.submittedAt, atLabel: "Submitted", detail: item.diagnostic });
   for (const run of execution?.assessmentRuns ?? []) records.push({ id: run.id, title: "Code assessment", source: "Implementation", status: run.status, at: run.startedAt, finishedAt: run.finishedAt, revision: run.revision, detail: JSON.stringify(run, null, 2) });
