@@ -4,6 +4,8 @@ import { ProjectStore } from "../storage/store.js";
 import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext, planExactTaskContext } from "../core/working-set.js";
+import { canStageSubmission } from "../core/submission-stages.js";
+import { runSubmissionStages } from "./submission-stages.js";
 import { questionHelpContext } from "../core/question-help-context.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
 import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
@@ -403,19 +405,33 @@ export class DiscoveryService {
           return await run(error);
         }
       }
+      const ordinaryTask = { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
+        requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
+        recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
+        supportingRecordIDs: refinementRecords, isolatedTask: options.refinementOnly || options.isolatedTask,
+        submissionFollowup: !!options.savedOverlapSubmissionID || options.isolatedTask && options.submissionIDs?.length === 1,
+        refinementFollowup: !!options.refinementOnly, budget: 48000, expandMandatory: true };
+      const stagedItem = options.isolatedTask && !options.refinementOnly && options.submissionIDs?.length === 1
+        ? this.store.submissions(projectID).find((s) => s.id === options.submissionIDs![0]) : undefined;
+      let ordinaryContext: ContextPack | undefined;
+      if (canStageSubmission(stagedItem)) {
+        const previous = this.store.jobs(projectID).some((j) => j.id !== job.id && j.submissionWork?.submissionID === stagedItem.id);
+        const run = async (overflow?: ContextBudgetError) => {
+          clearTimeout(timer);
+          timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
+          return completeMeasurement(await runSubmissionStages(this.store, inferenceAdapter, project, job, stagedItem, ordinaryTask,
+            { signal: controller.signal, research: options.research ?? false, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, onProgress: options.onProgress, measurement }));
+        };
+        if (previous) return await run();
+        try { ordinaryContext = taskPlanner(project, ordinaryTask); }
+        catch (error) { if (!(error instanceof ContextBudgetError)) throw error; return await run(error); }
+      }
       let context = readiness ? readiness : definition ? definition
         : options.helpRequest ? questionHelpContext(project, options.helpRequest, options.helpRequest.action === "define" ? [] : this.store.jobs(projectID))
         : continuationSource ? restoreGapTaskContext(project, continuationSource.context!.gapExploration!, continuationSource.context!.focusEpicID ?? undefined)
         : epicPlan?.task?.context ? epicPlan.task.context
         : generalExploration ? planGapContext(project, this.store.gapHistory(projectID), options.focusEpicID, (revision) => this.store.get(projectID, revision))
-        : taskPlanner(project, { focusEpicID: question?.epicID ?? refinementTarget?.epicID ?? options.focusEpicID,
-        requiredEpicIDs: pair ? [...new Set(project.requirements.filter((r) => pair.includes(r.id)).map((r) => r.epicID))] : options.requiredEpicIDs,
-        recordIDs: pairRecords ?? (question ? [question.id] : refinementTarget ? [refinementTarget.id] : options.recordIDs),
-        supportingRecordIDs: refinementRecords,
-        isolatedTask: options.refinementOnly || options.isolatedTask,
-        submissionFollowup: !!options.savedOverlapSubmissionID || options.isolatedTask && options.submissionIDs?.length === 1,
-        refinementFollowup: !!options.refinementOnly,
-        budget: 48000, expandMandatory: true });
+        : ordinaryContext ?? taskPlanner(project, ordinaryTask);
       if (pair || refinementTarget) assertRefinementEvidence(project, pair ?? [refinementTarget!.id], context.manifest.includedIDs);
       if (continuationSource?.gapReport) context.gapReport = structuredClone(continuationSource.gapReport);
       context.manifest.submissionIDs = options.submissionIDs;
@@ -782,7 +798,8 @@ export class DiscoveryService {
       }
       const cancelled = controller.signal.aborted;
       const savedWork = this.store.getJob(job.id);
-      const retainedAttempts = (savedWork.retrievalWork?.attempts ?? 0) + (savedWork.readinessWork?.attempts ?? 0) + (savedWork.readinessWork?.receipts.length ?? 0);
+      const retainedAttempts = (savedWork.retrievalWork?.attempts ?? 0) + (savedWork.readinessWork?.attempts ?? 0) + (savedWork.readinessWork?.receipts.length ?? 0)
+        + (savedWork.submissionWork?.attempts ?? 0) + (savedWork.submissionWork?.receipts.length ?? 0);
       const overlapDiagnostic = options.savedOverlapSubmissionID
         ? "Your response was already processed and saved. Its duplicate/conflict follow-up did not complete; resume retries the unfinished check, not the completed response. " : "";
       this.store.failJob(job.id, cancelled ? "cancelled" : error instanceof StaleRevisionError ? "stale" : "failed",

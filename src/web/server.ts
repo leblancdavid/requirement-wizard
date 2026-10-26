@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ProjectStore } from "../storage/store.js";
 import { readinessProgress } from "../core/readiness-stages.js";
+import { submissionProgress } from "../core/submission-stages.js";
 import { activityQuerySchema } from "../storage/activity.js";
 import { OperationConflictError, discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 import { browseDirectories } from "../storage/workspace.js";
@@ -188,7 +189,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const known = rawTokens === undefined ? undefined : parseSnapshotTokens(rawTokens);
         const current = revisionSnapshot(project);
         const recent = options.store.workspaceJobs(id);
-        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, ...job }) => ({ ...job,
+        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, submissionWork, ...job }) => ({ ...job,
+          ...(submissionWork ? { submissionProgress: submissionProgress(submissionWork) } : {}),
           ...(readinessWork ? { readinessProgress: readinessProgress(readinessWork) } : {}),
           ...(job.context?.readinessQuestions && _ ? { result: _ } : {}),
           gapContinuationAvailable: canContinueGapExploration({ ...job, retrievalWork }),

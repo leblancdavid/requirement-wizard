@@ -1,5 +1,83 @@
 # OpenCode runtime spike
 
+## Current OpenCode V2 adapter (2026-10-25)
+
+User-approved migration: `@opencode/client@2.1.4` replaces the old
+`@opencode-ai/sdk@1.18.32`. Despite its `/v2/client` import path, that old SDK called
+the V1 server API. The desktop installed here is OpenCode **2.1.4**, while the npm
+binary previously preferred by Reqwizit remained **1.18.32**. V2 imports supported
+legacy credentials into its SQLite store, but refreshed V2 credentials are not
+written back to V1 `auth.json`. The old process therefore kept reporting token-refresh
+401s even when the updated desktop was signed in. No credential values were inspected
+or copied during diagnosis/migration.
+
+`src/runtime/executable.ts` now prefers versioned Windows desktop CLI installations,
+then native PATH/npm candidates, accepting V2 only. `OPENCODE_BIN` remains an explicit
+native-binary override; an obsolete V1 override rejects rather than silently falling
+back. Other platforms can use native PATH or the override. Tested desktop CLI:
+`%APPDATA%/ai.opencode.desktop/cli/2.1.4-x64/opencode-cli.exe`. Selection probes only
+`--version`, not inference. Do not change or uninstall the user's other installations.
+
+The app owns an authenticated loopback `serve` child using an ephemeral in-memory
+server password. It shares OpenCode's normal provider credential management, not its
+desktop/shared-server process lifecycle. Configuration uses native V2 agents,
+permissions and skills; warming and automatic compaction are disabled for bounded
+app tasks. Metadata initialization waits for V2 catalogs before using provider,
+agent or skill listings. No global config/service registration is rewritten.
+
+The app-owned projection in `src/runtime/client.ts` handles V2 prompt queueing,
+wait/interrupt, full ascending message pagination (cursor requests must omit order),
+exact queued-input matching, terminal success, model identity, tool content, skills
+and events. It never treats an enqueued prompt as a completed response. Idle markers
+do not hide completed assistant output during coding-session recovery; failed idle
+outcomes remain fatal at publication. Earlier tool steps remain visible even when
+the last assistant step contains only JSON. Provider settings/account metadata never
+reach the model dropdown projection. V2 has no tool-registry endpoint: the adapter's
+tool restriction list is explicitly app-owned, not claimed runtime registry evidence.
+
+Verification actually run:
+
+- `spike -- providers` and `spike -- profile`: owned V2 server, native model/provider
+  metadata and role config worked. OpenAI was connected and Sol was listed. Listing
+  Copilot metadata is not a Copilot inference probe or qualification.
+- `runtime:skills`: assessment/coding/planning skill file identity/content and native session
+  permission create/update/get/delete passed, with staged temporary files cleaned up.
+  This is metadata, not a claim of adversarial enforcement or coding success.
+  An intermediate Windows cleanup check encountered a directory lock. All roles now
+  stop only their owned process tree, with bounded retries for owned temporary-file
+  cleanup; the final metadata check passed all three roles including cleanup.
+- One bounded synthetic `openai/gpt-6.1-sol` JSON-text probe authenticated and produced
+  a completed, schema-valid response. Initial result retrieval exposed the cursor/order
+  incompatibility; after fixing it, the same response was recovered and validated with
+  **no repeated model request**.
+- One bounded live `runtime:skills -- --live-assessment --provider openai --model
+  gpt-6.1-sol` check passed native skill loading and scenario-result validation against
+  a tiny supplied greeting-function excerpt. No source edits, Git delivery or personal
+  project calls were made. These two model calls consumed plan allowance.
+
+Native JSON-schema probing is not qualified on V2 and is rejected before dispatch;
+the spike now defaults explicitly to JSON text with local validation. Live V2 coding,
+GitHub delivery, in-flight/V1 coding-session recovery, research/adversarial tool budgets
+and full actual-project staged clarification remain unqualified. Prior V1 live results
+below do not automatically qualify those V2 paths. See [migration ledger](migrations.md#opencode-v1-to-v2-transport-and-credential-ownership-2026-10-25).
+
+Verification completed 2026-10-26: `npm test` passed **907 tests** (247 pretests + 660
+main). Type checking, UI build, CLI help checks, focused native transport/execution
+tests and model-selection/Specification browser checks passed. The final metadata
+skill check covered assessment, coding and planning, including cleanup. Broader
+browser runners retain their previously recorded unrelated assertion gaps and were
+not claimed passing by these focused checks. `npm audit --omit=dev` reports two high
+findings in the unchanged Zod 3 / zod-to-json-schema dependencies; fixing those needs
+a separate breaking-schema upgrade and was not bundled into this runtime migration.
+Both root and staged-desktop dependency locks now use the V2 client. The desktop
+rebuild passed after the user closed the running app that held SQLite's native binary
+open. A subsequent Electron smoke test reached the workspace and IPC/log checks, then
+failed its titlebar-height assertion (`src/desktop/desktop-check.ts:60`: 0px versus
+36px); the full desktop smoke test is therefore not recorded as passing. No user
+application was force-closed to clear the build lock.
+
+## Historical V1 observations
+
 Observed October 15, 2026. M1 is **partially verified**, not complete.
 
 DEC-015 starts migration toward independent provider connections. A separate

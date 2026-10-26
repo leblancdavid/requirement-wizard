@@ -7,6 +7,9 @@ import { ExecutionContextError } from "../core/execution-context.js";
 import { assessmentSkill, executionSkill, implementationSkill } from "../core/execution-skills.js";
 import { resolve } from "node:path";
 import { executionPermissions } from "./skills.js";
+import { runtimeToolNames } from "./client.js";
+import { codingTools } from "./skills.js";
+const toolMap = (coding: boolean) => Object.fromEntries(runtimeToolNames.map((name) => [name, name === "skill" || coding && codingTools.includes(name)]));
 
 const config = executionConfigSchema.parse({ repository: "fixture/repository", strategy: "requirement-pr", branch: "build", providerID: "openai", modelID: "fixture", checks: ["npm test"] });
 function request(extra: Partial<ExecutionRequest> = {}): ExecutionRequest {
@@ -41,7 +44,7 @@ test("oversized full prompts block before starting a runtime or creating a sessi
 test("planning has a distinct read-only skill and rejects coding or resumed sessions", async () => {
   const { calls, adapter } = runtime([], { coding: false, planning: true });
   await adapter.perform(request({ coding: false, planning: true, prompt: "Propose a dependency plan" }));
-  assert.deepEqual(calls.toolMaps[0], { skill: true, read: false, bash: false, task: false, webfetch: false });
+  assert.deepEqual(calls.toolMaps[0], toolMap(false));
   assert.deepEqual(calls.permissions[0], executionPermissions(false, true));
   await assert.rejects(adapter.perform(request({ planning: true })), /fresh read-only/);
   await assert.rejects(adapter.perform(request({ coding: false, planning: true, sessionID: "old" })), /fresh read-only/);
@@ -85,7 +88,7 @@ test("skills are role-scoped, assessment gains no source/tools access, and missi
     await adapter.perform(request({ coding }));
     const name = coding ? implementationSkill.name : assessmentSkill.name;
     assert.ok((calls.permissions[0] as { permission: string; pattern: string; action: string }[]).some((p) => p.permission === "skill" && p.pattern === name && p.action === "allow"));
-    assert.deepEqual(calls.toolMaps[0], { skill: true, read: coding, bash: coding, task: false, webfetch: false });
+    assert.deepEqual(calls.toolMaps[0], toolMap(coding));
   }
   for (const options of [{ missing: true }, { versionMismatch: true }, { loaded: false }]) {
     const { calls, adapter } = runtime([], options);

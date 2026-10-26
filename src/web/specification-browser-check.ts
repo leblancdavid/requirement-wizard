@@ -4,13 +4,15 @@ import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { startApp } from "./server.js";
 import { ProjectStore } from "../storage/store.js";
-import { type Analysis } from "../core/model.js";
+import { reviewFingerprint, type Analysis } from "../core/model.js";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { Connections } from "../providers/connections.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { dimensions } from "../core/epics.js";
 import { definitionQuestionTask } from "../core/readiness-questions.js";
 import { runReadinessStages } from "../service/readiness-stages.js";
+import { runSubmissionStages } from "../service/submission-stages.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -30,6 +32,8 @@ const connections: Connections = {
 let calls = 0;
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(snapshot, { context }) {
   calls++;
+  if (context.manifest.submissionStage) return context.manifest.submissionStage.phase === "check"
+    ? { submissionCheck: { valid: true, reason: "Frozen draft matches this exact batch" } } : { submissionKeep: true };
   if (context.manifest.readinessStage?.phase === "check") return { clarificationVerdict: { keepQuestions: [], summary: "Every saved evidence batch checked; no new question remains." } };
   if (context.manifest.readinessQuestions) {
     const task = context.manifest.readinessQuestions;
@@ -281,6 +285,45 @@ try {
   await stagedNotice.getByRole("button", { name: "Continue clarification", exact: true }).click();
   await expect(stagedNotice).toContainText("No new product question was established");
   assert.equal(calls, beforeContinuation + 1); assert.ok(sawProgress);
-  console.log("Specification/browser lists and staged Design continuation passed, including reload recovery, explicit continuation and bounded snapshot progress.");
+  // A saved targeted review can outgrow the ordinary 144k follow-up limit too.
+  let followup = store.create("Staged saved review continuation", "Preserve every project rule", p.model);
+  const followupSeed = store.beginJob(followup.id, followup.revision).job; store.claimJob(followupSeed.id, Date.now() + 60000);
+  store.finishJob(followupSeed.id, { ...empty(), requirements: [{ statement: "Save reports", rationale: "Human request", acceptance: ["Report saved"], sourceIDs: [followup.sources[0]!.id], epicID: "inbox" }] });
+  followup = store.get(followup.id);
+  for (let i = 0; i < 19; i++) followup = store.note(followup.id, followup.revision, `Exact shared rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");
+  const target = followup.requirements[0]!;
+  const reviewInput = store.enqueue(followup.id, { id: randomUUID(), auto: false, research: false, input: { type: "review", requirementID: target.id,
+    requirementText: target.statement, fingerprint: reviewFingerprint(target), action: "changes-requested", note: "Save reports offline", reviewedRevision: followup.revision } });
+  store.applyQueued(followup.id, [reviewInput.id]); followup = store.get(followup.id);
+  const savedReview = store.submissions(followup.id).find((s) => s.id === reviewInput.id)!;
+  const followupJob = store.beginJob(followup.id, followup.revision).job; store.claimJob(followupJob.id, Date.now() + 60000);
+  const pausedReview = await runSubmissionStages(store, { async analyze() { return { ...empty(),
+    reviewResponses: [{ sourceID: savedReview.appliedSourceID!, text: "Your saved request was processed" }], pendingChanges: { format: 1, changes: [{ type: "revise-requirement", requirementID: target.id,
+      statement: "Save reports offline", rationale: "Explicit human request", acceptance: ["Report saved without connectivity"], sourceIDs: [savedReview.appliedSourceID!], reason: "Saved review request" }] } }; } },
+    followup, followupJob, savedReview, { requiredEpicIDs: ["inbox"], recordIDs: [savedReview.appliedSourceID!, target.id], isolatedTask: true, submissionFollowup: true, expandMandatory: true },
+    { signal: new AbortController().signal, research: false, limits: { requests: 1, durationMs: 60000 } });
+  savedReview.jobID = followupJob.id; savedReview.status = "needs-attention"; savedReview.diagnostic = pausedReview.diagnostic;
+  store.saveSubmission(savedReview); store.pauseQueue(followup.id, true);
+  let sawReviewProgress = false;
+  await page.route(`**/api/projects/${followup.id}`, async (route) => {
+    const { "x-reqwizit-snapshot": _tokens, ...headers } = route.request().headers();
+    const response = await route.fetch({ headers }), snapshot = await response.json();
+    const saved = snapshot.jobs.find((job: { id: string }) => job.id === followupJob.id);
+    assert.equal(saved.submissionWork, undefined); assert.equal(saved.submissionProgress.completed, 1); sawReviewProgress = true;
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.setViewportSize({ width: 1280, height: 960 });
+  await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: followup.name, exact: true }).click();
+  const beforeReviewResume = calls;
+  await page.reload(); assert.equal(calls, beforeReviewResume, "Opening the saved review cannot start inference");
+  await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+  await page.getByText("Advanced actions", { exact: true }).click();
+  await page.getByRole("button", { name: "Process saved responses only", exact: true }).click();
+  await expect.poll(() => store.submissions(followup.id).find((s) => s.id === savedReview.id)?.status).toBe("completed");
+  assert.equal(calls - beforeReviewResume, pausedReview.submissionWork!.batches.length * 2 - 1, "The completed read was not repeated");
+  assert.equal(store.get(followup.id).requirements[0]!.statement, "Save reports offline");
+  assert.deepEqual(store.get(followup.id).sources, followup.sources); assert.ok(sawReviewProgress);
+  await page.unrouteAll({ behavior: "wait" });
+  console.log("Specification/browser lists, staged Design continuation and oversized saved-review continuation passed, including reload recovery, explicit continuation and bounded snapshot progress.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-continuous-specification-failure")); throw error; }
 finally { await browser?.close(); await app.close(); store.close(); }

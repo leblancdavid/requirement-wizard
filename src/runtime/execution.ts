@@ -1,6 +1,7 @@
 import type { ExecutionConfig } from "../core/execution.js";
 import { checkExecutionContext, executionPrompt, type ExecutionContextManifest } from "../core/execution-context.js";
 import { startRuntime } from "./server.js";
+import { runtimeToolNames } from "./client.js";
 import { selectModel, safeMessage } from "./contract.js";
 import { resolve } from "node:path";
 import { executionSkill } from "../core/execution-skills.js";
@@ -77,8 +78,7 @@ export class OpenCodeExecution implements ExecutionAdapter {
       const registered = catalogSkills.find((s) => s.name === skill.name);
       if (!registered || !runtime.skillPath || resolve(registered.location) !== resolve(runtime.skillPath) || !registered.content.includes(skill.body.trim())) throw new Error("The bundled Reqwizit skill was not registered correctly. Restart the app before retrying.");
       const allowed = new Set(["skill", ...(coding ? codingTools : [])]);
-      const tools = (await runtime.client.tool.ids({}, { signal })).data ?? [];
-      if (!tools.includes("skill")) throw new Error("This OpenCode runtime does not expose the required skill tool. No prompt was sent.");
+      const tools = runtimeToolNames; // V2 has no tool-registry API; exact skill registration is checked above.
       const response = (await runtime.client.session.prompt({ sessionID, model, agent: planning ? "reqwizit-planning" : coding ? "reqwizit-implementation" : "reqwizit-assessment",
         tools: Object.fromEntries(tools.map((id) => [id, allowed.has(id)])),
         parts: [{ type: "text", text: executionPrompt(request.prompt, coding, planning) }],

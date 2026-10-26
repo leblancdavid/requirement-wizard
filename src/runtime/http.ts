@@ -3,7 +3,7 @@ export function runtimeRequestTimeout(input: RequestInfo | URL, init?: RequestIn
   const method = init?.method ?? (input instanceof Request ? input.method : "GET");
   // Scans have a fifteen-minute service deadline; ordinary rounds still cancel
   // through their caller's five-minute signal. Do not cut scans short here.
-  return method === "POST" && /\/session\/[^/]+\/message(?:\?|$)/.test(url) ? 900_000 : 90_000;
+  return method === "POST" && /\/session\/[^/]+\/(?:message|prompt|wait)(?:\?|$)/.test(url) ? 900_000 : 90_000;
 }
 
 /** The generated SDK passes a Request, not a URL plus RequestInit. */

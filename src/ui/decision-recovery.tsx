@@ -11,7 +11,7 @@ export function ItemProcessingNotice({ submission, error, resume, disabled }: {
   return <section className="error item-processing-error" aria-label="Item processing error">
     <DiagnosticNotice detail={error || submission?.diagnostic} summary={submission?.status === "needs-attention" ? submission.contextBlock ? "Your response is saved, but there is too much related information to review in one step." : "Your response is saved, but its review needs attention." : undefined} alert />
     {submission?.status === "needs-attention" && submission.conflict && <p>Review the current item and any linked decisions before submitting again. Logs describe the earlier attempt, not necessarily the current blocker.</p>}
-    {submission?.status === "needs-attention" && !submission.conflict && <><p>{submission.contextBlock ? "Repeating the same review won’t fix the size limit. Check Logs; you may need help organizing the related project information." : "You don’t need to submit your response again. Resume processing to retry its review."}</p>{resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Resume processing</button>}</>}
+    {submission?.status === "needs-attention" && !submission.conflict && <><p>{submission.contextBlock ? "Your response is saved. Resume processing to recheck the size limit; supported targeted reviews can use saved evidence batches without resubmitting your decision. Other size blockers remain explained in Logs." : "You don’t need to submit your response again. Resume processing to retry its review."}</p>{resume && <button type="button" className="secondary" disabled={disabled} onClick={resume}>Resume processing</button>}</>}
   </section>;
 }
 

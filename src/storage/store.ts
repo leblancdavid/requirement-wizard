@@ -46,6 +46,7 @@ import { readinessQuestionTaskSchema, validateReadinessQuestions } from "../core
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
 import { dismissibleReviewAttempt, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
+import { submissionWorkSchema, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
 import { questionReviewFingerprint, reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
@@ -70,6 +71,11 @@ function readStoredJob(payload: string): Job {
     const work = readinessWorkSchema.parse(job.readinessWork);
     if (JSON.stringify(job.context?.readinessQuestions) !== JSON.stringify(work.task) || job.context?.readinessStage?.planKey !== work.planKey)
       throw new Error("Clarification checkpoint does not match its task; saved work was not overwritten.");
+  }
+  if (job.submissionWork !== undefined) {
+    const work = submissionWorkSchema.parse(job.submissionWork);
+    if (job.context?.submissionStage?.planKey !== work.planKey || JSON.stringify(job.context.submissionIDs) !== JSON.stringify([work.submissionID]))
+      throw new Error("Saved-response checkpoint does not match its task; original work was not overwritten.");
   }
   if (job.definitionWork !== undefined) {
     const work = definitionWorkSchema.parse(job.definitionWork), task = job.context?.definitionAssessment;
@@ -1297,6 +1303,26 @@ export class ProjectStore {
     }).immediate();
   }
 
+  checkpointSubmission(id: string, input: SubmissionWork, context: NonNullable<Job["context"]>) {
+    this.db.transaction(() => {
+      const job = this.getJob(id), work = submissionWorkSchema.parse(input);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Saved-response worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (context.submissionStage?.planKey !== work.planKey || JSON.stringify(context.submissionIDs) !== JSON.stringify([work.submissionID])) throw new Error("Saved-response checkpoint requires its original task and plan.");
+      job.submissionWork = structuredClone(work); job.context = context;
+      job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 360000); this.saveJob(job);
+    }).immediate();
+  }
+
+  pauseSubmission(id: string, reason: string): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (!job.submissionWork || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Saved-response worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      job.status = "interrupted"; job.leaseUntil = null; job.diagnostic = reason; this.saveJob(job); return job;
+    }).immediate();
+  }
+
   pauseReadiness(id: string, reason: string): Job {
     return this.db.transaction(() => {
       const job = this.getJob(id);
@@ -1423,7 +1449,7 @@ export class ProjectStore {
   finishJob(id: string, raw: unknown): Job {
     return this.db.transaction(() => {
       const job = this.getJob(id);
-      const { result, omittedConcepts } = job.definitionWork
+      let { result, omittedConcepts } = job.definitionWork
         ? { result: stagedDefinitionAnalysisSchema.parse(raw), omittedConcepts: 0 }
         : parseDiscoveryAnalysis(raw);
       if (job.helpRequest || job.kind === "scan") throw new Error("Question help and scans cannot apply ordinary discovery proposals.");
@@ -1451,10 +1477,22 @@ export class ProjectStore {
             return;
           }
           const before = structuredClone(project);
+          if (job.submissionWork || job.context?.submissionStage) {
+            const item = this.submissions(project.id).find((s) => s.id === job.submissionWork?.submissionID);
+            if (!job.submissionWork || !item || job.readinessWork || job.definitionWork || job.retrievalWork || job.context?.refinementOnly
+              || job.context?.readinessQuestions || job.context?.definitionAssessment || job.context?.epicReview || job.context?.gapExploration)
+              throw new Error("Staged saved-response publication requires its exclusive saved task.");
+            validateSubmissionPublication(project, item, job, result);
+          }
           if (job.context?.readinessQuestions) {
             const source = job.context.readinessQuestions.format === 2 && job.context.readinessQuestions.blockedJobID ? this.getJob(job.context.readinessQuestions.blockedJobID) : undefined;
             if (job.readinessWork) validateReadinessStagePublication(project, job, result, source);
             else validateReadinessQuestions(project, job.context, result, source);
+            // Validate/replay the original wire draft first. Questions-only tasks
+            // cannot reference new declarations, so their temporary aliases have
+            // no meaning at publication (applyRound assigns permanent IDs).
+            // Never rewrite saved receipts: later context hashes include them.
+            result = { ...result, questions: result.questions.map(({ localID: _alias, ...question }) => question) };
           }
           if (job.context?.gapExploration?.check || job.context?.epicReview) {
             // Older/deterministic adapters may omit the optional area field.

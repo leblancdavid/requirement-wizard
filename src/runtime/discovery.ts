@@ -1,6 +1,7 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { z } from "zod";
 import { readinessBlockedSchema, readinessEvidenceSchema, readinessVerdictSchema, readinessReadSchema } from "../core/readiness-stages.js";
+import { submissionStageResponseSchema } from "../core/submission-stages.js";
 import { definitionBlockedSchema, definitionEvidenceSchema, definitionVerdictSchema, definitionAssessmentResponseSchema, definitionUpdateSchema } from "../core/definition-stages.js";
 import { analysisSchema, pendingChangesSchema, specificationUpdatesSchema, scanBatchAnalysisSchema, questionHelpResponseSchema, requirementEvidenceIDs, type QuestionHelpRequest, type Project } from "../core/model.js";
 import { retrievalRequestSchema } from "../core/gap-retrieval.js";
@@ -11,6 +12,7 @@ import { resolutionEvidenceIDs } from "../core/resolution.js";
 import type { DiscoveryAdapter } from "../service/discovery.js";
 import { selectModel, safeMessage } from "./contract.js";
 import { startRuntime } from "./server.js";
+import { runtimeToolNames } from "./client.js";
 import { buildContext, type ContextPack } from "../core/context.js";
 import { retrievedEvidence } from "./research.js";
 
@@ -89,7 +91,7 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
         } catch { if (!streamController.signal.aborted) options.onProgress("Progress stream interrupted; awaiting the bounded request result."); }
       })();
       // Opt-in research permits only search/fetch. Coding and filesystem tools stay disabled.
-      const registry = (await runtime.client.tool.ids({}, { signal: options.signal })).data ?? [];
+      const registry = runtimeToolNames; // App-owned restriction list, not a runtime registry claim.
       options.onProgress("Request sent to the selected model; awaiting its response…");
       const response = (await runtime.client.session.prompt({
         sessionID, model, agent: "requirements-spike", tools: Object.fromEntries(registry.map((id) => [id, options.research && ["websearch", "webfetch"].includes(id)])),
@@ -99,7 +101,7 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
       if (!response) throw new Error("OpenCode returned no discovery output.");
       options.onProgress("Response received; checking model identity and research activity…");
       options.onTelemetry({ actualModel: { providerID: response.info.providerID, modelID: response.info.modelID },
-        usage: response.info.tokens, runtimeReportedCost: response.info.cost ?? null });
+        usage: response.info.tokens ?? null, runtimeReportedCost: response.info.cost ?? null });
       if (response.info.error) throw new Error(`${response.info.error.name}: ${safeMessage(response.info.error.data.message)}`);
       if (response.info.modelID !== model.modelID || response.info.providerID !== model.providerID) {
         throw new Error("Runtime returned a different provider/model; output was not applied.");
@@ -127,6 +129,11 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
 export const requirementWritingPolicy = `Requirements describe observable product behavior: capabilities, triggers, outcomes, business/game rules, boundaries and failure behavior. Apply this to statements, acceptance scenarios, new requirements and review revisions. Do not inventory functions, methods, classes, internal algorithms, file layouts or engine/node structure. Keep supporting file paths and line ranges in rationale/evidence, not behavioral wording. Abstract incidental tuning constants (speeds, sizes, angles, durations, visual offsets); retain the supported behavior and meaningful relationships without inventing replacement values or vague claims such as "feels good". Example: a jump method with a 0.15-second grace constant supports "The player can still jump briefly after stepping off a ledge", with an observable scenario about immediately pressing jump after leaving a ledge. Preserve explicit human constraints, compatibility obligations, accessibility/performance targets and genuine numeric product rules (such as two-player play). A number or technical term alone is not a defect. Do not infer that a code constant is a deliberate product rule. When abstraction would lose an intentional rule or intent is unclear, ask a targeted question; do not silently remove the constraint. Original source evidence remains intact.`;
 
 export function discoveryPrompt(project: Project, context: ContextPack = buildContext(project), research = false): string {
+  if (context.manifest.submissionStage) {
+    const { submissionStage: stage, ...manifest } = context.manifest;
+    const ordinary = discoveryPrompt(project, { ...context, manifest }, false);
+    return `${ordinary}\nSTAGED SAVED-RESPONSE FOLLOW-UP (${stage.phase}). This stage protocol overrides the ordinary response schema, NOT its human-input authorization rules. Do not treat a partial evidence batch as the whole context or mark input processed. No tools or research. Original human input is already saved; never reapply it. Read phase: return a complete bounded analysis draft or {"submissionKeep":true} to copy the prior draft unchanged. Only unchanged actions may retain earlier citations; any NEW or CHANGED action must reference exact records detailed in THIS request. To compare other evidence return ONLY {"submissionEvidence":{"recordIDs":[...]}} first (up to eight IDs). Navigation IDs/links and draft prose are not evidence. Check phase: return ONLY {"submissionCheck":{"valid":true,"reason":"..."}} if the frozen draft is consistent with this exact batch, or valid:false for a specific conflict. Do not rewrite drafts during check. Return {"submissionBlocked":{"reason":"..."}} if exact comparison is unsafe. Never silently resolve competing human choices. No organization, feature archival, assessments, global interpretation or broader task authority. The complete draft must fit 18,000 characters; no truncation. No changes publish until all exact batches are read and the frozen draft checked against every batch.\nStage response schema: ${JSON.stringify(zodToJsonSchema(submissionStageResponseSchema, { $refStrategy: "none" }))}`;
+  }
   if (context.manifest.readinessStage) {
     const stage = context.manifest.readinessStage, task = context.manifest.readinessQuestions!;
     const analysis = analysisSchema.extend({ questions: z.array(analysisSchema.shape.questions.element.extend({ epicID: z.literal(task.epicID), evidenceIDs: z.array(z.string()).min(1) })).max(3),

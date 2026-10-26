@@ -9,6 +9,11 @@ ChatGPT subscription access through app-owned sign-in (direct preview) or an exi
 OpenCode connection. Direct live compatibility is not yet qualified. GitHub Copilot
 support is deferred.
 
+OpenCode-backed requests now use the **V2 API** (`@opencode/client@2.1.4`). On
+Windows, Reqwizit discovers the desktop-installed V2 CLI instead of preferring a
+stale npm V1 executable. Provider sign-ins stay in OpenCode's V2 store; no token
+copying or project reset is needed. See [runtime compatibility](docs/runtime-spike.md).
+
 ## Project status
 
 The workspace now has one home for requirements (**Specification**, including
@@ -32,6 +37,10 @@ Partial assessment categories are not individual human input tasks. In Specifica
 options, or explain that no new decision is needed, after explicit AI-usage confirmation.
 Large clarifications use saved exact-evidence read/check batches; Design offers
 **Continue clarification** after a pause without repeating completed steps.
+
+Oversized targeted review follow-ups and requirement-scoped answers also use saved
+evidence batches when needed. Resume processing the retained response; no duplicate
+submission is required, and changes publish only after every batch is verified.
 
 **Specification** now replaces routine Review: explicit answers, notes and targeted
 change requests can maintain current requirements without another approval. Design

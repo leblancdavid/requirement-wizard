@@ -8,6 +8,8 @@ test("SDK Request signals cancel fetch and prompt deadlines differ from metadata
   assert.equal(runtimeRequestTimeout("http://127.0.0.1/session/example/message?directory=test", { method: "POST" }), 900000);
   assert.equal(runtimeRequestTimeout("http://127.0.0.1/session/example/message"), 90000);
   assert.equal(runtimeRequestTimeout(new Request("http://127.0.0.1/provider")), 90000);
+  assert.equal(runtimeRequestTimeout("http://127.0.0.1/api/session/example/prompt", { method: "POST" }), 900000);
+  assert.equal(runtimeRequestTimeout("http://127.0.0.1/api/experimental/session/example/wait", { method: "POST" }), 900000);
   const server = createServer((_req, res) => { res.writeHead(200); });
   await new Promise<void>((accept) => server.listen(0, "127.0.0.1", accept));
   const address = server.address();

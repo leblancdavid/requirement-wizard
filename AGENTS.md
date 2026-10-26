@@ -123,11 +123,17 @@ dependency on its compiler or experimental runtime.
 
 ## OpenCode integration
 
-The SDK is pinned to `1.18.32`, matching the runtime tested in the spike. Use
-`@opencode-ai/sdk/v2/client` and inspect installed types when changing integration
-code; public examples may use different argument and response shapes.
+The V2 HTTP client is pinned to `@opencode/client@2.1.4`, matching the installed
+OpenCode 2.1.4 used for the current migration. `src/runtime/client.ts` projects its
+native queued prompts/messages/events into the app-owned adapter contract. Inspect
+installed types when changing integration code; the old `@opencode-ai/sdk/v2/client`
+was a V1-server SDK, not an OpenCode V2 client. Never fall back to V1 credentials.
+The owned loopback lifecycle remains separate from the user's desktop/shared server.
+See `docs/runtime-spike.md` for V2 checks and historical V1 observations.
 
-Observed behavior is documented in `docs/runtime-spike.md`:
+Observed behavior is documented in `docs/runtime-spike.md`. Its current V2 section
+records the migration checks; the following bullets are dated historical V1 results,
+not automatic qualification of equivalent V2 behavior:
 
 - ChatGPT `gpt-6.1-sol` worked with explicit `--format text-json` and local validation.
 - Native schema mode failed with `StructuredOutputError`; recovering its stored

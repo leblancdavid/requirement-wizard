@@ -524,6 +524,72 @@ test("indexed read upgrade resumes a legacy third-attempt citation failure witho
   } finally { f.store.close(); }
 });
 
+test("completed legacy clarification with unusable question aliases reopens and publishes with zero calls and unchanged receipts", async () => {
+  const directory = mkdtempSync(resolve(".reqwizit-state/clarification-alias-upgrade-"));
+  const file = join(directory, "projects.sqlite"), f = largeFixture(file);
+  let store = f.store, calls = 0;
+  try {
+    const original = store.beginJob(f.project.id, f.project.revision).job;
+    store.claimJob(original.id, Date.now() + 60000);
+    const output = f.result();
+    output.questions[0]!.localID = "question-1";
+    output.questions.push({ ...output.questions[0]!, text: "When should the retained draft be retried?" });
+    let draft = replayReadinessStages(f.project, f.materials, f.work).draft;
+    while (readinessStep(f.work) < f.work.batches.length * 2) {
+      const context = readinessStageContext(f.project, f.materials, f.work, draft);
+      f.work.attempts = 1;
+      draft = acceptReadinessStage(f.project, f.materials, f.work, draft,
+        context.manifest.readinessStage!.phase === "read" ? output : { clarificationVerdict: { keepQuestions: [0, 1], summary: "Exact questions checked" } }, original);
+      store.checkpointReadiness(original.id, f.work, context.manifest);
+    }
+    const receipts = structuredClone(f.work);
+    // Publication must still reject any substantive change, not just accept
+    // arbitrary questions because all stage counters are complete.
+    const changed = structuredClone(draft); changed.questions[0]!.options[0]!.label = "Unverified change";
+    assert.throws(() => store.finishJob(original.id, changed), /Partial or changed/);
+    store.failJob(original.id, "failed", "questions[0].localID must use a nonempty new: alias.");
+    store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.getJob(original.id).readinessWork, receipts);
+    const continuation = continuationState(f.project, store.jobs(f.project.id), store.submissions(f.project.id), (r) => store.get(f.project.id, r));
+    const decoded = decodePortable(renderWorkspace(f.project, undefined, continuation), f.project.model);
+    assert.deepEqual(decoded.continuation.jobs.find((j) => j.id === original.id)!.readinessWork, receipts);
+    const service = new DiscoveryService(store, { async analyze() { calls++; throw new Error("Completed work must not call a model"); } });
+    const job = await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
+    assert.equal(job.status, "completed", job.diagnostic); assert.equal(calls, 0);
+    assert.deepEqual(job.readinessWork, receipts);
+    assert.deepEqual(store.getJob(original.id).readinessWork, receipts);
+    const current = store.get(f.project.id);
+    assert.deepEqual(current.questions.map(({ id, status, sourceID, ...q }) => q), output.questions.map(({ localID, ...q }) => q));
+    assert.equal(new Set(current.questions.map((q) => q.id)).size, 2);
+    assert.deepEqual(current.sources, f.project.sources); assert.deepEqual(current.requirements, f.project.requirements);
+    assert.deepEqual(current.assessments, f.project.assessments);
+    store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.get(f.project.id), current);
+    assert.deepEqual(store.getJob(original.id).readinessWork, receipts);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("one-shot clarification ignores only declaration aliases; evidence and ordinary discovery aliases stay strict", async () => {
+  for (const alias of ["", "new:", "question-1", "new:duplicate"]) {
+    const f = fixture();
+    try {
+      const output = f.result(); output.questions[0]!.localID = alias;
+      output.questions.push({ ...output.questions[0]!, text: "When should retries stop?" });
+      const ordinary = f.store.beginJob(f.project.id, f.project.revision).job;
+      f.store.claimJob(ordinary.id, Date.now() + 60000);
+      assert.throws(() => f.store.finishJob(ordinary.id, output), /alias/);
+      f.store.failJob(ordinary.id, "failed", "Invalid ordinary aliases");
+      const bad = structuredClone(output); bad.questions[0]!.evidenceIDs = [alias];
+      const rejected = await new DiscoveryService(f.store, { async analyze() { return bad; } }).analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
+      assert.equal(rejected.status, "failed"); assert.deepEqual(f.store.get(f.project.id), f.project);
+      const job = await new DiscoveryService(f.store, { async analyze() { return output; } }).analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
+      assert.equal(job.status, "completed", job.diagnostic);
+      assert.equal(f.store.get(f.project.id).questions.length, 2);
+      assert.deepEqual(output.questions.map((q) => q.localID), [alias, alias], "Never mutate the supplied wire output");
+    } finally { f.store.close(); }
+  }
+});
+
 test("indexed retention rejects forged indexes, unloaded new citations and question-check rewrites", () => {
   const f = largeFixture();
   try {

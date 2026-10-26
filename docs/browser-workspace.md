@@ -34,6 +34,21 @@ persist. No requirement, assessment or pending saved response is resolved by thi
 read-only workflow. Indivisible or oversized supplemental evidence remains an
 explicit blocker rather than truncated input. See the [migration ledger](migrations.md#resumable-exact-design-clarification-2026-10-25).
 
+Saved targeted review follow-up is a separate workflow: an eligible review or
+requirement-scoped answer that exceeds the ordinary 144k limit can now continue via
+saved exact read/check batches. Use **Resume processing** or **Process saved
+responses only**, not another submission of the same decision. No partial edits
+publish; the original input, completed steps and spent attempts remain saved.
+Processing shows bounded stage progress, while full receipts stay out of polling
+snapshots. Research must be explicitly disabled for this fallback. See
+[size recovery and limits](discovery-efficiency.md#oversized-targeted-saved-response-follow-up-2026-10-26).
+
+Completed clarification ledgers that previously failed publication on a question
+`localID` can use **Continue clarification** without another model request when
+their evidence remains current. Publication validates the exact saved draft first,
+then ignores unnecessary declaration aliases while assigning permanent question IDs;
+it does not rewrite saved steps, evidence or options. See [compatibility](migrations.md#clarification-publication-aliases-2026-10-26).
+
 Settled scope summaries need no reconfirmation. If no new product question is
 established, Design shows the saved explanation instead of demanding a correction.
 An unchanged completed result is reused without another request. Missing/indivisible

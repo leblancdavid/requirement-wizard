@@ -1,5 +1,134 @@
 # Data migrations and upgrade compatibility
 
+## Oversized targeted saved-response continuation (2026-10-26)
+
+Source: existing saved/applied review submissions and requirement-scoped answers,
+including older `contextBlock` failures before job creation. Target: unchanged
+SQLite/workspace versions with an optional format-1 `submissionWork` JSON envelope,
+policy `exact-submission-batches-v1`, and matching `context.submissionStage`.
+Existing completed jobs, submission/source IDs, exact input, revisions, assessments,
+clarification ledgers and portable evidence identities are not rewritten or rekeyed.
+No startup inference or reset is required. Explicit processing first tries the
+unchanged one-shot planner; only overflow uses the new ledger. Older completed
+one-shot work is not invalidated or repeated solely because staging is available.
+
+The ledger pins the original submission identity/input/scope, locally planned
+mandatory record union, plan/material hashes and exact batch coverage. Each request
+fits 96k characters with an 18k bounded draft; preflight reserves that draft and
+keeps the original initial source and task records detailed in every batch. All
+other mandatory records are partitioned without summarization or silent omissions.
+Every batch is read, then the frozen draft is checked against every batch. New or
+changed actions may cite only that request's detailed evidence; exact unchanged
+actions can be retained. Up to eight exact cross-batch records may be requested.
+A negative check blocks publication; it cannot silently rewrite a previously
+checked draft or certify conflicting human choices as reconciled.
+
+Attempts persist before dispatch (four per unfinished step); accepted responses,
+wire hashes, model/job/revision provenance and step counters persist before further
+planning. Each explicit action is bounded to 32 requests/15 minutes, with per-request
+five-minute timeout/cancellation. Restart, publication-only retry and portable
+adoption replay completed work without inference. Continuation retains the
+original saved task scope even if the browser's feature selection changed; current
+mandatory evidence is still recomputed and validated. Final publication replays the
+entire exclusive ledger against current material and then uses ordinary review,
+scope, evidence, revision/lease and specification-update checks in the same atomic
+transaction. Failed/cancelled/stale work does not reapply human input or partially
+publish. Changed mandatory evidence rejects with the old ledger retained, not
+silently marked current or regenerated. Unsupported future formats reject on read.
+
+Portable continuation retains the latest useful ledger plus linked waiting input;
+browser snapshots expose derived `submissionProgress`, not full receipt bodies.
+No database migration is necessary for old rows lacking the optional envelope.
+This policy supports targeted reviews and server-scoped concrete answers, not
+general notes/unscoped legacy answers, pair-resolution passes, or research-enabled
+work. Research must be explicitly disabled; it is never silently switched off.
+Indivisible target/base evidence, supplemental overflow, exhausted attempts, genuine
+conflicting evidence and more than 32 batches remain specific preserved blockers.
+Actual user-project and live-provider staged reasoning are not yet qualified.
+
+Upgrade/recovery verification: eight new deterministic tests passed, including an
+older applied pre-job context blocker, durable reopen, strict future-format rejection,
+portable adoption into an empty database, unchanged receipt identity and zero-call
+completed-ledger publication. All 917 tests, type check, UI/desktop builds and the
+focused saved-review browser continuation passed. Broader browser verification still
+stops at the pre-existing Project-map assertion; the earlier Electron titlebar gap
+was not rerun. No personal project or live inference was exercised.
+
+## Clarification publication aliases (2026-10-26)
+
+Source/target: unchanged SQLite/job/portable formats and exact clarification
+receipt policy. Older completed drafts may contain malformed or duplicate question
+`localID` declarations accepted during questions-only read/check stages but rejected
+by ordinary round publication. These aliases are not durable question identities.
+
+`ProjectStore.finishJob` now validates the original one-shot clarification output,
+or replays and compares the exact staged ledger, **before** dropping only question
+declaration aliases from the publication copy. Ordinary discovery alias validation
+is unchanged. Evidence references, options, text, scope, exclusivity and all-batch
+verification still validate; aliases in references are never repaired or remapped.
+The existing round machinery allocates permanent question IDs atomically.
+
+No startup rewrite, schema/fingerprint bump, receipt mutation or model request is
+needed. Completed ledgers resume through explicit **Continue clarification** with
+zero inference when evidence remains current. Original receipt responses, context
+hashes, attempts and history remain exact across reopening and portable export;
+failed publication rolls back and leaves that work available to retry. Genuinely
+stale, malformed or incomplete work still rejects rather than being certified.
+
+Regression checks cover file-backed failed completed work, repeated reopen,
+portable round-trip, zero-call continuation, unchanged question content/evidence,
+substantive draft tampering, one-shot invalid/duplicate aliases, and rejection of
+invalid evidence and ordinary discovery aliases. Verification: type check, all
+909 tests (249 pretests + 660 main), focused Specification/browser continuation,
+desktop/UI build and diff check passed. No model calls were made for this fix.
+Actual user-project publication has not been exercised; the previously recorded
+Electron titlebar smoke-test gap is unchanged and that check was not rerun.
+
+## OpenCode V1 to V2 transport and credential ownership (2026-10-25)
+
+Source: V1 server SDK `@opencode-ai/sdk@1.18.32`, legacy npm executable selection and
+V1 credential management. Target: `@opencode/client@2.1.4`, native V2 API and V2-owned
+credential management. User explicitly approved this migration after diagnosis of
+the installed V1 1.18.32 / desktop V2 2.1.4 split and persistent refresh-token 401s.
+
+No Reqwizit SQLite, settings, portable/workspace or saved-job format changes are
+needed: the transport is projected into the existing app contract. Original project
+IDs, evidence, model/provider selections, optimistic revisions, accepted assessments,
+delivery proofs and staged read/check receipts/attempts remain unchanged. No identity
+or freshness policy version is changed merely for a transport upgrade. Existing
+OpenCode selections route through V2; direct-provider selections remain direct.
+Root and staged-desktop production dependency locks are upgraded together; rebuild
+the desktop with Reqwizit closed so Windows can replace its native SQLite module.
+There is no startup model call, reset, receipt re-fingerprinting or automatic replay.
+Older saved-data reopen/reuse/portable tests continue to exercise the same formats.
+
+Reqwizit does not read, import, rewrite or copy provider tokens from `auth.json` or
+the V2 database. OpenCode owns its documented one-way legacy credential import and
+future refresh/sign-in flows. The adapter neither downgrades to V1 nor switches a
+failed account/model/response format. Explicit V1 executable overrides reject before
+session creation. Runtime-owned loopback authentication is generated in memory and
+never saved to project data or diagnostics. User desktop/shared servers are not
+reconfigured or stopped.
+
+Saved runtime session IDs are retained; V2 must be able to retrieve them for any
+coding-session recovery. Missing sessions fail without silently creating a replacement
+or repeating completed work. V2 message projection preserves user/assistant/skill
+content; idle markers are not counted as a later assistant response. Native queue IDs,
+terminal outcomes and model identities are verified before accepting new output.
+Unsupported attached input is rejected rather than omitted from the text-only
+application projection; system/synthetic text, compaction summaries and shell output
+remain included in bounded history accounting.
+In-flight/V1 coding-session migration remains a specific live qualification gap;
+the migration does not manufacture that provenance or upgrade old manual progress.
+
+Deterministic transport tests cover metadata projection, pagination, queue/terminal
+matching, wrong models, failed outcomes, intervening inputs, earlier tool activity,
+cancellation/interrupt and V1-binary rejection. Existing persisted-data regression
+tests and staged clarification/portable reuse tests remain registered. Live evidence
+is limited to V2 provider/role metadata, synthetic JSON output recovery and one
+skill-backed assessment; the actual user project and coding/GitHub delivery were not
+exercised. See [runtime checks and limits](runtime-spike.md#current-opencode-v2-adapter-2026-10-25).
+
 ## Indexed clarification draft retention (2026-10-25)
 
 Source: format-1 `exact-readiness-batches-v1` work without `indexedRead`. Target:

@@ -17,11 +17,11 @@ if (values["live-assessment"] ? !values.provider || !values.model : values.provi
 const liveConfig = values["live-assessment"] ? executionConfigSchema.parse({ repository: "fixture/skill-check", strategy: "requirement-pr", providerID: values.provider, modelID: values.model, checks: ["node --version"] }) : undefined;
 const directory = await mkdtemp(join(tmpdir(), "reqwizit-skill-check-"));
 try {
-  for (const coding of [false, true]) {
-    const runtime = await startRuntime(undefined, directory, AbortSignal.timeout(90000), false, coding, !coding);
+  for (const { coding, planning } of [{ coding: false, planning: false }, { coding: true, planning: false }, { coding: false, planning: true }]) {
+    const runtime = await startRuntime(undefined, directory, AbortSignal.timeout(90000), false, coding, !coding && !planning, planning);
     let staged: string | undefined;
     try {
-      const skill = executionSkill(coding); staged = runtime.skillPath;
+      const skill = executionSkill(coding, planning); staged = runtime.skillPath;
       assert.ok(staged);
       assert.equal(await readFile(staged, "utf8"), skillDocument(skill));
       const catalog = (await runtime.client.app.skills({}, { signal: AbortSignal.timeout(90000) })).data ?? [];
@@ -29,17 +29,16 @@ try {
       assert.ok(registered, `Missing ${skill.name}`);
       assert.equal(resolve(registered.location), resolve(staged));
       assert.ok(registered.content.includes(skill.body.trim()), "Registered skill must contain the bundled workflow");
-      assert.ok((await runtime.client.tool.ids({}, { signal: AbortSignal.timeout(90000) })).data?.includes("skill"));
-      const permission = executionPermissions(coding);
+      const permission = executionPermissions(coding, planning);
       const session = (await runtime.client.session.create({ title: "Reqwizit skill permission metadata check", permission: [{ permission: "*", pattern: "*", action: "deny" }] }, { signal: AbortSignal.timeout(90000) })).data;
       assert.ok(session);
       try {
         await runtime.client.session.update({ sessionID: session.id, permission }, { signal: AbortSignal.timeout(90000) });
         const saved = (await runtime.client.session.get({ sessionID: session.id }, { signal: AbortSignal.timeout(90000) })).data;
-        assert.equal(executionPermissionsCurrent(saved?.permission ?? [], coding), true, "Native session API appends the role's restrictive permissions on resume");
+        assert.equal(executionPermissionsCurrent(saved?.permission ?? [], coding, planning), true, "Native session API retains the role's restrictive permissions on resume");
         assert.equal(executionPermissionsCurrent(saved?.permission ?? [], !coding), false, "A different role cannot reuse these grants");
       } finally { await runtime.client.session.delete({ sessionID: session.id }, { signal: AbortSignal.timeout(90000) }); }
-      console.log(`${skill.name} v${skill.version}: registered with matching content and native skill tool; resumed permission rules verified (no model inference).`);
+      console.log(`${skill.name} v${skill.version}: registered with matching content; V2 session permission round-trip verified (no tool invocation or model inference).`);
     } finally { await runtime.close(); if (staged) await assert.rejects(access(staged)); }
   }
   if (liveConfig) {
@@ -51,4 +50,4 @@ try {
     assert.equal(assessment.status, "complete");
     console.log(`Live ${liveConfig.providerID}/${liveConfig.modelID}: completed matching assessment skill load and validated scenario result (${assessment.status}). No source edits or Git delivery.`);
   }
-} finally { await rm(directory, { recursive: true, force: true }); }
+} finally { await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }

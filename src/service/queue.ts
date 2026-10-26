@@ -3,6 +3,7 @@ import { refinementCandidates, type RefinementProgress } from "../core/refinemen
 import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
 import { planContext, planExactTaskContext } from "../core/working-set.js";
+import { canStageSubmission, planSubmissionStages, submissionMaterials } from "../core/submission-stages.js";
 import { ContextBudgetError } from "../core/context.js";
 import { refinementEvidenceRecords } from "../core/refinement-context.js";
 import { refinementCheckCurrent, resolutionPairEligible } from "./refinement-tasks.js";
@@ -734,6 +735,20 @@ export class DiscoveryQueue {
             break;
           } catch (error) {
             if (!(error instanceof ContextBudgetError)) throw error;
+            if (!(manual?.research ?? item.research) && canStageSubmission(item) && !task([item]).refinementFollowup) {
+              try {
+                planSubmissionStages(submissionMaterials(project, item, task([item]), error));
+                batch.push(item);
+                report("This saved response needs several exact evidence batches. Completed steps will be saved; no partial specification changes publish.");
+                break;
+              } catch (stageError) {
+                if (stageError instanceof ContextBudgetError) { block(item, stageError); continue; }
+                // Keep the original bounded-context failure and precise local
+                // staging cause; never start inference after failed preflight.
+                block(item, error); item.diagnostic += ` Staged fallback: ${stageError instanceof Error ? stageError.message : "Unable to prepare exact batches."}`;
+                this.service.store.saveSubmission(item); continue;
+              }
+            }
             block(item, error);
           }
         }

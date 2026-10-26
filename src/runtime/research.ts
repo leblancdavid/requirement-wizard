@@ -1,4 +1,4 @@
-import type { Part } from "@opencode-ai/sdk/v2/client";
+import type { Part } from "./client.js";
 import type { ResearchEvidence } from "../core/model.js";
 
 /** Citations must originate in actual completed tool output, never just model text. */

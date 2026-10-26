@@ -51,8 +51,8 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const executionWaiting = running.some((item) => item.title !== "Question help");
   const taskCount = Number(active) + running.length;
   const refinement = refinementProgress ? refinementActivity(refinementProgress) : undefined;
-  const completed = refinementProgress ? refinementProgress.completed : lastJob?.kind === "scan" ? lastJob.scanProgress?.completed : lastJob?.definitionWork?.receipts.length;
-  const total = refinementProgress ? refinementProgress.total : lastJob?.kind === "scan" ? lastJob.scanProgress?.total : lastJob?.definitionWork ? definitionSteps(lastJob.definitionWork).length : undefined;
+  const completed = refinementProgress ? refinementProgress.completed : lastJob?.kind === "scan" ? lastJob.scanProgress?.completed : lastJob?.submissionProgress?.completed ?? lastJob?.definitionWork?.receipts.length;
+  const total = refinementProgress ? refinementProgress.total : lastJob?.kind === "scan" ? lastJob.scanProgress?.total : lastJob?.submissionProgress?.total ?? (lastJob?.definitionWork ? definitionSteps(lastJob.definitionWork).length : undefined);
   const hasUnfinishedInput = submissions.some((s) => !s.archivedAt && !resolvedAttempts.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
   const actionablePause = (paused || !!lastJob && ["failed", "cancelled", "interrupted", "stale"].includes(lastJob.status)) && (hasUnfinishedInput || !!lastJob && lastJob.status !== "completed");
    const discoveryHeadline = active ? refinement?.headline ?? (processing.length ? `Processing ${processing.length} ${processing.length === 1 ? "response" : "responses"}` : lastJob?.kind === "scan" ? "Reading project files" : lastJob?.context?.definitionAssessment ? "Checking definition" : "Reviewing your project")

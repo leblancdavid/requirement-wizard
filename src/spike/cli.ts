@@ -6,13 +6,12 @@ const help = `Reqwizit — OpenCode compatibility spike
 
 npm run spike -- providers
 npm run spike -- profile
-npm run spike -- probe --provider github-copilot --model <model-id>
 npm run spike -- probe --provider openai --model <model-id> --idea "Your idea"
 npm run spike -- probe --provider openai --model <model-id> --cancel-after-ms 1000
 npm run spike -- session --session <session-id>
 
 Options: --timeout-ms <1..600000> (default 120000), --help
-         --format json-schema|text-json (default json-schema)
+         --format text-json (default; V2 native schema mode is not qualified)
 Providers/session inspection makes no model call. Probe sends the idea to the
 selected provider and may consume subscription allowance. Sessions are retained
 in OpenCode for recovery inspection. Credentials remain owned by OpenCode.
@@ -37,24 +36,23 @@ async function main() {
     throw new Error("Probe requires explicit --provider and --model. See --help.");
   }
   if (command === "session" && !values.session) throw new Error("Session requires --session.");
-  const format = values.format ?? "json-schema";
+  const format = values.format ?? "text-json";
   if (!["json-schema", "text-json"].includes(format)) throw new Error("format must be json-schema or text-json.");
+  if (command === "probe" && format === "json-schema") throw new Error("OpenCode V2 native schema mode is not qualified. Select --format text-json explicitly; no runtime or model request was started.");
   const timeout = positiveMilliseconds(values["timeout-ms"] ?? "120000", "timeout-ms");
   const cancelAfter = values["cancel-after-ms"] ? positiveMilliseconds(values["cancel-after-ms"], "cancel-after-ms") : undefined;
   if (cancelAfter !== undefined && cancelAfter >= timeout) throw new Error("cancel-after-ms must be less than timeout-ms.");
   const runtime = await startRuntime(command === "probe" ? `${values.provider}/${values.model}` : undefined);
   try {
     const health = (await runtime.client.global.health()).data;
-    console.log(JSON.stringify({ event: "runtime", health, sdk: "1.18.32" }));
+    console.log(JSON.stringify({ event: "runtime", health, client: "@opencode/client@2.1.4" }));
     if (command === "profile") {
       const config = (await runtime.client.config.get()).data;
       const agents = (await runtime.client.app.agents()).data;
-      const tools = (await runtime.client.tool.ids()).data;
       const agent = agents?.find((item) => item.name === "requirements-spike");
       console.log(JSON.stringify({ event: "profile", permission: config?.permission,
         agent: agent ? { name: agent.name, permission: agent.permission } : null,
-        registeredToolIDs: tools,
-        note: "Registered tools are not proof of agent access. Denial enforcement requires behavioral verification.",
+        note: "V2 exposes no tool registry endpoint. Configuration is not proof of effective tool permission enforcement.",
       }, null, 2));
       return;
     }

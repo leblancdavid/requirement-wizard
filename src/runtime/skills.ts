@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executionSkill, skillDocument } from "../core/execution-skills.js";
 
-export const codingTools = ["read", "glob", "grep", "list", "edit", "write", "patch", "apply_patch", "bash"];
+export const codingTools = ["read", "glob", "grep", "edit", "shell"];
 export function executionPermissions(coding: boolean, planning = false) {
   return [
     { permission: "*", pattern: "*", action: "deny" as const },
@@ -12,7 +12,7 @@ export function executionPermissions(coding: boolean, planning = false) {
     { permission: "external_directory", pattern: "*", action: "deny" as const },
   ];
 }
-/** OpenCode 1.18.32 appends session permission updates. The last rules must
+/** The normalized V2 session projection must
  * establish our whole role profile, including deny-all before its exact grants.
  */
 export function executionPermissionsCurrent(saved: { permission: string; pattern: string; action: string }[], coding: boolean, planning = false) {
@@ -27,6 +27,6 @@ export async function stageExecutionSkill(coding: boolean, planning = false) {
   try {
     const folder = join(directory, skill.name); await mkdir(folder);
     const path = join(folder, "SKILL.md"); await writeFile(path, skillDocument(skill), "utf8");
-    return { directory, path, close: () => rm(directory, { recursive: true, force: true }) };
-  } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
+    return { directory, path, close: () => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) };
+  } catch (error) { await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); throw error; }
 }

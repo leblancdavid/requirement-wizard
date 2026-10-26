@@ -303,6 +303,7 @@ export type Job = {
     refinementTarget?: { requirementID: string; fingerprint: string; contextKey?: string };
     refinementPair?: { requirementIDs: [string, string]; contextKey: string; includeUnapproved?: boolean; triggerSourceIDs?: string[] };
     submissionIDs?: string[];
+    submissionStage?: { policy: "exact-submission-batches-v1"; planKey: string; step: number; phase: "read" | "check" };
     reviewSourceIDs?: string[];
     scopedAnswerSourceIDs?: string[];
     reviewChangeSourceIDs?: string[];
@@ -320,6 +321,8 @@ export type Job = {
   scanWork?: ScanWork;
   definitionWork?: import("./definition-stages.js").DefinitionWork;
   readinessWork?: import("./readiness-stages.js").ReadinessWork;
+  submissionWork?: import("./submission-stages.js").SubmissionWork;
+  submissionProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
   readinessProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
   definitionBlock?: { format: 1; reason: string };
   definitionInterruption?: import("./definition-interruption.js").DefinitionInterruption;

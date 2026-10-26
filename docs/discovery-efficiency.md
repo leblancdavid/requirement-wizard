@@ -1,5 +1,42 @@
 # Graph-backed discovery and current-specification contexts
 
+## Oversized targeted saved-response follow-up (2026-10-26)
+
+A reported **168,043 / 144,000-character**, two-area failure occurred while
+processing retained input, before an AI job started. It is separate from Design
+question generation; that questions-only workflow cannot complete a saved review.
+Splitting the target requirement cannot reduce mandatory shared project evidence.
+
+The queue still isolates each response and tries the existing exact planner first.
+Targeted reviews and server-scoped concrete answers now have an overflow-only exact
+read/check fallback. Original input is not applied twice. Reads can draft changes
+under existing submission authority; every draft action is then checked unchanged
+against every evidence batch before anything publishes. Each request stays within
+96k characters, including the bounded draft; exact cross-batch retrieval is available.
+No raise to the ordinary 144k cap and no silent human-evidence trimming is used.
+
+Use **Resume processing** or **Process saved responses only** for an eligible old
+size-blocked response. Continue remains explicit after pause/restart and reuses
+accepted stages; there is no need to submit the same review again. This is not
+authority to resolve competing human decisions automatically, reapprove a requirement,
+archive a feature, or run coding. Research-enabled, unscoped/general input and pair
+resolution retain their existing policies; indivisible evidence may still block.
+See [upgrade/recovery](migrations.md#oversized-targeted-saved-response-continuation-2026-10-26).
+
+Verification: all **917 tests** passed (257 pretests + 660 main), along with type
+checking, UI/desktop builds and the focused Specification/browser runner. The new
+checks cover older pre-job blockers, scoped answers, exact independent wire decoding,
+file-backed restart, portable adoption into an empty store, publication-only zero-call
+retry, stale material, malformed output/attempt exhaustion, cross-batch loading,
+oversized supplements and non-cooperating-adapter timeout/late results. The browser
+case reloads a saved review and explicitly resumes only its unfinished stages, while
+asserting progress-only snapshots. The aggregate browser command passed layout and
+model selection, then failed the existing **Project map** locator at
+`src/web/browser-check.ts:706`; later aggregate runners were not reached. The focused
+runner passed separately after correcting its new Advanced-actions locator and
+waiting for routed polls before browser cleanup. No live model requests or actual
+user-project writes were performed for this change.
+
 ## Citation failure during staged clarification (2026-10-25)
 
 A reported live run fitted every request (59k–86k characters) and saved four read

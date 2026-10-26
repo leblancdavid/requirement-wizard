@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ToolPart } from "@opencode-ai/sdk/v2/client";
+import type { ToolPart } from "./client.js";
 import { retrievedEvidence } from "./research.js";
 
 function tool(name: string, output: string, url = "https://example.com/spec"): ToolPart {

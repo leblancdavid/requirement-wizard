@@ -274,7 +274,7 @@ coding/GitHub delivery remain unqualified. See [implementation-workspace.md](imp
 | --- | --- | --- |
 | TECH-001 | Local-first TypeScript service with SQLite. | SQLite/in-process service and authenticated loopback browser API implemented. CLI still attaches to storage in process; daemon discovery remains planned. |
 | TECH-002 | React browser first; add an Electron shell using the same service and UI. Ink remains a later option. | Browser delivery follows DEC-008; Electron implemented under DEC-017. See desktop.md for packaging and verified checks. |
-| TECH-003 | Use OpenCode as the initial model/tool runtime, migrating toward direct providers under DEC-015. | Legacy selections retain OpenCode with partial live verification on 1.18.32. App-owned ChatGPT auth/catalog Settings UI and direct discovery/help dispatch are implemented and fixture-verified, but not live-qualified. Direct research is unsupported. See runtime-spike.md and direct-providers.md. |
+| TECH-003 | Use OpenCode as the initial model/tool runtime, migrating toward direct providers under DEC-015. | User approved migration to OpenCode V2 on 2026-10-25 after V1/V2 credential divergence. The shared adapter now uses @opencode/client 2.1.4 and V2 credentials owned by OpenCode; live synthetic JSON response recovery and a bounded skill-backed assessment passed. Coding/GitHub delivery and actual-project clarification remain unqualified on V2. Direct-provider status is unchanged. See runtime-spike.md and direct-providers.md. |
 | TECH-004 | Use ChatGPT subscription sign-in for the initial release. | Current provider scope follows DEC-007; verify actual account/model availability. |
 | TECH-005 | Export build packages before embedding build execution. | Test specification quality with a fresh coding session before adding orchestration. |
 | TECH-006 | Windows first for verification. | Current development environment; portable core preserves later platform options. |
@@ -289,7 +289,7 @@ coding/GitHub delivery remain unqualified. See [implementation-workspace.md](imp
 
 | ID | Question | Resolve by | Initial handling |
 | --- | --- | --- | --- |
-| OPEN-001 | Which installed OpenCode/SDK versions support the needed behavior? | Milestone 1 | Both pinned to 1.18.32; capability results recorded in runtime-spike.md, with remaining gaps explicit. |
+| OPEN-001 | Which installed OpenCode/client versions support the needed behavior? | Milestone 1 | Current client pinned to @opencode/client 2.1.4, tested against OpenCode 2.1.4. Historical V1 SDK/runtime 1.18.32 observations remain dated; V2 verification gaps are explicit in runtime-spike.md. |
 | OPEN-002 | Can supported auth flows be embedded, or must onboarding launch OpenCode? | Milestone 1 | Accept external connection flow initially. |
 | OPEN-003 | Which search/fetch integration should research use? | Milestone 1 recommendation; milestone 4 verification | OpenCode webfetch verified on two official specifications; websearch path implemented but not live-qualified. |
 | OPEN-004 | How reliably can discovery tool profiles exclude coding tools and inherited workspace instructions? | Milestone 1 | Test effective behavior before relying on the runtime profile. |

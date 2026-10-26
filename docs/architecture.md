@@ -6,6 +6,23 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/core/submission-stages.ts` / `src/service/submission-stages.ts`: overflow-only
+  exact read/frozen-draft verification for targeted saved review/scoped-answer
+  follow-up. The queue preflights bounded batches before starting; durable ledgers
+  retain attempts, receipts and input/material identity across explicit continuation.
+  Store publication independently replays all batches before ordinary submission
+  authorization and atomic specification updates. Browser polling projects progress;
+  portable continuation retains the resumable ledger. General input/research and
+  pair-resolution policies remain unchanged; live user-project qualification is open.
+
+- `src/runtime/client.ts` uses `@opencode/client@2.1.4` for OpenCode V2 and exposes
+  an app-owned projection for discovery, help, model metadata and execution. It
+  translates native permissions, queued prompt/wait/message pagination, terminal
+  outcomes, tool content and live events without importing provider credentials.
+  `src/runtime/executable.ts` detects V2 CLI binaries and rejects stale V1 overrides.
+  The app still owns a private authenticated loopback server and stops only that
+  child; it does not attach to, configure or terminate the desktop/shared service.
+
 - `src/service/planning-context.ts` / `planning-stages.ts`: lossless bounded planning
   contexts and exact staged read/check fallback for mandatory implementation evidence.
   Versioned ledgers in the existing planning envelope preserve accepted requests and
