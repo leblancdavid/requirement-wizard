@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ProjectStore } from "../storage/store.js";
 import { readinessProgress } from "../core/readiness-stages.js";
-import { submissionProgress } from "../core/submission-stages.js";
+import { submissionProgress, submissionAllowance } from "../core/submission-stages.js";
 import { activityQuerySchema } from "../storage/activity.js";
 import { OperationConflictError, discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 import { browseDirectories } from "../storage/workspace.js";
@@ -34,7 +34,7 @@ import type { ModelSelection } from "../core/model.js";
 import { SnapshotEncoder, parseSnapshotTokens, snapshotHeader } from "./snapshot.js";
 import { savedEvidencePolicySchema } from "../core/gap-navigation.js";
 import { canContinueGapExploration } from "../core/gap-retrieval.js";
-import { reviewAttemptBatchLimit } from "../core/review-attempts.js";
+import { resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -190,7 +190,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const current = revisionSnapshot(project);
         const recent = options.store.workspaceJobs(id);
         const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, submissionWork, ...job }) => ({ ...job,
-          ...(submissionWork ? { submissionProgress: submissionProgress(submissionWork) } : {}),
+          ...(submissionWork ? { submissionProgress: submissionProgress(submissionWork), submissionAllowance: submissionAllowance(submissionWork) } : {}),
           ...(readinessWork ? { readinessProgress: readinessProgress(readinessWork) } : {}),
           ...(job.context?.readinessQuestions && _ ? { result: _ } : {}),
           gapContinuationAvailable: canContinueGapExploration({ ...job, retrievalWork }),
@@ -311,6 +311,25 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         queue.resumeBrowser(id, input);
         json(res, 202, { started: true }); return;
       }
+      if (action === "process-responses") {
+        if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
+        if (queue.isActive(id)) throw new OperationConflictError("Wait for the current task before processing saved responses.");
+        const input = z.object({ revision, submissionIDs: z.array(z.string().uuid()).min(1).max(128)
+          .refine((ids) => new Set(ids).size === ids.length, "Choose each saved response once."), research: z.boolean().optional(),
+          additionalRequests: z.literal(4).optional(), confirmAdditionalRequests: z.literal(true).optional(), resumeJobID: z.string().uuid().optional() }).strict()
+          .refine((value) => value.additionalRequests ? value.confirmAdditionalRequests && value.resumeJobID && value.submissionIDs.length === 1 && value.research !== true
+            : !value.confirmAdditionalRequests && !value.resumeJobID, "Additional requests require explicit confirmation, one saved response and its exact job; research must be disabled.").parse(raw);
+        if (project.revision !== input.revision) throw new StaleRevisionError();
+        const saved = options.store.submissions(id);
+        const resolved = resolvedReviewAttempts(project, saved);
+        const selected = input.submissionIDs.map((selectedID) => saved.find((s) => s.id === selectedID));
+        if (selected.some((s) => !s)) throw new Error("Choose saved responses from this project only.");
+        if (selected.some((s) => s!.archivedAt || s!.conflict || resolved.has(s!.id) || !["queued", "saved", "needs-attention"].includes(s!.status)))
+          throw new OperationConflictError("Selected responses changed or need an explicit human decision. Refresh before processing.");
+        if (input.additionalRequests) options.store.extendSubmissionAllowance(id, input.revision, input.submissionIDs[0]!, input.resumeJobID!);
+        queue.resume(id, { processOnly: true, submissionIDs: input.submissionIDs, research: input.research ?? false });
+        json(res, 202, { started: true }); return;
+      }
       if (action === "refresh-definition") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
         const input = z.object({ revision, focusEpicID: z.string().min(1).max(200).optional(),
@@ -323,9 +342,9 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (action === "clarify-definition") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
-        const input = z.object({ revision, epicID: z.string().min(1).max(200), confirmAIUsage: z.literal(true) }).strict().parse(raw);
+        const input = z.object({ revision, epicID: z.string().min(1).max(200), confirmAIUsage: z.literal(true), resumeJobID: z.string().uuid().optional() }).strict().parse(raw);
         if (project.revision !== input.revision) throw new StaleRevisionError();
-        json(res, 202, queue.clarifyDefinition(id, input.revision, input.epicID)); return;
+        json(res, 202, queue.clarifyDefinition(id, input.revision, input.epicID, input.resumeJobID)); return;
       }
       if (action === "recover-definition") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);

@@ -44,9 +44,9 @@ import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refineme
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { readinessQuestionTaskSchema, validateReadinessQuestions } from "../core/readiness-questions.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
-import { dismissibleReviewAttempt, reviewAttemptBatchLimit } from "../core/review-attempts.js";
+import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
-import { submissionWorkSchema, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
+import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
 import { questionReviewFingerprint, reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
@@ -981,16 +981,23 @@ export class ProjectStore {
     const ids = z.array(z.string().uuid()).min(1).max(20).refine((items) => new Set(items).size === items.length).parse(input);
     const rows = this.db.prepare(`SELECT id, json_extract(payload, '$.expectedRevision') AS revision,
       json_extract(payload, '$.status') AS status, json_extract(payload, '$.discoveryMetrics') AS metrics,
-      COALESCE(json_extract(payload, '$.context.epicReview.packageID'), json_extract(payload, '$.definitionWork.planKey')) AS packageID,
-      CASE WHEN json_type(payload, '$.definitionWork') IS NOT NULL THEN 'definition-exact-batches-v1' ELSE json_extract(payload, '$.context.epicReview.contextPolicy') END AS policy,
+      COALESCE(json_extract(payload, '$.context.epicReview.packageID'), json_extract(payload, '$.definitionWork.planKey'), json_extract(payload, '$.readinessWork.planKey'), json_extract(payload, '$.submissionWork.planKey')) AS packageID,
+      CASE WHEN json_type(payload, '$.readinessWork') IS NOT NULL THEN json_extract(payload, '$.readinessWork.policy')
+        WHEN json_type(payload, '$.submissionWork') IS NOT NULL THEN json_extract(payload, '$.submissionWork.policy')
+        WHEN json_type(payload, '$.definitionWork') IS NOT NULL THEN 'definition-exact-batches-v1' ELSE json_extract(payload, '$.context.epicReview.contextPolicy') END AS policy,
       CASE WHEN json_extract(payload, '$.definitionInterruption.format') = 1 THEN json_extract(payload, '$.definitionInterruption.cause') END AS interruptionCause,
+      COALESCE(json_extract(payload, '$.readinessWork.format'), json_extract(payload, '$.submissionWork.format')) AS savedStageFormat,
       json_extract(payload, '$.context.characters') AS characters, json_extract(payload, '$.context.budget') AS budget,
       json_array_length(payload, '$.context.includedIDs') AS included, json_array_length(payload, '$.context.omittedIDs') AS omitted,
       json_array_length(payload, '$.context.epicIDs') AS areas, json_extract(payload, '$.context.sectionCharacters') AS sections,
-      json_array_length(payload, '$.retrievalWork.stages') AS stages, COALESCE(json_extract(payload, '$.retrievalWork.attempts'), json_extract(payload, '$.definitionWork.attempts')) AS savedAttempts,
+      json_array_length(payload, '$.retrievalWork.stages') AS stages, COALESCE(json_extract(payload, '$.readinessWork.attempts'), json_extract(payload, '$.submissionWork.attempts'), json_extract(payload, '$.retrievalWork.attempts'), json_extract(payload, '$.definitionWork.attempts')) AS savedAttempts,
       json_extract(payload, '$.retrievalWork.reuse.stages') AS reusedStages, json_extract(payload, '$.retrievalWork.reuse.final') AS reusedFinal,
-      COALESCE(json_extract(payload, '$.retrievalWork.epicStages.batches'), json_array_length(payload, '$.definitionWork.batches')) AS stagedBatches,
-      COALESCE(json_array_length(payload, '$.retrievalWork.epicStages.receipts'), json_array_length(payload, '$.definitionWork.receipts')) AS stagedCompleted,
+      COALESCE(json_array_length(payload, '$.readinessWork.batches'), json_array_length(payload, '$.submissionWork.batches'), json_extract(payload, '$.retrievalWork.epicStages.batches'), json_array_length(payload, '$.definitionWork.batches')) AS stagedBatches,
+      CASE WHEN json_type(payload, '$.readinessWork') IS NOT NULL THEN
+        (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.readinessWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_type(r.value, '$.response.clarificationRead') IS NOT NULL OR json_type(r.value, '$.response.clarificationVerdict') IS NOT NULL)
+        WHEN json_type(payload, '$.submissionWork') IS NOT NULL THEN
+        (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1)
+        ELSE COALESCE(json_array_length(payload, '$.retrievalWork.epicStages.receipts'), json_array_length(payload, '$.definitionWork.receipts')) END AS stagedCompleted,
       COALESCE(json_extract(payload, '$.epicReviewReport.reviewed'), json_extract(payload, '$.gapReport.checked')) AS reviewed,
       COALESCE(json_extract(payload, '$.epicReviewReport.pending'), json_extract(payload, '$.gapReport.pending')) AS pending,
       COALESCE(json_extract(payload, '$.epicReviewReport.waiting'), json_extract(payload, '$.gapReport.waiting')) AS waiting,
@@ -1311,6 +1318,27 @@ export class ProjectStore {
       if (context.submissionStage?.planKey !== work.planKey || JSON.stringify(context.submissionIDs) !== JSON.stringify([work.submissionID])) throw new Error("Saved-response checkpoint requires its original task and plan.");
       job.submissionWork = structuredClone(work); job.context = context;
       job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 360000); this.saveJob(job);
+    }).immediate();
+  }
+
+  /** Explicit extra allowance, never a reset or an automatic retry. Metadata-only
+   * transaction binds consent to the latest exhausted task and current evidence. */
+  extendSubmissionAllowance(projectID: string, revision: number, submissionID: string, jobID: string) {
+    this.db.transaction(() => {
+      this.assertNoExecution(projectID);
+      if (this.discoveryActive(projectID)) throw new OperationConflictError("Wait for the current task before extending its allowance.");
+      const project = this.get(projectID);
+      if (project.revision !== revision) throw new StaleRevisionError();
+      const submissions = this.submissions(projectID), item = submissions.find((s) => s.id === submissionID), job = this.getJob(jobID);
+      const latest = [...this.jobs(projectID)].reverse().find((j) => j.submissionWork?.submissionID === submissionID);
+      if (!item || item.conflict || item.archivedAt || resolvedReviewAttempts(project, submissions).has(item.id) || item.status !== "needs-attention" || item.jobID !== jobID
+        || job.projectID !== projectID || job.id !== latest?.id || job.expectedRevision !== revision
+        || !["failed", "interrupted", "cancelled"].includes(job.status) || !job.submissionWork || !submissionAllowance(job.submissionWork).canExtend)
+        throw new OperationConflictError("This saved step cannot receive another allowance. Refresh its current state; no requests were granted.");
+      const work = job.submissionWork, material = submissionMaterials(project, item, work.task);
+      if (replaySubmissionStages(material, work).blocked) throw new OperationConflictError("Resolve the saved evidence conflict before requesting more allowance.");
+      (work.allowanceExtensions ??= []).push({ step: submissionAllowance(work).step, additionalRequests: 4, atRevision: revision, jobID });
+      submissionWorkSchema.parse(work); this.saveJob(job);
     }).immediate();
   }
 

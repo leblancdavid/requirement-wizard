@@ -34,6 +34,30 @@ persist. No requirement, assessment or pending saved response is resolved by thi
 read-only workflow. Indivisible or oversized supplemental evidence remains an
 explicit blocker rather than truncated input. See the [migration ledger](migrations.md#resumable-exact-design-clarification-2026-10-25).
 
+Paused clarification is also visible in **Processing & queue**, including its saved
+step counts and a dedicated **Continue clarification** button. With no unfinished
+saved input, the queue header prioritizes that continuation rather than offering
+general discovery. The request retains the exact saved task; changed evidence or a
+newer attempt rejects without silently restarting. A further bounded pause may need
+another explicit continuation. Diagnostic exports now include these stage counts,
+phase and next action instead of leaving the newer workflows unknown.
+
+When retained responses need follow-up, **Process saved responses only** is the
+primary queue action. It selects the saved inputs explicitly, performs no new
+research and cannot proceed into gap discovery or another clarification package.
+Answers need not be entered again. Concrete reconciliation answers without a narrow
+requirement scope now use the same exact-batch overflow fallback; their original
+broad authority is preserved. Question-preparation progress remains saved but its
+queue continuation is disabled until unfinished input is processed or resolved.
+
+If a saved step exhausts its four cumulative requests, ordinary processing does not
+reset it. **Review additional allowance** opens a confirmation explaining the saved
+work and scope. **Allow 4 more requests** grants at most four extra calls to that one
+unfinished step (eight total), without repeating prior retrieval/completed steps or
+starting research/gap discovery. Later steps retain their four-request limits.
+Opening the confirmation or reloading grants nothing, and extra allowance does not
+guarantee success. The exact-job consent and spend ledger survive reopening.
+
 Saved targeted review follow-up is a separate workflow: an eligible review or
 requirement-scoped answer that exceeds the ordinary 144k limit can now continue via
 saved exact read/check batches. Use **Resume processing** or **Process saved

@@ -7,13 +7,14 @@ import { ProjectStore } from "../storage/store.js";
 import { reviewFingerprint, type Analysis, type Project } from "../core/model.js";
 import { ContextBudgetError } from "../core/context.js";
 import { planExactTaskContext } from "../core/working-set.js";
-import { acceptSubmissionStage, planSubmissionStages, replaySubmissionStages, submissionMaterials, submissionStageContext, submissionStep, submissionWorkSchema } from "../core/submission-stages.js";
+import { acceptSubmissionStage, planSubmissionStages, replaySubmissionStages, recoverSubmissionPermissions, submissionAllowance, submissionDraftSchema, submissionMaterials, submissionStageContext, submissionStep, submissionWorkSchema } from "../core/submission-stages.js";
 import { DiscoveryService } from "./discovery.js";
 import { DiscoveryQueue } from "./queue.js";
 import { runSubmissionStages } from "./submission-stages.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
+import { startApp } from "../web/server.js";
 
 const empty = (): Analysis => ({ summary: "Follow up on saved review", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
 function decodeWire(input: unknown) {
@@ -35,29 +36,33 @@ function decodeWire(input: unknown) {
   };
   return decode(input);
 }
-function fixture(file = ":memory:", mode: "review" | "answer" = "review") {
+function fixture(file = ":memory:", mode: "review" | "answer" | "reconciliation" = "review", splitSupport = false) {
   const store = new ProjectStore(file);
   let p = store.create("Large saved review", "Save reports", { providerID: "openai", modelID: "fixture" });
+  if (splitSupport) for (let i = 0; i < 19; i++) p = store.note(p.id, p.revision, `Exact project rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");
   const setup = store.beginJob(p.id, p.revision).job; store.claimJob(setup.id, Date.now() + 60000);
-  store.finishJob(setup.id, { ...empty(), requirements: [{ statement: "Save reports", rationale: "Human request", acceptance: ["A report is saved"], sourceIDs: [p.sources[0]!.id], epicID: "inbox" }] });
+  store.finishJob(setup.id, { ...empty(), requirements: [{ statement: "Save reports", rationale: "Human request", acceptance: ["A report is saved"], sourceIDs: [p.sources[0]!.id, ...(splitSupport ? [p.sources.at(-1)!.id] : [])], epicID: "inbox" }] });
   p = store.get(p.id);
-  if (mode === "answer") {
+  if (mode === "reconciliation") {
+    p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", "Confirmed report policy");
+  }
+  if (mode !== "review") {
     const questions = store.beginJob(p.id, p.revision).job; store.claimJob(questions.id, Date.now() + 60000);
     store.finishJob(questions.id, { ...empty(), questions: [{ text: "Should this report save offline?", whyItMatters: "Clarify the target behavior", epicID: "inbox",
-      evidenceIDs: [p.requirements[0]!.id], options: [{ label: "Offline", consequence: "Retain the report without connectivity" }, { label: "Online", consequence: "Require connectivity" }] }] });
+      evidenceIDs: [mode === "reconciliation" ? p.sources[0]!.id : p.requirements[0]!.id], options: [{ label: "Offline", consequence: "Retain the report without connectivity" }, { label: "Online", consequence: "Require connectivity" }] }] });
     p = store.get(p.id);
   }
-  for (let i = 0; i < 19; i++) p = store.note(p.id, p.revision, `Exact project rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");
+  if (!splitSupport) for (let i = 0; i < 19; i++) p = store.note(p.id, p.revision, `Exact project rule ${i}: ${randomBytes(5000).toString("hex")}`, "project");
   const r = p.requirements[0]!;
   const item = store.enqueue(p.id, { id: randomUUID(), auto: false, research: false, input: mode === "review" ? { type: "review", requirementID: r.id,
     requirementText: r.statement, fingerprint: reviewFingerprint(r), action: "changes-requested", note: "  Save reports offline.\r\n", reviewedRevision: p.revision }
     : { type: "answer", questionID: p.questions[0]!.id, questionText: p.questions[0]!.text, sourceID: null, reviewedRevision: p.revision, answer: { kind: "answer", text: "Offline" } } });
   store.applyQueued(p.id, [item.id]); p = store.get(p.id);
   const saved = store.submissions(p.id).find((s) => s.id === item.id)!;
-  const task = { requiredEpicIDs: ["inbox"], recordIDs: [saved.appliedSourceID!, r.id, ...(mode === "answer" ? [p.questions[0]!.id] : [])], isolatedTask: true as const, submissionFollowup: true as const, expandMandatory: true as const };
+  const task = { requiredEpicIDs: ["inbox"], recordIDs: [saved.appliedSourceID!, r.id, ...(mode !== "review" ? [p.questions[0]!.id] : [])], isolatedTask: true as const, submissionFollowup: true as const, expandMandatory: true as const };
   const output = (): Analysis => ({ ...empty(), ...(mode === "review" ? { reviewResponses: [{ sourceID: saved.appliedSourceID!, text: "Offline wording updated from your saved request." }] } : {}),
-    pendingChanges: { format: 1, changes: [{ type: "revise-requirement", requirementID: r.id, statement: "Save reports offline", rationale: "Explicit human request",
-      acceptance: ["A report is saved without a network connection"], sourceIDs: [saved.appliedSourceID!], reason: "Apply the saved change request" }] } });
+    ...(mode === "reconciliation" ? { specificationUpdates: { format: 1 as const, changes: [{ type: "revise" as const, requirementID: r.id, statement: "Save reports offline", rationale: "Explicit human request", acceptance: ["A report is saved without a network connection"], sourceIDs: [saved.appliedSourceID!], reason: "Apply the saved reconciliation answer" }] } } : { pendingChanges: { format: 1, changes: [{ type: "revise-requirement", requirementID: r.id, statement: "Save reports offline", rationale: "Explicit human request",
+      acceptance: ["A report is saved without a network connection"], sourceIDs: [saved.appliedSourceID!], reason: "Apply the saved change request" }] } }) });
   return { store, project: p, item: saved, task, output };
 }
 function adapter(f: ReturnType<typeof fixture>, seen?: Set<string>) {
@@ -71,6 +76,8 @@ function adapter(f: ReturnType<typeof fixture>, seen?: Set<string>) {
       assert.deepEqual(decoded[field], p[field].filter((r) => ids.has(r.id)), "Independent expansion preserves every exact detailed record");
     for (const id of context.manifest.includedIDs) seen?.add(id);
     if (context.manifest.submissionStage!.phase === "check") return { submissionCheck: { valid: true, reason: "Frozen draft respects exact human evidence in this batch" } };
+    if (context.manifest.submissionStage!.step === 0 && !ids.has(f.project.requirements[0]!.id))
+      return { submissionEvidence: { recordIDs: [f.project.requirements[0]!.id] } };
     return context.manifest.submissionStage!.step === 0 ? f.output() : { submissionKeep: true };
   } };
 }
@@ -113,6 +120,190 @@ test("oversized scoped clarification answers retain their original scope and app
   } finally { f.store.close(); }
 });
 
+test("older unscoped reconciliation answers resume after reopen without inventing scope or reapplying human input", async () => {
+  mkdirSync(resolve(".reqwizit-state"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/unscoped-upgrade-")), file = join(directory, "projects.sqlite");
+  const f = fixture(file, "reconciliation"); let store = f.store; let queue: DiscoveryQueue | undefined;
+  try {
+    assert.equal(f.item.answerScope, undefined);
+    assert.throws(() => planExactTaskContext(f.project, f.task), ContextBudgetError);
+    f.item.status = "needs-attention"; f.item.diagnostic = "Older preflight stopped before dispatch";
+    store.saveSubmission(f.item); store.close(); store = new ProjectStore(file);
+    const original = store.submissions(f.project.id).find((s) => s.id === f.item.id)!;
+    assert.deepEqual(original, f.item);
+    queue = new DiscoveryQueue(new DiscoveryService(store, adapter(f)));
+    queue.resume(f.project.id, { processOnly: true, submissionIDs: [f.item.id], research: false }); await queue.wait(f.project.id);
+    const saved = store.submissions(f.project.id).find((s) => s.id === f.item.id)!;
+    assert.equal(saved.status, "completed", saved.diagnostic); assert.equal(saved.answerScope, undefined);
+    assert.deepEqual(saved.input, original.input); assert.equal(saved.appliedSourceID, original.appliedSourceID);
+    assert.deepEqual(store.get(f.project.id).sources, f.project.sources);
+    assert.equal(store.get(f.project.id).requirements[0]!.statement, "Save reports offline");
+    await queue.close(); queue = undefined; store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.submissions(f.project.id).find((s) => s.id === f.item.id), saved);
+  } finally { await queue?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("broad answer stages accept declared activation aliases but reject invented references", async () => {
+  for (const declared of [true, false]) {
+    const f = fixture(":memory:", "reconciliation");
+    try {
+      const job = await new DiscoveryService(f.store, { async analyze(_p, { context }) {
+        if (context.manifest.submissionStage!.phase === "check") return { submissionCheck: { valid: true, reason: "Exact answer authorizes this behavior" } };
+        if (context.manifest.submissionStage!.step) return { submissionKeep: true };
+        return { ...empty(), requirements: [{ localID: "new:offline", statement: "Retain offline report copies", rationale: "Concrete saved answer", acceptance: ["Report remains accessible offline"], epicID: "inbox", sourceIDs: [f.item.appliedSourceID!] }],
+          specificationUpdates: { format: 1, changes: [{ type: "activate", requirementID: declared ? "new:offline" : "new:missing", sourceIDs: [f.item.appliedSourceID!], reason: "Explicit saved answer" }] } };
+      } }).analyze(f.project.id, f.project.revision, { ...f.task, submissionIDs: [f.item.id] });
+      assert.equal(job.status, declared ? "completed" : "failed", job.diagnostic);
+      if (declared) assert.equal(f.store.get(f.project.id).requirements.find((r) => r.statement === "Retain offline report copies")?.status, "accepted");
+      else assert.deepEqual(f.store.get(f.project.id), f.project);
+    } finally { f.store.close(); }
+  }
+});
+
+test("real discovery prompts keep staged revision eligibility while requiring exact missing target support", () => {
+  const f = fixture(":memory:", "reconciliation", true);
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const context = submissionStageContext(m, w, empty()), target = f.project.requirements[0]!;
+    assert.ok(context.manifest.includedIDs.includes(target.id));
+    const missing = target.sourceIDs.filter((id) => !context.manifest.includedIDs.includes(id)); assert.ok(missing.length);
+    const eligible = (prompt: string) => JSON.parse(prompt.match(/Existing eligible exact IDs: (\[[^\]]*\])/u)![1]!);
+    const { submissionStage: _stage, ...manifest } = context.manifest;
+    assert.deepEqual(eligible(discoveryPrompt(f.project, { ...context, manifest })), [], "Ordinary single-request permissions remain unchanged");
+    const prompt = discoveryPrompt(f.project, context);
+    assert.match(prompt, /goals, actors and assumptions MUST be \[\]/);
+    assert.doesNotMatch(prompt, /CONTINUOUS SPECIFICATION:/, "Do not mix the ordinary/global discovery contract into staged follow-up");
+    assert.equal(submissionDraftSchema.safeParse({ ...empty(), goals: ["Unauthorized global goal"] }).success, false);
+    assert.equal(submissionDraftSchema.safeParse({ ...empty(), scopeAssessment: { confidence: "high", explanation: "Global assessment" } }).success, false);
+    assert.deepEqual(eligible(prompt), [target.id]);
+    assert.match(prompt, /staged-target-evidence-v1/); assert.match(prompt, /load every missing original sourceID/);
+    for (const id of missing) assert.ok(prompt.includes(id));
+    const job = f.store.beginJob(f.project.id, f.project.revision).job;
+    assert.throws(() => { w.attempts = 1; acceptSubmissionStage(m, w, empty(), f.output(), job); }, /supporting sources loaded/);
+    const response = { submissionEvidence: { recordIDs: missing } };
+    acceptSubmissionStage(m, w, empty(), response, job);
+    const loaded = submissionStageContext(m, w, empty()); assert.ok(missing.every((id) => loaded.manifest.includedIDs.includes(id)));
+    w.attempts = 2; assert.doesNotThrow(() => acceptSubmissionStage(m, w, empty(), f.output(), job));
+  } finally { f.store.close(); }
+});
+
+test("extra staged allowance requires explicit exact-job consent, preserves spent attempts across reopen and cannot start other work", async () => {
+  mkdirSync(resolve(".reqwizit-state"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/submission-allowance-")), file = join(directory, "projects.sqlite");
+  const f = fixture(file); let store = f.store; let app: Awaited<ReturnType<typeof startApp>> | undefined;
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const first = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(first.id, Date.now() + 60000);
+    const draft = replaySubmissionStages(m, w).draft, context = submissionStageContext(m, w, draft);
+    const loadedID = context.manifest.omittedIDs.at(-1)!;
+    w.attempts = 1; acceptSubmissionStage(m, w, draft, { submissionEvidence: { recordIDs: [loadedID] } }, first);
+    w.attempts = 4; store.checkpointSubmission(first.id, w, submissionStageContext(m, w, draft).manifest);
+    store.failJob(first.id, "failed", "Saved-response step exhausted its four-request allowance.");
+    f.item.jobID = first.id; f.item.status = "needs-attention"; store.saveSubmission(f.item);
+    const original = structuredClone(w); store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.getJob(first.id).submissionWork, original); assert.equal(submissionAllowance(original).canExtend, true);
+    const unrelated = store.enqueue(f.project.id, { id: randomUUID(), auto: false, research: false, input: { type: "note", epicID: "inbox", text: "Leave unrelated saved input waiting" } });
+    let calls = 0;
+    app = await startApp({ store, port: 0, adapter: { async analyze(p, options) {
+      calls++; assert.equal(options.research, false); assert.deepEqual(options.context.manifest.submissionIDs, [f.item.id]);
+      if (options.context.manifest.submissionStage!.step === 0) {
+        assert.ok(options.context.manifest.includedIDs.includes(loadedID), "Previously loaded evidence is not requested again");
+        assert.equal(store.getJob(store.submissions(p.id).find((s) => s.id === f.item.id)!.jobID!).submissionWork!.attempts, 5);
+      }
+      return adapter(f).analyze(p, options);
+    } } });
+    const url = `${app.origin}/api/projects/${f.project.id}/process-responses`;
+    const input = { revision: f.project.revision, submissionIDs: [f.item.id], research: false, resumeJobID: first.id, additionalRequests: 4, confirmAdditionalRequests: true };
+    const post = (body: unknown, headers: Record<string, string> = {}) => fetch(url, { method: "POST", headers: { "X-Reqwizit-Token": app!.token, "Content-Type": "application/json", Origin: app!.origin, ...headers }, body: JSON.stringify(body) });
+    assert.equal((await post(input, { "X-Reqwizit-Token": "wrong" })).status, 403);
+    assert.equal((await post(input, { Origin: "https://foreign.example" })).status, 403);
+    assert.equal((await post({ ...input, revision: input.revision + 1 })).status, 409);
+    for (const body of [{ ...input, confirmAdditionalRequests: false }, { ...input, resumeJobID: undefined }, { ...input, additionalRequests: 8 },
+      { ...input, research: true }, { ...input, submissionIDs: [f.item.id, unrelated.id] }]) assert.equal((await post(body)).status, 400);
+    assert.equal(calls, 0); assert.deepEqual(store.getJob(first.id).submissionWork, original, "Rejected consent cannot modify allowance");
+    assert.equal((await post(input)).status, 202);
+    for (let i = 0; i < 200; i++) {
+      const response = await fetch(`${app.origin}/api/projects/${f.project.id}`, { headers: { "X-Reqwizit-Token": app.token } });
+      if (!(await response.json() as { active: boolean }).active) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const saved = store.submissions(f.project.id).find((s) => s.id === f.item.id)!, result = store.getJob(saved.jobID!);
+    assert.equal(saved.status, "completed", saved.diagnostic); assert.equal(calls, w.batches.length * 2);
+    assert.deepEqual(result.submissionWork!.receipts[0], original.receipts[0]);
+    assert.equal(result.submissionWork!.receipts[1]!.attempt, 5);
+    assert.ok(result.submissionWork!.receipts.filter((r) => r.step > 0).every((r) => r.attempt <= 4));
+    const portable = decodePortable(renderWorkspace(store.get(f.project.id), undefined,
+      continuationState(store.get(f.project.id), store.jobs(f.project.id), store.submissions(f.project.id), (revision) => store.get(f.project.id, revision))), f.project.model);
+    assert.deepEqual(portable.continuation.jobs.find((j) => j.id === result.id)!.submissionWork, result.submissionWork);
+    assert.deepEqual(store.submissions(f.project.id).find((s) => s.id === unrelated.id), unrelated);
+    assert.equal((await post({ ...input, revision: store.get(f.project.id).revision })).status, 409, "A grant cannot be consumed twice");
+    await app.close(); app = undefined;
+    store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.getJob(result.id).submissionWork, result.submissionWork);
+    const duplicate = structuredClone(result.submissionWork!); duplicate.allowanceExtensions!.push({ ...duplicate.allowanceExtensions![0]! });
+    assert.throws(() => replaySubmissionStages(submissionMaterials(f.project, f.item, duplicate.task), duplicate), /additional request grant/);
+    assert.throws(() => submissionWorkSchema.parse({ ...result.submissionWork, allowanceExtensions: [{ ...result.submissionWork!.allowanceExtensions![0], additionalRequests: 99 }] }), /Invalid literal/);
+  } finally { await app?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("legacy empty-permission blocker recovers after reopen without replaying completed reads or resetting attempts", async () => {
+  mkdirSync(resolve(".reqwizit-state"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/permission-upgrade-")), file = join(directory, "projects.sqlite");
+  const f = fixture(file, "reconciliation", true); let store = f.store;
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const first = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(first.id, Date.now() + 60000);
+    w.attempts = 1; const firstDraft = acceptSubmissionStage(m, w, replaySubmissionStages(m, w).draft, empty(), first).draft;
+    const blockedContext = submissionStageContext(m, w, firstDraft);
+    w.attempts = 2; acceptSubmissionStage(m, w, firstDraft, { submissionBlocked: { reason: "No existing targets were listed as eligible for revision; no new product choice is needed" } }, first);
+    for (const receipt of w.receipts) delete receipt.permissionPolicy;
+    const original = structuredClone(w);
+    store.checkpointSubmission(first.id, w, blockedContext.manifest); store.failJob(first.id, "failed", "Legacy permissions blocker");
+    store.close(); store = new ProjectStore(file);
+    const reopened = store.getJob(first.id); assert.deepEqual(reopened.submissionWork, original);
+    let calls = 0;
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      calls++; assert.ok(context.manifest.submissionStage!.step >= 1, "Completed first read must not repeat");
+      if (context.manifest.submissionStage!.phase === "check") return { submissionCheck: { valid: true, reason: "Frozen update preserves all exact evidence" } };
+      if (context.manifest.submissionStage!.step !== 1) return { submissionKeep: true };
+      const missing = f.project.requirements[0]!.sourceIDs.filter((id) => !context.manifest.includedIDs.includes(id));
+      if (missing.length) return { submissionEvidence: { recordIDs: missing } };
+      return f.output();
+    } }).analyze(f.project.id, f.project.revision, { ...f.task, submissionIDs: [f.item.id] });
+    assert.equal(result.status, "completed", result.diagnostic);
+    assert.equal(calls, original.batches.length * 2, "Only unfinished reads/checks plus the new support load ran");
+    assert.deepEqual(result.submissionWork!.receipts.slice(0, 2), original.receipts);
+    assert.equal(result.submissionWork!.receipts[2]!.attempt, 3); assert.equal(result.submissionWork!.receipts[3]!.attempt, 4);
+    assert.equal(result.submissionWork!.permissionRecovery?.receiptIndex, 1);
+    const receiptFiles = renderWorkspace(store.get(f.project.id), undefined,
+      continuationState(store.get(f.project.id), store.jobs(f.project.id), store.submissions(f.project.id), (revision) => store.get(f.project.id, revision)));
+    const portable = decodePortable(receiptFiles, f.project.model);
+    assert.deepEqual(portable.continuation.jobs.find((j) => j.id === result.id)!.submissionWork, result.submissionWork);
+    assert.throws(() => submissionWorkSchema.parse({ ...result.submissionWork,
+      permissionRecovery: { ...result.submissionWork!.permissionRecovery, format: 99 } }), /Invalid literal/);
+    assert.deepEqual(store.getJob(first.id).submissionWork, original, "Never overwrite the old blocker ledger");
+    assert.equal(store.get(f.project.id).requirements[0]!.statement, "Save reports offline");
+    store.close(); store = new ProjectStore(file); assert.deepEqual(store.getJob(result.id).submissionWork, result.submissionWork);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("permission recovery cannot clear semantic verdicts, corrected-prompt blockers, or exhausted allowances", () => {
+  const f = fixture(":memory:", "reconciliation", true);
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), initial = planSubmissionStages(m), job = f.store.beginJob(f.project.id, f.project.revision).job;
+    const modern = structuredClone(initial), draft = replaySubmissionStages(m, initial).draft; modern.attempts = 1;
+    acceptSubmissionStage(m, modern, draft, { submissionBlocked: { reason: "The original human rules genuinely conflict" } }, job);
+    assert.ok(recoverSubmissionPermissions(m, modern, job).blocked); assert.equal(modern.permissionRecovery, undefined);
+    const exhausted = structuredClone(modern); delete exhausted.receipts[0]!.permissionPolicy; exhausted.attempts = 4;
+    recoverSubmissionPermissions(m, exhausted, job); assert.equal(exhausted.attempts, 4, "A repair never refunds spent requests");
+    const check = structuredClone(initial);
+    while (submissionStep(check) < check.batches.length) { check.attempts = 1; acceptSubmissionStage(m, check, draft, { submissionKeep: true }, job); }
+    check.attempts = 1; acceptSubmissionStage(m, check, draft, { submissionCheck: { valid: false, reason: "Frozen draft conflicts with human evidence" } }, job);
+    for (const r of check.receipts) delete r.permissionPolicy;
+    assert.ok(recoverSubmissionPermissions(m, check, job).blocked); assert.equal(check.permissionRecovery, undefined);
+  } finally { f.store.close(); }
+});
+
 test("file-backed saved review resumes explicitly, retains receipt hashes/attempts and round-trips portable checkpoints", async () => {
   mkdirSync(resolve(".reqwizit-state"), { recursive: true });
   const directory = mkdtempSync(resolve(".reqwizit-state/submission-stage-upgrade-")), file = join(directory, "projects.sqlite");
@@ -122,6 +313,11 @@ test("file-backed saved review resumes explicitly, retains receipt hashes/attemp
     const paused = await runSubmissionStages(store, adapter(f), f.project, first, f.item, f.task,
       { signal: new AbortController().signal, research: false, limits: { requests: 1, durationMs: 60000 } });
     assert.equal(paused.status, "interrupted"); assert.equal(paused.submissionWork!.receipts.length, 1);
+    const diagnostic = store.discoveryDiagnostics(f.project.id, [first.id]).runs[0]!;
+    assert.equal(diagnostic.policy, "exact-submission-batches-v1");
+    assert.equal(diagnostic.savedWork.completedBatches, 1);
+    assert.equal(diagnostic.savedWork.totalSteps, paused.submissionWork!.batches.length * 2);
+    assert.equal(diagnostic.savedWork.continuationAction, "process-saved-responses");
     assert.deepEqual(store.get(f.project.id), f.project);
     store.close(); store = new ProjectStore(file);
     assert.deepEqual(store.getJob(first.id).submissionWork, paused.submissionWork);
@@ -253,6 +449,8 @@ test("exact cross-batch loading preserves wire receipts; oversized supplemental 
       assert.equal(job.status, oversized ? "failed" : "completed", job.diagnostic);
       assert.equal(job.submissionWork!.receipts[0]!.attempt, 1);
       assert.deepEqual(job.submissionWork!.receipts[0]!.response, { submissionEvidence: { recordIDs: extra } });
+      assert.equal(f.store.discoveryDiagnostics(f.project.id, [job.id]).runs[0]!.savedWork.completedBatches,
+        oversized ? 0 : job.submissionWork!.batches.length * 2, "Retrieval receipts are not completed read/check steps");
       if (oversized) {
         assert.equal(calls, 1); assert.match(job.diagnostic!, /supplemental.*earlier requests.*remain saved/);
         assert.deepEqual(f.store.get(f.project.id), f.project);

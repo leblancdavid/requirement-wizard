@@ -376,6 +376,10 @@ test("file-backed clarification pauses, reopens and reuses completed steps acros
     const reopened = new ProjectStore(file);
     try {
       assert.equal(readinessStep(reopened.getJob(first.id).readinessWork!), 1);
+      const saved = reopened.getJob(first.id), report = reopened.discoveryDiagnostics(f.project.id, [first.id]).runs[0]!;
+      assert.equal(report.policy, "exact-readiness-batches-v1"); assert.equal(report.savedWork.completedBatches, 1);
+      assert.equal(report.savedWork.totalSteps, first.readinessWork!.batches.length * 2);
+      assert.deepEqual(reopened.getJob(first.id), saved, "Exporting older saved progress after reopen cannot rewrite it");
       const b = start(reopened);
       // Optimistic revision alone does not change semantic evidence or receipt hashes.
       const metadata = structuredClone(b.project); metadata.revision++;
@@ -609,4 +613,40 @@ test("indexed retention rejects forged indexes, unloaded new citations and quest
     assert.deepEqual(replayReadinessStages(f.project, f.materials, f.work).draft, kept);
     assert.throws(() => readinessWorkSchema.parse({ ...f.work, indexedRead: { format: 2, fromReceipt: 0 } }), /Invalid literal/);
   } finally { f.store.close(); }
+});
+
+test("explicit clarification continuation is bound to the latest saved task and never starts general discovery", async () => {
+  for (const changed of [false, true]) {
+    const f = fixture(); let calls = 0; let queue: DiscoveryQueue | undefined;
+    try {
+      const task = definitionQuestionTask(f.project, "reports"), job = f.store.beginJob(f.project.id, f.project.revision).job;
+      f.store.claimJob(job.id, Date.now() + 60000);
+      const paused = await runReadinessStages(f.store, { async analyze() { return empty(); } }, f.project, job, task,
+        { signal: new AbortController().signal, limits: { requests: 1, durationMs: 60000 } });
+      assert.equal(paused.status, "interrupted");
+      queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(_p, { context }) {
+        calls++; assert.equal(context.manifest.readinessStage!.phase, "check", "The completed read must not repeat");
+        assert.deepEqual(context.manifest.readinessQuestions, task);
+        return { clarificationVerdict: { keepQuestions: [], summary: "No new human choice remains" } };
+      } }));
+      const other = fixture();
+      try {
+        const foreign = other.store.beginJob(other.project.id, other.project.revision).job;
+        assert.throws(() => queue!.clarifyDefinition(f.project.id, f.project.revision, "reports", foreign.id), /cannot resume/);
+      } finally { other.store.close(); }
+      if (changed) {
+        const updated = f.store.note(f.project.id, f.project.revision, "A genuinely new constraint", "reports");
+        assert.throws(() => queue!.clarifyDefinition(f.project.id, updated.revision, "reports", job.id), /current evidence/);
+        assert.equal(calls, 0);
+      } else {
+        const result = queue.clarifyDefinition(f.project.id, f.project.revision, "reports", job.id);
+        assert.equal(result.reused, false); await queue.wait(f.project.id);
+        const done = f.store.jobs(f.project.id).at(-1)!;
+        assert.equal(done.status, "completed", done.diagnostic); assert.equal(calls, 1);
+        assert.deepEqual(done.readinessWork!.receipts[0], paused.readinessWork!.receipts[0]);
+        assert.throws(() => queue!.clarifyDefinition(f.project.id, f.store.get(f.project.id).revision, "reports", job.id), /cannot resume/);
+      }
+      assert.deepEqual(f.store.getJob(job.id).readinessWork, paused.readinessWork);
+    } finally { await queue?.close(); f.store.close(); }
+  }
 });

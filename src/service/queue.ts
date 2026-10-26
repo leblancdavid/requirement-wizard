@@ -287,7 +287,7 @@ export class DiscoveryQueue {
       .finally(() => { this.active.delete(id); });
     this.active.set(id, { controller, promise, kind: "definition" });
   }
-  clarifyDefinition(id: string, revision: number, epicID: string) {
+  clarifyDefinition(id: string, revision: number, epicID: string, resumeJobID?: string) {
     this.service.store.assertNoExecution(id);
     this.service.assertCanDiscover(id);
     if (this.closing || this.isActive(id)) throw new OperationConflictError("Wait for the current task before asking for clarification.");
@@ -297,10 +297,21 @@ export class DiscoveryQueue {
     if (inputs.blocked.length) throw new OperationConflictError(`${inputs.blocked.length} related saved response(s) still need to be recorded or their input conflict resolved before this area can be clarified. Unrelated responses do not block this action. Use Process saved responses for the related area; no AI call was made.`);
     const history = [...this.service.store.jobs(id)].reverse();
     const inputKey = definitionInputKey(project, epicID);
+    if (resumeJobID) {
+      const saved = history.find((j) => j.id === resumeJobID), latest = history.find((j) => j.context?.readinessQuestions?.epicID === epicID);
+      if (!saved?.readinessWork || saved.id !== latest?.id || !["interrupted", "cancelled", "failed"].includes(saved.status)
+        || saved.context?.readinessQuestions?.epicID !== epicID || saved.context.readinessQuestions.inputKey !== inputKey)
+        throw new OperationConflictError("This clarification cannot resume against the current evidence or a newer attempt. Saved steps are retained; no model request was made. Refresh to view the latest task. Prepare new questions separately only if the decisions actually changed.");
+    }
     const latest = history.find((j) => j.context?.definitionAssessment?.epicID === epicID);
     const blocker = latest && (latest.definitionBlock || latest.definitionWork?.blocked) && latest.status !== "completed"
       && (latest.context!.definitionAssessment!.inputKey === inputKey || inputs.sourceIDs.length) ? latest : undefined;
     const task = definitionQuestionTask(project, epicID, blocker, inputs.sourceIDs);
+    if (resumeJobID) {
+      const saved = history.find((j) => j.id === resumeJobID)!;
+      if (JSON.stringify(saved.context?.readinessQuestions) !== JSON.stringify(task))
+        throw new OperationConflictError("This clarification cannot resume against the current evidence or a newer attempt. Saved steps are retained; no model request was made. Refresh to view the latest task. Prepare new questions separately only if the decisions actually changed.");
+    }
     const previous = history.find((j) => j.status === "completed"
       && JSON.stringify(j.context?.readinessQuestions) === JSON.stringify(task));
     if (previous) return { task, reused: true, result: previous.result };

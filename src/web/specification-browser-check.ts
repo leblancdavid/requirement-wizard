@@ -13,6 +13,7 @@ import { dimensions } from "../core/epics.js";
 import { definitionQuestionTask } from "../core/readiness-questions.js";
 import { runReadinessStages } from "../service/readiness-stages.js";
 import { runSubmissionStages } from "../service/submission-stages.js";
+import { submissionMaterials, replaySubmissionStages, submissionStageContext } from "../core/submission-stages.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -282,7 +283,25 @@ try {
   const beforeContinuation = calls;
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(stagedNotice).toContainText("Clarification paused"); assert.equal(calls, beforeContinuation);
-  await stagedNotice.getByRole("button", { name: "Continue clarification", exact: true }).click();
+  const waitingDecision = store.enqueue(staged.id, { id: randomUUID(), auto: false, research: false,
+    input: { type: "note", text: "Retained decision awaiting processing", epicID: "project" } });
+  await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
+  await expect(stagedNotice.getByRole("button", { name: "Continue clarification", exact: true })).toBeDisabled();
+  await expect(page.locator(".queue-header-action", { hasText: "Process saved responses only" })).toBeVisible();
+  assert.equal(calls, beforeContinuation, "Saved input priority never dispatches inference on render");
+  waitingDecision.archivedAt = new Date().toISOString(); store.saveSubmission(waitingDecision);
+  await page.reload();
+  await page.getByRole("tab", { name: /^Specification/ }).click();
+  await expect(page.locator(".queue-header-action", { hasText: "Continue clarification" })).toBeVisible();
+  await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+  const clarificationRecovery = page.getByRole("region", { name: "Saved clarification progress", exact: true });
+  await expect(clarificationRecovery).toContainText("1 / 2 exact read/check steps saved");
+  await expect(clarificationRecovery).toContainText("not general discovery");
+  await page.getByText("Advanced actions", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Resume discovery only", exact: true })).toHaveCount(0);
+  const continuationRequest = page.waitForRequest((request) => request.url().endsWith(`/api/projects/${staged.id}/clarify-definition`) && request.method() === "POST");
+  await clarificationRecovery.getByRole("button", { name: "Continue clarification", exact: true }).click();
+  assert.equal((await continuationRequest).postDataJSON().resumeJobID, workJob.id, "Continue must name the exact saved task");
   await expect(stagedNotice).toContainText("No new product question was established");
   assert.equal(calls, beforeContinuation + 1); assert.ok(sawProgress);
   // A saved targeted review can outgrow the ordinary 144k follow-up limit too.
@@ -302,7 +321,12 @@ try {
       statement: "Save reports offline", rationale: "Explicit human request", acceptance: ["Report saved without connectivity"], sourceIDs: [savedReview.appliedSourceID!], reason: "Saved review request" }] } }; } },
     followup, followupJob, savedReview, { requiredEpicIDs: ["inbox"], recordIDs: [savedReview.appliedSourceID!, target.id], isolatedTask: true, submissionFollowup: true, expandMandatory: true },
     { signal: new AbortController().signal, research: false, limits: { requests: 1, durationMs: 60000 } });
-  savedReview.jobID = followupJob.id; savedReview.status = "needs-attention"; savedReview.diagnostic = pausedReview.diagnostic;
+   const exhaustedJob = store.beginJob(followup.id, followup.revision).job; store.claimJob(exhaustedJob.id, Date.now() + 60000);
+   const exhaustedWork = structuredClone(pausedReview.submissionWork!), materials = submissionMaterials(followup, savedReview, exhaustedWork.task);
+   exhaustedWork.attempts = 4;
+   store.checkpointSubmission(exhaustedJob.id, exhaustedWork, submissionStageContext(materials, exhaustedWork, replaySubmissionStages(materials, exhaustedWork).draft).manifest);
+   store.failJob(exhaustedJob.id, "failed", "Saved-response step exhausted its four-request allowance.");
+   savedReview.jobID = exhaustedJob.id; savedReview.status = "needs-attention"; savedReview.diagnostic = "Saved-response step exhausted its four-request allowance.";
   store.saveSubmission(savedReview); store.pauseQueue(followup.id, true);
   let sawReviewProgress = false;
   await page.route(`**/api/projects/${followup.id}`, async (route) => {
@@ -316,9 +340,16 @@ try {
   await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: followup.name, exact: true }).click();
   const beforeReviewResume = calls;
   await page.reload(); assert.equal(calls, beforeReviewResume, "Opening the saved review cannot start inference");
-  await page.getByRole("button", { name: /^Processing & queue:/ }).click();
-  await page.getByText("Advanced actions", { exact: true }).click();
-  await page.getByRole("button", { name: "Process saved responses only", exact: true }).click();
+  await expect(page.locator(".queue-header-action", { hasText: "Review additional allowance" })).toBeVisible();
+  await page.getByRole("button", { name: "Review additional allowance", exact: true }).click();
+  const retained = page.getByRole("region", { name: "Additional saved-response allowance", exact: true });
+  await expect(retained).toContainText("eight total");
+  await expect(retained).toContainText("does not guarantee completion");
+  assert.equal(calls, beforeReviewResume, "Opening the allowance confirmation cannot start requests");
+  const processRequest = page.waitForRequest((request) => request.url().endsWith(`/api/projects/${followup.id}/process-responses`) && request.method() === "POST");
+  await retained.getByRole("button", { name: "Allow 4 more requests", exact: true }).click();
+  assert.deepEqual((await processRequest).postDataJSON(), { revision: followup.revision, submissionIDs: [savedReview.id], research: false,
+    resumeJobID: exhaustedJob.id, additionalRequests: 4, confirmAdditionalRequests: true });
   await expect.poll(() => store.submissions(followup.id).find((s) => s.id === savedReview.id)?.status).toBe("completed");
   assert.equal(calls - beforeReviewResume, pausedReview.submissionWork!.batches.length * 2 - 1, "The completed read was not repeated");
   assert.equal(store.get(followup.id).requirements[0]!.statement, "Save reports offline");

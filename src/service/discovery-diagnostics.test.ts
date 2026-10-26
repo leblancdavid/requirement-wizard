@@ -10,6 +10,10 @@ import { discoveryMetricsSchema } from "../core/discovery-diagnostics.js";
 import { continuationState } from "../storage/portable.js";
 import { startApp } from "../web/server.js";
 import type { Analysis } from "../core/model.js";
+import { definitionQuestionTask } from "../core/readiness-questions.js";
+import { runReadinessStages } from "./readiness-stages.js";
+import { DiscoveryMeasurement } from "./discovery-metrics.js";
+import { definitionInputKey } from "../core/definition-identity.js";
 
 const empty = (): Analysis => ({ summary: "PRIVATE model output", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 const create = (store: ProjectStore) => store.create("PRIVATE project name", "PRIVATE initial human input", { providerID: "openai", modelID: "PRIVATE-model" });
@@ -58,6 +62,45 @@ test("new discovery measures actual adapter requests and context, without record
     assert.throws(() => discoveryMetricsSchema.parse({ ...metrics, prompt: "PRIVATE" }));
     assert.throws(() => discoveryMetricsSchema.parse({ ...metrics, initialContext: { ...metrics.initialContext, sections: { "PRIVATE-key": 10 } } }));
   } finally { store.close(); }
+});
+
+test("clarification diagnostic export recovers policy and accepted progress from older saved ledgers without rewriting evidence", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let p = create(store);
+    for (let i = 0; i < 12; i++) p = store.note(p.id, p.revision, `PRIVATE decision ${i}: ${randomBytes(4000).toString("hex")}`, "project");
+    const source = store.beginJob(p.id, p.revision).job; store.claimJob(source.id, Date.now() + 60000);
+    store.attachContext(source.id, { revision: p.revision, focusEpicID: "project", characters: 0, budget: 48000, includedIDs: [p.sources[0]!.id], omittedIDs: [],
+      definitionAssessment: { format: 1, epicID: "project", inputKey: definitionInputKey(p, "project") } });
+    const blocked = store.blockDefinition(source.id, "PRIVATE unresolved choices");
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    const measurement = new DiscoveryMeasurement((value) => store.saveDiscoveryMetrics(job.id, value));
+    const paused = await runReadinessStages(store, { async analyze() { return { clarificationRead: { summary: "PRIVATE model prose", keepQuestions: [], questions: [] } }; } },
+      p, job, definitionQuestionTask(p, "project", blocked), { signal: new AbortController().signal, blockedJob: blocked, measurement, limits: { requests: 1, durationMs: 60000 } });
+    measurement.finish();
+    const before = store.getJob(job.id), report = store.discoveryDiagnostics(p.id, [job.id]), row = report.runs[0]!;
+    assert.equal(row.policy, "exact-readiness-batches-v1"); assert.equal(row.package, "package-1");
+    assert.equal(row.savedWork.stagedBatches, paused.readinessWork!.batches.length);
+    assert.equal(row.savedWork.completedBatches, 1); assert.equal(row.savedWork.attempts, 0);
+    assert.equal(row.savedWork.totalSteps, paused.readinessWork!.batches.length * 2);
+    assert.equal(row.savedWork.remainingSteps, row.savedWork.totalSteps! - 1);
+    assert.equal(row.savedWork.continuationAction, "continue-clarification");
+    assert.equal(row.measurements!.requests[0]!.response, "analysis");
+    assert.equal(row.interruptionCause, null, "Do not invent a historical pause cause from timing or request counts");
+    for (const secret of ["PRIVATE", p.id, job.id, p.sources[0]!.id, paused.readinessWork!.planKey]) assert.ok(!JSON.stringify(report).includes(secret), secret);
+    assert.deepEqual(store.getJob(job.id), before); assert.deepEqual(store.get(p.id), p);
+  } finally { store.close(); }
+});
+
+test("new clarification and saved-input response categories reveal only metadata, not returned prose", async () => {
+  const measurement = new DiscoveryMeasurement(() => {});
+  const context = { data: {}, manifest: { revision: 1, focusEpicID: null, includedIDs: [], omittedIDs: [], characters: 2, budget: 96000 } };
+  for (const [field, category] of [["clarificationRead", "analysis"], ["clarificationVerdict", "analysis"], ["clarificationEvidence", "load"], ["clarificationBlocked", "blocked"],
+    ["submissionKeep", "analysis"], ["submissionCheck", "analysis"], ["submissionEvidence", "load"], ["submissionBlocked", "blocked"]] as const) {
+    await measurement.request(async () => ({ [field]: "PRIVATE provider response" }), context, new AbortController().signal);
+    assert.equal(measurement.value.requests.at(-1)!.response, category);
+  }
+  measurement.finish(); assert.ok(!JSON.stringify(measurement.value).includes("PRIVATE"));
 });
 
 for (const outcome of ["failed", "cancelled", "stale", "malformed"] as const) test(`diagnostics retain measured ${outcome} attempts without claiming publication`, async () => {
@@ -142,7 +185,11 @@ test("legacy and interrupted measurements survive repeated reopen; future envelo
     store = new ProjectStore(path);
     assert.throws(() => store.getJob(interrupted.id)); assert.throws(() => store.discoveryDiagnostics(p.id, [interrupted.id]));
     const check = new Database(path);
-    assert.equal((check.prepare("SELECT payload FROM jobs WHERE id = ?").get(interrupted.id) as { payload: string }).payload, future); check.close();
+    assert.equal((check.prepare("SELECT payload FROM jobs WHERE id = ?").get(interrupted.id) as { payload: string }).payload, future);
+    const futureStage = JSON.stringify({ ...original, readinessWork: { format: 99, policy: "exact-readiness-batches-v1" } });
+    check.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(futureStage, interrupted.id);
+    assert.throws(() => store.discoveryDiagnostics(p.id, [interrupted.id]), /Unsupported saved clarification/);
+    assert.equal((check.prepare("SELECT payload FROM jobs WHERE id = ?").get(interrupted.id) as { payload: string }).payload, futureStage); check.close();
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 

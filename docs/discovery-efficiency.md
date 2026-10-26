@@ -1,5 +1,93 @@
 # Graph-backed discovery and current-specification contexts
 
+## Exhausted saved step: explicit, bounded additional allowance (2026-10-26)
+
+A user retry reached four cumulative attempts: evidence load, the old permissions
+blocker, another load and a draft rejected for out-of-authority global changes.
+Repeating ordinary processing cannot clear this cap. The staged prompt now has its
+own constrained draft schema instead of embedding ordinary/global discovery
+instructions. It still enforces the saved input's authority and exact evidence rules.
+
+For an eligible exhausted step, **Processing & queue → Review additional allowance →
+Allow 4 more requests** explicitly grants up to four additional calls to that step
+only (eight cumulative). Earlier attempts/receipts and loaded evidence remain;
+completed work is not repeated. Opening/reloading this confirmation grants nothing.
+Other steps keep their original limits, and other inputs, research and gap discovery
+are not included. An extended step can still fail; the grant is neither an automatic
+reset nor a completion guarantee. See [compatibility](migrations.md#explicit-extra-saved-response-requests-and-isolated-staged-prompt-2026-10-26).
+
+## Loaded targets with support in another batch (2026-10-26)
+
+A subsequent saved-input run correctly read explicit replacement intent but stopped
+because its ordinary prompt listed no accepted requirements as revision-eligible.
+The loaded targets' original supporting sources were split across evidence batches.
+This was an app-side evidence/permission projection bug, not a new product decision.
+
+Staged prompts now list eligible detailed targets whose complete support is present
+in the mandatory material, identify missing source IDs and require exact retrieval
+before new/changed updates. A candidate ID alone is not evidence or permission to
+ignore a conflicting human decision. Normal single-request permissions are unchanged.
+An older affected read blocker can be re-evaluated on **Process saved responses
+only**, retaining its original receipt and spent attempts. Corrected-prompt blockers
+and failed frozen-draft checks do not receive that recovery. Completed work is not
+repeated or reclassified as stale. See the [migration ledger](migrations.md#staged-revision-permission-evidence-loading-and-blocker-recovery-2026-10-26).
+
+## Retained reconciliation answers before more clarification (2026-10-26)
+
+Read-only inspection of the affected local project established that a completed
+clarification did not finish retained input: two concrete unscoped reconciliation
+answers were applied but size-blocked before dispatch, and another was still queued.
+The earlier fallback mistakenly required `answerScope`; questions citing human
+sources rather than requirement IDs legitimately lack that narrow scope. Repeating
+question preparation cannot substitute for processing those answers.
+
+The fallback now covers all concrete answers without manufacturing scope. The queue
+prioritizes **Process saved responses only**, sending explicit submission IDs and
+`research:false` to the processing-only API. It does not start another discovery or
+clarification package. Pending input disables queue clarification continuation;
+Design also disables continuation when related retained input remains. Saved
+clarification receipts stay intact. Review-blocker processing now sends the selected
+submission IDs instead of discarding them in favor of a general feature-level call.
+
+Pure planning reproduced the two original overflows and now fits each into 10 exact
+batches / 20 steps. This does not establish semantic completion or live-provider
+success. No personal project writes or model calls were authorized or performed.
+See [compatibility and checks](migrations.md#broad-concrete-answer-staging-and-explicit-processing-only-selection-2026-10-26).
+
+## Visible paused clarification and complete staged diagnostics (2026-10-26)
+
+A supplied metadata-only export showed its latest run **interrupted after 32
+returned adapter attempts**, with every request below the 96k context budget. It did
+not establish another oversized-context failure. Its policy and saved-work counters
+were null and every staged response was labelled `other`: the exporter predated the
+readiness/submission ledgers. Those omissions prevented identifying the exact saved
+phase, accepted progress or historical pause cause from the attachment alone. A
+returned adapter response is not proof of validation/publication.
+
+The queue now shows saved clarification steps and a direct **Continue clarification**
+action, including while browsing Specification. It does not send that task to
+general discovery. The request names the exact saved job, and the server checks that
+it is still the latest stopped task for the area's current evidence before doing
+anything. Completed requests/attempts remain saved; no response needs resubmitting.
+A large task can pause again at its existing per-action limit, requiring explicit
+continuation; step counts distinguish progress from an unchanged failure.
+
+Re-exporting now includes readiness/submission policies, anonymized plan grouping,
+accepted steps, total/remaining steps, phase and the right continuation action.
+Retrieval requests are separate from completed read/check progress. Historical
+measurements are not rewritten, missing interruption causes stay unknown, and the
+report remains metadata-only. See [upgrade compatibility](migrations.md#clarification-recovery-controls-and-diagnostic-projection-2026-10-26).
+
+Verification: **921 tests** passed (260 pretests + 661 main), as did type checking,
+UI/desktop builds and the focused Specification/browser runner. That runner now
+continues a paused clarification directly from the Specification queue, checks the
+exact saved job ID and confirms that no completed read repeats. The aggregate
+browser runner passed layout/model selection, then stopped at the existing
+**Project map** locator (`src/web/browser-check.ts:706`); later aggregate checks were
+not reached. No live model call or personal-project read/write was performed beyond
+reading the user-supplied diagnostic export. The user's actual continuation remains
+unverified; the old attachment alone cannot establish its saved accepted-step count.
+
 ## Oversized targeted saved-response follow-up (2026-10-26)
 
 A reported **168,043 / 144,000-character**, two-area failure occurred while
@@ -8,7 +96,7 @@ question generation; that questions-only workflow cannot complete a saved review
 Splitting the target requirement cannot reduce mandatory shared project evidence.
 
 The queue still isolates each response and tries the existing exact planner first.
-Targeted reviews and server-scoped concrete answers now have an overflow-only exact
+Targeted reviews and all concrete answers (including unscoped reconciliation) now have an overflow-only exact
 read/check fallback. Original input is not applied twice. Reads can draft changes
 under existing submission authority; every draft action is then checked unchanged
 against every evidence batch before anything publishes. Each request stays within

@@ -1,5 +1,205 @@
 # Data migrations and upgrade compatibility
 
+## Explicit extra saved-response requests and isolated staged prompt (2026-10-26)
+
+Source/target: existing exact-submission format-1 ledgers gain optional
+`allowanceExtensions`, each naming a step, four additional requests, consent revision
+and the exact stopped job. No SQLite schema/version, task/material/plan fingerprint,
+project revision, input/source or existing receipt rewrite. Existing ledgers without
+extensions retain four attempts per step. Receipt/attempt validation supports up to
+eight **only** for a step with one validated extension; duplicate/out-of-range grants
+reject. Up to 512 receipts cover the existing 64-step maximum at eight attempts.
+Grant records survive reopen and portable projection. Unsupported future grant
+values reject rather than resetting work; older apps cannot interpret extended
+ledgers and should not be used to downgrade them.
+
+`process-responses` accepts the optional exact `resumeJobID`,
+`additionalRequests:4` and `confirmAdditionalRequests:true` together, for one saved
+submission only with research disabled. Auth/origin/revision, selected-record and
+worker guards still apply. The immediate transaction checks the latest exhausted
+job, its submission link, current evidence and unresolved replay outcome, then
+appends one extension without refunding any spent attempts. Concurrent/repeated
+grants cannot extend the same step twice. If task startup fails after consent, the
+saved grant remains available for ordinary explicit processing; it is not granted
+again. Later steps retain their own original four-request limits. Eight attempts
+is the hard extended limit, not an automatic repeating budget.
+
+The queue exposes metadata-only attempt/limit/can-extend values and a **Review
+additional allowance** action. Opening it makes no calls. **Allow 4 more requests**
+explicitly consumes AI allowance for the named unfinished step while preserving
+loaded records and completed reads/checks. Other submissions remain waiting and no
+gap discovery or research starts. Nothing is granted on upgrade, render or reload.
+
+The reported four spent attempts comprised exact retrieval, the older permission
+blocker, more exact retrieval and a rejected out-of-authority draft. Staged prompts
+no longer embed ordinary discovery's competing/global instructions and schema.
+They use a dedicated bounded draft contract with empty global fields, no pair
+resolution, organization, research or assessment, while retaining current-source
+authority, exact support loading and all-batch checks. The persisted response parser
+is unchanged so original wire receipts remain replayable. This prevents a contract
+contradiction, not a guarantee of correct provider output or semantic completion.
+
+Tests cover prompt/schema restrictions, older exhausted ledger reopen, failed
+consent/auth/origin/revision/bulk/research requests without writes/calls, attempt 5
+after explicit consent, original receipt/retrieval reuse, later-step limits,
+selection isolation, duplicate grant rejection, portable preservation and future
+grant rejection. Read-only inspection confirmed that the personal step remains at
+four attempts with three saved receipts and is eligible to request this extension;
+no grant, personal write or live-model call was performed by the agent.
+
+Verification: **928 tests** passed (266 pretests + 662 main), the final 14 staged
+tests, type check, UI/desktop builds, focused browser and diff check. The browser
+regression opens the allowance review without requests, confirms the exact-job
+four-call grant and finishes saved work without repeating its completed read. The
+aggregate browser runner passed layout/model selection before the existing
+Project-map locator failure (`src/web/browser-check.ts:706`); later aggregate checks
+and Electron titlebar behavior remain unqualified. Actual personal-project provider
+completion has not been exercised.
+
+## Staged revision-permission evidence loading and blocker recovery (2026-10-26)
+
+Source/target: unchanged SQLite and exact-submission format-1 task/material/plan
+identities, with two additive, validated optional ledger fields. New receipts record
+`permissionPolicy: staged-target-evidence-v1`; an explicit continuation of an affected
+older ledger can add `permissionRecovery` (format 1, same policy, original receipt
+index and recovery job/revision). These fields are retained in portable continuation.
+Unknown future recovery formats/policies reject rather than replacing saved work.
+No startup rewrite, database schema bump, project revision or automatic model call
+is needed. Existing receipt response bytes, hashes, models, IDs and spent attempts
+are never rewritten. Material/context/plan hashes are deliberately unchanged.
+
+The ordinary prompt required the detailed target **and all its source records in
+the same request** before listing it as revision-eligible. Reusing this rule inside
+exact batches produced an empty permission list when a loaded accepted target had
+support in another batch. Staged prompts now distinguish candidate eligibility from
+evidence loading: target and support must belong to the complete mandatory material,
+and missing support IDs are listed for explicit retrieval. Before a new/changed
+specification update is accepted, all original target source records must actually
+be loaded in that request. Normal input boundaries, pending replacements, semantic
+conflicts, frozen-draft checks and atomic publication remain enforced. Ordinary
+single-request permissions are unchanged; this is not broader product authority.
+
+Explicit processing reconstructs and replays the old task first. Recovery applies
+only to an unmarked legacy `submissionBlocked` read receipt with the structural
+empty-permissions/missing-support gap. It records a one-time recovery marker and
+allows the **unfinished** read to be re-evaluated under corrected prompts; the old
+blocker remains in the receipt list and original job. It does not certify the draft
+or ignore a failed verification. New-policy blockers, verification conflicts,
+changed evidence/plans, malformed recovery markers and exhausted request allowances
+remain blocked. Reopen/retry preserves the marker and prior attempts; completed
+reads/checks and previous exact retrieval are reused. New-policy support validation
+is applied only to marked receipts so previously valid completed work is not made
+stale solely by this stronger per-request evidence rule. Original publication
+validation still requires the full exact evidence union for older work.
+
+Tests exercise the actual prompt builder with target support split across batches,
+the unchanged ordinary permission list, missing-source rejection/retrieval, durable
+legacy blocker recovery after reopen, preserved completed read and attempts 3/4,
+portable round-trip, future-format rejection, corrected-prompt/verification blockers
+and no allowance reset. A read-only replay of the reported personal ledger confirmed
+the structural recovery match, both reported targets in the corrected permission
+list, exact original receipts and two spent attempts preserved. No personal database
+writes, credentials or live inference were used. Actual provider completion remains
+unverified; recovery still needs an explicit processing action.
+
+Verification: **927 tests** passed (265 pretests + 662 main), plus the final 13-test
+staged-processing run with portable recovery/future-format assertions. Type check,
+UI/desktop build, focused browser continuation and diff check passed. The broader
+browser suite was not rerun for this prompt/ledger-only fix; its earlier Project-map
+locator failure and Electron titlebar gap remain unqualified. No live-provider or
+personal-project publication success is claimed.
+
+## Broad concrete-answer staging and explicit processing-only selection (2026-10-26)
+
+Source/target formats are unchanged: SQLite/job/submission JSON, format-1 exact
+submission ledgers, workspace and portable continuation. No schema bump, startup
+rewrite, fingerprint change or reset is needed. Overflow-only staging now accepts
+concrete answers with **no `answerScope`**, including older reconciliation questions
+that cite human sources/confirmations instead of direct requirement IDs. Missing
+scope stays missing; original broad authority is neither narrowed nor expanded.
+Original input, applied-source identity, completed receipts, attempts and dated
+evidence remain intact. Deferred/delegated answers and notes remain ineligible for
+this fallback. A new draft may reference its own declared `new:` IDs; undeclared IDs
+still reject, and normal publication/authorization validators remain authoritative.
+Old valid ledger/context identities are unchanged; no completed inference repeats.
+
+`POST /api/projects/:id/process-responses` explicitly selects 1–128 distinct saved
+submission UUIDs with expected revision and optional research (default false).
+Authentication/origin/worker guards apply; foreign, conflicted, archived, completed
+and resolved historical attempts reject before dispatch. The queue receives exact
+IDs and `processOnly:true`, never a general discovery request. Unselected inputs stay
+waiting. The primary browser action processes at most 128 eligible inputs without
+new research; larger queues can be processed again. Saved inputs take priority over
+question preparation; the paused clarification ledger is retained, not certified or
+deleted. Processing may still return genuine semantic conflicts for human review.
+
+Upgrade coverage uses a file-backed older unscoped preflight-blocked answer, reopen,
+processing, and repeated reopen; input/source/scope preservation and approved-rule
+revision are checked. API tests cover selection isolation, authentication/origin,
+stale revision, malformed/duplicate/foreign IDs, conflicts, archives, active work,
+completed records and no subsequent gap call. Existing staged review/answer
+continuation tests remain in place. No user-database migration or inference was run.
+
+Read-only pure planning against the two actual size-blocked saved answers reproduced
+168,043/144,000 and 164,608/144,000 ordinary contexts. Both now plan 10 exact batches
+(20 steps), retaining 221/230 mandatory records; largest planned request bodies were
+49,126/48,575 characters plus an 18,000-character draft reserve, below 96,000. This is
+preflight feasibility, not live-model or semantic-completion qualification. The
+third unapplied answer was not simulated or written to the personal database.
+
+Verification: **924 tests** passed (262 pretests + 662 main); the final activation
+reference restriction and foreign-project API case also passed in a subsequent
+35-test focused run. Type check, UI/desktop build, diff check and focused browser
+continuation passed. The browser regression checks that retained input replaces the
+clarification header action and disables Design continuation without making a call,
+then verifies exact-ID processing-only dispatch and reuse of saved work. The full
+browser runner passed layout/model selection but again stopped at the existing
+Project-map locator (`src/web/browser-check.ts:706`); later aggregate runners and
+Electron titlebar behavior remain unqualified. Personal-project processing itself
+has not been run; all personal-state access was read-only and no live model was used.
+
+## Clarification recovery controls and diagnostic projection (2026-10-26)
+
+Source/target: unchanged SQLite, job, metric format-1, workspace/portable and exact
+readiness/submission receipt formats. No schema/fingerprint bump, startup rewrite,
+project revision or inference is needed. Existing original input, receipts, wire
+hashes, model provenance and spent attempts remain exact. The action/request limits
+and publication validators are unchanged.
+
+The queue now exposes paused clarification progress and a dedicated **Continue
+clarification** action even while browsing Specification. When no saved input needs
+processing, its header prioritizes that action over general discovery. An optional
+`resumeJobID` on the authenticated, consented clarification API binds continuation to
+the latest stopped area task and its current evidence; obsolete/foreign IDs or changed
+material reject without starting a new task. This request field is not persisted and
+does not alter old task/receipt identities. Ordinary new clarification remains a
+separate explicit operation. Completed newer area attempts suppress older paused UI
+offers; opening/reloading the workspace never grants inference allowance.
+
+Diagnostic export now projects existing readiness/submission policy, anonymized plan
+group, saved attempts, accepted read/check counts, total/remaining steps, phase and
+the appropriate continuation action directly from bounded SQL metadata. Retrieval
+and blocked receipts are not counted as completed read/check steps. Older saved
+ledgers gain this visibility on re-export without any row rewrite. Existing downloaded
+exports cannot recover missing metadata themselves. Historical request categories
+already stored as `other` remain unchanged; only new measurements recognize staged
+analysis/load/blocked wrappers. Unknown historical interruption causes remain null,
+not inferred from a 32-request count. Unsupported future stage/metric formats reject
+without writing. No source prose, IDs, hashes, credentials or diagnostic messages
+are exported; added fields are allowlisted metadata only.
+
+Regression checks cover read-only projection after durable reopen, exact receipt
+retention, future-format rejection, private-value exclusion, staged response labels,
+retrieval-vs-completed counts, latest-attempt UI selection, stale/foreign continuation
+rejection and browser continuation from Specification without repeating a saved read.
+Actual user-project continuation and live-provider reasoning remain unexercised.
+
+Verification: 921 tests (260 pretests + 661 main), type checking, focused browser
+continuation, UI/desktop builds and diff check passed. Layout/model browser checks
+passed in the aggregate runner before its unchanged Project-map locator failure;
+the later aggregate runners and prior Electron titlebar gap are not claimed passing.
+Only the attached metadata export was inspected, not the user's application database.
+
 ## Oversized targeted saved-response continuation (2026-10-26)
 
 Source: existing saved/applied review submissions and requirement-scoped answers,

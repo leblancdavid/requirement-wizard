@@ -1178,7 +1178,7 @@ test("approval history keeps exact decisions without pinning unrelated accepted 
   } finally { store.close(); }
 });
 
-test("queue preflight isolates oversized responses, persists blockers, and resumes after scope changes without failed jobs", async () => {
+test("queue preflight isolates unsupported oversized notes, persists blockers, and resumes after scope changes without failed jobs", async () => {
   const store = new ProjectStore(":memory:");
   let queue: DiscoveryQueue | undefined;
   try {
@@ -1188,12 +1188,11 @@ test("queue preflight isolates oversized responses, persists blockers, and resum
       questions: [{ epicID: "new:small", text: "Small feature choice?", whyItMatters: "Independent choice",
         options: [{ label: "A", consequence: "First" }, { label: "B", consequence: "Second" }] }] });
     project = store.get(project.id);
-    const largeQuestion = project.questions[0]!, smallQuestion = project.questions.at(-1)!;
+    const smallQuestion = project.questions.at(-1)!;
     for (let i = 0; i < 13; i++) project = store.note(project.id, project.revision, String.fromCharCode(97 + i).repeat(12000), "inbox");
     const notes = project.sources.filter((s) => s.kind === "note");
     const large = store.enqueue(project.id, { id: crypto.randomUUID(), auto: false, research: false,
-      input: { type: "answer", questionID: largeQuestion.id, questionText: largeQuestion.text, sourceID: largeQuestion.sourceID,
-        answer: { kind: "answer", text: "  Retain this blocked answer exactly\r\n" } } });
+      input: { type: "note", epicID: "inbox", text: "  Retain this blocked answer exactly\r\n" } });
     const small = store.enqueue(project.id, { id: crypto.randomUUID(), auto: false, research: false,
       input: { type: "answer", questionID: smallQuestion.id, questionText: smallQuestion.text, sourceID: null,
         answer: { kind: "answer", text: "A" } } });
@@ -1240,7 +1239,7 @@ test("queue preflight isolates oversized responses, persists blockers, and resum
     assert.equal(completed.status, "completed");
     assert.equal(completed.contextBlock, undefined);
     assert.equal(completed.diagnostic, undefined);
-    assert.equal(store.get(project.id).sources.filter((s) => s.questionID === largeQuestion.id && s.text === "  Retain this blocked answer exactly\r\n").length, 1);
+    assert.equal(store.get(project.id).sources.filter((s) => s.id === blocked.appliedSourceID && s.text === "  Retain this blocked answer exactly\r\n").length, 1);
   } finally { await queue?.close(); store.close(); }
 });
 

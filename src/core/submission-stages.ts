@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { analysisSchema, type Analysis, type Job, type Project, type Submission } from "./model.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
 import { planExactTaskContext, shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure, type ContextTask } from "./working-set.js";
+import { specificationUpdateTargets } from "./specification-permissions.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
@@ -12,26 +13,46 @@ export const submissionStageResponseSchema = z.union([analysisSchema,
   z.object({ submissionKeep: z.literal(true) }).strict(),
   z.object({ submissionCheck: z.object({ valid: z.boolean(), reason: z.string().trim().min(1).max(1200) }).strict() }).strict(),
   z.object({ submissionEvidence: z.object({ recordIDs: z.array(z.string().min(1)).min(1).max(8) }).strict() }).strict(),
-  z.object({ submissionBlocked: z.object({ reason: z.string().trim().min(1).max(1200) }).strict() }).strict()]);
+   z.object({ submissionBlocked: z.object({ reason: z.string().trim().min(1).max(1200) }).strict() }).strict()]);
+/** Prompt-only constrained draft. The persisted legacy response parser stays
+ * unchanged so upgrading never rewrites earlier wire receipts. */
+export const submissionDraftSchema = analysisSchema.extend({ goals: z.tuple([]), actors: z.tuple([]), assumptions: z.tuple([]),
+  organization: z.tuple([]).optional(), assessments: z.tuple([]).optional(), researchFindings: z.tuple([]).optional(),
+  scopeAssessment: z.undefined().optional(), resolutionCheck: z.undefined().optional(),
+  refinements: z.array(analysisSchema.shape.refinements.unwrap().element.omit({ resolution: true })).max(10).optional(),
+  reviewChanges: z.array(z.discriminatedUnion("type", [analysisSchema.shape.reviewChanges.unwrap().element.options[0],
+    analysisSchema.shape.reviewChanges.unwrap().element.options[1]])).max(30).optional() });
 export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-submission-batches-v1"), submissionID: z.string().uuid(),
   task: taskSchema, materialKey: key, planKey: key, batches: z.array(z.array(z.string()).min(1)).min(1).max(32),
-  attempts: z.number().int().min(0).max(4), receipts: z.array(z.object({ step: z.number().int().min(0).max(63),
-    contextKey: key, attempt: z.number().int().min(1).max(4), atRevision: z.number().int().positive(), jobID: z.string().min(1),
-    model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: submissionStageResponseSchema }).strict()).max(256) }).strict();
+   attempts: z.number().int().min(0).max(8), receipts: z.array(z.object({ step: z.number().int().min(0).max(63),
+     contextKey: key, attempt: z.number().int().min(1).max(8), atRevision: z.number().int().positive(), jobID: z.string().min(1),
+     model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: submissionStageResponseSchema,
+     permissionPolicy: z.literal("staged-target-evidence-v1").optional() }).strict()).max(512),
+  permissionRecovery: z.object({ format: z.literal(1), policy: z.literal("staged-target-evidence-v1"), receiptIndex: z.number().int().nonnegative(),
+    atRevision: z.number().int().positive(), jobID: z.string().min(1) }).strict().optional(),
+  allowanceExtensions: z.array(z.object({ step: z.number().int().min(0).max(63), additionalRequests: z.literal(4),
+    atRevision: z.number().int().positive(), jobID: z.string().min(1) }).strict()).max(64).optional() }).strict();
 export type SubmissionWork = z.infer<typeof submissionWorkSchema>;
 const complete = (r: z.infer<typeof submissionStageResponseSchema>) => "questions" in r || "submissionKeep" in r || "submissionCheck" in r && r.submissionCheck.valid;
 export const submissionStep = (w: SubmissionWork) => w.receipts.filter((r) => complete(r.response)).length;
 export const submissionProgress = (w: SubmissionWork) => ({ completed: submissionStep(w), total: w.batches.length * 2,
-  phase: submissionStep(w) >= w.batches.length * 2 ? "complete" as const : submissionStep(w) < w.batches.length ? "read" as const : "check" as const });
+   phase: submissionStep(w) >= w.batches.length * 2 ? "complete" as const : submissionStep(w) < w.batches.length ? "read" as const : "check" as const });
+export const submissionRequestLimit = (w: SubmissionWork, step = submissionStep(w)) => w.allowanceExtensions?.some((g) => g.step === step) ? 8 : 4;
+export function submissionAllowance(w: SubmissionWork) {
+  const step = submissionStep(w), limit = submissionRequestLimit(w), last = w.receipts.at(-1);
+  const blocked = last && ("submissionCheck" in last.response && !last.response.submissionCheck.valid
+    || "submissionBlocked" in last.response && w.permissionRecovery?.receiptIndex !== w.receipts.length - 1);
+  return { step, attempts: w.attempts, limit, canExtend: step < w.batches.length * 2 && w.attempts === 4 && limit === 4 && !blocked };
+}
 const empty = (): Analysis => ({ summary: "Saved response follow-up in progress", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 export const canStageSubmission = (s: Submission | undefined): s is Submission => !!s?.applied && !!s.appliedSourceID && !s.conflict
   && !["completed", "superseded"].includes(s.status)
-  && (s.input.type === "review" || s.input.type === "answer" && !!s.answerScope && s.input.answer.kind === "answer");
+  && (s.input.type === "review" || s.input.type === "answer" && s.input.answer.kind === "answer");
 
 /** Only new overflow work uses this policy; never reconstruct older completed jobs differently. */
 export function submissionMaterials(project: Project, item: Submission, input: ContextTask, overflow?: ContextBudgetError) {
   if (!canStageSubmission(item) || item.projectID !== project.id || project.sources.some((s) => s.supersedes === item.appliedSourceID))
-    throw new Error("Staged follow-up requires current, already saved targeted human input.");
+    throw new Error("Staged follow-up requires a current saved review or concrete answer.");
   const task = taskSchema.parse({ ...(input.focusEpicID !== undefined ? { focusEpicID: input.focusEpicID } : {}),
     ...(input.requiredEpicIDs !== undefined ? { requiredEpicIDs: input.requiredEpicIDs } : {}), recordIDs: input.recordIDs,
     isolatedTask: true, submissionFollowup: true, expandMandatory: true });
@@ -50,7 +71,7 @@ export function submissionMaterials(project: Project, item: Submission, input: C
     areas: project.epics.filter((e) => manifest.epicIDs?.includes(e.id)),
     submission: { id: item.id, input: item.input, appliedSourceID: item.appliedSourceID, answerScope: item.answerScope, decisionBasis: item.decisionBasis },
     instruction: "Original human input is already saved; do not apply it again. Follow up only on this submission. Human evidence and conflicting decisions are authoritative, drafts are not. Never choose precedence between conflicting human decisions. Other mandatory records are read and checked separately; no partial changes publish. No tools, research, whole-area assessment, organization, archive-feature or global interpretation changes. Links/available IDs are navigation only, not reviewed evidence. Request exact records when needed; never infer from missing evidence." };
-  return { base, records, pins, evidenceIDs, task, submissionID: item.id, revision: project.revision,
+  return { project, base, records, pins, evidenceIDs, task, submissionID: item.id, revision: project.revision,
     materialKey: hash({ base, records, pins: [...pins], task }) };
 }
 export type SubmissionMaterials = ReturnType<typeof submissionMaterials>;
@@ -98,7 +119,7 @@ export function planSubmissionStages(m: SubmissionMaterials): SubmissionWork {
   }
   return w;
 }
-function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw: unknown) {
+function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw: unknown, requireTargetSupport = false) {
   if ((JSON.stringify(raw)?.length ?? 0) > draftLimit) throw new Error("Saved-response output exceeds its bounded reserve; no output was truncated or applied.");
   const response = submissionStageResponseSchema.parse(raw), context = submissionStageContext(m, w, draft);
   if ("submissionEvidence" in response) {
@@ -126,8 +147,16 @@ function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw:
     throw new Error("Saved-response draft declarations require unique nonempty new: aliases, or omit localID. No checked stage was published.");
   validateReadyDraft(response);
   const loaded = new Set(context.manifest.includedIDs), areas = new Set(m.base.areas.map((e) => e.id));
+  for (const change of requireTargetSupport ? response.specificationUpdates?.changes ?? [] : []) {
+    if (draft.specificationUpdates?.changes.some((old) => JSON.stringify(old) === JSON.stringify(change))) continue;
+    const target = m.records.find((r) => r.field === "requirements" && r.record.id === change.requirementID)?.record;
+    if (target && "sourceIDs" in target && target.sourceIDs.some((id) => !loaded.has(id)))
+      throw new Error("A changed specification target requires all original supporting sources loaded in this request; request submissionEvidence first.");
+  }
   const references = (value: unknown, field = ""): void => {
-    if (typeof value === "string" && (field === "epicID" ? !areas.has(value) : field !== "localID" && (field.endsWith("ID") || field.endsWith("IDs")) && !loaded.has(value)))
+    const declaredTarget = field === "requirementID" && response.requirements.some((r) => r.localID === value)
+      || field === "questionID" && response.questions.some((q) => q.localID === value);
+    if (typeof value === "string" && (field === "epicID" ? !areas.has(value) : field !== "localID" && (field.endsWith("ID") || field.endsWith("IDs")) && !loaded.has(value) && !declaredTarget))
       throw new Error("New or changed follow-up actions must reference exact evidence loaded in this request; request submissionEvidence first.");
     if (Array.isArray(value)) value.forEach((v) => references(v, field));
     else if (value && typeof value === "object") Object.entries(value).forEach(([k, v]) => references(v, k));
@@ -146,6 +175,9 @@ function accept(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw:
 }
 export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork) {
   submissionWorkSchema.parse(w);
+  const grants = w.allowanceExtensions ?? [];
+  if (new Set(grants.map((g) => g.step)).size !== grants.length || grants.some((g) => g.step >= w.batches.length * 2))
+    throw new Error("Invalid saved-response additional request grant.");
   if (w.materialKey !== m.materialKey || w.submissionID !== m.submissionID || JSON.stringify(w.task) !== JSON.stringify(m.task)
     || w.planKey !== hash([w.policy, w.materialKey, w.batches])) throw new Error("Saved response evidence or stage plan changed; completed calls were retained, not repeated.");
   const expected = m.evidenceIDs.filter((id) => !m.pins.has(id)), actual = w.batches.flat().filter((id) => !m.pins.has(id));
@@ -153,18 +185,47 @@ export function replaySubmissionStages(m: SubmissionMaterials, w: SubmissionWork
     || w.batches.flat().some((id) => !m.evidenceIDs.includes(id))) throw new Error("Saved-response batches must cover every mandatory record exactly once.");
   const prefix = { ...w, receipts: [] as SubmissionWork["receipts"], attempts: 0 };
   let draft = empty(), blocked: string | undefined, priorAttempt = 0;
-  for (const r of w.receipts) {
-    if (blocked || r.step !== submissionStep(prefix) || r.attempt <= priorAttempt || r.contextKey !== hash(submissionStageContext(m, prefix, draft).data)) throw new Error("Invalid saved-response transition; no completed call repeated.");
-    const next = accept(m, prefix, draft, r.response); draft = next.draft; blocked = next.blocked;
+  for (const [index, r] of w.receipts.entries()) {
+    if (blocked || r.step !== submissionStep(prefix) || r.attempt > submissionRequestLimit(w, r.step) || r.attempt <= priorAttempt || r.contextKey !== hash(submissionStageContext(m, prefix, draft).data)) throw new Error("Invalid saved-response transition; no completed call repeated.");
+    const next = accept(m, prefix, draft, r.response, !!r.permissionPolicy); draft = next.draft; blocked = next.blocked;
+    if (w.permissionRecovery?.receiptIndex === index) {
+      if (!blocked || r.permissionPolicy || !("submissionBlocked" in r.response) || !hasSubmissionPermissionGap(m, prefix, draft))
+        throw new Error("Saved permission recovery does not match an affected legacy read blocker.");
+      blocked = undefined;
+    }
     priorAttempt = complete(r.response) ? 0 : r.attempt; prefix.receipts.push(r);
   }
-  if (w.attempts < priorAttempt || submissionStep(w) > w.batches.length * 2) throw new Error("Invalid saved-response attempt accounting.");
+  if (w.attempts < priorAttempt || w.attempts > submissionRequestLimit(w) || submissionStep(w) > w.batches.length * 2) throw new Error("Invalid saved-response attempt accounting.");
+  if (w.permissionRecovery && w.permissionRecovery.receiptIndex >= w.receipts.length) throw new Error("Saved permission recovery is missing its original receipt.");
   return { draft, blocked };
 }
+
+/** Detect the old empty-permissions bug structurally, never by interpreting blocker prose. */
+function hasSubmissionPermissionGap(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis) {
+  if (submissionStep(w) >= w.batches.length) return false;
+  const context = submissionStageContext(m, w, draft), included = context.manifest.includedIDs;
+  const input = m.base.submission.input;
+  const targetIDs = input.type === "review" ? new Set([input.requirementID])
+    : m.base.submission.answerScope ? new Set(m.base.submission.answerScope.requirementIDs) : undefined;
+  return specificationUpdateTargets(m.project, included, included, targetIDs).length === 0
+    && specificationUpdateTargets(m.project, included, m.evidenceIDs, targetIDs).length > 0;
+}
+
+/** Explicit continuation only. Preserve the terminal blocker, all earlier receipts
+ * and spent attempts; re-evaluate the same unfinished read under corrected prompts. */
+export function recoverSubmissionPermissions(m: SubmissionMaterials, w: SubmissionWork, job: Job) {
+  const replay = replaySubmissionStages(m, w), last = w.receipts.at(-1);
+  if (!replay.blocked || w.permissionRecovery || !last || last.permissionPolicy || !("submissionBlocked" in last.response)) return replay;
+  const prefix = { ...w, receipts: w.receipts.slice(0, -1) }, prior = replaySubmissionStages(m, { ...prefix, attempts: w.attempts });
+  if (!hasSubmissionPermissionGap(m, prefix, prior.draft)) return replay;
+  w.permissionRecovery = { format: 1, policy: "staged-target-evidence-v1", receiptIndex: w.receipts.length - 1, atRevision: m.revision, jobID: job.id };
+  return replaySubmissionStages(m, w);
+}
 export function acceptSubmissionStage(m: SubmissionMaterials, w: SubmissionWork, draft: Analysis, raw: unknown, job: Job) {
-  const context = submissionStageContext(m, w, draft), next = accept(m, w, draft, raw);
+  const context = submissionStageContext(m, w, draft), next = accept(m, w, draft, raw, true);
   w.receipts.push({ step: submissionStep(w), contextKey: hash(context.data), attempt: w.attempts,
-    atRevision: m.revision, jobID: job.id, model: { providerID: job.model.providerID, modelID: job.model.modelID }, response: next.response });
+    atRevision: m.revision, jobID: job.id, model: { providerID: job.model.providerID, modelID: job.model.modelID }, response: next.response,
+    permissionPolicy: "staged-target-evidence-v1" });
   if (complete(next.response)) w.attempts = 0;
   return next;
 }

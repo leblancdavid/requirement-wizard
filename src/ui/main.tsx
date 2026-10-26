@@ -1,6 +1,8 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
+import { pausedClarification, processableSavedResponses } from "./clarification-recovery.js";
+import { definitionClarificationInputs } from "../core/definition-clarification-inputs.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import { captureAnswerScope } from "../core/input-scope.js";
 import type { coverage } from "../core/coverage.js";
@@ -8,7 +10,7 @@ import { dimensionLabels } from "../core/epics.js";
 import "./appearance.css";
 import "./review.css";
 import "./action-button.css";
-import { ReviewQueue, reviewItems, reviewProcessingScope, type ReviewDraft } from "./review.js";
+import { ReviewQueue, reviewItems, type ReviewDraft } from "./review.js";
 import { Pagination, PagedList, usePagination } from "./pagination.js";
 import "./pagination.css";
 import { ProcessingQueue } from "./processing-queue.js";
@@ -304,6 +306,11 @@ function App() {
   }
   async function resumeDiscovery() {
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before resuming.");
+    const saved = pausedClarification(data?.jobs ?? []);
+    const unfinished = data?.submissions.some((s) => !s.archivedAt && !resolvedAttempts.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
+    if (saved?.context?.readinessQuestions && !unfinished) {
+      await clarifyDefinition(saved.context.readinessQuestions.epicID, saved.id); return;
+    }
     if (project) await api(`projects/${project.id}/resume-discovery`, { revision: project.revision, questionTarget,
       research: project.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
   }
@@ -371,13 +378,16 @@ function App() {
     ? expandedQuestion : questionFilter === "open" ? pagedQuestions[0]?.id ?? null : null;
   useEffect(() => {
     if (!project || definitionClarification?.projectID === project.id) return;
-    const saved = [...(data?.jobs ?? [])].reverse().find((job) => job.readinessProgress && job.status !== "completed" && job.context?.readinessQuestions);
+    const saved = pausedClarification(data?.jobs ?? []) ?? [...(data?.jobs ?? [])].reverse().find((job) => job.readinessProgress && job.status === "running" && job.context?.readinessQuestions);
     if (saved?.context?.readinessQuestions) setDefinitionClarification({ projectID: project.id, task: saved.context.readinessQuestions, reused: false });
   }, [project?.id, data?.jobs, definitionClarification?.projectID]);
   const clarificationJob = definitionClarification?.projectID === project?.id ? [...(data?.jobs ?? [])].reverse()
     .find((job) => JSON.stringify(job.context?.readinessQuestions) === JSON.stringify(definitionClarification?.task)) : undefined;
   const clarificationResult = clarificationJob?.result ?? definitionClarification?.result;
   const clarificationFinished = clarificationJob?.status === "completed" || definitionClarification?.reused;
+  const clarificationInput = useMemo(() => project && data && definitionClarification?.projectID === project.id
+    ? definitionClarificationInputs(project, definitionClarification.task.epicID, data.submissions) : undefined, [project, data?.submissions, definitionClarification]);
+  const clarificationNeedsProcessing = !!clarificationInput && (clarificationInput.blocked.length > 0 || clarificationInput.sourceIDs.length > 0);
   useEffect(() => {
     if (!project || definitionClarification?.projectID !== project.id || !clarificationFinished) return;
     const token = JSON.stringify(definitionClarification.task);
@@ -393,6 +403,7 @@ function App() {
     return [...executionIndex.requirements.values()].filter((r) => !deliveredRequirement(project, evaluation, r.id, executionIndex)).length;
   }, [project, evaluation, executionIndex]);
   const lastJob = data?.jobs.at(-1);
+  const pausedQuestions = pausedClarification(data?.jobs ?? []);
   const responseStatus = (questionID: string) => [...(data?.submissions ?? [])].reverse().find((item) => item.input.type === "answer" && item.input.questionID === questionID && ["queued", "processing"].includes(item.status))?.status;
   const inspectRepository = useCallback(() => api<WorkspaceRepository>(`projects/${project?.id}/execution-repository`), [project?.id]);
   const implementationAction = useCallback((name: string, body: Record<string, unknown>) => act(async () => {
@@ -409,8 +420,18 @@ function App() {
   const processBlocking = (ids: string[]) => void act(async () => {
     if (!project || !data) return;
     if (connectionChanged) throw new Error("Save your connection and model selection in Settings before processing.");
-    await api(`projects/${project.id}/analyze`, { revision: project.revision, research: project.model.connectionID ? false : research, ...reviewProcessingScope(project, data.submissions, ids) });
+    await api(`projects/${project.id}/process-responses`, { revision: project.revision, submissionIDs: ids, research: project.model.connectionID ? false : research });
   });
+  const processSavedResponses = () => void act(async () => {
+    if (!project || !data) return;
+    await api(`projects/${project.id}/process-responses`, { revision: project.revision,
+      submissionIDs: processableSavedResponses(project, data.submissions).slice(0, 128).map((s) => s.id), research: false });
+  }, "Processing saved answers without new research…");
+  const extendSavedResponse = (submissionID: string, resumeJobID: string) => void act(async () => {
+    if (!project) return;
+    await api(`projects/${project.id}/process-responses`, { revision: project.revision, submissionIDs: [submissionID], research: false,
+      resumeJobID, additionalRequests: 4, confirmAdditionalRequests: true });
+  }, "Continuing the saved step with four explicitly authorized additional requests…");
   const renderClarification = (question: Project["questions"][number]) => {
     if (!project || !data) return null;
     const submission = [...data.submissions].reverse().find((s) => s.input.type === "answer" && s.input.questionID === question.id && !s.conflict && ["queued", "saved", "processing", "needs-attention"].includes(s.status)
@@ -419,12 +440,12 @@ function App() {
     const source = project.sources.find((s) => s.id === question.sourceID);
     return <QuestionCard key={`${project.id}:review:${question.id}:${question.sourceID ?? "new"}`} inline question={question} area={areaTitle(epics.find((e) => e.id === question.epicID))} expanded={true} onToggle={() => {}} onCancel={() => { drafts.current.delete(question.id); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={source?.text} initialKind="answer" number={0} disabled={sending.includes(question.id)} dismissDisabled={true} onSave={(kind, text) => saveAnswer(question, kind, text)} notice={<ItemProcessingNotice error={itemErrors[question.id]} />} />;
   };
-  async function clarifyDefinition(epicID: string) {
+  async function clarifyDefinition(epicID: string, resumeJobID?: string) {
     if (!project) return;
     setPending(true);
     try {
       const result = await api<{ task: ReadinessQuestionTask; reused: boolean; result?: Job["result"] }>(`projects/${project.id}/clarify-definition`, {
-        revision: project.revision, epicID, confirmAIUsage: true,
+        revision: project.revision, epicID, confirmAIUsage: true, ...(resumeJobID ? { resumeJobID } : {}),
       });
       setDefinitionClarification({ projectID: project.id, ...result });
       setIssue(undefined); setEpicID(epicID); setQuestionFilter("open"); setExpandedQuestion(null); setTab("discover");
@@ -489,7 +510,10 @@ function App() {
         selectProject={(projectID) => { setID(projectID); setCreating(false); navigate("workspace"); }}
         settings={() => navigate("settings")} logs={() => openLogs()} reportError={setError} />
         <div className="app-header-title"><div className="app-header-title-row"><h1 ref={pageHeading} tabIndex={-1}>{showSettings ? "Settings" : creating ? opening ? "Open Reqwizit project" : "New project" : project?.name ?? "Your next idea starts here."}</h1><HeaderActivity /></div><small>{showSettings ? project && !creating ? `Settings for ${project.name} · Active connection: ${activeConnection}` : "AI connections and workspace preferences" : project && !creating ? `Active connection: ${activeConnection}` : "Local workspace"}</small></div></div>
-        {!creating && project && data && <ProcessingQueue key={project.id} project={project} jobs={data.jobs} workflow={data.workflow} configureWorkflow={configureWorkflow} openWorkflowDecision={openWorkflowDecision} maintenance={data.maintenance} configureMaintenance={configureMaintenance} maintenanceSettings={openMaintenanceSettings} openRequest={queueRequest?.projectID === project.id ? queueRequest.value : undefined} openIssue={openIssue} active={data.active} progress={data.progress} refinementProgress={data.refinementProgress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(resumeDiscovery, "Resuming processing…")} discover={() => void act(reviewEpic, "Preparing workflow evidence…")} continuationAvailable={!!lastJob?.gapContinuationAvailable} continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
+        {!creating && project && data && <ProcessingQueue key={project.id} project={project} jobs={data.jobs}
+          processSavedResponses={processSavedResponses} extendSavedResponse={extendSavedResponse}
+          clarificationJob={pausedQuestions} continueClarification={pausedQuestions?.context?.readinessQuestions ? () => void act(() => clarifyDefinition(pausedQuestions.context!.readinessQuestions!.epicID, pausedQuestions.id), "Continuing saved clarification…") : undefined}
+          workflow={data.workflow} configureWorkflow={configureWorkflow} openWorkflowDecision={openWorkflowDecision} maintenance={data.maintenance} configureMaintenance={configureMaintenance} maintenanceSettings={openMaintenanceSettings} openRequest={queueRequest?.projectID === project.id ? queueRequest.value : undefined} openIssue={openIssue} active={data.active} progress={data.progress} refinementProgress={data.refinementProgress} submissions={data.submissions} paused={data.queuePaused} lastJob={lastJob} activities={queueActivities(project, data.execution, data.implementationActive, data.helpJobs, data.implementationOperation)} stopActivity={(target) => void act(async () => { await api(`projects/${project.id}/${target.action}`, target.body); }, "Stopping background task…")} scope={selectedEpic ? areaTitle(selectedEpic) : "All project areas"} disabled={busy || connectionChanged || needsInitialization} stopDisabled={pending} error={error} resume={() => void act(resumeDiscovery, "Resuming processing…")} discover={() => void act(reviewEpic, "Preparing workflow evidence…")} continuationAvailable={!!lastJob?.gapContinuationAvailable} continueExploration={() => void act(continueExploration, "Continuing saved gap exploration…")} stop={() => void act(async () => { await api(`projects/${project.id}/cancel`, {}); }, "Stopping discovery…")} />}
         {!showSettings && project && summary && data && !creating && <ProjectProgress key={`progress:${project.id}`} progress={mapProgress!} definition={summary} project={project} jobs={data.jobs} disabled={busy || connectionChanged || needsInitialization} disabledReason={discoveryReason || (connectionChanged ? "Save your connection and model selection first." : undefined)} refreshDefinition={(focusEpicID, additionalRequests) => void act(async () => { await api(`projects/${project.id}/refresh-definition`, { revision: project.revision, ...(focusEpicID ? { focusEpicID } : {}), ...(additionalRequests?.length ? { additionalRequests, confirmAdditionalRequests: true } : {}) }); }, "Refreshing definition coverage…")} />}
         {!showSettings && project && summary && data && !creating && <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Specification"], ["implementation", "Implement"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}{key === "review" && <span title="Requirements needing a decision">{pendingReviewCount}</span>}{key === "implementation" && <span>{implementationRemaining}</span>}</button>)}</div>}
       </header>
@@ -561,7 +585,7 @@ function App() {
               {definitionClarification?.projectID === project.id && (epicID === "all" || epicID === definitionClarification.task.epicID) && <section className="save-notice" role="status" aria-label="Definition clarification">
                 {clarificationFinished ? clarificationResult?.questions.length ? <><strong>Focused questions are ready.</strong><p>Choose an answer option below or write your own answer, then save the response. Earlier decisions stay saved; asking a question does not resolve the assessment.</p></>
                   : <><strong>No new product question was established.</strong><p>{clarificationResult?.summary ?? "The findings did not establish a new choice for you. No answer or specification change is required by this result."}</p></>
-                  : clarificationJob?.readinessProgress && !data.active && ["interrupted", "cancelled", "failed"].includes(clarificationJob.status) ? <><strong>Clarification paused.</strong><p>{clarificationJob.readinessProgress.completed} / {clarificationJob.readinessProgress.total} exact read/check steps saved. No partial questions were published. Continuing uses your AI allowance; completed requests and spent attempts are retained.</p><p>{clarificationJob.diagnostic}</p><ActionButton disabled={busy || connectionChanged} onClick={() => void act(() => clarifyDefinition(definitionClarification.task.epicID), "Continuing saved clarification…")}>Continue clarification</ActionButton></>
+                  : clarificationJob?.readinessProgress && !data.active && ["interrupted", "cancelled", "failed"].includes(clarificationJob.status) ? <><strong>Clarification paused.</strong><p>{clarificationJob.readinessProgress.completed} / {clarificationJob.readinessProgress.total} exact read/check steps saved. No partial questions were published. Continuing uses your AI allowance; completed requests and spent attempts are retained.</p><p>{clarificationJob.diagnostic}</p>{clarificationNeedsProcessing && <p>Related answers are already saved. Use Process saved responses only in Processing &amp; queue, or resolve the retained input conflict there, before continuing question preparation. This ledger stays saved.</p>}<ActionButton disabled={busy || connectionChanged || clarificationNeedsProcessing} onClick={() => void act(() => clarifyDefinition(definitionClarification.task.epicID, clarificationJob.id), "Continuing saved clarification…")}>Continue clarification</ActionButton></>
                   : (clarificationJob && ["failed", "cancelled", "interrupted", "stale"].includes(clarificationJob.status) || !pending && !data.active && !clarificationJob) ? <><strong>Clarification could not finish.</strong><p>Your earlier decisions are unchanged. See Processing &amp; queue and Logs before explicitly trying again.</p></>
                     : <><strong>Preparing focused questions…</strong><p>AI is checking whether this area's findings actually need a human decision. You do not need to type a correction from assessment prose.</p></>}
                 {clarificationJob?.readinessProgress && data.active && <p>{clarificationJob.readinessProgress.phase === "read" ? "Reading exact evidence" : "Checking proposed questions"}: {clarificationJob.readinessProgress.completed} / {clarificationJob.readinessProgress.total} steps saved. No questions publish before all batches finish.</p>}

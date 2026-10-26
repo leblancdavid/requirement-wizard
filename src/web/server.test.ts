@@ -15,6 +15,48 @@ import type { ActivityPage } from "../core/project-activity.js";
 import { snapshotHeader } from "./snapshot.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 
+test("processing-only API validates local selected responses and never starts subsequent gap discovery", async () => {
+  const store = new ProjectStore(":memory:");
+  const p = store.create("Retained input", "Save reports", { providerID: "openai", modelID: "fixture" });
+  const enqueue = (text: string) => store.enqueue(p.id, { id: randomUUID(), auto: false, research: false, input: { type: "note", text, epicID: "inbox" } });
+  const first = enqueue("First retained decision"), other = enqueue("Leave this waiting");
+  const conflicted = enqueue("Human conflict"); conflicted.status = "needs-attention"; conflicted.conflict = true; store.saveSubmission(conflicted);
+  const archived = enqueue("Historical input"); archived.archivedAt = new Date().toISOString(); store.saveSubmission(archived);
+  const foreignProject = store.create("Unrelated project", "Other scope", p.model);
+  const foreign = store.enqueue(foreignProject.id, { id: randomUUID(), auto: false, research: false, input: { type: "note", text: "Foreign response", epicID: "inbox" } });
+  let calls = 0; let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const app = await startApp({ store, port: 0, adapter: { async analyze(_p, options) {
+    calls++; assert.equal(options.research, false); assert.deepEqual(options.context.manifest.submissionIDs, [first.id]);
+    await gate;
+    return analysisSchema.parse({ summary: "Saved decision processed", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+  } } });
+  const post = (input: unknown, headers: Record<string, string> = {}) => fetch(`${app.origin}/api/projects/${p.id}/process-responses`, {
+    method: "POST", headers: { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin, ...headers }, body: JSON.stringify(input) });
+  const input = { revision: p.revision, submissionIDs: [first.id] };
+  try {
+    assert.equal((await post(input, { "X-Reqwizit-Token": "wrong" })).status, 403);
+    assert.equal((await post(input, { Origin: "https://foreign.example" })).status, 403);
+    assert.equal((await post({ ...input, revision: p.revision + 1 })).status, 409);
+    for (const ids of [[], [first.id, first.id], [randomUUID()], [foreign.id], ["bad-id"]]) assert.equal((await post({ ...input, submissionIDs: ids })).status, 400);
+    for (const id of [conflicted.id, archived.id]) assert.equal((await post({ ...input, submissionIDs: [id] })).status, 409);
+    assert.equal(calls, 0);
+    assert.equal((await post(input)).status, 202);
+    assert.equal((await post({ revision: store.get(p.id).revision, submissionIDs: [other.id] })).status, 409);
+    release();
+    for (let i = 0; i < 100; i++) {
+      const response = await fetch(`${app.origin}/api/projects/${p.id}`, { headers: { "X-Reqwizit-Token": app.token } });
+      if (!(await response.json() as { active: boolean }).active) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(calls, 1, "No later gap or clarification call can follow processing");
+    const saved = store.submissions(p.id);
+    assert.equal(saved.find((s) => s.id === first.id)!.status, "completed");
+    assert.deepEqual(saved.find((s) => s.id === other.id), other, "Unselected response remains untouched");
+    assert.equal((await post({ revision: store.get(p.id).revision, submissionIDs: [first.id] })).status, 409);
+  } finally { release(); await app.close(); store.close(); }
+});
+
 test("definition clarification requires explicit local consent, targets blocked reviews, and reuses no-question results", async () => {
   const store = new ProjectStore(":memory:"); let calls = 0;
   const p = store.create("Clarify blocked answers", "Preserve the original scope", { providerID: "openai", modelID: "fixture" });
@@ -38,6 +80,9 @@ test("definition clarification requires explicit local consent, targets blocked 
     assert.equal((await post({ ...input, revision: p.revision + 1 })).status, 409);
     assert.equal((await post({ ...input, research: true })).status, 400);
     assert.equal((await post({ ...input, epicID: "missing" })).status, 400);
+    assert.equal((await post({ ...input, resumeJobID: "not-a-job-id" })).status, 400);
+    assert.equal((await post({ ...input, resumeJobID: randomUUID() })).status, 409, "Unknown or foreign continuations cannot start inference");
+    assert.equal((await post({ ...input, resumeJobID: job.id })).status, 409, "A definition blocker is not a saved clarification ledger");
     assert.equal(calls, 0);
     const response = await post(input); assert.equal(response.status, 202); assert.equal((await response.json()).reused, false);
     await until(() => calls === 1);

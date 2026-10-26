@@ -322,6 +322,8 @@ export type Job = {
   definitionWork?: import("./definition-stages.js").DefinitionWork;
   readinessWork?: import("./readiness-stages.js").ReadinessWork;
   submissionWork?: import("./submission-stages.js").SubmissionWork;
+  /** Metadata-only browser projection; never a request grant by itself. */
+  submissionAllowance?: { step: number; attempts: number; limit: number; canExtend: boolean };
   submissionProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
   readinessProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
   definitionBlock?: { format: 1; reason: string };

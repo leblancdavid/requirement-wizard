@@ -7,6 +7,7 @@ import { refinementActivity } from "./refinement-progress.js";
 import { mayContinueProject, WorkflowControls } from "./workflow-controls.js";
 import type { WorkflowView } from "../service/workflow.js";
 import { workflowLimits } from "../core/workflow.js";
+import { pausedClarification } from "./clarification-recovery.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -48,6 +49,18 @@ test("refinement labels distinguish stage progress, run scope and terminal outco
 const project = projectSchema.parse({ id: "project", name: "Queue", revision: 1, model: { providerID: "openai", modelID: "fixture" },
   sources: [{ id: "idea", kind: "initial", text: "Save responses" }], questions: [], summary: "Queue", goals: [], actors: [], assumptions: [],
   requirements: [{ id: "save", statement: "Save a response", rationale: "Persistence", sourceIDs: ["idea"], epicID: "inbox", acceptance: ["Survives restart"], status: "accepted" }] });
+
+test("paused clarification selects the latest area attempt without reviving completed or superseded tasks", () => {
+  const saved: Job = { id: "clarification", projectID: project.id, expectedRevision: 1, model: project.model, leaseUntil: null, status: "interrupted",
+    readinessProgress: { completed: 32, total: 42, phase: "check" }, context: { revision: 1, focusEpicID: "inbox", characters: 63000, budget: 96000, includedIDs: [], omittedIDs: [],
+      readinessQuestions: { format: 2, policy: "definition-area-questions-v1", epicID: "inbox", dimension: "area-review", inputKey: "key", checkKey: "check" } } };
+  assert.equal(pausedClarification([saved]), saved);
+  assert.equal(pausedClarification([saved, { ...saved, id: "completed", status: "completed", readinessProgress: undefined }]), undefined);
+  assert.equal(pausedClarification([saved, { ...saved, id: "running", status: "running" }]), undefined);
+  const other = { ...saved, id: "other-area", status: "completed" as const, context: { ...saved.context!, readinessQuestions: { ...saved.context!.readinessQuestions!, epicID: "another-area" } } };
+  assert.equal(pausedClarification([saved, other]), saved, "Another area's completion does not erase this saved task");
+  assert.deepEqual(saved.readinessProgress, { completed: 32, total: 42, phase: "check" });
+});
 function assessment() {
   const state = emptyExecution();
   state.assessmentRuns = [{ id: "assessment", operation: "assess", revision: 1, bindingID: "binding", status: "running", stage: "Receiving model output", requirementIDs: ["save", "load"], completedIDs: ["load"], reused: 1, currentRequirementID: "save", startedAt: "2026-10-19", checks: [], progress: [] }];

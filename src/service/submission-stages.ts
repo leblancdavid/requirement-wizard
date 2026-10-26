@@ -1,7 +1,7 @@
 import { StaleRevisionError, type Job, type Project, type Submission } from "../core/model.js";
 import type { ContextTask } from "../core/working-set.js";
 import type { ContextBudgetError } from "../core/context.js";
-import { acceptSubmissionStage, planSubmissionStages, replaySubmissionStages, submissionMaterials, submissionStageContext, submissionStep } from "../core/submission-stages.js";
+import { acceptSubmissionStage, planSubmissionStages, recoverSubmissionPermissions, submissionMaterials, submissionStageContext, submissionStep, submissionRequestLimit } from "../core/submission-stages.js";
 import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
@@ -15,7 +15,9 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   // Reconstruct its original scope, then revalidate all current mandatory evidence.
   const m = submissionMaterials(project, item, previous?.submissionWork?.task ?? task, previous ? undefined : options.overflow);
   const w = previous?.submissionWork ? structuredClone(previous.submissionWork) : planSubmissionStages(m);
-  let { draft, blocked } = replaySubmissionStages(m, w);
+  const priorRecovery = w.permissionRecovery;
+  let { draft, blocked } = recoverSubmissionPermissions(m, w, job);
+  if (!priorRecovery && w.permissionRecovery) options.onProgress?.("Recovered an older staged revision-permission blocker. Original input, completed steps and spent attempts remain saved; continuing the unfinished read with exact supporting evidence.");
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;
   const current = () => { options.signal.throwIfAborted(); if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError(); };
@@ -35,7 +37,9 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
     if (blocked) throw new Error(`Saved-response follow-up blocked: ${blocked} Original input and completed steps remain saved.`);
     if (calls >= limits.requests || Date.now() >= deadline) return store.pauseSubmission(job.id,
       `Saved-response follow-up paused: ${submissionStep(w)} / ${w.batches.length * 2} steps saved. Continue processing explicitly; completed requests will not repeat.`);
-    if (w.attempts >= 4) throw new Error("Saved-response step exhausted its four-request allowance. Earlier completed work and spent attempts remain saved.");
+    if (w.attempts >= submissionRequestLimit(w)) throw new Error(submissionRequestLimit(w) === 4
+      ? "Saved-response step exhausted its four-request allowance. Earlier completed work and spent attempts remain saved. Use Allow 4 more requests in Processing & queue to explicitly extend only this unfinished step."
+      : "Saved-response step exhausted its extended eight-request allowance. Earlier completed work and spent attempts remain saved; no further requests were granted.");
     if (!calls) options.measurement?.planned(context);
     w.attempts++; calls++; store.checkpointSubmission(job.id, w, context.manifest);
     options.onProgress?.(`Following up on saved input · ${submissionStep(w)} / ${w.batches.length * 2} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial changes published.`);
