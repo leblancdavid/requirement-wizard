@@ -1,4 +1,15 @@
 import type { RefinementProgress } from "../core/refinement.js";
+import type { Job } from "../core/model.js";
+
+export function pausedRefinement(jobs: Job[]) {
+  const seen = new Set<string>();
+  for (const job of [...jobs].reverse()) {
+    const id = job.context?.refinementPair ? `pair:${JSON.stringify([job.context.refinementPair.requirementIDs, !!job.context.refinementPair.includeUnapproved, job.context.refinementPair.triggerSourceIDs ?? []])}` : job.context?.refinementTarget?.requirementID;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    if (job.refinementStageProgress && ["interrupted", "cancelled", "failed"].includes(job.status)) return job;
+  }
+}
 
 export function refinementActivity(progress: RefinementProgress) {
   const stage = progress.phase === "preparing" ? "Preparing checks"

@@ -9,6 +9,7 @@ import { z } from "zod";
 import { ProjectStore } from "../storage/store.js";
 import { readinessProgress } from "../core/readiness-stages.js";
 import { submissionProgress, submissionAllowance } from "../core/submission-stages.js";
+import { refinementStageProgress } from "../core/refinement-stages.js";
 import { activityQuerySchema } from "../storage/activity.js";
 import { OperationConflictError, discoveryBlockReason, executionBlockReason } from "../core/operations.js";
 import { browseDirectories } from "../storage/workspace.js";
@@ -189,7 +190,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const known = rawTokens === undefined ? undefined : parseSnapshotTokens(rawTokens);
         const current = revisionSnapshot(project);
         const recent = options.store.workspaceJobs(id);
-        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, submissionWork, ...job }) => ({ ...job,
+        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, submissionWork, refinementWork, ...job }) => ({ ...job,
+          ...(refinementWork ? { refinementStageProgress: refinementStageProgress(refinementWork) } : {}),
           ...(submissionWork ? { submissionProgress: submissionProgress(submissionWork), submissionAllowance: submissionAllowance(submissionWork) } : {}),
           ...(readinessWork ? { readinessProgress: readinessProgress(readinessWork) } : {}),
           ...(job.context?.readinessQuestions && _ ? { result: _ } : {}),
@@ -364,7 +366,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (action === "analyze") {
         if (implementation.isActive(id)) throw new OperationConflictError(executionBlockReason);
-        const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional(), savedEvidencePolicy: savedEvidencePolicySchema.optional(), gapMode: z.literal("epic").optional(), questionTarget: z.number().int().min(1).max(50).optional() }).strict().parse(raw);
+        const input = z.object({ revision, focusEpicID: z.string().optional(), research: z.boolean().optional(), refinementOnly: z.boolean().optional(), continueRefinementJobID: z.string().uuid().optional(), savedEvidencePolicy: savedEvidencePolicySchema.optional(), gapMode: z.literal("epic").optional(), questionTarget: z.number().int().min(1).max(50).optional() }).strict().parse(raw);
         if (input.savedEvidencePolicy === "prefix-aux-v1" && (input.refinementOnly || !project.requirements.length && !project.questions.length)) throw new Error("The saved-evidence pilot is only available for manual next-gap exploration after initial interpretation.");
         if (project.revision !== input.revision) throw new StaleRevisionError();
         if (queue.isActive(id)) {

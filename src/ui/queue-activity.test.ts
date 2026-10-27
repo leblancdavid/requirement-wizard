@@ -3,7 +3,7 @@ import test from "node:test";
 import { emptyExecution } from "../core/execution.js";
 import { projectSchema, type Job } from "../core/model.js";
 import { queueActivities } from "./queue-activity.js";
-import { refinementActivity } from "./refinement-progress.js";
+import { refinementActivity, pausedRefinement } from "./refinement-progress.js";
 import { mayContinueProject, WorkflowControls } from "./workflow-controls.js";
 import type { WorkflowView } from "../service/workflow.js";
 import { workflowLimits } from "../core/workflow.js";
@@ -60,6 +60,20 @@ test("paused clarification selects the latest area attempt without reviving comp
   const other = { ...saved, id: "other-area", status: "completed" as const, context: { ...saved.context!, readinessQuestions: { ...saved.context!.readinessQuestions!, epicID: "another-area" } } };
   assert.equal(pausedClarification([saved, other]), saved, "Another area's completion does not erase this saved task");
   assert.deepEqual(saved.readinessProgress, { completed: 32, total: 42, phase: "check" });
+});
+test("paused refinement selects saved per-requirement progress without reviving completed tasks", () => {
+  const saved: Job = { id: "refine", projectID: project.id, expectedRevision: 1, model: project.model, leaseUntil: null, status: "interrupted",
+    refinementStageProgress: { completed: 2, total: 12, phase: "read" }, context: { revision: 1, focusEpicID: "inbox", characters: 50000, budget: 96000,
+      includedIDs: [], omittedIDs: [], refinementOnly: true, refinementTarget: { requirementID: "save", fingerprint: "original" } } };
+  assert.equal(pausedRefinement([saved]), saved);
+  assert.equal(pausedRefinement([saved, { ...saved, id: "done", status: "completed", refinementStageProgress: undefined }]), undefined);
+  assert.equal(pausedRefinement([saved, { ...saved, id: "running", status: "running" }]), undefined);
+  assert.equal(pausedRefinement([saved, { ...saved, id: "other", status: "completed", context: { ...saved.context!, refinementTarget: { requirementID: "other", fingerprint: "another" } } }]), saved);
+  const pair: Job = { ...saved, id: "pair", context: { ...saved.context!, refinementTarget: undefined,
+    refinementPair: { requirementIDs: ["save", "retain"], contextKey: "pair-context" } } };
+  assert.equal(pausedRefinement([pair]), pair);
+  assert.equal(pausedRefinement([pair, { ...saved, status: "completed" }]), pair, "An individual check does not complete a saved pair");
+  assert.equal(pausedRefinement([pair, { ...pair, id: "pair-done", status: "completed" }]), undefined);
 });
 function assessment() {
   const state = emptyExecution();

@@ -26,6 +26,8 @@ import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { refinementContextKey } from "./refinement-tasks.js";
+import { runRefinementStages } from "./refinement-stages.js";
+import { refinementPairContext, sameRefinementTask } from "../core/refinement-stages.js";
 import { refinementEvidenceRecords, assertRefinementEvidence } from "../core/refinement-context.js";
 import { pairQuestions, resolutionContextKey } from "../core/resolution.js";
 import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanWindowTimeout, scanLeaseDuration } from "./scan-batches.js";
@@ -414,6 +416,20 @@ export class DiscoveryService {
       const stagedItem = options.isolatedTask && !options.refinementOnly && options.submissionIDs?.length === 1
         ? this.store.submissions(projectID).find((s) => s.id === options.submissionIDs![0]) : undefined;
       let ordinaryContext: ContextPack | undefined;
+      if (refinementTarget || pair) {
+        const requirementID = pair?.[0] ?? refinementTarget!.id;
+        const stagedPair = pair ? { requirementIDs: pair, includeUnapproved: !!options.includeUnapproved, triggerSourceIDs } : undefined;
+        const previous = [...this.store.jobs(projectID)].reverse().find((j) => j.id !== job.id && sameRefinementTask(j, requirementID, stagedPair));
+        const run = async (overflow?: ContextBudgetError) => {
+          clearTimeout(timer);
+          timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
+          return await runRefinementStages(this.store, inferenceAdapter, project, job, requirementID,
+            { signal: controller.signal, pair: stagedPair, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, onProgress: options.onProgress });
+        };
+        if (previous?.refinementWork && previous.status !== "completed") return await run();
+        try { ordinaryContext = taskPlanner(project, ordinaryTask); }
+        catch (error) { if (!(error instanceof ContextBudgetError)) throw error; return await run(error); }
+      }
       if (canStageSubmission(stagedItem)) {
         const previous = this.store.jobs(projectID).some((j) => j.id !== job.id && j.submissionWork?.submissionID === stagedItem.id);
         const run = async (overflow?: ContextBudgetError) => {
@@ -794,12 +810,15 @@ export class DiscoveryService {
         error.manifest.submissionIDs = options.submissionIDs;
         error.manifest.refinementOnly = options.refinementOnly;
         if (refinementTarget) error.manifest.refinementTarget = { requirementID: refinementTarget.id, fingerprint: reviewFingerprint(refinementTarget), contextKey: refinementContextKey(project, refinementTarget) };
+        if (options.refinementPair) error.manifest.refinementPair = refinementPairContext(project, { requirementIDs: options.refinementPair,
+          includeUnapproved: !!options.includeUnapproved, triggerSourceIDs: options.resolutionTriggerSourceIDs ?? [] });
         this.store.attachContext(job.id, error.manifest);
       }
       const cancelled = controller.signal.aborted;
       const savedWork = this.store.getJob(job.id);
       const retainedAttempts = (savedWork.retrievalWork?.attempts ?? 0) + (savedWork.readinessWork?.attempts ?? 0) + (savedWork.readinessWork?.receipts.length ?? 0)
-        + (savedWork.submissionWork?.attempts ?? 0) + (savedWork.submissionWork?.receipts.length ?? 0);
+        + (savedWork.submissionWork?.attempts ?? 0) + (savedWork.submissionWork?.receipts.length ?? 0)
+        + (savedWork.refinementWork?.attempts ?? 0) + (savedWork.refinementWork?.receipts.length ?? 0);
       const overlapDiagnostic = options.savedOverlapSubmissionID
         ? "Your response was already processed and saved. Its duplicate/conflict follow-up did not complete; resume retries the unfinished check, not the completed response. " : "";
       this.store.failJob(job.id, cancelled ? "cancelled" : error instanceof StaleRevisionError ? "stale" : "failed",

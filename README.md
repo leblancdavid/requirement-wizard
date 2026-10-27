@@ -41,6 +41,11 @@ Large clarifications use saved exact-evidence read/check batches; Design offers
 Oversized targeted review follow-ups and requirement-scoped answers also use saved
 evidence batches when needed. Resume processing the retained response; no duplicate
 submission is required, and changes publish only after every batch is verified.
+Oversized individual wording refinement now uses exact batches too; **Processing &
+queue → Continue refinement** resumes that saved requirement only. Full target
+support stays exact, and wording proposals still need approval. Oversized pair
+comparisons also use saved batches; both stories and their supporting evidence stay
+exact, and Continue refinement resumes that comparison only.
 
 **Specification** now replaces routine Review: explicit answers, notes and targeted
 change requests can maintain current requirements without another approval. Design

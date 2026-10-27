@@ -10,6 +10,7 @@ import { definitionTaskSchema } from "../core/definition-assessment.js";
 import { readinessQuestionTaskSchema } from "../core/readiness-questions.js";
 import { readinessWorkSchema } from "../core/readiness-stages.js";
 import { submissionWorkSchema } from "../core/submission-stages.js";
+import { refinementStageSchema, refinementWorkSchema } from "../core/refinement-stages.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionInterruptionSchema } from "../core/definition-interruption.js";
 
@@ -73,7 +74,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (copy.scan) copy.scan.workspaceKey = "portable";
     if (copy.scanWork) copy.scanWork.bindingID = "portable";
     for (const stage of copy.retrievalWork?.stages ?? []) delete stage.sessionID;
-    if (copy.status === "completed" && copy.context?.refinementOnly) {
+    if (copy.status === "completed" && copy.context?.refinementOnly && !copy.refinementWork) {
       const c = copy.context;
       copy.portableReceipt = 1;
       copy.context = { revision: c.revision, focusEpicID: c.focusEpicID, characters: c.characters, budget: c.budget,
@@ -226,6 +227,8 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
   context: z.object({ revision: z.number().int().positive(), focusEpicID: z.string().nullable(), characters: z.number().nonnegative(), budget: z.number().nonnegative(),
     includedIDs: z.array(z.string()), omittedIDs: z.array(z.string()), definitionAssessment: definitionTaskSchema.optional(),
     readinessQuestions: readinessQuestionTaskSchema.optional(),
+    refinementPair: z.object({ requirementIDs: z.tuple([z.string(), z.string()]), contextKey: z.string(), includeUnapproved: z.boolean().optional(), triggerSourceIDs: z.array(z.string()).optional() }).strict().optional(),
+    refinementStage: refinementStageSchema.optional(),
     submissionStage: z.object({ policy: z.literal("exact-submission-batches-v1"), planKey: z.string().regex(/^[a-f0-9]{64}$/), step: z.number().int().min(0).max(63), phase: z.enum(["read", "check"]) }).strict().optional(),
     readinessStage: z.object({ policy: z.literal("exact-readiness-batches-v1"), planKey: z.string().regex(/^[a-f0-9]{64}$/), step: z.number().int().nonnegative(), phase: z.enum(["read", "check"]) }).strict().optional() }).passthrough().optional(),
   retrievalWork: retrievalWorkSchema.optional(), gapReport: z.unknown().optional(), epicReviewReport: z.unknown().optional(),
@@ -233,13 +236,23 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
   definitionInterruption: definitionInterruptionSchema.optional(),
   readinessWork: readinessWorkSchema.optional(),
   submissionWork: submissionWorkSchema.optional(),
+  refinementWork: refinementWorkSchema.optional(),
   scan: z.object({ workspaceKey: z.literal("portable"), snapshot: projectSchema.shape.scans.removeDefault().element, sources: projectSchema.shape.sources }).strict().optional(),
   scanWork: z.object({ version: z.literal(1), bindingID: z.literal("portable"), resumedFrom: z.string().optional(), batches: z.array(z.object({
     excerpts: z.array(z.object({ sourceID: z.string(), start: z.number().int().nonnegative(), end: z.number().int().positive() }).strict()),
     depth: z.number().int().min(0).max(4), attempts: z.number().int().min(0), timedOut: z.boolean().optional(), output: scanAnalysisSchema.optional(),
   }).strict()) }).strict().optional(),
   scanProgress: z.object({ completed: z.number().int().nonnegative(), total: z.number().int().nonnegative(), capturedAt: z.string(), resumable: z.boolean() }).strict().optional(),
-}).strict().refine((job) => !job.submissionWork || job.context?.submissionStage?.planKey === job.submissionWork.planKey
+}).strict().refine((job) => !job.refinementWork || job.context?.refinementOnly === true
+  && job.context?.refinementStage?.planKey === job.refinementWork.planKey
+  && job.context?.refinementStage?.policy === job.refinementWork.policy
+  && (job.refinementWork.pair
+    ? JSON.stringify(job.context?.refinementPair?.requirementIDs) === JSON.stringify(job.refinementWork.pair.requirementIDs)
+      && !!job.context?.refinementPair?.includeUnapproved === job.refinementWork.pair.includeUnapproved
+      && JSON.stringify(job.context?.refinementPair?.triggerSourceIDs ?? []) === JSON.stringify(job.refinementWork.pair.triggerSourceIDs)
+      && !(job.context?.refinementTarget)
+    : (job.context?.refinementTarget as { requirementID?: string } | undefined)?.requirementID === job.refinementWork.requirementID && !job.context?.refinementPair),
+"Refinement continuation must retain its exact target and plan.").refine((job) => !job.submissionWork || job.context?.submissionStage?.planKey === job.submissionWork.planKey
   && JSON.stringify(job.context.submissionIDs) === JSON.stringify([job.submissionWork.submissionID]),
 "Saved-response continuation must retain its exact task and plan.").refine((job) => !job.readinessWork || JSON.stringify(job.context?.readinessQuestions) === JSON.stringify(job.readinessWork.task)
   && job.context?.readinessStage?.planKey === job.readinessWork.planKey,

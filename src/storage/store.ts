@@ -47,6 +47,7 @@ import { reconcileCompletedReview, type AppliedInputChange } from "../core/revie
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
 import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
+import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
 import { questionReviewFingerprint, reviewFingerprint, validateRequirementEvidence, answerSchema, parseDiscoveryAnalysis, scanAnalysisSchema, modelSelection, projectSchema, researchEvidenceSchema, telemetrySchema, StaleRevisionError,
@@ -76,6 +77,12 @@ function readStoredJob(payload: string): Job {
     const work = submissionWorkSchema.parse(job.submissionWork);
     if (job.context?.submissionStage?.planKey !== work.planKey || JSON.stringify(job.context.submissionIDs) !== JSON.stringify([work.submissionID]))
       throw new Error("Saved-response checkpoint does not match its task; original work was not overwritten.");
+  }
+  if (job.context?.refinementStage !== undefined) refinementStageSchema.parse(job.context.refinementStage);
+  if (job.refinementWork !== undefined) {
+    const work = refinementWorkSchema.parse(job.refinementWork);
+    if (!job.context?.refinementOnly || !sameRefinementTask(job, work.requirementID, work.pair) || job.context.refinementStage?.policy !== work.policy || job.context.refinementStage?.planKey !== work.planKey)
+      throw new Error("Refinement checkpoint does not match its task; saved work was not overwritten.");
   }
   if (job.definitionWork !== undefined) {
     const work = definitionWorkSchema.parse(job.definitionWork), task = job.context?.definitionAssessment;
@@ -1310,6 +1317,30 @@ export class ProjectStore {
     }).immediate();
   }
 
+  checkpointRefinement(id: string, input: RefinementWork, context: NonNullable<Job["context"]>) {
+    this.db.transaction(() => {
+      const job = this.getJob(id), work = refinementWorkSchema.parse(input);
+      refinementStageSchema.parse(context.refinementStage);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Refinement worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (!context.refinementOnly || !sameRefinementTask({ ...job, context }, work.requirementID, work.pair) || context.refinementStage?.policy !== work.policy || context.submissionIDs?.length || context.readinessQuestions || context.definitionAssessment
+        || context.gapExploration || context.epicReview || job.submissionWork || job.readinessWork || job.definitionWork || job.retrievalWork
+        || context.refinementStage?.planKey !== work.planKey)
+        throw new Error("Refinement checkpoint requires its exact target and plan.");
+      job.refinementWork = structuredClone(work); job.context = context;
+      job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 360000); this.saveJob(job);
+    }).immediate();
+  }
+
+  pauseRefinement(id: string, reason: string): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (!job.refinementWork || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Refinement worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      job.status = "interrupted"; job.leaseUntil = null; job.diagnostic = reason; this.saveJob(job); return job;
+    }).immediate();
+  }
+
   checkpointSubmission(id: string, input: SubmissionWork, context: NonNullable<Job["context"]>) {
     this.db.transaction(() => {
       const job = this.getJob(id), work = submissionWorkSchema.parse(input);
@@ -1505,6 +1536,12 @@ export class ProjectStore {
             return;
           }
           const before = structuredClone(project);
+          if (job.refinementWork || job.context?.refinementStage) {
+            if (!job.refinementWork || !job.context?.refinementOnly || job.context.submissionIDs?.length
+              || job.submissionWork || job.readinessWork || job.definitionWork || job.retrievalWork || job.context.readinessQuestions || job.context.definitionAssessment)
+              throw new Error("Staged refinement publication requires its exclusive saved task.");
+            validateRefinementPublication(project, job, result);
+          }
           if (job.submissionWork || job.context?.submissionStage) {
             const item = this.submissions(project.id).find((s) => s.id === job.submissionWork?.submissionID);
             if (!job.submissionWork || !item || job.readinessWork || job.definitionWork || job.retrievalWork || job.context?.refinementOnly

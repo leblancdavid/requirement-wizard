@@ -189,6 +189,19 @@ project and live-provider staged reasoning remain untested. No paid probe was ru
 
 ## Saved-input/clarification dead-end recovery (2026-10-25)
 
+**Individual refinement follow-up (2026-10-26):** the reported
+149,358/144,000-character overflow now has an exact staged fallback after the
+single-request compaction below. It pins the story and all supporting sources,
+reads remaining mandatory constraints in bounded batches, then checks the frozen
+draft against every batch before publication. **Processing & queue → Continue
+refinement** resumes only the latest saved task with unchanged evidence. The 144k
+single-request ceiling is not raised. The later 148,329/144,000-character failure
+was a pair comparison; pair overflow now has its own format-2 read/check protocol
+with exact pair/support/trigger pins and unchanged resolution authority. A read-only
+preflight of that saved snapshot fits in nine batches/eighteen steps. See
+[pair bounds and compatibility](migrations.md#oversized-pair-resolution-refinement-continuation-2026-10-26) and
+[bounds and migration](migrations.md#oversized-individual-refinement-continuation-2026-10-26).
+
 The supplied 159,757/96,000-character diagnostic is a local context-preparation
 failure, not a provider rejection or missing human decision. The original input is
 retained and the reported request made no model call. Retrying the same wire package

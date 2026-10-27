@@ -23,6 +23,7 @@ import type { DefinitionAdditionalRequest } from "../core/definition-budget.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionQuestionTask, readinessQuestionContext, readinessQuestionTask } from "../core/readiness-questions.js";
 import { definitionClarificationInputs } from "../core/definition-clarification-inputs.js";
+import { refinementMaterials, replayRefinementStages, sameRefinementTask } from "../core/refinement-stages.js";
 
 type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" };
 
@@ -432,12 +433,20 @@ export class DiscoveryQueue {
       : { ...options, gapMode: "epic" });
   }
 
-  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number; processOnly?: boolean; submissionIDs?: string[] } = {}) {
+  resume(id: string, options: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; continueRefinementJobID?: string; savedEvidencePolicy?: SavedEvidencePolicy; gapMode?: "epic"; questionTarget?: number; processOnly?: boolean; submissionIDs?: string[] } = {}) {
     this.service.store.assertNoExecution(id);
     this.service.store.acknowledgeExpiredExecution(id);
     this.service.assertCanDiscover(id);
     if (this.isActive(id)) throw new Error("This project already has an active discovery job.");
     const project = this.service.store.get(id);
+    if (options.continueRefinementJobID) {
+      const job = this.service.store.getJob(options.continueRefinementJobID), work = job.refinementWork;
+      const latest = [...this.service.store.jobs(id)].reverse().find((j) => work && sameRefinementTask(j, work.requirementID, work.pair));
+      if (!options.refinementOnly || options.research || options.focusEpicID || options.refreshProposalID || options.gapMode || options.processOnly || options.submissionIDs || options.savedEvidencePolicy
+        || !work || job.projectID !== id || latest?.id !== job.id || !["failed", "interrupted", "cancelled"].includes(job.status))
+        throw new Error("Choose the latest paused refinement. No new task or request was started.");
+      replayRefinementStages(refinementMaterials(project, work.requirementID, undefined, work.pair), work);
+    }
     if (options.questionTarget !== undefined && (!Number.isInteger(options.questionTarget) || options.questionTarget < 1 || options.questionTarget > 50 || options.refinementOnly)) throw new Error("Choose a question target from 1 to 50 for gap exploration.");
     if (options.refreshProposalID) {
       const proposal = project.refinements.find((p) => p.id === options.refreshProposalID && p.status === "pending");
@@ -580,7 +589,7 @@ export class DiscoveryQueue {
     report("Gap scan stopped after 10 packages; completed results are saved. Start again to explore more.");
   }
 
-  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; savedEvidencePolicy?: SavedEvidencePolicy; questionTarget?: number; processOnly?: boolean; submissionIDs?: string[] }) {
+  private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; continueRefinementJobID?: string; savedEvidencePolicy?: SavedEvidencePolicy; questionTarget?: number; processOnly?: boolean; submissionIDs?: string[] }) {
     if (this.closing || this.isActive(id) || this.service.store.executionActive(id)) return;
     if (!manual && this.service.store.workflow(id).enabled) return;
     if (!manual && this.service.store.executionExpired(id)) {
@@ -598,6 +607,17 @@ export class DiscoveryQueue {
     const promise = Promise.resolve().then(async () => {
       if (manual?.refinementOnly) {
         let project = this.service.store.get(id);
+        if (manual.continueRefinementJobID) {
+          const work = this.service.store.getJob(manual.continueRefinementJobID).refinementWork!;
+          Object.assign(refinement!, { phase: work.pair ? "overlaps" : "wording", total: 1 });
+          report("Continuing only the saved refinement task. Completed evidence reads/checks and spent attempts are retained.");
+          const job = await this.service.analyze(id, project.revision, { signal: controller.signal, refinementOnly: true, research: false,
+            ...(work.pair ? { refinementPair: work.pair.requirementIDs, includeUnapproved: work.pair.includeUnapproved, resolutionTriggerSourceIDs: work.pair.triggerSourceIDs } : { recordIDs: [work.requirementID] }), onProgress: report });
+          if (job.status !== "completed") { refinement!.status = job.status === "cancelled" || job.status === "interrupted" ? "stopped" : "failed"; report(job.diagnostic ?? `Refinement ${job.status}.`); return; }
+          refinement!.completed = 1;
+          report("Saved refinement finished. Proposals still need approval; no other refinement or discovery tasks were started.");
+          return;
+        }
         if (manual.refreshProposalID) {
           const proposal = project.refinements.find((p) => p.id === manual.refreshProposalID)!;
           const pair: [string, string] | undefined = proposal.resolution ? [proposal.requirementID, proposal.resolution.relatedRequirementID] : undefined;
@@ -643,7 +663,7 @@ export class DiscoveryQueue {
           report(`Refining requirement ${index + 1} of ${targets.length}; earlier completed checks are saved.`);
           const job = await this.service.analyze(id, current.revision, { signal: controller.signal, refinementOnly: true,
             recordIDs: [requirementID], research: false, onProgress: report });
-          if (job.status !== "completed") { refinement!.status = job.status === "cancelled" ? "stopped" : "failed"; this.service.store.pauseQueue(id, true); report(job.diagnostic ?? `Refinement ${job.status}.`); return; }
+          if (job.status !== "completed") { refinement!.status = job.status === "cancelled" || job.status === "interrupted" ? "stopped" : "failed"; this.service.store.pauseQueue(id, true); report(job.diagnostic ?? `Refinement ${job.status}.`); return; }
           refinement!.completed++;
         }
         if (!controller.signal.aborted) report(`Refinement finished: ${pairsChecked} overlap checks and ${targets.length} individual wording tasks considered. Review proposed resolutions/refinements or answer targeted Design questions, then Refine again for remaining overlaps. Active wording is unchanged.`);

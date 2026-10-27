@@ -1,5 +1,29 @@
 # Browser workspace, epics, and estimated completeness
 
+## Large individual refinement (2026-10-26)
+
+An individual story/requirement refinement that exceeds the ordinary 144k context
+limit now falls back to saved exact evidence batches. Its full wording and supporting
+sources stay in every request; shared project/dependency constraints are read and
+checked across batches. Nothing publishes early, and resulting wording still needs
+approval. Small refinements keep the existing single-request path.
+
+If paused, **Processing & queue → Continue refinement** resumes only that saved
+requirement, using your AI allowance without repeating completed steps or starting
+general discovery. Reload/restart makes no requests. Progress counts survive reopen
+and portable continuation. Changed evidence rejects saved continuation; explicitly
+run Refine again for a fresh review of the changed material. Indivisible target
+evidence, conflicting checks and exhausted step allowances remain explicit blockers.
+Pair overlap/resolution tasks now also use saved exact batches under a separate
+pair policy. Both stories, all support and any triggering human response remain
+exact in every request; **Continue refinement** resumes only that saved comparison,
+not general discovery or the full Refine sweep. Outcomes retain normal resolution
+rules and require every batch's verification before a proposal/question publishes.
+The reported 148,329-character pair snapshot passed read-only size preparation in
+9 batches; actual live-provider completion remains unverified. See
+[pair upgrade compatibility](migrations.md#oversized-pair-resolution-refinement-continuation-2026-10-26) and
+[upgrade compatibility](migrations.md#oversized-individual-refinement-continuation-2026-10-26).
+
 ## Resolve assessment findings in Specification (2026-10-25)
 
 **Blocked saved-response follow-up:** you can use **Clarify in Design** directly

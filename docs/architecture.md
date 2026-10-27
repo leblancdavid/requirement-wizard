@@ -6,6 +6,16 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/core/refinement-stages.ts` / `src/service/refinement-stages.ts`: overflow-only
+  exact read/frozen-draft checks for individual requirement refinement. Every request
+  pins the full target/support; durable receipts and attempts survive explicit
+  task-only queue continuation and portable adoption. Store publication independently
+  replays every batch before ordinary proposal authorization; no early publication
+  or direct specification edits. The format-2 pair overflow protocol uses the same
+  checkpoint engine with separate resolution drafts, exact pair/support/trigger pins,
+  source/basis-specific citation rules and original pair publication authorization.
+  Format-1 contexts remain unchanged. See [pair compatibility](migrations.md#oversized-pair-resolution-refinement-continuation-2026-10-26).
+
 - `src/core/submission-stages.ts` / `src/service/submission-stages.ts`: overflow-only
   exact read/frozen-draft verification for targeted saved review/scoped-answer
   follow-up. The queue preflights bounded batches before starting; durable ledgers

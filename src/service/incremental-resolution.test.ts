@@ -341,7 +341,7 @@ for (const outcome of ["cancelled", "stale", "malformed"] as const) test(`expand
   } finally { await queue?.close(); store.close(); }
 });
 
-test("saved overlap above 144k remains blocked before inference without replaying the completed response", async () => {
+test("saved overlap above 144k uses exact pair batches without replaying the completed response", async () => {
   const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
   try {
     const p = seed(store), item = store.enqueue(p.id, { id: crypto.randomUUID(), auto: false, research: false, input: reviewInput(p) });
@@ -349,12 +349,20 @@ test("saved overlap above 144k remains blocked before inference without replayin
     const root = await new DiscoveryService(store, { async analyze(_p, { context }) { return { ...empty(), reviewResponses: context.manifest.reviewSourceIDs!.map((sourceID) => ({ sourceID, text: "Saved" })) }; } })
       .analyze(p.id, store.get(p.id).revision, { isolatedTask: true, recordIDs: [p.requirements[0]!.id], submissionIDs: [item.id] });
     const current = largeGuardrails(store, store.get(p.id), 16);
-    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Oversized overlap must not dispatch"); } }));
+    const completedRoot = store.getJob(root.id); let calls = 0;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_p, { context }) {
+      calls++; assert.ok(context.manifest.refinementPair, "Completed saved-response discovery must not repeat");
+      assert.equal(context.manifest.refinementStage!.policy, "exact-resolution-batches-v1");
+      assert.ok(context.manifest.characters <= 96000);
+      return context.manifest.refinementStage!.phase === "check" ? { refinementCheck: { valid: true, reason: "Preserves exact saved rules" } }
+        : context.manifest.refinementStage!.step === 0 ? resolution() : { refinementKeep: true };
+    } }));
     queue.resumeBrowser(p.id); await idle(queue, p.id);
     const saved = store.submissions(p.id)[0]!;
-    assert.equal(saved.status, "needs-attention"); assert.equal(saved.overlapFollowup!.state, "pending");
-    assert.equal(store.getJob(root.id).status, "completed");
-    assert.match(saved.diagnostic!, /144,000/); assert.deepEqual(store.get(p.id), current);
+    assert.equal(saved.status, "completed", saved.diagnostic); assert.equal(saved.overlapFollowup!.state, "completed");
+    assert.deepEqual(store.getJob(root.id), completedRoot); assert.equal(saved.response, "Saved");
+    const pair = store.jobs(p.id).at(-1)!; assert.equal(calls, pair.refinementWork!.batches.length * 2);
+    assert.deepEqual(store.get(p.id).sources, current.sources); assert.deepEqual(store.get(p.id).requirements, current.requirements);
   } finally { await queue?.close(); store.close(); }
 });
 
@@ -470,23 +478,31 @@ test("newer human input during pair inference wins, and retry runs only the unfi
   } finally { await queue?.close(); store.close(); }
 });
 
-test("oversized pair evidence blocks inference after saved discovery without dropping human guardrails", async () => {
+test("oversized cross-feature pair evidence is checked in exact batches after discovery without dropping human guardrails", async () => {
   const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
   try {
     let p = seed(store);
     p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "reports-a", title: "A", purpose: "Reports A", dependencies: [] }, { type: "upsert", epicID: "reports-b", title: "B", purpose: "Reports B", dependencies: [] },
       ...p.requirements.map((r, i) => ({ type: "move" as const, recordID: r.id, epicID: i ? "reports-b" : "reports-a" }))]);
     for (let i = 0; i < 14; i++) p = store.note(p.id, p.revision, String.fromCharCode(65 + i).repeat(11000), i < 7 ? "reports-a" : "reports-b");
-    let roots = 0, checks = 0;
+    let roots = 0, checks = 0; const seen = new Set<string>();
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_snapshot, options) {
-      if (options.context.manifest.refinementPair) { checks++; return resolution(); }
+      if (options.context.manifest.refinementPair) {
+        checks++; const context = options.context;
+        assert.ok(context.manifest.characters <= 96000);
+        for (const id of context.manifest.includedIDs) seen.add(id);
+        return context.manifest.refinementStage!.phase === "check" ? { refinementCheck: { valid: true, reason: "Both feature guardrails are preserved" } }
+          : context.manifest.refinementStage!.step === 0 ? resolution() : { refinementKeep: true };
+      }
       roots++; return { ...empty(), reviewResponses: options.context.manifest.reviewSourceIDs!.map((sourceID) => ({ sourceID, text: "Review saved with exact guardrails" })) };
     } }));
     submit(queue, p, reviewInput(p)); await idle(queue, p.id);
     const item = store.submissions(p.id)[0]!;
-    assert.equal(item.status, "needs-attention"); assert.equal(roots, 1); assert.equal(checks, 0);
+    assert.equal(item.status, "completed", item.diagnostic); assert.equal(roots, 1);
+    const pair = store.jobs(p.id).at(-1)!; assert.equal(checks, pair.refinementWork!.batches.length * 2);
     assert.equal(store.getJob(item.overlapFollowup!.discoveryJobID).status, "completed");
-    assert.match(item.diagnostic!, /bounded input budget/);
+    assert.equal(item.overlapFollowup!.state, "completed");
+    for (const source of p.sources.filter((s) => s.kind === "note")) assert.ok(seen.has(source.id), "Every exact human guardrail was reviewed");
     assert.deepEqual(store.get(p.id).sources.filter((s) => s.kind === "note"), p.sources.filter((s) => s.kind === "note"));
   } finally { await queue?.close(); store.close(); }
 });

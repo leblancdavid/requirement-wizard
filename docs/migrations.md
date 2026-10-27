@@ -1,5 +1,122 @@
 # Data migrations and upgrade compatibility
 
+## Oversized pair-resolution refinement continuation (2026-10-26)
+
+The later **148,329/144,000-character** failure was a two-requirement comparison,
+not an individual wording task. Read-only saved-job metadata confirmed two task
+targets and no staged ledger. Earlier failed pair preflights omitted `refinementPair`
+from the error manifest; budget errors reaching the diagnostic handler now retain
+that exact task metadata.
+Original failed jobs are not rewritten, marked complete or discarded.
+
+Source/target: existing individual `refinementWork` **format 1** and its
+`exact-refinement-batches-v1` wire contexts/hashes remain unchanged. New oversized
+pair tasks use **format 2**, policy `exact-resolution-batches-v1`, with the exact
+ordered requirement pair, `includeUnapproved` authority and trigger-source IDs.
+No SQLite/schema counter, project revision or completed-check freshness-key migration
+is needed. Old valid ordinary pair checks and individual receipts remain reusable;
+unknown formats, mixed individual/pair policies and mismatched task metadata reject
+without overwriting stored work. Portable continuation preserves both ledger formats
+and drops machine-local sessions as before. Downgrading to a reader that lacks the
+pair format is unsupported.
+
+Pair batching uses the same finite request/context/draft bounds, pre-dispatch attempt
+accounting and all-batch store replay as the individual slice below. Both detailed
+requirements, **all** supporting sources, trigger sources and linked pair questions
+are pinned in every request. Supplemental citations must be loaded exactly before a
+new/changed action can use them. A draft must retain an explicit resolution outcome:
+distinct, one explicit resolution proposal, one question linked to both requirements,
+or a concrete blocker. Source-only/basis-specific citation validation remains:
+workspace facts cannot establish human preference. No direct specification changes,
+approval, scope expansion or early question/proposal publication are authorized.
+
+**Continue refinement** resumes only the latest exact saved individual/pair task;
+pair identity, authority, triggers, complete evidence and spent attempts are rechecked.
+Changed evidence rejects continuation; a separate explicit Refine action can review
+genuinely changed material while retaining the dated ledger. Previous no-call size
+failures can simply retry Refine; original answers/approvals need no resubmission.
+
+A read-only local preflight of the exact failed snapshot prepared **9 batches / 18
+read-and-check steps**, covering **193 mandatory records** with **11 pinned records**.
+Its largest initial context was **57,995 characters**, plus an 18k draft reserve,
+under the 96k batch limit. Its evidence set exactly matches all 193 records from
+the failed manifest: zero omitted, extra or unbatched records. No personal data was
+written and no live model call was made. This verifies preparation size/coverage,
+not provider quality or completion.
+
+Tests cover each explicit outcome, pair-only continuation, pinned support/triggers,
+unapproved-target authority, source-only and exact-load citation checks, blocked
+publication, stale/cancelled results, old no-call failures and repeated portable/
+SQLite reopening alongside unchanged format-1 work. Oversized supplemental evidence
+also carries its valid ledger to every failed continuation before preparing the next
+context, so repeated size failures cannot silently reset completed steps or attempts.
+The focused pair browser runner passed progress, Stop/reload, metadata-only polling,
+exact-step reuse, mobile and proposal-only publication; the individual runner also
+passed. Screenshot: `.reqwizit-state/browser-resolution-stages-mobile.png`.
+
+Final verification: **951 tests passed** (`npm test`: 288 pretests + 663 main),
+type check, UI build, individual/pair browser runners and diff whitespace check.
+The saved-response overlap tests now verify exact batching, unchanged completed
+discovery receipts and retained cross-feature human guardrails instead of expecting
+the superseded 144k pre-inference blocker. An earlier full command hit its shell
+timeout; another run exposed these two outdated expectations before correction.
+`npm run test:browser` still passes workspace layout/model selection then stops at
+the existing **Project map** tab locator (`src/web/browser-check.ts:706`); later
+aggregate runners remain unexecuted. No live-provider completion is claimed.
+
+## Oversized individual refinement continuation (2026-10-26)
+
+Source/target: existing jobs without staged refinement remain unchanged. New
+overflow-only jobs may carry `refinementWork` format 1, policy
+`exact-refinement-batches-v1`, plus `context.refinementStage`. No SQLite schema
+change, startup conversion, assessment/refinement freshness-key change, input
+rewrite or reset is needed. Existing valid completed checks remain reusable.
+The separate format version is not a project revision or concurrency counter.
+
+The ledger stores exact material/plan hashes, original record IDs, bounded batches,
+pre-dispatch attempts and model/job/revision-linked responses. Every request pins
+the detailed target and all its supporting sources; the complete mandatory evidence
+union is partitioned without truncation. Up to 32 batches receive reads followed by
+frozen-draft checks, with four cumulative requests per step, a 96k request context
+and 18k draft reserve. An explicit action permits up to 32 requests/15 minutes;
+timeouts, Stop and shutdown retain spent attempts and completed receipts. Nothing
+publishes until the store independently replays the entire ledger and verifies the
+exact final draft and evidence union under ordinary refinement authorization.
+
+Reopen/retry and portable continuation preserve receipt hashes, attempts, target
+identity and compatible work; session IDs are not exported. The browser receives
+progress counts, not full ledgers. Unknown future ledger/stage formats reject rather
+than overwriting saved work. Completed staged checks retain their ledger in portable
+projection instead of using the legacy compact completion receipt.
+
+**Continue refinement** binds the current revision and latest saved job, reconstructs
+its exact evidence, and resumes that requirement only. Changed evidence rejects
+this continuation before inference. A separate explicit **Refine** action may start
+a fresh plan for genuinely changed material, retaining the older dated ledger.
+Unrelated revisions with equivalent material do not force repeated completed steps.
+Indivisible target/support, excessive batches, failed verification, oversized exact
+retrieval and exhausted attempts remain blockers; no automatic allowance reset or
+research/pair-resolution fallback is introduced. No downgrade compatibility with
+apps that do not understand these additive ledgers is promised.
+
+Deterministic tests cover overflow and the unchanged small-task path, all-batch
+publication, queue task isolation, malformed outputs/attempt retention, tampered work,
+conflicts, exact retrieval, stale revisions, cancellation, repeated SQLite reopen,
+portable adoption and future-format rejection. The focused browser check covers
+progress, metadata-only polling, Stop/reload, explicit continuation, receipt reuse,
+proposal-only publication and mobile layout. No personal-project writes or live
+provider inference were used. Pair refinement was excluded from this first slice;
+the follow-up above adds its separate format-2 protocol.
+
+Verification: `npm test` passed 939 tests (276 pretests + 663 main); the final
+local-repacking/schema changes additionally passed 70 targeted refinement,
+portable and queue tests. Type check, UI build, focused refinement browser check
+and diff whitespace check passed. `npm run test:browser` passed workspace layout
+and model selection, then stopped at the existing obsolete **Project map** tab
+locator in `src/web/browser-check.ts:706`; later aggregate runners did not execute.
+Screenshot: `.reqwizit-state/browser-refinement-stages-mobile.png`. Actual provider
+quality and the reported personal project's completion remain unverified.
+
 ## Explicit extra saved-response requests and isolated staged prompt (2026-10-26)
 
 Source/target: existing exact-submission format-1 ledgers gain optional
