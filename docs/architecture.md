@@ -6,6 +6,13 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- Workflow planning uses material-bound CPU receipts and separate successful-context/
+  failed-probe caches. Candidate-policy failures checkpoint expensive partition work
+  within unfinished groups; bookkeeping-only revisions can retain local progress,
+  while evidence, history and selection remain conservative invalidators. SQLite 8
+  adds a pool-selection index only. Model-stage identities/attempts and publication
+  CAS remain separate. See [planning recovery](migrations.md#resumable-workflow-planning-probes-and-bookkeeping-revisions-2026-10-27).
+
 - `src/core/refinement-stages.ts` / `src/service/refinement-stages.ts`: overflow-only
   exact read/frozen-draft checks for individual requirement refinement. Every request
   pins the full target/support; durable receipts and attempts survive explicit

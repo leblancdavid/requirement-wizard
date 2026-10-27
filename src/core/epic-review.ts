@@ -9,8 +9,9 @@ import { epicReviewDiagnostic, epicReviewSchema, isStagedPolicy, type EpicReview
 import { evidenceGraph, type EvidenceGraph } from "./evidence-graph.js";
 import type { EpicPlanningCheckpoint, EpicContextCheckpoint, EpicPlanningBlocker } from "./epic-planning-checkpoint.js";
 import type { PlanningActivity, PlanningBlockers } from "./discovery-diagnostics.js";
-import { reusablePlanningCheckpoint } from "./epic-planning-checkpoint.js";
+import { reusablePlanningCheckpoint, rememberEpicContext } from "./epic-planning-checkpoint.js";
 import { reservedStageCharacters, epicDraftLimit } from "./epic-stage-context.js";
+import { epicPlanningProjectKey } from "./epic-planning-input.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const epicContextTarget = 72000;
@@ -67,25 +68,30 @@ function groups(project: Project, records: Record[], size: number): Record[][] {
   return [...batches, ...records.filter((r) => "options" in r).sort((a, b) => a.id.localeCompare(b.id)).map((r) => [r])];
 }
 
-type ContextMemo = Pick<EpicPlanningOptions, "contexts" | "onContext">;
+type ContextMemo = Pick<EpicPlanningOptions, "contexts" | "onContext"> & { projectKeys?: WeakMap<Project, string> };
 export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false, guardrailIDs?: string[], index?: EvidenceGraph, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo): ContextPack {
   if (!memo?.contexts) return computeEpicReviewContext(project, review, extraIDs, final, guardrailIDs, index, onPrepare, preparation);
-  const key = hash(["epic-context-computation-v1", project.id, project.revision, review, extraIDs, final, guardrailIDs]);
-  const cached = memo.contexts.get(key);
+  const projectKey = memo.projectKeys?.get(project) ?? epicPlanningProjectKey(project);
+  memo.projectKeys?.set(project, projectKey);
+  const key = hash(["epic-context-computation-v2", projectKey, review, extraIDs, final, guardrailIDs]);
+  const legacyKey = hash(["epic-context-computation-v1", project.id, project.revision, review, extraIDs, final, guardrailIDs]);
+  const cached = memo.contexts.get(key) ?? memo.contexts.get(legacyKey);
   if (cached) {
-    memo.contexts.delete(key); memo.contexts.set(key, cached);
+    if (cached.outcome === "planning-failure") throw new Error("Invalid context computation checkpoint.");
+    rememberEpicContext(memo.contexts, key, cached);
     memo.onContext?.(key, cached, true);
     if (cached.outcome === "context") {
       const context = structuredClone(cached.context);
+      context.manifest.revision = project.revision;
+      (context.data as { revision: number }).revision = project.revision;
       context.manifest.epicReview = review; // Restore the live identity alias used by cold construction.
       return context;
     }
-    const error = new ContextBudgetError(structuredClone(cached.manifest)); error.message = cached.message; throw error;
+    const error = new ContextBudgetError({ ...structuredClone(cached.manifest), revision: project.revision }); error.message = cached.message; throw error;
   }
   const remember = (value: EpicContextCheckpoint) => {
     const copy = structuredClone(value);
-    memo.contexts!.set(key, copy);
-    if (memo.contexts!.size > 128) memo.contexts!.delete(memo.contexts!.keys().next().value!);
+    rememberEpicContext(memo.contexts!, key, copy);
     memo.onContext?.(key, copy, false);
   };
   let context: ContextPack;
@@ -280,6 +286,9 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   // This index lives only for this synchronous plan, never across project mutations.
   const graph = evidenceGraph(project);
   const preparation = contextPreparationIndex(project, graph, options.onClosure);
+  const contextMemo: ContextMemo = { contexts: options.contexts, onContext: options.onContext, projectKeys: new WeakMap() };
+  const currentProjectKey = options.contexts ? epicPlanningProjectKey(project) : undefined;
+  if (currentProjectKey) contextMemo.projectKeys!.set(project, currentProjectKey);
   const evidence = gapEvidence(project, graph);
   const requirementIDs = new Set(project.requirements.map((r) => r.id));
   const tasks: EpicReviewTask[] = [];
@@ -321,13 +330,29 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
         // Research is not part of the legacy gap key. Retain conservative freshness here.
         research: project.research.filter((r) => epicIDs.includes(r.epicID)) }) });
     let context: ContextPack | undefined, batches: ContextPack[] | undefined, batchKey: string | undefined, error: ContextBudgetError | undefined, batchLimit: StagedBatchLimitError | undefined;
+    // Failed candidate policies are small deterministic local results. Retaining
+    // them avoids replaying an entire >16-batch partition before reaching the
+    // unfinished sibling on explicit retry. Never cache a pending model package.
+    const failureKey = hash(["epic-candidate-failure-v1", currentProjectKey, epicID, epicIDs, kind, recordIDs, contextPolicy]);
+    const savedFailure = options.contexts?.get(failureKey);
+    if (savedFailure?.outcome === "planning-failure") {
+      options.onContext?.(failureKey, savedFailure, true);
+      if (savedFailure.kind === "stage-limit") batchLimit = new StagedBatchLimitError();
+      else {
+        const manifest = { ...structuredClone(savedFailure.manifest!), revision: project.revision };
+        error = savedFailure.kind === "context" ? new ContextBudgetError(manifest)
+          : new StagedBudgetError(savedFailure.kind, manifest);
+        error.message = savedFailure.message;
+      }
+      const candidate = { review, error, batchLimit }; candidates.set(cacheKey, candidate); return candidate;
+    }
     try {
       const staged = isStagedPolicy(contextPolicy) ? during(activity === "saved-policy" ? "saved-policy" : "staging",
-        () => stagedEpicReview(project, { ...review, contextPolicy }, options.onPrepare, preparation, options)) : undefined;
+        () => stagedEpicReview(project, { ...review, contextPolicy }, options.onPrepare, preparation, contextMemo)) : undefined;
       if (staged) review = staged.review;
       batches = staged?.contexts;
       batchKey = batches ? epicBatchKey(batches) : undefined;
-      context = batches?.[0] ?? epicReviewContext(project, review, [], false, undefined, graph, options.onPrepare, preparation, options);
+      context = batches?.[0] ?? epicReviewContext(project, review, [], false, undefined, graph, options.onPrepare, preparation, contextMemo);
       const withoutIdentity = { ...context, manifest: { ...context.manifest } };
       delete withoutIdentity.manifest.epicReview;
       review.inputKey = hash({ semantic: review.inputKey, exact: batchKey ?? retrievalEvidenceBasis(withoutIdentity).key,
@@ -338,6 +363,13 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       if (cause instanceof StagedBatchLimitError) batchLimit = cause;
       else if (cause instanceof ContextBudgetError) error = cause;
       else throw cause;
+    }
+    if (options.contexts && (error || batchLimit)) {
+      const value: EpicContextCheckpoint = { format: 1, outcome: "planning-failure",
+        kind: batchLimit ? "stage-limit" : error instanceof StagedBudgetError ? error.stage : "context",
+        message: (batchLimit ?? error)!.message, ...(error ? { manifest: structuredClone(error.manifest) } : {}) };
+      rememberEpicContext(options.contexts, failureKey, value);
+      options.onContext?.(failureKey, value, false);
     }
     // A saved policy may no longer partition the current evidence. This is a
     // failed compatibility candidate, not permission to abort the whole catalog
@@ -354,11 +386,11 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     const stage = j.retrievalWork?.stages[0];
     const extra = stage && "retrieveEvidence" in stage.request ? stage.request.retrieveEvidence.recordIDs : [];
     try {
-      const current = extra.length ? epicReviewContext(project, review, extra, true, undefined, graph, options.onPrepare, preparation, options) : context;
+      const current = extra.length ? epicReviewContext(project, review, extra, true, undefined, graph, options.onPrepare, preparation, contextMemo) : context;
       if (j.retrievalWork?.final) return j.retrievalWork.final.evidenceBasis?.key === retrievalEvidenceBasis(current).key;
       if (!extra.length || j.expectedRevision === project.revision) return true;
       if (!readRevision) return true;
-      return retrievalEvidenceBasis(epicReviewContext(readRevision(j.expectedRevision), review, extra, true, undefined, undefined, options.onPrepare, undefined, options)).key === retrievalEvidenceBasis(current).key;
+      return retrievalEvidenceBasis(epicReviewContext(readRevision(j.expectedRevision), review, extra, true, undefined, undefined, options.onPrepare, undefined, contextMemo)).key === retrievalEvidenceBasis(current).key;
     } catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
   };
   const add = (epicID: string, epicIDs: string[], kind: EpicReview["kind"], records: Record[]) => {

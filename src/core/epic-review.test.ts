@@ -30,6 +30,7 @@ import { stagedRunDurationMs } from "./epic-run.js";
 import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
 import { emptyExecution } from "./execution.js";
+import type { EpicPlanningCheckpoint, EpicContextCheckpoint } from "./epic-planning-checkpoint.js";
 
 const empty = (): Analysis => ({ summary: "Task-sized pass", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 function seed(store: ProjectStore, count = 8) {
@@ -132,9 +133,15 @@ test("current stage-limit blockers remain explicit and do not prevent independen
     independent.epics.find((e) => e.id === "orders")!.dependencies.push("guardrails");
     independent.sources = independent.sources.map((s) => s.kind === "note" ? { ...s, epicID: "guardrails" } : s);
     independent.requirements.push({ ...target, id: "independent-target", epicID: "independent", statement: "Keep independent behavior" });
-    const continued = planEpicReview(independent, history, undefined, [], undefined, { firstPending: true });
+    const contexts = new Map<string, EpicContextCheckpoint>(), resolved = new Map<string, EpicPlanningCheckpoint>();
+    const continued = planEpicReview(independent, history, undefined, [], undefined, { firstPending: true, contexts, resolved });
     assert.ok(continued.report.blocked > 0); assert.equal(continued.task!.review.epicID, "independent");
     assert.equal(continued.report.planningPartial, true);
+    let reused = 0;
+    const warm = planEpicReview(independent, history, undefined, [], undefined, { firstPending: true, contexts, resolved,
+      onResolved(_key, _value, hit) { if (hit) reused++; },
+      onPrepare() { assert.fail("Unchanged blocked prefix and pending exact context should reuse local work"); } });
+    assert.deepEqual(warm.report, continued.report); assert.deepEqual(warm.task, continued.task); assert.ok(reused > 0);
     assert.throws(() => planEpicReview(p, history, "orders", [], undefined, { onPrepare() { throw new Error("Unexpected preparation failure"); } }), /Unexpected preparation failure/);
     assert.deepEqual(p, before);
   } finally { store.close(); }

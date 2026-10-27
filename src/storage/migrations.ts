@@ -7,7 +7,7 @@ import { createActivityIndex } from "./activity.js";
 import { workflowSchema, workflowReadinessSchema } from "../core/workflow.js";
 import { implementationPlanningWorkSchema } from "../core/implementation-planning.js";
 
-export const databaseSchemaVersion = 7;
+export const databaseSchemaVersion = 8;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -101,6 +101,12 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
     project_id TEXT NOT NULL REFERENCES projects(id), receipt_key TEXT NOT NULL, payload TEXT NOT NULL,
     PRIMARY KEY(project_id, receipt_key)
   );`);
+} }, { version: 8, name: "workflow-planning-probe-pools-v1", apply(db: Database.Database) {
+  // Classify once on insert/index creation, not by reparsing every saved wire
+  // context on every probe write. No evidence or previous cache payload changes.
+  db.exec(`CREATE INDEX IF NOT EXISTS epic_planning_context_pool ON epic_planning_contexts
+    (project_id, (json_extract(payload, '$.outcome') = 'context'), format,
+     json_extract(payload, '$.format'), json_extract(payload, '$.outcome'), json_extract(payload, '$.kind'));`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

@@ -1,5 +1,59 @@
 # Data migrations and upgrade compatibility
 
+## Resumable workflow planning probes and bookkeeping revisions (2026-10-27)
+
+The supplied metadata-only export contains two two-minute preparation failures at
+revisions 2379/2380, each examining 34 blocked packages, resolving 61 local groups
+and reusing **zero** groups. Neither made a model request. About 100 seconds per
+run went into staging; 2 target-size, 17 indivisible-decision and 15 batch-limit
+blockers were recorded. The export does not identify what changed between revisions
+or establish blockers for the unexamined remainder.
+
+Source/target: SQLite **7 → 8** adds only an expression index separating successful
+wire contexts from failed local probes. The ordered startup migration is transactional
+and leaves all existing payloads, specification/CAS revisions, evidence IDs, model
+checks, stages and spent attempts unchanged. An interrupted migration rolls back the
+index/history/version together and retries on reopen. Older apps refuse schema 8;
+downgrade after upgrading is unsupported.
+
+CPU input namespace `resolved-prefix-v2` binds all project material except the
+revision number and known workflow-unread bookkeeping (`implementation`,
+`reviewUpdates`, `roundChanges`, `assessments`, `scopeAssessment`). Revision **digit
+width** remains bound because it affects exact encoded sizes. All sources, questions,
+requirements, dependencies, organization records, generated interpretation,
+analysis revision, scans, model selection, job history, submissions and selection
+remain conservative inputs. This is not permission to reuse after arbitrary
+unrelated evidence edits. Context-computation keys separately bind each immutable
+project's material, so historical evidence cannot collide with current evidence.
+Compatible cached contexts are cloned and rebound to the current revision; same-width
+revision substitution leaves sizes, evidence hashes and partition identities intact.
+Publication still requires the latest expected revision.
+
+Existing format-1 root/subtree receipts and budget/context computations remain readable.
+An exact matching `resolved-prefix-v1` generation is lazily adopted on explicit
+preparation, without inference. Each storage write remains transactional/revision
+checked; an interrupted adoption never grants model attempts or changes original
+checks. Unmatched disposable CPU work may be recomputed, never model calls solely
+because this CPU representation changed. No project reset or bulk reassessment is
+needed. Original failed-job diagnostics are not rewritten.
+
+The format-1 intermediate envelope adds `outcome: planning-failure`, a deterministic
+failed candidate-policy result with kind `context`, `target`, `seed` or `stage-limit`,
+original diagnostic and required size manifest where applicable. It is not model
+evidence or a completed review. Successful contexts retain their 128-entry/16-MiB
+pool; budget/failed-policy probes have a separate 4,096-entry/64-MiB pool. The index
+avoids reparsing large wire payloads for pool selection on every checkpoint write.
+Completed failed partitions and intermediate split probes survive explicit retry,
+including inside a root without a completed group receipt. Bounded eviction or one
+indivisible computation can still require recomputation/time out. Unknown formats
+or outcome variants reject on load rather than being adopted; no startup model calls.
+
+Tests cover exact cold/warm wire equivalence, metadata revision reuse, evidence and
+wire-width invalidation, unfinished-root interruption/reopen, independent packages
+past cached blockers, separate-pool eviction, legacy adoption, interrupted migration/
+adoption and repeated startup. Verification results are recorded in
+[discovery efficiency](discovery-efficiency.md#workflow-preparation-retry-fix-2026-10-27).
+
 ## Oversized pair-resolution refinement continuation (2026-10-26)
 
 The later **148,329/144,000-character** failure was a two-requirement comparison,

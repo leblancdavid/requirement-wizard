@@ -92,7 +92,7 @@ test("legacy execution migration preserves evidence, delivery, original payload 
     const db = new Database(f.path);
     assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.deepEqual(db.prepare("SELECT payload FROM execution_migration_backups").all(), [{ payload: f.payload }]);
-    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history").get() as { n: number }).n, 6);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history").get() as { n: number }).n, databaseSchemaVersion - 1);
     db.close();
   } finally { rmSync(f.directory, { recursive: true, force: true }); }
 });

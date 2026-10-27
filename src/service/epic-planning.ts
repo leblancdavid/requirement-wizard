@@ -5,17 +5,24 @@ import type { planEpicReview } from "../core/epic-review.js";
 import { ContextBudgetError } from "../core/context.js";
 import { planningProgressSchema, type PlanningProgress } from "../core/discovery-diagnostics.js";
 import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
+import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
 
 /** Bump on any scheduling/context/freshness change that could alter skip receipts.
- * Deliberately conservative: even irrelevant edits invalidate local CPU reuse.
+ * Exclude only bookkeeping never read by the workflow planner/context builder.
+ * Keep revision width: changing encoded size can change a boundary partition.
  * This is NOT a semantic/model/checkpoint identity and never changes saved calls. */
 export function epicPlanningInputKey(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[]) {
-  return createHash("sha256").update(JSON.stringify(["resolved-prefix-v1", project, jobs, focusEpicID, submissions])).digest("hex");
+  return createHash("sha256").update(JSON.stringify(["resolved-prefix-v2", epicPlanningProjectKey(project), jobs, focusEpicID, submissions])).digest("hex");
 }
 
 export type EpicPlan = Omit<ReturnType<typeof planEpicReview>, "tasks">;
 export class PlanningTimeoutError extends Error {
-  constructor() { super("Local workflow preparation exceeded its two-minute bound. No model request was made. Completed local planning groups and earlier model checks are retained. Retry explicitly to continue past compatible saved groups; if one group still cannot finish, narrow the feature scope."); }
+  constructor(progress?: PlanningProgress) {
+    const blockers = progress?.blockerSummary;
+    super("Local workflow preparation exceeded its two-minute bound. No model request was made. Completed local preparation steps and earlier model checks are retained."
+      + (blockers && progress.examinedStates?.blocked ? ` The examined prefix has ${progress.examinedStates.blocked} blocked packages: ${blockers.stagedTarget} oversized targets, ${blockers.stagedSeed} indivisible decisions, ${blockers.stageLimit} batch-limit blockers and ${blockers.contextLimit + blockers.savedBlocker + blockers.attemptLimit + blockers.unknown} other blockers. This is not a whole-project result.` : "")
+      + " Resume discovery explicitly to continue compatible saved planning. A size blocker needs its exact evidence/dependency scope reviewed; repeated retries cannot make unchanged oversized evidence fit.");
+  }
 }
 
 /** Owned CPU worker keeps API, cancellation and deadline timers responsive even
@@ -30,8 +37,21 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
     saveContext?: (inputKey: string, key: string, value: EpicContextCheckpoint) => void } ): Promise<EpicPlan> {
   options.signal.throwIfAborted();
   const inputKey = epicPlanningInputKey(project, jobs, focusEpicID, submissions);
-  const data = { project, jobs, focusEpicID, submissions, resolved: options.loadReceipts?.(inputKey) ?? new Map(),
-    contexts: options.loadContexts?.(inputKey) ?? new Map() };
+  // Lazy adoption of the previous exact-input cache only when its original full
+  // inputs still match. These are disposable CPU receipts, never model evidence.
+  const legacyKey = createHash("sha256").update(JSON.stringify(["resolved-prefix-v1", project, jobs, focusEpicID, submissions])).digest("hex");
+  const resolved = options.loadReceipts?.(inputKey) ?? new Map<string, EpicPlanningCheckpoint>();
+  const contexts = options.loadContexts?.(inputKey) ?? new Map<string, EpicContextCheckpoint>();
+  if (!resolved.size) for (const [key, value] of options.loadReceipts?.(legacyKey) ?? []) {
+    options.signal.throwIfAborted();
+    options.saveReceipt?.(inputKey, key, value); resolved.set(key, value);
+  }
+  if (!contexts.size) for (const [key, value] of options.loadContexts?.(legacyKey) ?? []) {
+    options.signal.throwIfAborted();
+    options.saveContext?.(inputKey, key, value); contexts.set(key, value);
+  }
+  options.signal.throwIfAborted();
+  const data = { project, jobs, focusEpicID, submissions, resolved, contexts };
   const source = import.meta.url.endsWith(".ts");
   // Source runs need tsx's explicit import API in the worker. Packaged builds use
   // emitted JS directly and never depend on the dev-only TypeScript loader.
@@ -53,7 +73,7 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
       report();
       if (settled) return;
       pulse = setInterval(report, 500);
-      timer = setTimeout(() => fail(new PlanningTimeoutError()), options.timeoutMs ?? 120_000);
+      timer = setTimeout(() => fail(new PlanningTimeoutError(latest)), options.timeoutMs ?? 120_000);
       worker.on("message", (message: { type: string; value?: unknown; key?: string; revision?: number; message?: string; manifest?: ContextBudgetError["manifest"] }) => {
         if (settled) return;
         try {

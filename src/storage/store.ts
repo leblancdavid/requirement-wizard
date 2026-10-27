@@ -39,7 +39,7 @@ import { assertRefinementEvidence } from "../core/refinement-context.js";
 import { epicReviewBatches } from "../core/epic-review.js";
 import type { GapHistory } from "../core/gap-backlog.js";
 import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSource } from "../core/discovery-diagnostics.js";
-import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
+import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, epicPlanningCacheLimits, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { readinessQuestionTaskSchema, validateReadinessQuestions } from "../core/readiness-questions.js";
@@ -1130,8 +1130,8 @@ export class ProjectStore {
       .all(projectID) as { payload: string }[]).map((row) => readStoredJob(row.payload));
   }
 
-  /** Derived scheduling only, not exported evidence. Exact input keys include all
-   * project/job/submission data and an explicit planner-algorithm version. */
+  /** Derived scheduling only, not exported evidence. Input keys bind workflow
+   * material, job/submission data and an explicit planner-algorithm version. */
   epicPlanningReceipts(projectID: string, inputKey: string): Map<string, EpicPlanningCheckpoint> {
     const rows = this.db.prepare("SELECT input_key, group_key, format, payload FROM epic_planning_receipts WHERE project_id = ?")
       .all(projectID) as { input_key: string; group_key: string; format: number; payload: string }[];
@@ -1170,33 +1170,45 @@ export class ProjectStore {
   }
 
   epicPlanningContexts(projectID: string, inputKey: string): Map<string, EpicContextCheckpoint> {
-    if (this.db.prepare("SELECT 1 FROM epic_planning_contexts WHERE project_id = ? AND format != 1").get(projectID))
+    this.assertPlanningContextFormats(projectID);
+    // Validate all generations before a later write can replace an old one.
+    const rows = this.db.prepare("SELECT input_key, context_key, payload FROM epic_planning_contexts WHERE project_id = ? ORDER BY rowid")
+      .all(projectID) as { input_key: string; context_key: string; payload: string }[];
+    const parsed = rows.map((row) => ({ ...row, value: epicContextCheckpointSchema.parse(JSON.parse(row.payload)) as EpicContextCheckpoint }));
+    return new Map(parsed.filter((row) => row.input_key === inputKey).map((row) => [row.context_key, row.value]));
+  }
+
+  private assertPlanningContextFormats(projectID: string) {
+    // Read the indexed envelope fields, never reparse every large wire payload
+    // for each checkpoint. Reject future variants before deleting a generation.
+    if (this.db.prepare(`SELECT 1 FROM epic_planning_contexts INDEXED BY epic_planning_context_pool WHERE project_id = ? AND
+      (format != 1 OR COALESCE(json_extract(payload, '$.format'), 0) != 1 OR
+       COALESCE(json_extract(payload, '$.outcome'), '') NOT IN ('context', 'budget', 'planning-failure') OR
+       (json_extract(payload, '$.outcome') = 'planning-failure' AND
+        COALESCE(json_extract(payload, '$.kind'), '') NOT IN ('context', 'target', 'seed', 'stage-limit')))` ).get(projectID))
       throw new Error("Unsupported intermediate planning context format. Saved work was not overwritten.");
-    const rows = this.db.prepare("SELECT context_key, payload FROM epic_planning_contexts WHERE project_id = ? AND input_key = ? ORDER BY rowid")
-      .all(projectID, inputKey) as { context_key: string; payload: string }[];
-    return new Map(rows.map((row) => [row.context_key,
-      epicContextCheckpointSchema.parse(JSON.parse(row.payload)) as EpicContextCheckpoint]));
   }
 
   saveEpicPlanningContext(projectID: string, expectedRevision: number, inputKey: string, contextKey: string, value: EpicContextCheckpoint) {
     z.string().regex(/^[a-f0-9]{64}$/).parse(inputKey); z.string().regex(/^[a-f0-9]{64}$/).parse(contextKey);
     const payload = JSON.stringify(epicContextCheckpointSchema.parse(value));
-    const bytes = Buffer.byteLength(payload), cap = 16 * 1024 * 1024;
+    const bytes = Buffer.byteLength(payload), success = value.outcome === "context";
+    const limits = epicPlanningCacheLimits[success ? "context" : "failure"];
     this.db.transaction(() => {
       const current = this.db.prepare("SELECT revision FROM projects WHERE id = ?").get(projectID) as { revision: number } | undefined;
       if (current?.revision !== expectedRevision) throw new StaleRevisionError();
-      if (this.db.prepare("SELECT 1 FROM epic_planning_contexts WHERE project_id = ? AND format != 1").get(projectID))
-        throw new Error("Unsupported intermediate planning context format. Saved work was not overwritten.");
-      if (bytes > cap) return; // The computation still proceeds without caching.
+      this.assertPlanningContextFormats(projectID);
+      if (bytes > limits.bytes) return; // The computation still proceeds without caching.
       this.db.prepare("DELETE FROM epic_planning_contexts WHERE project_id = ? AND input_key != ?").run(projectID, inputKey);
-      // FIFO retention prioritizes the unfinished tail over contexts from roots
-      // already covered by durable receipts. Eviction never removes evidence.
-      const rows = this.db.prepare("SELECT context_key, bytes FROM epic_planning_contexts WHERE project_id = ? ORDER BY rowid")
-        .all(projectID) as { context_key: string; bytes: number }[];
+      // Separate FIFO pools: large wire contexts cannot evict the small failed
+      // probes proving why an expensive partition must split or cannot finish.
+      const rows = this.db.prepare(`SELECT context_key, bytes FROM epic_planning_contexts WHERE project_id = ?
+        AND (json_extract(payload, '$.outcome') = 'context') = ? ORDER BY rowid`)
+        .all(projectID, Number(success)) as { context_key: string; bytes: number }[];
       if (rows.some((row) => row.context_key === contextKey)) return;
       let total = rows.reduce((sum, row) => sum + row.bytes, 0), count = rows.length;
       for (const row of rows) {
-        if (count < 128 && total + bytes <= cap) break;
+        if (count < limits.entries && total + bytes <= limits.bytes) break;
         this.db.prepare("DELETE FROM epic_planning_contexts WHERE project_id = ? AND context_key = ?").run(projectID, row.context_key);
         total -= row.bytes; count--;
       }

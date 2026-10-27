@@ -128,6 +128,9 @@ Workflow startup prepares only through the next eligible package in an owned CPU
 worker. **Preparing workflow evidence…** shows progress before inference; initial
 preparation can be stopped and has a two-minute deadline. Partial package counts are
 labelled explicitly rather than presented as a whole-project assessment.
+Explicit retries retain compatible local groups and partition probes across
+bookkeeping-only revisions; unchanged size blockers remain visible rather than
+being counted as reviewed. See [planning recovery](docs/discovery-efficiency.md#workflow-preparation-retry-fix-2026-10-27).
 Gap discovery can request additional exact saved evidence in up to three bounded stages,
 retaining human constraints and checkpointing completed calls for explicit retry. Navigation
 hints cannot support citations; oversized evidence blocks rather than silently truncating it.

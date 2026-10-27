@@ -1,5 +1,51 @@
 # Graph-backed discovery and current-specification contexts
 
+## Workflow preparation retry fix (2026-10-27)
+
+A user-supplied export showed two runs exhausting local preparation after two minutes:
+both examined 34 blocked packages, reused zero groups, and spent about 100 seconds
+staging. No model request was dispatched. Whole-revision CPU identities prevented
+reuse across the observed revision change, although the export cannot identify the
+changed material. A separate 128-entry shared intermediate cache could also churn
+thousands of failed probes alongside large successful contexts.
+
+Workflow preparation now binds known workflow material rather than bookkeeping-only
+revision changes. Actual evidence/history/model/selection changes still invalidate
+conservatively. Intermediate contexts bind historical and current material separately
+and rebind only the known current revision field in a cloned compatible wire context.
+The revision's digit width remains bound to preserve exact size/partition decisions.
+
+Small budget probes and whole failed candidate policies now have a separate bounded
+4,096-entry/64-MiB pool, leaving the successful-context pool at 128 entries/16 MiB.
+This retains failed partition/split work inside an unfinished group, not just completed
+root/subtree receipts. Retrying can skip unchanged blocked work and proceed to an
+independent eligible package. It never treats an oversized target, indivisible decision
+or >16-batch partition as reviewed, drops evidence, raises context/model-attempt limits,
+or silently starts requests on reopen. Genuine size blockers remain blockers. The
+timeout now includes the examined-prefix blocker breakdown, not a whole-project claim.
+
+Restart the updated app and explicitly use **Resume discovery**. Exact-compatible old
+CPU caches are adopted; completed model checks/attempts require no reset or replay.
+A changed evidence generation, bounded cache eviction, or a single indivisible local
+computation may still require work or pause again. The actual supplied project's
+successful continuation is not established by metadata or synthetic tests. See the
+[migration ledger](migrations.md#resumable-workflow-planning-probes-and-bookkeeping-revisions-2026-10-27).
+
+Verification: **958 tests passed** (`npm test`: 295 pretests + 663 main), including
+transactional schema-7/legacy-cache recovery and exact cold/warm identity checks.
+The focused planning/workflow/migration suite also passed separately after the final
+cache/cancellation changes, as did type checking, the UI build and diff whitespace
+checks. The desktop build passed UI/TypeScript compilation but could not replace
+`dist/desktop-app/node_modules/better-sqlite3/prebuilds/win32-x64.node` (`EPERM`,
+apparently in use); no app process was stopped. Close the desktop app before rebuilding.
+The workflow browser runner stopped at its obsolete **Project map** tab locator
+(`src/web/epic-review-browser-check.ts:122`); later checks were not reached. This
+change does not qualify that browser runner or actual-project/live-model continuation.
+An initial migration-test run exposed older test fixtures that retained migration-8
+history while simulating schema 6, and a hard-coded migration count; those fixtures
+were corrected and both later full suites passed. No live model calls or personal
+project writes were performed.
+
 ## Exhausted saved step: explicit, bounded additional allowance (2026-10-26)
 
 A user retry reached four cumulative attempts: evidence load, the old permissions
