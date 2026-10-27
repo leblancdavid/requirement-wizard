@@ -324,6 +324,8 @@ export type Job = {
   readinessWork?: import("./readiness-stages.js").ReadinessWork;
   submissionWork?: import("./submission-stages.js").SubmissionWork;
   refinementWork?: import("./refinement-stages.js").RefinementWork;
+  /** Attempts dispatched by this job only; reused receipts are not new calls. */
+  refinementRequests?: number;
   refinementStageProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
   /** Metadata-only browser projection; never a request grant by itself. */
   submissionAllowance?: { step: number; attempts: number; limit: number; canExtend: boolean };

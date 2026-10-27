@@ -58,6 +58,7 @@ function readStoredJob(payload: string): Job {
   const job = JSON.parse(payload) as Job;
   if (job.portableReceipt !== undefined && job.portableReceipt !== 1) throw new Error("Unsupported portable checkpoint receipt. Upgrade the app; saved work was not overwritten.");
   if (job.discoveryMetrics !== undefined) discoveryMetricsSchema.parse(job.discoveryMetrics);
+  if (job.refinementRequests !== undefined) z.number().int().nonnegative().parse(job.refinementRequests);
   const envelopes = [...(job.result?.resolutionCheck ? [job.result.resolutionCheck] : []),
     ...(job.result?.refinements ?? []).flatMap((p) => p.resolution ? [p.resolution] : [])];
   if (envelopes.some((value) => value.format !== 1)) throw new Error("Unsupported requirement-resolution format in saved job. Upgrade the app; saved evidence was not overwritten.");
@@ -138,6 +139,7 @@ function applyScanResults(project: Project, scan: NonNullable<Job["scan"]>, outp
 
 export class ProjectStore {
   private readonly db: Database.Database;
+  private readonly deferredWorkspaceSync = new Map<string, number>();
 
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -437,7 +439,7 @@ export class ProjectStore {
   syncWorkspace(id: string): Workspace | null {
     // Workers checkpoint immediately in SQLite. Do not repeatedly rebuild the
     // portable evidence set while a scan/discovery/implementation request owns it.
-    if (this.db.inTransaction || this.executionActive(id) || this.discoveryActive(id)) return this.workspace(id);
+    if (this.deferredWorkspaceSync.has(id) || this.db.inTransaction || this.executionActive(id) || this.discoveryActive(id)) return this.workspace(id);
     const owner = randomUUID();
     const acquired = this.db.prepare("UPDATE workspaces SET owner = ?, lease_until = ? WHERE project_id = ? AND (owner IS NULL OR lease_until <= ?)")
       .run(owner, Date.now() + 300_000, id, Date.now()).changes;
@@ -480,6 +482,21 @@ export class ProjectStore {
       }
     }
     return this.workspace(id);
+  }
+
+  /** SQLite checkpoints remain immediate; publish the accumulated portable view
+   * once at the end of an owned continuous action, including pause/failure. */
+  deferWorkspacePublication(id: string) {
+    this.projectRevision(id);
+    this.deferredWorkspaceSync.set(id, (this.deferredWorkspaceSync.get(id) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.deferredWorkspaceSync.get(id) ?? 1) - 1;
+      if (remaining) this.deferredWorkspaceSync.set(id, remaining);
+      else { this.deferredWorkspaceSync.delete(id); if (this.db.open) this.syncWorkspace(id); }
+    };
   }
 
   syncWorkspaces() {
@@ -1329,7 +1346,7 @@ export class ProjectStore {
     }).immediate();
   }
 
-  checkpointRefinement(id: string, input: RefinementWork, context: NonNullable<Job["context"]>) {
+  checkpointRefinement(id: string, input: RefinementWork, context: NonNullable<Job["context"]>, requestStarted = false) {
     this.db.transaction(() => {
       const job = this.getJob(id), work = refinementWorkSchema.parse(input);
       refinementStageSchema.parse(context.refinementStage);
@@ -1339,8 +1356,19 @@ export class ProjectStore {
         || context.gapExploration || context.epicReview || job.submissionWork || job.readinessWork || job.definitionWork || job.retrievalWork
         || context.refinementStage?.planKey !== work.planKey)
         throw new Error("Refinement checkpoint requires its exact target and plan.");
+      if (!job.refinementWork) job.refinementRequests = 0;
+      if (requestStarted && job.refinementRequests !== undefined) job.refinementRequests++;
       job.refinementWork = structuredClone(work); job.context = context;
       job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 360000); this.saveJob(job);
+    }).immediate();
+  }
+
+  recordRefinementRequest(id: string) {
+    this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (!job.context?.refinementOnly || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Refinement worker is no longer live.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      job.refinementRequests = (job.refinementRequests ?? 0) + 1; this.saveJob(job);
     }).immediate();
   }
 

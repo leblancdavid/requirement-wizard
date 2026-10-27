@@ -41,6 +41,8 @@ test("zero-request blocked runs explain retained blockers without claiming a new
   assert.doesNotMatch(jobHistoryLog({ ...entry, requests: null }).summary!, /Stopped before/);
   assert.doesNotMatch(jobHistoryLog({ ...entry, blockReason: null }).summary!, /Stopped before/);
   assert.deepEqual(entry, original);
+  assert.match(jobHistoryLog({ ...entry, requests: 18, requestsAtLeast: true, refinementOutcome: "unchanged" }).summary!, /Finished—no wording changes needed.*At least 18 model request attempts this run/);
+  assert.match(jobHistoryLog({ ...entry, requests: 9, refinementOutcome: "suggestion" }).summary!, /Finished—wording suggestion ready for approval.*9 model request attempts this run/);
 });
 
 test("older saved jobs remain readable without fabricated timestamps or mutations", () => {

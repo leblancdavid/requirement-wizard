@@ -3,12 +3,13 @@ import test from "node:test";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import Database from "better-sqlite3";
 import { ProjectStore } from "../storage/store.js";
-import { type Analysis } from "../core/model.js";
+import { reviewFingerprint, type Analysis } from "../core/model.js";
 import { ContextBudgetError } from "../core/context.js";
 import { planExactTaskContext } from "../core/working-set.js";
 import { refinementEvidenceRecords } from "../core/refinement-context.js";
-import { acceptRefinementStage, planRefinementStages, refinementMaterials, refinementStageContext, refinementStep, refinementWorkSchema, replayRefinementStages } from "../core/refinement-stages.js";
+import { acceptRefinementStage, planRefinementStages, refinementMaterials, refinementStageContext, refinementStep, refinementWorkSchema, replayRefinementStages, refinementStageProgress, refinementNoChangeComplete } from "../core/refinement-stages.js";
 import { DiscoveryService, type DiscoveryAdapter } from "./discovery.js";
 import { DiscoveryQueue } from "./queue.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
@@ -65,7 +66,106 @@ test("small refinement retains the original one-request path", async () => {
   try {
     const job = await new DiscoveryService(f.store, { async analyze(_p, { context }) { calls++; assert.equal(context.manifest.refinementStage, undefined); return f.output(); } })
       .analyze(f.project.id, f.project.revision, { refinementOnly: true, recordIDs: [f.requirementID] });
-    assert.equal(job.status, "completed", job.diagnostic); assert.equal(calls, 1); assert.equal(job.refinementWork, undefined);
+    assert.equal(job.status, "completed", job.diagnostic); assert.equal(calls, 1); assert.equal(job.refinementWork, undefined); assert.equal(job.refinementRequests, 1);
+  } finally { f.store.close(); }
+});
+test("no-change refinement reads every batch once, skips empty-proposal verification and reuses its completed check", async () => {
+  const f = fixture(), seen = new Set<string>(); let calls = 0;
+  const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(_p, { context }) {
+    calls++; assert.equal(context.manifest.refinementStage!.phase, "read");
+    for (const id of context.manifest.includedIDs) seen.add(id);
+    return context.manifest.refinementStage!.step === 0 ? { ...empty(), summary: "Wording already suitable", refinements: [] } : { refinementKeep: true };
+  } }));
+  try {
+    queue.resume(f.project.id, { refinementOnly: true }); await queue.wait(f.project.id);
+    const job = f.store.jobs(f.project.id).at(-1)!, w = job.refinementWork!;
+    assert.equal(job.status, "completed", job.diagnostic); assert.equal(calls, w.batches.length);
+    assert.equal(job.refinementRequests, calls); assert.equal(w.receipts.length, calls);
+    assert.deepEqual(refinementStageProgress(w), { completed: calls, total: calls, phase: "complete" });
+    assert.deepEqual([...seen].sort(), [...refinementMaterials(f.project, f.requirementID).evidenceIDs].sort());
+    assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements); assert.equal(f.store.get(f.project.id).refinements.length, 0);
+    const saved = f.store.get(f.project.id);
+    const portable = decodePortable(renderWorkspace(saved, undefined, continuationState(saved, f.store.jobs(saved.id), [], (r) => f.store.get(saved.id, r))), saved.model);
+    const receipt = portable.continuation.jobs.find((j) => j.id === job.id)!;
+    assert.equal(receipt.refinementRequests, calls); assert.deepEqual(receipt.refinementWork, w);
+    assert.deepEqual(queue.refinementProgress(f.project.id), { phase: "wording", status: "completed", completed: 1, total: 1, requests: calls, suggestions: 0, unchanged: 1 });
+    queue.resume(f.project.id, { refinementOnly: true }); await queue.wait(f.project.id); assert.equal(calls, w.batches.length, "Completed no-change check must not repeat");
+  } finally { await queue.close(); f.store.close(); }
+});
+test("a proposal discovered in the last evidence batch still requires every frozen-draft check", async () => {
+  const f = fixture(), count = planRefinementStages(refinementMaterials(f.project, f.requirementID)).batches.length;
+  let calls = 0;
+  try {
+    const job = await new DiscoveryService(f.store, { async analyze(_p, { context }) {
+      calls++; const stage = context.manifest.refinementStage!;
+      return stage.phase === "check" ? { refinementCheck: { valid: true, reason: "Preserves constraints" } }
+        : stage.step === count - 1 ? f.output() : empty();
+    } }).analyze(f.project.id, f.project.revision, { refinementOnly: true, recordIDs: [f.requirementID] });
+    assert.equal(job.status, "completed", job.diagnostic); assert.equal(calls, count * 2); assert.equal(job.refinementRequests, calls);
+    assert.equal(f.store.get(f.project.id).refinements.length, 1);
+  } finally { f.store.close(); }
+});
+test("older saved no-change reads finish with zero new requests after repeated startup and portable adoption", async () => {
+  mkdirSync(resolve(".reqwizit-state"), { recursive: true });
+  const dir = mkdtempSync(resolve(".reqwizit-state/refinement-no-change-upgrade-")), file = join(dir, "state.sqlite");
+  const f = fixture(file); let store = f.store;
+  try {
+    const m = refinementMaterials(f.project, f.requirementID), w = planRefinementStages(m);
+    const job = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    let draft = empty();
+    while (refinementStep(w) < w.batches.length) {
+      w.attempts = 1; draft = acceptRefinementStage(m, w, draft, empty(), job).draft;
+    }
+    const context = refinementStageContext(m, w, draft).manifest;
+    context.refinementTarget = { requirementID: f.requirementID, fingerprint: reviewFingerprint(f.project.requirements[0]!) };
+    store.checkpointRefinement(job.id, w, context); store.pauseRefinement(job.id, "Older app paused before no-change checks");
+    const original = store.getJob(job.id);
+    delete original.refinementRequests;
+    store.close();
+    const old = new Database(file); old.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(original), job.id); old.close();
+    store = new ProjectStore(file); store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.getJob(job.id), original);
+    const root = join(dir, "project"); mkdirSync(root); store.connectWorkspace(f.project.id, f.project.revision, root); store.syncWorkspace(f.project.id);
+    const adopted = new ProjectStore(":memory:");
+    try {
+      adopted.openWorkspace(root, f.project.model);
+      const resumed = await new DiscoveryService(adopted, { async analyze() { assert.fail("All original evidence reads already completed"); } })
+        .analyze(f.project.id, f.project.revision, { refinementOnly: true, recordIDs: [f.requirementID] });
+      assert.equal(resumed.status, "completed", resumed.diagnostic); assert.equal(resumed.refinementRequests, 0);
+      assert.deepEqual(resumed.refinementWork, w); assert.deepEqual(adopted.getJob(job.id).refinementWork, original.refinementWork);
+      const entry = adopted.logHistory(f.project.id, { jobID: resumed.id }).entries[0]!;
+      assert.equal(entry.requests, 0); assert.equal(entry.refinementOutcome, "unchanged");
+    } finally { adopted.close(); }
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+test("the refinement sweep continues across requirements without a new whole-sweep allowance or confirmation", async () => {
+  const f = fixture(":memory:", false);
+  const setup = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(setup.id, Date.now() + 60000);
+  f.store.finishJob(setup.id, { ...empty(), requirements: [{ statement: "The user can reopen a report", rationale: "Requested behavior",
+    acceptance: ["Saved reports can be reopened"], sourceIDs: [f.project.sources[0]!.id], epicID: "inbox" }] });
+  let calls = 0;
+  const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze() { calls++; return empty(); } }));
+  try {
+    queue.resume(f.project.id, { refinementOnly: true }); await queue.wait(f.project.id);
+    assert.equal(calls, 2); assert.equal(f.store.jobs(f.project.id).filter((j) => j.context?.refinementOnly && j.status === "completed").length, 2);
+    assert.deepEqual(queue.refinementProgress(f.project.id), { phase: "wording", status: "completed", completed: 2, total: 2, requests: 2, suggestions: 0, unchanged: 2 });
+  } finally { await queue.close(); f.store.close(); }
+});
+test("no-change shortcut cannot complete missing reads, implicit retention or an explicitly blocked verification", () => {
+  const f = fixture();
+  try {
+    const m = refinementMaterials(f.project, f.requirementID), w = planRefinementStages(m), job = f.store.beginJob(f.project.id, f.project.revision).job;
+    let draft = empty();
+    while (refinementStep(w) < w.batches.length) {
+      assert.equal(refinementNoChangeComplete(w), false);
+      w.attempts = 1; draft = acceptRefinementStage(m, w, draft, { refinementKeep: true }, job).draft;
+    }
+    assert.equal(refinementNoChangeComplete(w), false, "An explicit no-change draft is required");
+    const explicit = planRefinementStages(m);
+    while (refinementStep(explicit) < explicit.batches.length) { explicit.attempts = 1; draft = acceptRefinementStage(m, explicit, draft, empty(), job).draft; }
+    assert.equal(refinementNoChangeComplete(explicit), true);
+    explicit.attempts = 1; acceptRefinementStage(m, explicit, draft, { refinementCheck: { valid: false, reason: "Original conflict" } }, job);
+    assert.equal(refinementNoChangeComplete(explicit), false); assert.equal(replayRefinementStages(m, explicit).blocked, "Original conflict");
   } finally { f.store.close(); }
 });
 test("pause, repeated startup and portable adoption retain completed reads and spent attempts", async () => {

@@ -82,3 +82,37 @@ test("unified log history API remains authenticated, bounded and read-only acros
     assert.equal(calls, 0); assert.equal(store.jobs(p.id).length, 1);
   } finally { await app.close(); store.close(); }
 });
+
+test("refinement logs retain exact new-run counts and label older receipt counts as lower bounds without exposing results", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "refinement-log-counts-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path);
+  try {
+    const p = store.create("Refinement logs", "Original human input", { providerID: "openai", modelID: "fixture" });
+    const jobs = Array.from({ length: 4 }, () => {
+      const j = store.beginJob(p.id, p.revision).job; store.claimJob(j.id, Date.now() + 60000); store.failJob(j.id, "cancelled", "Fixture"); return store.getJob(j.id);
+    });
+    const db = new Database(path);
+    try {
+      for (const [index, job] of jobs.entries()) {
+        const payload = { ...job, status: "completed", context: { refinementOnly: true, refinementTarget: { requirementID: "target" } },
+          ...(index < 2 ? { refinementRequests: index === 0 ? 9 : 0 } : {}),
+          refinementWork: { receipts: [
+            { jobID: "earlier-job", response: { privateResponse: "NEVER_RETURN_THIS_RESPONSE" } },
+            ...(index === 3 ? [] : [{ jobID: job.id, response: { privateResponse: "NEVER_RETURN_THIS_RESPONSE" } }]),
+          ], batches: [["private-evidence"]], attempts: 0 },
+          result: { privateResponse: "NEVER_RETURN_THIS_RESPONSE", refinements: index === 0 ? [{}] : [] } };
+        db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(payload), job.id);
+      }
+      const before = db.prepare("SELECT id,payload FROM jobs WHERE project_id=? ORDER BY id").all(p.id);
+      const entries = jobs.map((j) => store.logHistory(p.id, { jobID: j.id }).entries[0]!);
+      assert.equal(entries[0]!.requests, 9); assert.equal(entries[0]!.requestsAtLeast, false); assert.equal(entries[0]!.refinementOutcome, "suggestion");
+      assert.equal(entries[1]!.requests, 0); assert.equal(entries[1]!.requestsAtLeast, false); assert.equal(entries[1]!.refinementOutcome, "unchanged");
+      assert.equal(entries[2]!.requests, 1); assert.equal(entries[2]!.requestsAtLeast, true, "Reused receipts cannot count as requests by this job");
+      assert.equal(entries[3]!.requests, null, "Unknown historical attempts must not become zero");
+      assert.equal(entries[2]!.savedSteps, 2); assert.equal(entries[2]!.batches, 1);
+      assert.ok(!JSON.stringify(entries).includes("NEVER_RETURN_THIS_RESPONSE")); assert.ok(!JSON.stringify(entries).includes("private-evidence"));
+      assert.deepEqual(db.prepare("SELECT id,payload FROM jobs WHERE project_id=? ORDER BY id").all(p.id), before);
+    } finally { db.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});

@@ -6,6 +6,13 @@ ordinary folder. SQLite remains the working store and revision history; generate
 files provide readable, versionable specification and progress artifacts. Under
 DEC-029, `.reqwizit/` also contains portable continuation state for clone-and-open.
 
+During a continuous **Refresh definition coverage** action, SQLite commits each
+result/checkpoint immediately, but portable folder publication waits until the
+action finishes, fails or pauses. This avoids rebuilding the entire continuation
+between areas. **Pause assessment before committing/sharing the latest `.reqwizit/`
+state.** Pending exports recover from durable dirty state after interruption; no
+model calls restart automatically. Other projects' publication is unaffected.
+
 ## Share and continue a project (DEC-029)
 
 Commit the entire `.reqwizit/` directory alongside the code. In another checkout,

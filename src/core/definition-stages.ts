@@ -8,6 +8,7 @@ import { definitionInputKey, definitionAreas } from "./definition-identity.js";
 import { shareRepeatedIdentifiers, shareRepeatedText, shareRecordStructure } from "./working-set.js";
 import { definitionSteps, definitionStageLimit as maxStages } from "./definition-continuation.js";
 import { definitionEvidenceRequests, definitionEvidenceRequestLimit, definitionRequestLimit } from "./definition-budget.js";
+import { encodeDefinitionSnapshots } from "./definition-wire.js";
 export { definitionSteps, splitDefinitionStage } from "./definition-continuation.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -44,10 +45,12 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
     supersededBlock: z.string().min(1).max(1000).optional() }).strict().optional(),
   evidencePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
     supersededBlock: z.string().min(1).max(1000).optional() }).strict().optional(),
+  exactWirePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1) }).strict().optional(),
   evidenceRequests: z.array(z.object({ stage: z.number().int().min(0).max(maxStages - 1),
     contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(definitionRequestLimit),
     jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
     response: definitionEvidenceSchema,
+    resolvedRecordIDs: z.array(z.string().min(1)).min(1).max(20).optional(),
   }).strict()).max(maxStages).optional(),
   evidenceFollowupPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
     priorRequests: z.number().int().min(0).max(maxStages), supersededBlock: z.string().min(1).max(1000).optional(),
@@ -59,6 +62,7 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
     evidenceStage: z.number().int().min(0).max(maxStages - 1), splitCount: z.number().int().min(0).max(maxStages - 2),
     contextKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(definitionRequestLimit),
     jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: definitionEvidenceSchema,
+    resolvedRecordIDs: z.array(z.string().min(1)).min(1).max(20).optional(),
   }).strict()).max(maxStages * definitionEvidenceRequestLimit).optional(),
   // Append-only continuation boundaries. Original batches and earlier request
   // hashes remain unchanged; each event bisects only the unfinished exact step.
@@ -92,6 +96,8 @@ const compactResponse = (work: DefinitionWork) => !!work.responsePolicy && work.
 const labeledCitations = (work: DefinitionWork) => !!work.citationPolicy && work.receipts.length >= work.citationPolicy.fromStage;
 const additiveCollectionCitations = (work: DefinitionWork) => !!work.collectionCitationPolicy && work.receipts.length >= work.collectionCitationPolicy.fromStage;
 const evidenceEnabled = (work: DefinitionWork) => !!work.evidencePolicy && work.receipts.length >= work.evidencePolicy.fromStage;
+const exactWire = (work: DefinitionWork) => !!work.exactWirePolicy && work.receipts.length >= work.exactWirePolicy.fromStage;
+const requestedIDs = (request: { resolvedRecordIDs?: string[]; response: z.infer<typeof definitionEvidenceSchema> }) => request.resolvedRecordIDs ?? request.response.definitionEvidence.recordIDs;
 const supplementalRequest = (work: DefinitionWork) => work.evidenceRequests?.find((r) => r.stage ===
   (definitionSteps(work)[work.receipts.length]?.evidenceStage ?? work.receipts.length));
 const followupsEnabled = (work: DefinitionWork) => !!work.evidenceFollowupPolicy && work.receipts.length >= work.evidenceFollowupPolicy.fromStage;
@@ -100,8 +106,14 @@ const activeFollowups = (work: DefinitionWork) => work.evidenceFollowups?.filter
 const restoredEvidenceIDs = (work: DefinitionWork) => followupsEnabled(work) && work.evidenceFollowupPolicy?.restored?.evidenceStage === evidenceOwner(work)
   ? work.evidenceFollowupPolicy.restored.recordIDs : [];
 const stageEvidenceIDs = (work: DefinitionWork) => [...new Set([...definitionSteps(work)[work.receipts.length]!.ids,
-  ...supplementalRequest(work)?.response.definitionEvidence.recordIDs ?? [], ...restoredEvidenceIDs(work),
-  ...activeFollowups(work).flatMap((r) => r.response.definitionEvidence.recordIDs)])];
+  ...(supplementalRequest(work) ? requestedIDs(supplementalRequest(work)!) : []), ...restoredEvidenceIDs(work),
+  ...activeFollowups(work).flatMap(requestedIDs)])];
+
+/** Upgrade only future contexts; never change a saved evidence-request context. */
+export function upgradeDefinitionExactWire(work: DefinitionWork) {
+  if (!work.exactWirePolicy && definitionPhase(work) !== "complete" && !supplementalRequest(work) && !activeFollowups(work).length && !restoredEvidenceIDs(work).length)
+    work.exactWirePolicy = { format: 1, fromStage: work.receipts.length };
+}
 
 function blockedLinkedEvidence(project: Project, work: DefinitionWork) {
   const included = new Set(stageEvidenceIDs(work)), available = new Set(work.batches.flat()), links = new Set<string>();
@@ -155,18 +167,27 @@ export function requestDefinitionEvidence(project: Project, work: DefinitionWork
     .filter((r) => r.stage === work.receipts.length && r.attempts === work.attempts).length;
   const recovery = work.attempts === 3 && work.recovery?.grants.some((g) => g.stage === work.receipts.length && g.spent);
   if (responses >= (recovery ? 2 : 1)) throw new DefinitionEvidenceBlocked("This spent attempt already returned an exact evidence request; a follow-up needs a separately spent request.");
-  const response = definitionEvidenceSchema.parse(raw), ids = response.definitionEvidence.recordIDs;
+  const response = definitionEvidenceSchema.parse(raw);
   const context = definitionStageContext(project, work, draft), available = new Set(work.batches.flat());
-  if (new Set(ids).size !== ids.length || ids.some((id) => !available.has(id) || context.manifest.includedIDs.includes(id))) {
+  const labels = labeledCitations(work) ? citationLabels(work, draft) : {};
+  const ids = response.definitionEvidence.recordIDs.map((id) => exactWire(work) && Object.hasOwn(labels, id) ? labels[id]! : id);
+  const unread = ids.filter((id) => !context.manifest.includedIDs.includes(id));
+  if (exactWire(work)) {
+    const unknown = ids.filter((id) => !available.has(id)).length;
+    if (unknown || new Set(ids).size !== ids.length || !unread.length) throw new DefinitionEvidenceBlocked(
+      `Exact evidence request rejected: ${unknown} unknown references; ${ids.length - new Set(ids).size} duplicate references; ${ids.length - unread.length} already loaded records; ${unread.length} unread records. Use exact canonical IDs or this request's citation labels; add at least one unread saved record. No evidence or assessment was changed.`);
+  } else if (new Set(ids).size !== ids.length || ids.some((id) => !available.has(id) || context.manifest.includedIDs.includes(id))) {
     throw new DefinitionEvidenceBlocked("Cross-batch evidence requests must name distinct unread canonical record IDs from this area's saved exact plan.");
   }
   work.evidenceRequests ??= [];
   const request = { stage: work.receipts.length, contextKey: digest(context.data), attempts: work.attempts,
-    jobID, model: { providerID: project.model.providerID, modelID: project.model.modelID }, response };
+    jobID, model: { providerID: project.model.providerID, modelID: project.model.modelID }, response,
+    ...(exactWire(work) ? { resolvedRecordIDs: unread } : {}) };
   if (supplemental) {
     work.evidenceFollowups ??= [];
     work.evidenceFollowups.push({ ...request, evidenceStage: evidenceOwner(work), splitCount: work.continuation?.splits.length ?? 0 });
   } else work.evidenceRequests.push(request);
+  return request;
 }
 
 /** Explicit continuation only, after replay. The older replacement contract and
@@ -239,7 +260,7 @@ export function planDefinitionStages(project: Project, epicID: string, onProgres
   const records = new Map([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => [r.id, r]));
   if (ids.some((id) => !records.has(id))) throw new DefinitionEvidenceBlocked("Required linked evidence is missing from saved records. Restore or correct that evidence before assessing this area; no model call was made.");
   const work: DefinitionWork = { format: 1, policy: "exact-batches-v1", epicID, inputKey: definitionInputKey(project, epicID), planKey: "0".repeat(64), batches: [], receipts: [], attempts: 0,
-    draftPolicy: { format: 1, fromStage: 0 }, responsePolicy: { format: 1, fromStage: 0 }, citationPolicy: { format: 1, fromStage: 0 }, collectionCitationPolicy: { format: 1, fromStage: 0 }, evidencePolicy: { format: 1, fromStage: 0 } };
+    draftPolicy: { format: 1, fromStage: 0 }, responsePolicy: { format: 1, fromStage: 0 }, citationPolicy: { format: 1, fromStage: 0 }, collectionCitationPolicy: { format: 1, fromStage: 0 }, evidencePolicy: { format: 1, fromStage: 0 }, exactWirePolicy: { format: 1, fromStage: 0 } };
   // Related supporting records follow each requirement/question when possible.
   const remaining = new Set(ids), ordered: string[] = [];
   const add = (id: string) => { if (remaining.delete(id)) ordered.push(id); };
@@ -299,6 +320,10 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
   if (work.citationPolicy && work.citationPolicy.fromStage > work.receipts.length) throw new Error("Definition citation policy begins after its saved receipt boundary.");
   if (work.collectionCitationPolicy && work.collectionCitationPolicy.fromStage > work.receipts.length) throw new Error("Definition collection citation policy begins after its saved receipt boundary.");
   if (work.evidencePolicy && work.evidencePolicy.fromStage > work.receipts.length) throw new Error("Definition evidence policy begins after its saved receipt boundary.");
+  if (work.exactWirePolicy && work.exactWirePolicy.fromStage > work.receipts.length) throw new Error("Definition exact wire policy begins after its saved receipt boundary.");
+  for (const request of [...work.evidenceRequests ?? [], ...work.evidenceFollowups ?? []]) {
+    if (request.resolvedRecordIDs && (!work.exactWirePolicy || request.stage < work.exactWirePolicy.fromStage)) throw new Error("Resolved definition evidence requires its versioned exact wire policy.");
+  }
   if (work.evidenceFollowupPolicy && (work.evidenceFollowupPolicy.fromStage > work.receipts.length
     || work.evidenceFollowupPolicy.priorRequests > (work.evidenceRequests?.length ?? 0)
     || (work.evidenceFollowupPolicy.restored?.splitCount ?? 0) > (work.continuation?.splits.length ?? 0))) throw new Error("Invalid definition evidence follow-up policy boundary.");
@@ -345,6 +370,7 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
         ...(activeFollowups(work).length ? { supplementalFollowups: activeFollowups(work).map((r) => r.response.definitionEvidence) } : {}),
       } : {}),
       ...(labels ? { citationLabels: labels, citationInstruction: "In evidenceIDs cite the owning record's short citationLabel (E1, E2, etc.) from citationLabels, not copied UUIDs. Labels are scoped to THIS request and may change next stage. Do not invent, combine or guess labels/IDs. For a retained draft citation, use its matching entry in this request's citationLabels. Unchanged checks should be omitted from updates." } : {}),
+      ...(exactWire(work) ? { exactEvidenceReferences: "Override canonical-only wording: definitionEvidence.recordIDs accepts canonical IDs or THIS request's citationLabels. Loaded IDs are ignored only alongside new unread records. Unknown/duplicate references reject; no prefixes or other-request labels. Raw responses and resolved IDs are retained." } : {}),
       ...(compactResponse(work) && phase === "collect" ? { responseFormat: draft ? "definition-update-v1" : "definition-assessment-v1" } : {}),
       ...(additiveCollectionCitations(work) && phase === "collect" ? { collectionCitationPolicy: "additive-v1" } : {}),
       // Only the assessment affects subsequent findings. Ignored analysis wrapper
@@ -363,14 +389,22 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
            : "All JSON, including explanations, must fit 12,000 characters. Explanations should be concise (at most 700 characters per dimension).")
         : " VERIFY ONLY: return {definitionVerdict:[]} when this exact batch supports or does not contradict the draft. Otherwise return only definitionVerdict checks that DOWNGRADE unsupported/contradicted findings, raise importance when warranted, and explain the exact issue using THIS batch's evidence IDs. Do not downgrade merely because another batch's cited evidence is not repeated here. No new defined/not-applicable statuses or positive upgrades. Unresolvable indispensable missing relationships must block rather than be guessed.") },
   };
-  let wire: unknown = data;
-  let serialized = JSON.stringify(wire);
-  // Only lossless encodings; raw fields/human text remain reconstructible.
-  for (const encode of [(value: unknown) => shareRepeatedText(value, true, true, wireDraft ? ["explanation"] : []).data,
-    (value: unknown) => shareRepeatedIdentifiers(value, true).data, (value: unknown) => shareRecordStructure(value, [], true).data]) {
-    const candidate = encode(wire);
-    const encoded = JSON.stringify(candidate);
-    if (encoded.length < serialized.length) { wire = candidate; serialized = encoded; }
+  const encode = (input: unknown) => {
+    let wire: unknown = input;
+    let serialized = JSON.stringify(wire);
+    // Only lossless encodings; raw fields/human text remain reconstructible.
+    for (const encode of [(value: unknown) => shareRepeatedText(value, true, true, wireDraft ? ["explanation"] : []).data,
+      (value: unknown) => shareRepeatedIdentifiers(value, true).data, (value: unknown) => shareRecordStructure(value, [], true).data]) {
+      const candidate = encode(wire);
+      const encoded = JSON.stringify(candidate);
+      if (encoded.length < serialized.length) { wire = candidate; serialized = encoded; }
+    }
+    return { wire, serialized };
+  };
+  let { wire, serialized } = encode(data);
+  if (exactWire(work)) {
+    const candidate = encode(encodeDefinitionSnapshots(data, project.sources, project.requirements.filter((r) => included.has(r.id))));
+    if (candidate.serialized.length < serialized.length) ({ wire, serialized } = candidate);
   }
   const characters = serialized.length;
   const manifest: NonNullable<Job["context"]> = { version: "definition-exact-batches-v1", revision: project.revision,
@@ -478,7 +512,8 @@ function validateEvidenceRequest(project: Project, work: DefinitionWork, draft?:
       splits: work.continuation.splits.filter((s) => s.evidenceRequestStage !== request.stage) } } : {}) };
   const context = definitionStageContext(project, before, draft);
   if (request.contextKey !== digest(context.data)) throw new Error("Saved cross-batch evidence request does not match its original context.");
-  requestDefinitionEvidence(project, before, draft, request.response, request.jobID);
+  const replayed = requestDefinitionEvidence(project, before, draft, request.response, request.jobID);
+  if (JSON.stringify(replayed.resolvedRecordIDs) !== JSON.stringify(request.resolvedRecordIDs)) throw new Error("Saved resolved definition evidence differs from its original exact request.");
 }
 
 function validateFollowupPolicy(project: Project, work: DefinitionWork) {
@@ -500,7 +535,8 @@ function validateEvidenceFollowups(project: Project, work: DefinitionWork, draft
     if (evidenceOwner(before) !== request.evidenceStage || request.contextKey !== digest(definitionStageContext(project, before, draft).data)) {
       throw new Error("Saved evidence follow-up does not match its original exact context.");
     }
-    requestDefinitionEvidence(project, before, draft, request.response, request.jobID);
+    const replayed = requestDefinitionEvidence(project, before, draft, request.response, request.jobID);
+    if (JSON.stringify(replayed.resolvedRecordIDs) !== JSON.stringify(request.resolvedRecordIDs)) throw new Error("Saved resolved definition follow-up differs from its original exact request.");
   }
 }
 

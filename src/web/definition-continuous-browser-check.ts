@@ -50,6 +50,15 @@ try {
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect.poll(() => waiting).toBe(true);
   await overview.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("button", { name: /Processing & queue:/ }).click();
+  const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+  await expect(queue.getByRole("region", { name: "Definition refresh progress", exact: true })).toContainText("2 model requests this refresh");
+  await expect(queue.getByRole("region", { name: "Definition refresh progress", exact: true })).toContainText("area 1 of 13");
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-definition-refresh-progress-mobile.png", fullPage: true });
+  await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await page.setViewportSize({ width: 1280, height: 960 });
   await page.locator(".queue-header").getByRole("button", { name: "Pause assessment", exact: true }).click();
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("cancelled");
   const paused = store.jobs(project.id).at(-1)!;

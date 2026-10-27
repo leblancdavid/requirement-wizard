@@ -8,6 +8,9 @@ export type RefinementProgress = {
   status: "running" | "completed" | "stopped" | "failed" | "blocked";
   completed: number;
   total?: number;
+  requests?: number;
+  suggestions?: number;
+  unchanged?: number;
 };
 
 export function refinementCandidates(project: Project) {

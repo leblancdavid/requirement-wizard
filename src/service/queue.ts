@@ -1,4 +1,4 @@
-import { reviewFingerprint, type Project, type Submission } from "../core/model.js";
+import { reviewFingerprint, type Job, type Project, type Submission } from "../core/model.js";
 import { refinementCandidates, type RefinementProgress } from "../core/refinement.js";
 import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
@@ -255,37 +255,47 @@ export class DiscoveryQueue {
     const controller = new AbortController();
     const progress: string[] = []; this.messages.set(id, progress); this.refinementRuns.delete(id);
     const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
+    const publishWorkspace = this.service.store.deferWorkspacePublication(id);
     const promise = Promise.resolve().then(async () => {
-      let refreshed = 0, blocked = 0, reused = 0;
+      let refreshed = 0, blocked = 0, reused = 0, requests = 0;
       for (const [areaIndex, area] of areas.entries()) {
         controller.signal.throwIfAborted();
         const snapshot = this.service.store.get(id);
         const current = coverage(snapshot).epics.find((e) => e.epicID === area.epicID);
         if (current?.assessed && !current.stale) { reused++; continue; }
         const areaTitle = snapshot.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID;
-        const reportArea = (message: string) => report(`Definition coverage · area ${areaIndex + 1} of ${areas.length} · ${areaTitle}\n${message}`);
+        let stageMessage = "Preparing exact evidence";
+        const reportArea = (message: string) => {
+          stageMessage = message;
+          report(`Definition coverage · area ${areaIndex + 1} of ${areas.length} · ${areaTitle}\n${refreshed} areas refreshed · ${reused} reused · ${blocked} unfinished · ${requests} model requests this refresh\n${message}`);
+        };
+        const onDefinitionRequest = () => { requests++; reportArea(stageMessage); };
         reportArea(`Assessing definition: ${areaTitle}. Complete current area only; no specification changes or gap discovery. ${reused} current areas reused without calls.`);
         const grant = additionalRequests.find((g) => g.epicID === area.epicID);
         const extraJobID = grant?.jobID ?? recoveryJobID;
         const savedSteps = grant ? this.service.store.getJob(grant.jobID).definitionWork!.receipts.length : 0;
         let job = await this.service.analyze(id, snapshot.revision, { definitionEpicID: area.epicID,
           ...(extraJobID ? { definitionRecoveryJobID: extraJobID, definitionLimits: { requests: 1, durationMs: 300000 } } : { continuousDefinition: true }),
-          signal: controller.signal, onProgress: reportArea });
+          signal: controller.signal, onProgress: reportArea, onDefinitionRequest });
         // Confirmation extends only the exhausted step by one request. Once it
         // succeeds, ordinary Refresh continues the remaining saved work normally.
         if (grant && job.status === "interrupted" && job.definitionWork?.paused === "request-limit"
           && job.definitionWork.receipts.length > savedSteps) {
           controller.signal.throwIfAborted();
           job = await this.service.analyze(id, this.service.store.get(id).revision, { definitionEpicID: area.epicID,
-            continuousDefinition: true, signal: controller.signal, onProgress: reportArea });
+            continuousDefinition: true, signal: controller.signal, onProgress: reportArea, onDefinitionRequest });
         }
         if (job.status === "completed") refreshed++;
         else { blocked++; report(`Definition assessment unfinished: ${job.diagnostic ?? job.status}`); }
         if (["cancelled", "stale", "interrupted"].includes(job.status) || job.status === "failed" && !job.definitionBlock) break;
       }
-      report(`Definition refresh: ${refreshed} areas refreshed · ${reused} current assessments reused · ${blocked} unfinished. Unassessed or outdated areas remain unknown; this does not certify readiness.`);
+      report(`Definition refresh: ${refreshed} areas refreshed · ${reused} current assessments reused · ${blocked} unfinished · ${requests} model requests. Unassessed or outdated areas remain unknown; this does not certify readiness.`);
     }).catch((error) => report(controller.signal.aborted ? "Definition refresh interrupted; completed area assessments are saved. Refresh explicitly to continue without repeating current areas." : safeMessage(error instanceof Error ? error.message : error)))
-      .finally(() => { this.active.delete(id); });
+      .finally(() => {
+        this.active.delete(id);
+        const started = performance.now(); publishWorkspace();
+        if (this.service.store.workspace(id)) report(`${progress.at(-1) ?? "Definition refresh stopped."}\nWorkspace publication check: ${((performance.now() - started) / 1000).toFixed(1)}s. SQLite checkpoints remain saved; see Project workspace for folder save/conflict status.`);
+      });
     this.active.set(id, { controller, promise, kind: "definition" });
   }
   clarifyDefinition(id: string, revision: number, epicID: string, resumeJobID?: string) {
@@ -600,21 +610,27 @@ export class DiscoveryQueue {
     const progress: string[] = []; this.messages.set(id, progress);
     this.refinementRuns.delete(id);
     const refinement: RefinementProgress | undefined = manual?.refinementOnly
-      ? { phase: "preparing", status: "running", completed: 0 } : undefined;
+      ? { phase: "preparing", status: "running", completed: 0, requests: 0, suggestions: 0, unchanged: 0 } : undefined;
     if (refinement) this.refinementRuns.set(id, refinement);
     const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
     // Defer to a microtask so active is installed before any round can finish.
     const promise = Promise.resolve().then(async () => {
       if (manual?.refinementOnly) {
+        const tracking = { onRefinementRequest: () => { refinement!.requests!++; } };
+        const outcome = (job: Job) => {
+          if (job.status !== "completed") return;
+          refinement!.suggestions! += job.result?.refinements?.length ?? 0;
+          if (job.context?.refinementTarget && !job.result?.refinements?.length) refinement!.unchanged!++;
+        };
         let project = this.service.store.get(id);
         if (manual.continueRefinementJobID) {
           const work = this.service.store.getJob(manual.continueRefinementJobID).refinementWork!;
           Object.assign(refinement!, { phase: work.pair ? "overlaps" : "wording", total: 1 });
           report("Continuing only the saved refinement task. Completed evidence reads/checks and spent attempts are retained.");
-          const job = await this.service.analyze(id, project.revision, { signal: controller.signal, refinementOnly: true, research: false,
+          const job = await this.service.analyze(id, project.revision, { ...tracking, signal: controller.signal, refinementOnly: true, research: false,
             ...(work.pair ? { refinementPair: work.pair.requirementIDs, includeUnapproved: work.pair.includeUnapproved, resolutionTriggerSourceIDs: work.pair.triggerSourceIDs } : { recordIDs: [work.requirementID] }), onProgress: report });
           if (job.status !== "completed") { refinement!.status = job.status === "cancelled" || job.status === "interrupted" ? "stopped" : "failed"; report(job.diagnostic ?? `Refinement ${job.status}.`); return; }
-          refinement!.completed = 1;
+          refinement!.completed = 1; outcome(job);
           report("Saved refinement finished. Proposals still need approval; no other refinement or discovery tasks were started.");
           return;
         }
@@ -623,11 +639,11 @@ export class DiscoveryQueue {
           const pair: [string, string] | undefined = proposal.resolution ? [proposal.requirementID, proposal.resolution.relatedRequirementID] : undefined;
           Object.assign(refinement!, { phase: pair ? "overlaps" : "wording", total: 1 });
           report(pair ? "Refreshing only this requirement comparison. The previous proposal remains in history." : "Refreshing only this requirement's wording.");
-          const job = await this.service.analyze(id, project.revision, { signal: controller.signal, refinementOnly: true, research: false, onProgress: report,
+          const job = await this.service.analyze(id, project.revision, { ...tracking, signal: controller.signal, refinementOnly: true, research: false, onProgress: report,
             ...(pair ? { refinementPair: pair, includeUnapproved: true, resolutionTriggerSourceIDs: proposal.resolutionTriggerSourceIDs } : { recordIDs: [proposal.requirementID] }) });
           if (job.status !== "completed") { refinement!.status = job.status === "cancelled" ? "stopped" : "failed"; report(job.diagnostic ?? `Refresh ${job.status}.`); return; }
           if (job.result?.resolutionCheck?.outcome === "blocked") { refinement!.status = "blocked"; report(job.result.resolutionCheck.explanation); return; }
-          refinement!.completed = 1;
+          refinement!.completed = 1; outcome(job);
           report(`Refresh complete. ${job.result?.resolutionCheck ? `${job.result.resolutionCheck.outcome}: ${job.result.resolutionCheck.explanation}` : job.result?.refinements?.length ? "Replacement wording awaits review." : "No replacement wording was proposed."} Review proposed fixes here or clarification questions in Design. Other refinement checks were not repeated.`);
           return;
         }
@@ -644,10 +660,10 @@ export class DiscoveryQueue {
           const pair: [string, string] = [finding.leftID, finding.rightID];
           if (!resolutionPairEligible(current, pair, this.service.store.jobs(id))) continue;
           report(`Checking requirement overlap ${++pairsChecked} (at most 20 pair checks per Refine action). Fixes require approval; unclear intent produces a Design question.`);
-          const job = await this.service.analyze(id, current.revision, { signal: controller.signal, refinementOnly: true, refinementPair: pair, research: false, onProgress: report });
+          const job = await this.service.analyze(id, current.revision, { ...tracking, signal: controller.signal, refinementOnly: true, refinementPair: pair, research: false, onProgress: report });
           if (job.status !== "completed") { refinement!.status = job.status === "cancelled" ? "stopped" : "failed"; this.service.store.pauseQueue(id, true); report(job.diagnostic ?? `Resolution ${job.status}.`); return; }
           if (job.result?.resolutionCheck?.outcome === "blocked") { refinement!.status = "blocked"; report(`Resolution needs attention: ${job.result.resolutionCheck.explanation} Run Refine requirements again after addressing this blocker.`); return; }
-          refinement!.completed++;
+          refinement!.completed++; outcome(job);
         }
         if (controller.signal.aborted || this.closing) return;
         project = this.service.store.get(id);
@@ -661,10 +677,10 @@ export class DiscoveryQueue {
           const current = this.service.store.get(id);
           if (!refinementCandidates(current).some((r) => r.id === requirementID)) { refinement!.total!--; continue; }
           report(`Refining requirement ${index + 1} of ${targets.length}; earlier completed checks are saved.`);
-          const job = await this.service.analyze(id, current.revision, { signal: controller.signal, refinementOnly: true,
+          const job = await this.service.analyze(id, current.revision, { ...tracking, signal: controller.signal, refinementOnly: true,
             recordIDs: [requirementID], research: false, onProgress: report });
           if (job.status !== "completed") { refinement!.status = job.status === "cancelled" || job.status === "interrupted" ? "stopped" : "failed"; this.service.store.pauseQueue(id, true); report(job.diagnostic ?? `Refinement ${job.status}.`); return; }
-          refinement!.completed++;
+          refinement!.completed++; outcome(job);
         }
         if (!controller.signal.aborted) report(`Refinement finished: ${pairsChecked} overlap checks and ${targets.length} individual wording tasks considered. Review proposed resolutions/refinements or answer targeted Design questions, then Refine again for remaining overlaps. Active wording is unchanged.`);
         return;

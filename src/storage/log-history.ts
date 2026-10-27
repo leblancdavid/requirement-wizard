@@ -37,11 +37,17 @@ export function logHistory(db: Database.Database, projectID: string, input: unkn
     substr(json_extract(j.payload, '$.definitionBlock.reason'), 1, 16000) AS blockReason,
     COALESCE(length(json_extract(j.payload, '$.diagnostic')) > 16000, 0)
       OR COALESCE(length(json_extract(j.payload, '$.definitionBlock.reason')) > 16000, 0) AS detailLimited,
-    json_array_length(j.payload, '$.definitionWork.receipts') AS savedSteps,
-    json_array_length(j.payload, '$.definitionWork.batches') AS batches,
-    json_extract(j.payload, '$.definitionWork.attempts') AS attempts,
-    json_array_length(j.payload, '$.discoveryMetrics.requests') AS requests,
+    COALESCE(json_array_length(j.payload, '$.definitionWork.receipts'), json_array_length(j.payload, '$.refinementWork.receipts')) AS savedSteps,
+    COALESCE(json_array_length(j.payload, '$.definitionWork.batches'), json_array_length(j.payload, '$.refinementWork.batches')) AS batches,
+    COALESCE(json_extract(j.payload, '$.definitionWork.attempts'), json_extract(j.payload, '$.refinementWork.attempts')) AS attempts,
+    COALESCE(json_array_length(j.payload, '$.discoveryMetrics.requests'), json_extract(j.payload, '$.refinementRequests'),
+      NULLIF((SELECT COUNT(*) FROM json_each(j.payload, '$.refinementWork.receipts') r WHERE json_extract(r.value, '$.jobID') = j.id), 0)) AS requests,
+    json_type(j.payload, '$.discoveryMetrics.requests') IS NULL AND json_type(j.payload, '$.refinementRequests') IS NULL
+      AND json_type(j.payload, '$.refinementWork') = 'object' AS requestsAtLeast,
+    CASE WHEN json_extract(j.payload, '$.status') = 'completed' AND json_type(j.payload, '$.context.refinementTarget') = 'object'
+      AND json_type(j.payload, '$.result') = 'object' THEN
+      CASE WHEN COALESCE(json_array_length(j.payload, '$.result.refinements'), 0) = 0 THEN 'unchanged' ELSE 'suggestion' END END AS refinementOutcome,
     json_extract(j.payload, '$.definitionInterruption.cause') AS interruptionCause
     FROM jobs j WHERE ${where.join(" AND ")} ORDER BY j.rowid DESC LIMIT 26`).all(...args) as (Omit<JobLogEntry, "detailLimited"> & { detailLimited: number; sequence: number })[];
-  return { entries: rows.slice(0, 25).map(({ sequence: _, detailLimited, ...entry }) => ({ ...entry, detailLimited: !!detailLimited })), nextBefore: rows.length > 25 ? rows[24]!.sequence : null };
+  return { entries: rows.slice(0, 25).map(({ sequence: _, detailLimited, requestsAtLeast, ...entry }) => ({ ...entry, detailLimited: !!detailLimited, requestsAtLeast: !!requestsAtLeast })), nextBefore: rows.length > 25 ? rows[24]!.sequence : null };
 }

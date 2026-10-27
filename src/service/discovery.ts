@@ -230,8 +230,8 @@ export class DiscoveryService {
   }
 
   async analyze(projectID: string, expectedRevision: number, options: {
-    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
-    definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule; continuousDefinition?: boolean; definitionRecoveryJobID?: string;
+    signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; onRefinementRequest?: () => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
+    definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule; continuousDefinition?: boolean; definitionRecoveryJobID?: string; onDefinitionRequest?: () => void;
     readinessQuestions?: ReadinessQuestionTask;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
@@ -331,7 +331,7 @@ export class DiscoveryService {
           clearTimeout(timer);
           if (!options.continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition, recoveryJobID: options.definitionRecoveryJobID }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition, recoveryJobID: options.definitionRecoveryJobID, onRequest: options.onDefinitionRequest }));
         }
         try { definition = definitionContext(project, options.definitionEpicID); }
         catch (error) {
@@ -341,7 +341,7 @@ export class DiscoveryService {
           clearTimeout(timer);
           if (!options.continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition, onRequest: options.onDefinitionRequest }));
         }
         if (options.definitionSchedule && options.definitionSchedule.deadline - Date.now() < definitionRequestReserve(options.definitionSchedule, "collect")) {
           this.store.attachContext(job.id, definition!.manifest);
@@ -424,7 +424,7 @@ export class DiscoveryService {
           clearTimeout(timer);
           timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
           return await runRefinementStages(this.store, inferenceAdapter, project, job, requirementID,
-            { signal: controller.signal, pair: stagedPair, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, onProgress: options.onProgress });
+            { signal: controller.signal, pair: stagedPair, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, onProgress: options.onProgress, onRequest: options.onRefinementRequest });
         };
         if (previous?.refinementWork && previous.status !== "completed") return await run();
         try { ordinaryContext = taskPlanner(project, ordinaryTask); }
@@ -503,6 +503,8 @@ export class DiscoveryService {
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
       const requestModel = async (context: ContextPack) => {
+        if (options.definitionEpicID) options.onDefinitionRequest?.();
+        if (options.refinementOnly) { this.store.recordRefinementRequest(job.id); options.onRefinementRequest?.(); }
         const requestStarted = Date.now();
         const heartbeat = options.definitionEpicID ? setInterval(() => report(`Waiting for model response · ${Math.floor((Date.now() - requestStarted) / 1000)} seconds this request. Reviewing all nine definition dimensions; this cannot generate questions or change the specification.`), 10000) : undefined;
         if (options.definitionEpicID) report(`Reviewing ${context.manifest.includedIDs.length} exact evidence records · ${context.manifest.characters.toLocaleString("en-US")} / ${context.manifest.budget.toLocaleString("en-US")} characters. One complete-area request; checking all nine definition dimensions.`);

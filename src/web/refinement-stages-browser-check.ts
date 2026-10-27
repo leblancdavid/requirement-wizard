@@ -55,6 +55,9 @@ try {
   const snapshot = await (await fetch(`${app.origin}/api/projects/${project.id}`, { headers: { "X-Reqwizit-Token": app.token } })).json() as { jobs: { refinementWork?: unknown; refinementStageProgress?: { completed: number } }[] };
   assert.ok(snapshot.jobs.some((j) => j.refinementStageProgress?.completed === 1)); assert.ok(snapshot.jobs.every((j) => j.refinementWork === undefined));
   await page.getByRole("button", { name: /Processing & queue:/ }).click();
+  await expect(dialog.getByRole("region", { name: "Current task", exact: true })).toContainText("1 model requests this run");
+  await expect(dialog.getByRole("region", { name: "Current task", exact: true })).toContainText("selected requirements are reviewed continuously");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await dialog.getByRole("button", { name: "Stop", exact: true }).click();
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("cancelled");
   const stopped = store.jobs(project.id).at(-1)!; assert.equal(stopped.refinementWork!.receipts.length, 1); assert.equal(stopped.refinementWork!.attempts, 1);

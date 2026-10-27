@@ -18,6 +18,20 @@ import { definitionInputKey } from "../core/definition-identity.js";
 const empty = (): Analysis => ({ summary: "PRIVATE model output", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 const create = (store: ProjectStore) => store.create("PRIVATE project name", "PRIVATE initial human input", { providerID: "openai", modelID: "PRIVATE-model" });
 
+test("definition local timings allowlist phase names, retain exception time and leave older timings unknown", () => {
+  const measurement = new DiscoveryMeasurement(() => {});
+  assert.equal(measurement.value.definitionLocalMs, undefined);
+  assert.equal(measurement.local("context", () => 42), 42);
+  assert.throws(() => measurement.local("validation", () => { throw new Error("PRIVATE failure"); }), /PRIVATE failure/);
+  measurement.finish();
+  assert.ok(measurement.value.definitionLocalMs!.context! >= 0); assert.ok(measurement.value.definitionLocalMs!.validation! >= 0);
+  assert.equal(measurement.value.definitionLocalMs!.publication, undefined);
+  assert.ok(discoveryMetricsSchema.safeParse(measurement.value).success);
+  assert.equal(discoveryMetricsSchema.safeParse({ ...measurement.value, definitionLocalMs: { "PRIVATE arbitrary key": 1 } }).success, false);
+  assert.equal(discoveryMetricsSchema.safeParse({ ...measurement.value, definitionLocalMs: { context: -1 } }).success, false);
+  assert.ok(!JSON.stringify(measurement.value).includes("PRIVATE"));
+});
+
 test("diagnostic export allowlists fields and keys, preserves unknown historical measurements and never changes evidence", () => {
   const store = new ProjectStore(":memory:");
   try {

@@ -57,22 +57,22 @@ test("manual refinement exposes completed stage counts independently of model me
       const progress = queue!.refinementProgress(p.id)!;
       assert.equal(progress.status, "running");
       if (options.context.manifest.refinementPair) {
-        assert.deepEqual(progress, { phase: "overlaps", status: "running", completed: pairs++, total: 3 });
+        assert.deepEqual(progress, { phase: "overlaps", status: "running", completed: pairs++, total: 3, requests: pairs, suggestions: 0, unchanged: 0 });
         options.onProgress?.("Receiving model output");
         assert.equal(queue!.refinementProgress(p.id)!.phase, "overlaps");
         return resolution();
       }
-      assert.deepEqual(progress, { phase: "wording", status: "running", completed: wording++, total: 3 });
+      assert.deepEqual(progress, { phase: "wording", status: "running", completed: wording++, total: 3, requests: 3 + wording, suggestions: 0, unchanged: wording - 1 });
       return empty();
     } }));
     queue.resume(p.id, { refinementOnly: true });
-    assert.deepEqual(queue.refinementProgress(p.id), { phase: "preparing", status: "running", completed: 0 });
+    assert.deepEqual(queue.refinementProgress(p.id), { phase: "preparing", status: "running", completed: 0, requests: 0, suggestions: 0, unchanged: 0 });
     await idle(queue, p.id);
     assert.equal(pairs, 3); assert.equal(wording, 3);
-    assert.deepEqual(queue.refinementProgress(p.id), { phase: "wording", status: "completed", completed: 3, total: 3 });
+    assert.deepEqual(queue.refinementProgress(p.id), { phase: "wording", status: "completed", completed: 3, total: 3, requests: 6, suggestions: 0, unchanged: 3 });
     queue.resume(p.id, { refinementOnly: true }); await idle(queue, p.id);
     assert.equal(pairs, 3); assert.equal(wording, 3);
-    assert.deepEqual(queue.refinementProgress(p.id), { phase: "wording", status: "completed", completed: 0, total: 0 });
+    assert.deepEqual(queue.refinementProgress(p.id), { phase: "wording", status: "completed", completed: 0, total: 0, requests: 0, suggestions: 0, unchanged: 0 });
     queue.resume(p.id); await idle(queue, p.id);
     assert.equal(queue.refinementProgress(p.id), null, "new discovery must not reuse refinement telemetry");
   } finally { await queue?.close(); store.close(); }
@@ -92,7 +92,7 @@ for (const outcome of ["failed", "stopped", "blocked"] as const) {
         return resolution();
       } }));
       queue.resume(p.id, { refinementOnly: true }); await idle(queue, p.id);
-      assert.deepEqual(queue.refinementProgress(p.id), { phase: "overlaps", status: outcome, completed: 1, total: 3 });
+      assert.deepEqual(queue.refinementProgress(p.id), { phase: "overlaps", status: outcome, completed: 1, total: 3, requests: 2, suggestions: 0, unchanged: 0 });
       assert.equal(calls, 2);
     } finally { await queue?.close(); store.close(); }
   });

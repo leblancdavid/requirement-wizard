@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { ProjectStore } from "../storage/store.js";
@@ -25,12 +25,175 @@ import { upgradeDefinitionCollectionCitations, upgradeDefinitionEvidencePolicy, 
 import { canRecoverDefinition } from "../core/definition-recovery.js";
 import { ContextBudgetError } from "../core/context.js";
 import { definitionFailedAttempts, definitionEvidenceRequests, upgradeDefinitionAllowance } from "../core/definition-budget.js";
+import { upgradeDefinitionExactWire } from "../core/definition-stages.js";
+import { encodeDefinitionSnapshots } from "../core/definition-wire.js";
+import { shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure } from "../core/working-set.js";
 
 const empty = (): Analysis => analysisSchema.parse({ summary: "Definition evidence batch", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 const result = (epicID: string, evidenceID: string): Analysis => ({ ...empty(), assessments: [{ epicID, confidence: "high", explanation: "Exact current evidence; remaining uncertainty is explicit.",
   checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "defined", explanation: "Current recorded decision.", evidenceIDs: [evidenceID] })) }] });
 const collectionLimitBlock = "This batch adds exact human approvals that change the retained assessment. The retained acceptance assessment already cites 20 records, which is the response limit for one dimension. Updating it would require dropping earlier citations or omitting the new approval. No missing product decision or product gap is established by this blocker.";
 const crossBatchBlock = "The retained assessment reports earlier accepted rendering constraints, but their exact human decisions are not supplied here. Supply the earlier decisions and any decision replacing or limiting them. Current approvals remain valid within their stated scope.";
+
+test("definition snapshot encoding round-trips current, historical, cleanup and ambiguous human text exactly", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 0), requirement = p.requirements[0]!, addendum = "  Human scope\r\nQuotes \" and Unicode 🐾\n";
+    const text = (statement: string) => `Requirement ${requirement.id}: ${statement}\nAcceptance scenarios: ${JSON.stringify(requirement.acceptance)}\nHuman decision: accepted\nAddendum: ${addendum}`;
+    const original = { ...requirement, statement: "Earlier code-facing wording", reviewNote: "Original evidence stays exact\r\n" };
+    const sources = [text(requirement.statement), text("An older conflicting decision"),
+      `Human approved requirement cleanup. Original: ${JSON.stringify(original)}\nReplacement: ${requirement.statement}\nAcceptance scenarios: ${JSON.stringify(requirement.acceptance)}\nReason: ${addendum}`,
+      text(requirement.statement) + "\nAddendum: embedded ambiguous marker", "Unrecognized legacy prose\r\n"].map((value, index) => ({ ...p.sources[0]!, id: `snapshot-${index}`, kind: "confirmation" as const, requirementID: requirement.id, text: value }));
+    const data = { sources, requirements: [requirement] }, before = structuredClone(data);
+    const encoded = encodeDefinitionSnapshots(data, sources, [requirement]);
+    const decode = (source: any) => {
+      let text = source.text;
+      if (text.reviewSnapshotReference || text.exactReviewSnapshot) {
+        const value = text.reviewSnapshotReference ? { ...requirement, ...text.reviewSnapshotReference } : text.exactReviewSnapshot;
+        text = `Requirement ${value.requirementID}: ${value.statement}\nAcceptance scenarios: ${JSON.stringify(value.acceptance)}\nHuman decision: ${value.decision}\nAddendum: ${value.addendum}`;
+      } else if (text.exactCleanupSnapshot) {
+        const value = text.exactCleanupSnapshot;
+        text = `Human approved requirement cleanup. Original: ${JSON.stringify(value.original)}\nReplacement: ${value.statement}\nAcceptance scenarios: ${JSON.stringify(value.acceptance)}\nReason: ${value.reason}`;
+      }
+      return { ...source, text };
+    };
+    const decoded = encoded.sources.map(decode);
+    assert.deepEqual(decoded, sources); assert.deepEqual(data, before);
+    assert.equal(encoded.sources[3]!.text, sources[3]!.text); assert.equal(encoded.sources[4]!.text, sources[4]!.text);
+    assert.ok(typeof encoded.sources[1]!.text === "object", "Historical wording is encoded independently, not substituted with current wording");
+    let wire: unknown = encoded;
+    for (const encode of [(value: unknown) => shareRepeatedText(value, true, true).data,
+      (value: unknown) => shareRepeatedIdentifiers(value, true).data, (value: unknown) => shareRecordStructure(value, [], true).data]) wire = encode(wire);
+    assert.deepEqual(expandDefinitionWire(wire).sources.map(decode), sources, "Independent decoding after all generic wire encodings preserves original source bytes");
+  } finally { store.close(); }
+});
+
+test("exact evidence labels resolve only in the original request, retaining raw references and validating canonical receipts", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), work = planDefinitionStages(p, "runtime"), first = definitionStageContext(p, work);
+    const id = first.manifest.includedIDs[0]!; work.attempts = 1;
+    const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: result("runtime", id).assessments![0] }, "first");
+    const context = definitionStageContext(p, work, draft), expanded = expandDefinitionWire(context.data);
+    assert.ok(!context.manifest.includedIDs.includes(id));
+    const label = Object.entries(expanded.definitionStage.citationLabels).find(([, value]) => value === id)![0];
+    const loaded = context.manifest.includedIDs[0]!, request = (ids: string[]) => ({ definitionEvidence: { recordIDs: ids, reason: "Read exact earlier human provenance" } });
+    work.attempts = 1;
+    for (const ids of [["E999999"], [label, id], [loaded]]) assert.throws(() => requestDefinitionEvidence(p, work, draft, request(ids), "new"), /unknown references|duplicate references|already loaded/);
+    const raw = request([label, loaded]); requestDefinitionEvidence(p, work, draft, raw, "new");
+    assert.deepEqual(work.evidenceRequests![0]!.response, raw);
+    assert.deepEqual(work.evidenceRequests![0]!.resolvedRecordIDs, [id]);
+    assert.ok(definitionStageContext(p, work, draft).manifest.includedIDs.includes(id));
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    const forged = structuredClone(work); forged.evidenceRequests![0]!.resolvedRecordIDs = [work.batches.at(-1)![0]!];
+    assert.throws(() => replayDefinitionStages(p, forged), /resolved definition evidence differs/);
+    const future = structuredClone(work); future.exactWirePolicy!.format = 99 as 1; assert.equal(definitionWorkSchema.safeParse(future).success, false);
+  } finally { store.close(); }
+});
+
+test("exact-wire upgrade preserves attempted legacy evidence contexts until their next safe stage boundary", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), work = planDefinitionStages(p, "runtime"); delete work.exactWirePolicy;
+    const context = definitionStageContext(p, work); work.attempts = 1;
+    const id = context.manifest.omittedIDs[0]!;
+    requestDefinitionEvidence(p, work, undefined, { definitionEvidence: { recordIDs: [id], reason: "Original canonical request" } }, "legacy");
+    const original = structuredClone(work.evidenceRequests), originalContext = definitionStageContext(p, work);
+    upgradeDefinitionExactWire(work); assert.equal(work.exactWirePolicy, undefined); assert.deepEqual(definitionStageContext(p, work), originalContext);
+    work.attempts = 2;
+    const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: result("runtime", id).assessments![0] }, "legacy");
+    const receipt = structuredClone(work.receipts[0]); upgradeDefinitionExactWire(work);
+    assert.deepEqual(work.exactWirePolicy, { format: 1, fromStage: 1 }); assert.deepEqual(work.evidenceRequests, original); assert.deepEqual(work.receipts[0], receipt);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+  } finally { store.close(); }
+});
+
+test("label-based evidence requests survive repeated startup and portable continuation without another read or load request", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "definition-label-continuation-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const p = seed(store), work = planDefinitionStages(p, "runtime"), first = definitionStageContext(p, work);
+    const old = store.beginJob(p.id, p.revision).job; store.claimJob(old.id, Date.now() + 60000);
+    const id = first.manifest.includedIDs[0]!; work.attempts = 1;
+    const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: result("runtime", id).assessments![0] }, old.id);
+    const context = definitionStageContext(p, work, draft), stage = expandDefinitionWire(context.data).definitionStage;
+    const label = Object.entries(stage.citationLabels).find(([, value]) => value === id)![0]; work.attempts = 1;
+    requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [label, context.manifest.includedIDs[0]!], reason: "Read the retained exact human decision" } }, old.id);
+    store.checkpointDefinition(old.id, work, definitionStageContext(p, work, draft).manifest); store.pauseDefinition(old.id, "request-limit", 900000);
+    const historical = store.getJob(old.id); store.close(); store = new ProjectStore(file); store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.getJob(old.id), historical);
+    const path = join(directory, "project"); mkdirSync(path); store.connectWorkspace(p.id, p.revision, path); store.syncWorkspace(p.id);
+    const adopted = new ProjectStore(":memory:");
+    try {
+      adopted.openWorkspace(path, p.model); let calls = 0;
+      const done = await new DiscoveryService(adopted, { async analyze(_snapshot, { context }) {
+        calls++; if (calls === 1) assert.ok(context.manifest.includedIDs.includes(id), "Saved exact load is already supplied");
+        return expandDefinitionWire(context.data).definitionStage.phase === "verify" ? { definitionVerdict: [] } : { definitionUpdate: { checks: [] } };
+      } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+      assert.equal(done.status, "completed", done.diagnostic); assert.equal(calls, definitionSteps(work).length - 1);
+      assert.deepEqual(done.definitionWork!.receipts[0], historical.definitionWork!.receipts[0]);
+      assert.deepEqual(done.definitionWork!.evidenceRequests, historical.definitionWork!.evidenceRequests);
+      assert.deepEqual(adopted.getJob(old.id).definitionWork, historical.definitionWork);
+    } finally { adopted.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("older invalid-evidence failure upgrades after repeated reopen without replaying saved reads or resetting attempts", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "definition-wire-upgrade-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const p = seed(store), work = planDefinitionStages(p, "runtime"); delete work.exactWirePolicy;
+    const old = store.beginJob(p.id, p.revision).job; store.claimJob(old.id, Date.now() + 60000);
+    work.attempts = 1;
+    const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: result("runtime", work.batches[0]![0]!).assessments![0] }, old.id);
+    work.attempts = 1; store.checkpointDefinition(old.id, work, definitionStageContext(p, work, draft).manifest);
+    store.blockDefinition(old.id, "Cross-batch evidence requests must name distinct unread canonical record IDs from this area's saved exact plan.");
+    const historical = store.getJob(old.id); store.close(); store = new ProjectStore(file); store.close(); store = new ProjectStore(file);
+    let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const stage = expandDefinitionWire(context.data).definitionStage;
+      assert.ok(context.manifest.definitionAssessment!.staged); assert.ok(stage.exactEvidenceReferences);
+      return stage.phase === "verify" ? { definitionVerdict: [] } : { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(calls, definitionSteps(done.definitionWork!).length - 1);
+    assert.equal(done.definitionWork!.receipts[1]!.attempts, 2); assert.deepEqual(done.definitionWork!.receipts[0], work.receipts[0]);
+    assert.deepEqual(done.definitionWork!.batches, work.batches); assert.deepEqual(store.getJob(old.id), historical);
+    assert.deepEqual(done.definitionWork!.exactWirePolicy, { format: 1, fromStage: 1 });
+    const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [done], [], (r) => store.get(p.id, r))), p.model);
+    assert.deepEqual(completedDefinitionAssessment(p, portable.continuation.jobs[0]!.definitionWork!), done.result);
+    assert.ok(done.discoveryMetrics!.definitionLocalMs!.publication! >= 0);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const outcome of ["completed", "failed", "cancelled"] as const) test(`continuous refresh coalesces portable publication and flushes saved assessments when ${outcome}`, async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "definition-publication-")), path = join(directory, "repo"); mkdirSync(path);
+  const store = new ProjectStore(join(directory, "state.sqlite")); let queue: DiscoveryQueue | undefined;
+  try {
+    let p = store.create("Refresh publication", "Preserve original decisions", { providerID: "openai", modelID: "fixture" });
+    p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "runtime", title: "Runtime", purpose: "Startup", dependencies: [] }]);
+    store.connectWorkspace(p.id, p.revision, path);
+    let calls = 0;
+    queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, { context }) {
+      calls++;
+      if (calls === 2) {
+        assert.equal(store.get(p.id).assessments.length, 1, "Previous area is durable before the next request");
+        assert.equal(store.workspace(p.id)!.savedRevision, p.revision, "Portable export must not rebuild between areas");
+        assert.match(queue!.progress(p.id).at(-1)!, /1 areas refreshed.*2 model requests this refresh/);
+        if (outcome === "failed") throw new Error("Fixture provider failure");
+        if (outcome === "cancelled") queue!.stop(p.id);
+      }
+      return result(context.manifest.definitionAssessment!.epicID, snapshot.sources[0]!.id);
+    } }));
+    queue.refreshDefinition(p.id, p.revision); await idle(queue, p.id);
+    const current = store.get(p.id);
+    assert.equal(calls, 2); assert.equal(current.assessments.length, outcome === "completed" ? 2 : 1);
+    assert.equal(store.workspace(p.id)!.savedRevision, current.revision, "Finish/failure/Stop all flush the retained portable state");
+    const saved = readFileSync(join(path, ".reqwizit", "manifest.json"), "utf8"); assert.equal(JSON.parse(saved).revision, current.revision);
+  } finally { await queue?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("nine-step legacy allowance blocks resume through Refresh after reopen without repeating saved evidence", async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });

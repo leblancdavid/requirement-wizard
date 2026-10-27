@@ -12,5 +12,6 @@ export type JobLogEntry = {
   createdAt: string | null; startedAt: string | null; finishedAt: string | null; recordedAt: string | null;
   durationMs: number | null; diagnostic: string | null; blockReason: string | null; detailLimited: boolean;
   savedSteps: number | null; batches: number | null; attempts: number | null; requests: number | null; interruptionCause: string | null;
+  requestsAtLeast?: boolean; refinementOutcome?: "unchanged" | "suggestion" | null;
 };
 export type LogHistoryPage = { entries: JobLogEntry[]; nextBefore: number | null };

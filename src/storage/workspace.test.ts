@@ -29,6 +29,38 @@ function generate(store: ProjectStore, project: Project) {
   return store.get(project.id);
 }
 
+test("continuous-action publication defers only its own workspace, retains SQLite revisions and flushes once on release", async () => {
+  const f = fixture();
+  try {
+    f.store.connectWorkspace(f.project.id, f.project.revision, f.path);
+    const outer = f.store.deferWorkspacePublication(f.project.id), inner = f.store.deferWorkspacePublication(f.project.id);
+    const changed = generate(f.store, f.project); await setImmediate();
+    assert.equal(f.store.workspace(changed.id)!.savedRevision, f.project.revision);
+    const reader = new Database(f.database, { readonly: true });
+    try { assert.equal((reader.prepare("SELECT revision FROM projects WHERE id=?").get(changed.id) as { revision: number }).revision, changed.revision); } finally { reader.close(); }
+    const otherPath = join(f.directory, "other"); mkdirSync(otherPath);
+    let other = f.store.create("Independent workspace", "Keep independent publication", selection);
+    f.store.connectWorkspace(other.id, other.revision, otherPath); other = f.store.note(other.id, other.revision, "Independent update"); await setImmediate();
+    assert.equal(f.store.workspace(other.id)!.savedRevision, other.revision);
+    inner(); f.store.syncWorkspace(changed.id); assert.equal(f.store.workspace(changed.id)!.savedRevision, f.project.revision);
+    outer(); assert.equal(f.store.workspace(changed.id)!.savedRevision, changed.revision);
+    const manifest = readFileSync(join(f.path, workspaceFolder, "manifest.json"), "utf8");
+    outer(); inner(); assert.equal(readFileSync(join(f.path, workspaceFolder, "manifest.json"), "utf8"), manifest);
+  } finally { f.cleanup(); }
+});
+
+test("an interrupted publication deferral reopens from durable dirty SQLite state without inference", async () => {
+  const f = fixture(); let store = f.store;
+  try {
+    store.connectWorkspace(f.project.id, f.project.revision, f.path);
+    const release = store.deferWorkspacePublication(f.project.id), changed = generate(store, f.project); await setImmediate();
+    assert.equal(store.workspace(changed.id)!.savedRevision, f.project.revision);
+    store.close(); release(); store = new ProjectStore(f.database);
+    assert.equal(store.get(changed.id).revision, changed.revision); assert.equal(store.workspace(changed.id)!.savedRevision, changed.revision);
+    store.close(); store = new ProjectStore(f.database); assert.equal(store.workspace(changed.id)!.savedRevision, changed.revision);
+  } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
 test("workspace saves committed model and human revisions automatically and keeps account selection out of files", async () => {
   const f = fixture();
   try {

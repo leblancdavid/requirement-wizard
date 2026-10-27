@@ -1,7 +1,7 @@
 import type { Job, Project } from "../core/model.js";
 import { StaleRevisionError } from "../core/model.js";
 import { acceptDefinitionStage, completedDefinitionAssessment, definitionBlockedSchema, definitionPhase, definitionStageContext,
-  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, upgradeDefinitionCitationPolicy, upgradeDefinitionCollectionCitations, upgradeDefinitionEvidencePolicy, upgradeDefinitionEvidenceFollowups, requestDefinitionEvidence, DefinitionEvidenceBlocked, definitionSteps, splitDefinitionStage } from "../core/definition-stages.js";
+  planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, upgradeDefinitionCitationPolicy, upgradeDefinitionCollectionCitations, upgradeDefinitionEvidencePolicy, upgradeDefinitionEvidenceFollowups, upgradeDefinitionExactWire, requestDefinitionEvidence, DefinitionEvidenceBlocked, definitionSteps, splitDefinitionStage } from "../core/definition-stages.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import type { ProjectStore } from "../storage/store.js";
@@ -18,16 +18,18 @@ export function definitionRequestReserve(schedule: DefinitionSchedule, phase: "c
 
 export async function runDefinitionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job,
   epicID: string, options: { signal: AbortSignal; onProgress?: (message: string) => void; measurement?: DiscoveryMeasurement;
-    limits?: { requests: number; durationMs: number }; requestTimeoutMs?: number; schedule?: DefinitionSchedule; continuous?: boolean; recoveryJobID?: string }): Promise<Job> {
+    limits?: { requests: number; durationMs: number }; requestTimeoutMs?: number; schedule?: DefinitionSchedule; continuous?: boolean; recoveryJobID?: string; onRequest?: () => void }): Promise<Job> {
+  const local = <T>(phase: Parameters<DiscoveryMeasurement["local"]>[0], run: () => T) => options.measurement ? options.measurement.local(phase, run) : run();
+  const checkpoint = (manifest: NonNullable<Job["context"]>, renewal: { leaseUntil?: number } = {}) => local("checkpoint", () => store.checkpointDefinition(job.id, work, manifest, renewal));
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = options.continuous ? Infinity : Date.now() + limits.durationMs;
   const lease = () => options.continuous ? { leaseUntil: Date.now() + 360_000 } : {};
   const prior = store.definitionHistory(project.id, epicID, definitionInputKey(project, epicID)).find((j) => j.id !== job.id);
   const preparationStarted = Date.now();
   options.onProgress?.(`Preparing definition evidence for ${project.epics.find((e) => e.id === epicID)?.title ?? epicID} · ${prior?.definitionWork?.receipts.length ?? 0} saved stages available. Gathering exact area, project-wide and declared dependency evidence; no model request is running yet.`);
-  const work = prior?.definitionWork ? { ...structuredClone(prior.definitionWork), originJobID: prior.id }
-    : planDefinitionStages(project, epicID, (progress) => options.onProgress?.(`Preparing exact definition batches · ${progress.prepared} / ${progress.total} evidence records packaged · ${progress.probes} exact size checks. Local preparation only; no model request is running yet.`));
+  const work = local("preparation", () => prior?.definitionWork ? { ...structuredClone(prior.definitionWork), originJobID: prior.id }
+    : planDefinitionStages(project, epicID, (progress) => options.onProgress?.(`Preparing exact definition batches · ${progress.prepared} / ${progress.total} evidence records packaged · ${progress.probes} exact size checks. Local preparation only; no model request is running yet.`)));
   delete work.paused;
-  let draft = replayDefinitionStages(project, work), calls = 0;
+  let draft = local("replay", () => replayDefinitionStages(project, work)), calls = 0;
   upgradeDefinitionAllowance(work);
   upgradeDefinitionDraftPolicy(work);
   upgradeDefinitionResponsePolicy(work);
@@ -35,6 +37,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   upgradeDefinitionCollectionCitations(work, draft, options.continuous === true);
   upgradeDefinitionEvidencePolicy(work, draft, options.continuous === true);
   upgradeDefinitionEvidenceFollowups(project, work, options.continuous === true);
+  upgradeDefinitionExactWire(work);
   if (prior?.definitionWork?.blocked && !work.blocked) options.onProgress?.(`The saved protocol blocker has been superseded by the updated evidence/citation contract. All ${work.receipts.length} completed responses and spent attempts are retained. Preparing the unfinished step; no new model request has started yet.`);
   if (options.recoveryJobID) {
     if (prior?.id !== options.recoveryJobID || !canRecoverDefinition(prior)) throw new Error("This assessment is no longer eligible for recovery. Refresh before continuing.");
@@ -50,15 +53,15 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   const prepareContext = (): ContextPack | Job => {
     for (;;) {
       options.signal.throwIfAborted();
-      try { return currentContext(); }
+      try { return local("context", currentContext); }
       catch (error) {
         if (!(error instanceof ContextBudgetError)) throw error;
         if (definitionPhase(work) !== "complete" && splitDefinitionStage(work)) {
-          store.checkpointDefinition(job.id, work, error.manifest);
+          checkpoint(error.manifest);
           options.onProgress?.(`Repacking oversized definition evidence into smaller exact-record steps · ${work.receipts.length} completed responses retained. No findings or evidence removed; no completed request repeated.`);
           continue;
         }
-        store.checkpointDefinition(job.id, work, error.manifest);
+        checkpoint(error.manifest);
         const supplemental = definitionSteps(work)[work.receipts.length]?.evidenceStage ?? work.receipts.length;
         if (work.evidenceRequests?.some((r) => r.stage === supplemental)) {
           return store.blockDefinition(job.id, "The requested cross-batch exact evidence plus the retained assessment and the smallest available batch still exceeds 96,000 characters after lossless encoding. Further exact subdivision cannot help within the 64-stage limit. The request, completed steps and spent attempts are retained; no evidence was truncated or partial assessment published.");
@@ -71,13 +74,13 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   const initial = prepareContext();
   if (!("manifest" in initial)) return initial;
   let context = initial;
-  store.checkpointDefinition(job.id, work, context.manifest); options.measurement?.planned(context);
+  checkpoint(context.manifest); options.measurement?.planned(context);
   options.onProgress?.(`Definition evidence prepared in ${((Date.now() - preparationStarted) / 1000).toFixed(1)} seconds · ${work.receipts.length} stages reused · ${definitionSteps(work).length} planned read/check stages. Additional exact subdivisions may be needed if findings grow.`);
   for (;;) {
     options.signal.throwIfAborted();
     if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
     if (work.blocked) return store.blockDefinition(job.id, work.blocked);
-    if (definitionPhase(work) === "complete") return store.finishJob(job.id, completedDefinitionAssessment(project, work));
+    if (definitionPhase(work) === "complete") return local("publication", () => store.finishJob(job.id, completedDefinitionAssessment(project, work)));
     if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline)) return store.pauseDefinition(job.id, calls >= limits.requests ? "request-limit" : "time-limit", limits.durationMs);
     const recovery = work.recovery?.grants.find((g) => g.stage === work.receipts.length);
     if (!canDispatchDefinition(work, job.id)) return store.blockDefinition(job.id, "This assessment step reached its failed-request allowance. Successful evidence gathering and saved checks are retained. Refresh can ask for one additional request when eligible; unchanged refresh never resets failed attempts.");
@@ -93,7 +96,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     if (definitionFailedAttempts(work) >= 3) recovery!.spent = true;
     work.attempts++;
     calls++;
-    store.checkpointDefinition(job.id, work, context.manifest, lease());
+    checkpoint(context.manifest, lease()); options.onRequest?.();
     const requestMs = options.requestTimeoutMs ?? 300000;
     const remainingMs = deadline - Date.now(), areaTimeoutFirst = remainingMs <= requestMs;
     const requestTimeout = AbortSignal.timeout(Math.max(1, Math.min(requestMs, remainingMs)));
@@ -121,8 +124,8 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     options.signal.throwIfAborted();
     if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
     if (raw && typeof raw === "object" && "definitionEvidence" in raw) {
-      requestDefinitionEvidence(project, work, draft, raw, job.id);
-      store.checkpointDefinition(job.id, work, context.manifest);
+      local("validation", () => requestDefinitionEvidence(project, work, draft, raw, job.id));
+      checkpoint(context.manifest);
       const next = prepareContext();
       if (!("manifest" in next)) return next;
       context = next;
@@ -130,11 +133,12 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     }
     if (raw && typeof raw === "object" && "definitionBlocked" in raw) {
       work.blocked = definitionBlockedSchema.parse(raw).definitionBlocked.reason;
-      store.checkpointDefinition(job.id, work, context.manifest);
+      checkpoint(context.manifest);
       return store.blockDefinition(job.id, work.blocked);
     }
-    draft = acceptDefinitionStage(project, work, draft, raw, job.id);
-    store.checkpointDefinition(job.id, work, context.manifest);
+    draft = local("validation", () => acceptDefinitionStage(project, work, draft, raw, job.id));
+    upgradeDefinitionExactWire(work);
+    checkpoint(context.manifest);
     if (definitionPhase(work) !== "complete") {
       const next = prepareContext();
       if (!("manifest" in next)) return next;

@@ -1,12 +1,12 @@
 import { reviewFingerprint, StaleRevisionError, type Job, type Project } from "../core/model.js";
 import type { ContextBudgetError } from "../core/context.js";
-import { acceptRefinementStage, planRefinementStages, refinementMaterials, refinementStageContext, refinementStep, replayRefinementStages, refinementPairContext, sameRefinementTask, type ResolutionStageTask } from "../core/refinement-stages.js";
+import { acceptRefinementStage, planRefinementStages, refinementMaterials, refinementStageContext, refinementStep, refinementNoChangeComplete, replayRefinementStages, refinementPairContext, sameRefinementTask, type ResolutionStageTask } from "../core/refinement-stages.js";
 import { refinementContextKey } from "./refinement-tasks.js";
 import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 
 export async function runRefinementStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, requirementID: string,
-  options: { signal: AbortSignal; pair?: ResolutionStageTask; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number }; onProgress?: (message: string) => void }) {
+  options: { signal: AbortSignal; pair?: ResolutionStageTask; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number }; onProgress?: (message: string) => void; onRequest?: () => void }) {
   const previous = [...store.jobs(project.id)].reverse().find((j) => j.id !== job.id && sameRefinementTask(j, requirementID, options.pair));
   const m = refinementMaterials(project, requirementID, previous ? undefined : options.overflow, options.pair);
   // Explicit new refinement after genuinely changed evidence starts a new plan;
@@ -29,22 +29,29 @@ export async function runRefinementStages(store: ProjectStore, adapter: Discover
   const current = () => { options.signal.throwIfAborted(); if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError(); };
   for (;;) {
     current();
-    const done = refinementStep(w) === w.batches.length * 2;
+    const unchanged = refinementNoChangeComplete(w);
+    const done = unchanged || refinementStep(w) === w.batches.length * 2;
     const context = done ? refinementStageContext(m, { ...w, receipts: w.receipts.slice(0, -1) }, draft) : refinementStageContext(m, w, draft);
     if (options.pair) context.manifest.refinementPair = refinementPairContext(project, options.pair);
     else context.manifest.refinementTarget = { requirementID, fingerprint: reviewFingerprint(target), contextKey: refinementContextKey(project, target) };
     if (done) {
       context.manifest.includedIDs = m.evidenceIDs; context.manifest.omittedIDs = [];
-      context.manifest.selectionReason = "Publication authorized only by replay of all exact refinement read/check batches.";
+      context.manifest.selectionReason = unchanged ? "All exact evidence reads replayed; no wording changes proposed, so no proposal verification requests are needed."
+        : "Publication authorized only by replay of all exact refinement read/check batches.";
     }
     store.checkpointRefinement(job.id, w, context.manifest);
-    if (done) return store.finishJob(job.id, draft);
+    if (done) {
+      if (unchanged) options.onProgress?.("All evidence read · no wording changes needed. Skipped verification requests for an empty proposal; completed work is saved.");
+      return store.finishJob(job.id, draft);
+    }
     if (blocked) throw new Error(`Refinement blocked: ${blocked} Completed steps and spent attempts remain saved.`);
     if (calls >= limits.requests || Date.now() >= deadline) return store.pauseRefinement(job.id,
       `Refinement paused: ${refinementStep(w)} / ${w.batches.length * 2} steps saved. Run Refine again explicitly to continue; completed requests will not repeat.`);
     if (w.attempts >= 4) throw new Error("Refinement step exhausted its four-request allowance. Completed steps and spent attempts remain saved; retrying does not reset the allowance.");
-    w.attempts++; calls++; store.checkpointRefinement(job.id, w, context.manifest);
-    options.onProgress?.(`Refining requirement · ${refinementStep(w)} / ${w.batches.length * 2} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial proposals published.`);
+    w.attempts++; calls++; store.checkpointRefinement(job.id, w, context.manifest, true);
+    options.onRequest?.();
+    const step = refinementStep(w), reading = step < w.batches.length;
+    options.onProgress?.(`${reading ? "Reading evidence" : "Checking proposed wording"} ${step % w.batches.length + 1} of ${w.batches.length} · ${step} / ${w.batches.length * 2} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial proposals published.`);
     const timeout = AbortSignal.timeout(Math.max(1, Math.min(300000, deadline - Date.now()))), signal = AbortSignal.any([options.signal, timeout]);
     let abort: () => void = () => {};
     try {

@@ -5,6 +5,58 @@ decisions; it is not readiness, code completeness, or verified delivery to main.
 
 ## Refresh the overall view
 
+### Refresh efficiency and evidence references (2026-10-27)
+
+Continuous refresh remains the default: no new whole-action cap or periodic Continue
+confirmation. Every evidence batch is still read and every final assessment checked;
+an empty verification response is a passed check, not permission to skip that check.
+
+Staged requests can now losslessly encode plain review and cleanup snapshots before
+ordinary text/identifier/table sharing. Historical wording, full embedded originals
+and human addenda remain exact. The smaller complete encoding wins; records are not
+summarized or dropped. Request-local evidence labels are also accepted for exact loads,
+not only citations. A request may include already loaded records alongside new unread
+evidence; invalid references and duplicate aliases still block with bounded count
+diagnostics. This fixes an app-side canonical-only mismatch, but does not establish
+the exact cause of earlier rejected live responses that were not retained.
+
+**Processing & queue** shows the refresh's area position, completed/reused/unfinished
+areas and cumulative requests, followed by current evidence-stage progress. Requests
+use the selected model and allowance as before. Diagnostics add local preparation,
+replay, context, checkpoint, validation and publication timings; missing older timings
+are unknown, not zero. Model request time still includes provider/runtime work.
+The retained queue summary separately times the final workspace-publication check;
+that volatile action timing is not retroactively added to older per-job diagnostics.
+
+Portable folder export is coalesced until the continuous action finishes or pauses,
+rather than rebuilding the full shared continuation after every area. Results and
+request checkpoints remain immediately durable in SQLite. **Pause assessment before
+committing/sharing the latest `.reqwizit/` state**; the folder may lag during a run.
+Failure/shutdown also release publication, and dirty exports recover after interruption
+without inference. Independent workspaces are unaffected. Saved reads, evidence loads,
+attempts and completed assessment identities survive explicit continuation/upgrades;
+see [compatibility](migrations.md#definition-exact-wire-evidence-and-continuous-publication-2026-10-27).
+
+Read-only profiling of one saved personal-project assessment measured approximately
+264 ms for nine-stage replay and 329 ms for local planning, not the entire roughly
+15-second non-request interval seen in many jobs. A subsequent read-only project-wide
+encoding probe still needed four batches: compression offers modest context savings
+there, not an established halving of model calls. Coalesced export eliminates repeated
+between-area publication in deterministic connected-workspace checks; actual-project
+wall-clock/model quality improvements remain unqualified. No live model requests or
+personal-project writes were performed.
+
+Verification: **975 tests passed** (`npm test`: 310 pretests + 665 main), type check,
+UI build and both focused continuous-definition / refresh-allowance browser runners
+passed. Checks cover independent exact snapshot decoding, label resolution/raw receipt
+retention, rejected/forged references, safe legacy stage upgrades, repeated reopening,
+portable continuation, immediate SQLite durability, coalesced export on success/failure/
+Stop, interruption recovery, independent workspaces, local timing privacy and mobile
+refresh progress. The aggregate browser runner passed layout/model selection, then
+stopped at the previously documented obsolete **Project map** locator
+(`src/web/browser-check.ts:706`); subsequent aggregate checks were not reached.
+Desktop rebuilding and actual-project/live-provider continuation were not performed.
+
 ### Refresh resumes saved work and owns extra-usage confirmation (2026-10-25)
 
 Use **Refresh definition coverage** to continue saved reviews. Successful evidence

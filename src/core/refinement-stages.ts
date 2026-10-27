@@ -41,8 +41,17 @@ export const refinementWorkSchema = z.object({ format: z.union([z.literal(1), z.
 export type RefinementWork = z.infer<typeof refinementWorkSchema>;
 const complete = (r: z.infer<typeof savedResponseSchema>) => "questions" in r || "refinementKeep" in r || "refinementCheck" in r && r.refinementCheck.valid;
 export const refinementStep = (w: RefinementWork) => w.receipts.filter((r) => complete(r.response)).length;
-export const refinementStageProgress = (w: RefinementWork) => ({ completed: refinementStep(w), total: w.batches.length * 2,
-  phase: refinementStep(w) >= w.batches.length * 2 ? "complete" as const : refinementStep(w) < w.batches.length ? "read" as const : "check" as const });
+/** All exact reads are still required. An explicitly empty individual draft has
+ * no proposed actions to verify; pair outcomes and blocked checks never qualify.
+ * Derived from original receipts so older saved work needs no rewritten ledger. */
+export function refinementNoChangeComplete(w: RefinementWork) {
+  const draft = [...w.receipts].reverse().find((r) => "questions" in r.response)?.response;
+  return !w.pair && refinementStep(w) >= w.batches.length && !!draft && "questions" in draft && !draft.refinements?.length
+    && !w.receipts.some((r) => "refinementBlocked" in r.response || "refinementCheck" in r.response && !r.response.refinementCheck.valid);
+}
+export const refinementStageProgress = (w: RefinementWork) => ({ completed: refinementStep(w),
+  total: refinementNoChangeComplete(w) ? refinementStep(w) : w.batches.length * 2,
+  phase: refinementNoChangeComplete(w) || refinementStep(w) >= w.batches.length * 2 ? "complete" as const : refinementStep(w) < w.batches.length ? "read" as const : "check" as const });
 const empty = (): Analysis => ({ summary: "Requirement refinement in progress", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 
 /** An additive overflow policy. Older completed contexts and check identities are unchanged. */
@@ -192,7 +201,7 @@ export function acceptRefinementStage(m: RefinementMaterials, w: RefinementWork,
 export function validateRefinementPublication(project: Project, job: Job, result: Analysis) {
   const w = job.refinementWork!, m = refinementMaterials(project, w.requirementID, undefined, w.pair), verified = replayRefinementStages(m, w);
   const target = project.requirements.find((r) => r.id === w.requirementID)!;
-  if (verified.blocked || refinementStep(w) !== w.batches.length * 2 || JSON.stringify(result) !== JSON.stringify(verified.draft)
+  if (verified.blocked || !(refinementNoChangeComplete(w) || refinementStep(w) === w.batches.length * 2) || JSON.stringify(result) !== JSON.stringify(verified.draft)
     || job.context?.refinementStage?.planKey !== w.planKey || job.context.refinementStage.policy !== w.policy
     || (w.pair ? JSON.stringify(job.context.refinementPair) !== JSON.stringify(refinementPairContext(project, w.pair)) || !!job.context.refinementTarget
       : job.context.refinementTarget?.requirementID !== w.requirementID || job.context.refinementTarget.fingerprint !== reviewFingerprint(target) || !!job.context.refinementPair)

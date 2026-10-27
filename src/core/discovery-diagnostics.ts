@@ -34,6 +34,8 @@ export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.
   elapsedMs: duration, planningMs: duration.nullable(),
   planningDecisions: planningDecisionsSchema.nullable(),
   planningProgress: planningProgressSchema.optional(),
+  definitionLocalMs: z.object({ preparation: duration.optional(), replay: duration.optional(), context: duration.optional(),
+    checkpoint: duration.optional(), validation: duration.optional(), publication: duration.optional() }).strict().optional(),
   initialContext: diagnosticContextSchema.nullable(),
   requests: z.array(z.object({ durationMs: duration.nullable(), outcome: z.enum(["in-flight", "returned", "failed", "cancelled"]),
     response: z.enum(["analysis", "search", "load", "blocked", "other"]).nullable(), context: diagnosticContextSchema }).strict()).max(definitionStageLimit),

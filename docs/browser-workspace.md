@@ -1,5 +1,42 @@
 # Browser workspace, epics, and estimated completeness
 
+## Continuous refinement and no-change results (2026-10-27)
+
+**Refine requirements** continues automatically through its selected finite target
+list, with no new whole-sweep request/time cap or periodic Continue confirmation.
+The queue shows stage-level completed/total checks, model requests this run, wording
+suggestions and unchanged requirements, plus the current requirement's evidence
+read/check progress. Stop and existing individual-request/task failure safeguards
+remain available. App restart never silently restarts model requests.
+
+Large individual wording tasks still read every exact evidence batch. If the final
+explicit draft proposes no changes, the task saves that outcome without a redundant
+second model pass verifying an empty proposal. A later read can still propose changes;
+then all frozen-draft checks are required before a suggestion publishes. Pair
+comparisons retain their full verification, including distinct/no-change outcomes.
+No evidence-selection or context-size rules are relaxed.
+
+Logs distinguish **Finished—no wording changes needed** from a wording suggestion
+ready for approval. New refinement jobs retain their own dispatched-request count,
+excluding reused steps; older stage receipts supply a labelled lower bound where
+available. Saved evidence counts are separate from requests made this run. Original
+historical jobs are not rewritten. Compatible saved reads can finish on explicit
+continuation without repeated calls, including zero-call no-change publication.
+See [upgrade compatibility](migrations.md#no-change-refinement-completion-and-request-visibility-2026-10-27).
+
+Verification: **964 tests passed** (`npm test`: 301 pretests + 663 main), along with
+type checking, UI build, and both focused individual/pair refinement browser runners.
+Tests cover all-read no-change completion, late proposals requiring the full check
+pass, blocked/incomplete evidence, repeated startup, portable receipt preservation,
+zero-call recovery of older saved reads, continuous multi-requirement runs and
+per-job counts excluding inherited work. Browser checks cover live request counts,
+saved stages, Stop/reload/continuation and mobile overflow. The aggregate browser
+runner passed workspace layout/model selection, then stopped at its existing
+obsolete **Project map** locator (`src/web/browser-check.ts:706`); later aggregate
+checks were not reached. No live model calls or running personal-project writes
+were performed. The already-running desktop process does not hot-load these changes;
+desktop rebuild/update and explicit continuation remain separate, unperformed actions.
+
 ## Large individual refinement (2026-10-26)
 
 An individual story/requirement refinement that exceeds the ordinary 144k context

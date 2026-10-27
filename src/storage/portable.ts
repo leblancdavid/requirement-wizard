@@ -237,6 +237,7 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
   readinessWork: readinessWorkSchema.optional(),
   submissionWork: submissionWorkSchema.optional(),
   refinementWork: refinementWorkSchema.optional(),
+  refinementRequests: z.number().int().nonnegative().optional(),
   scan: z.object({ workspaceKey: z.literal("portable"), snapshot: projectSchema.shape.scans.removeDefault().element, sources: projectSchema.shape.sources }).strict().optional(),
   scanWork: z.object({ version: z.literal(1), bindingID: z.literal("portable"), resumedFrom: z.string().optional(), batches: z.array(z.object({
     excerpts: z.array(z.object({ sourceID: z.string(), start: z.number().int().nonnegative(), end: z.number().int().positive() }).strict()),

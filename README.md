@@ -89,6 +89,10 @@ Successful evidence gathering is separate from failed requests. **Refresh defini
 coverage** continues saved work and asks inline if repeated failures need one extra
 request; there is no separate recovery screen or silent allowance reset.
 SQLite retains project state, original answers, revisions, and jobs across restarts.
+Definition refresh now coalesces portable folder export until finish/pause while
+SQLite checkpoints stay immediate; pause before sharing its latest `.reqwizit/` state.
+The queue shows cumulative refresh requests and area progress. See
+[refresh efficiency](docs/definition-coverage.md#refresh-efficiency-and-evidence-references-2026-10-27).
 Use **Settings → Project settings
 → Automatic maintenance** to opt in to definition updates after relevant decisions change: edits settle for
 20 seconds, then at most eight requests/five minutes/three areas run per burst.

@@ -8,6 +8,14 @@ export class DiscoveryMeasurement {
     planningDecisions: null, initialContext: null, requests: [] };
   private readonly started = performance.now();
   constructor(private readonly save: (value: DiscoveryMetrics) => void) { this.checkpoint(); }
+  /** Synchronous definition phases; no extra persistence per local probe. */
+  local<T>(phase: keyof NonNullable<DiscoveryMetrics["definitionLocalMs"]>, run: () => T): T {
+    const start = performance.now();
+    try { return run(); } finally {
+      this.value.definitionLocalMs ??= {};
+      this.value.definitionLocalMs[phase] = (this.value.definitionLocalMs[phase] ?? 0) + performance.now() - start;
+    }
+  }
   private checkpoint() { this.value.elapsedMs = performance.now() - this.started; this.save(this.value); }
   preparing(progress: PlanningProgress) { this.value.planningProgress = progress; this.checkpoint(); }
   planned(context?: ContextPack, decisions?: DiscoveryMetrics["planningDecisions"]) {

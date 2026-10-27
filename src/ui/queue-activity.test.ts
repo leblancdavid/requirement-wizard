@@ -44,6 +44,8 @@ test("refinement labels distinguish stage progress, run scope and terminal outco
   }
   assert.equal(refinementActivity({ phase: "preparing", status: "running", completed: 0 }).label, "Preparing checks · this run");
   assert.doesNotMatch(refinementActivity({ phase: "wording", status: "completed", completed: 0, total: 0 }).label, /NaN|Infinity|100%/);
+  assert.match(refinementActivity({ phase: "wording", status: "running", completed: 5, total: 12, requests: 48, suggestions: 2, unchanged: 3 }).label,
+    /5 of 12 checks completed.*48 model requests this run.*2 wording suggestions.*3 unchanged/);
 });
 
 const project = projectSchema.parse({ id: "project", name: "Queue", revision: 1, model: { providerID: "openai", modelID: "fixture" },

@@ -20,7 +20,8 @@ export function jobHistoryLog(entry: JobLogEntry): LogRecord {
     source: entry.source, status: entry.status, epicID: entry.epicID ?? undefined, revision: entry.revision,
     at: entry.startedAt ?? entry.createdAt ?? entry.recordedAt ?? undefined,
     atLabel: entry.startedAt ? "Started" : entry.createdAt ? "Created" : "Recorded", finishedAt: entry.finishedAt ?? undefined, durationMs: entry.durationMs ?? undefined,
-    summary: [definitionRunOutcome(entry.requests, entry.blockReason), entry.requests !== null ? `${entry.requests} model request attempts this run` : "Model request count not recorded", entry.savedSteps !== null ? `${entry.savedSteps} review steps saved (including reused work) · ${entry.batches ?? "Unknown"} evidence batches${entry.interruptionCause === "request-limit" ? " · Request allowance reached; progress retained. Refresh definition coverage to continue." : ""}` : ""].filter(Boolean).join(" · "),
+    summary: [entry.refinementOutcome === "unchanged" ? "Finished—no wording changes needed" : entry.refinementOutcome === "suggestion" ? "Finished—wording suggestion ready for approval" : "",
+      definitionRunOutcome(entry.requests, entry.blockReason), entry.requests !== null ? `${entry.requestsAtLeast ? "At least " : ""}${entry.requests} model request attempts this run` : "Model request count not recorded", entry.savedSteps !== null ? `${entry.savedSteps} review steps saved (including reused work) · ${entry.batches ?? "Unknown"} evidence batches${entry.interruptionCause === "request-limit" ? " · Request allowance reached; progress retained. Refresh definition coverage to continue." : ""}` : ""].filter(Boolean).join(" · "),
     detail: logPreview(JSON.stringify(entry, null, 2)) };
 }
 

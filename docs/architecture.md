@@ -116,6 +116,14 @@ implemented under `src/`. See [decisions.md](decisions.md),
   preserve replay and legacy recovery accounting. Refresh owns revision/area/job-bound
   extra-request consent and continues ordinary remaining work after a successful
   extension; automatic maintenance cannot grant that extension.
+  `definition-wire.ts` adds reversible plain-review/cleanup envelope encoding only
+  when the full encoded request is smaller. `exactWirePolicy` preserves old hashes
+  at a safe stage boundary; exact-load labels resolve against their original request
+  and persist separately from raw responses. Verification is never skipped. Manual
+  continuous refresh defers its workspace publication until finish/pause while every
+  SQLite checkpoint commits immediately; local phase timings and cumulative action
+  request counts distinguish model work from preparation/export. See
+  [efficiency compatibility](migrations.md#definition-exact-wire-evidence-and-continuous-publication-2026-10-27).
   Existing single-context assessment identities remain unchanged. See
   [large-area assessment](definition-coverage.md#large-area-assessment-and-continuation-follow-up-2026-10-23).
 
@@ -393,6 +401,16 @@ checks, including no-change outcomes, are skipped on explicit retry/restart whil
 key matches. Errors/cancellation stop the finite run and preserve previous results;
 there is no automatic replay after restart. A single oversized target still blocks
 before model inference. Normal gap discovery retains its existing working-set policy.
+
+The finite refinement sweep has no shared whole-sweep allowance or periodic consent
+pause. Individual staged wording tasks can finish after all exact reads when the
+final explicit validated draft proposes no changes; no empty-proposal verification
+pass is dispatched. Actual proposals and pair outcomes still require all checks.
+Publication replays original receipts and checks exact coverage/current material;
+blocked work cannot take the shortcut. Saved hashes/formats remain compatible.
+New per-job request counters exclude inherited receipts; historical logs disclose
+receipt-derived lower bounds. Volatile sweep progress separates requests, suggestions
+and unchanged requirements. See [compatibility](migrations.md#no-change-refinement-completion-and-request-visibility-2026-10-27).
 
 ```text
 Analyze → Identify gaps → Research when needed → Propose questions

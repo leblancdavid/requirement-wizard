@@ -1,5 +1,93 @@
 # Data migrations and upgrade compatibility
 
+## Definition exact-wire evidence and continuous publication (2026-10-27)
+
+Source/target: SQLite remains **schema 8**, `definitionWork` remains **format 1 /
+exact-batches-v1**. The optional `exactWirePolicy:{format:1,fromStage}` is an ordered
+wire/interpretation boundary, not a specification revision, new attempt allowance or
+assessment freshness identity. No startup migration, model call, history rewrite or
+forced reassessment occurs. Current assessments retain their existing freshness keys.
+
+New plans start at boundary zero. Explicit continuation first replays old receipts
+unchanged, then upgrades only future stages. A stage with an accepted supplemental
+evidence request (including inherited split evidence) keeps its original contexts until
+the next safe boundary. Original partitions, hashes before the boundary, receipts,
+raw responses, IDs and spent attempts remain intact. Compatible old invalid-reference
+failures may retry the unfinished request under their remaining allowance; unsupported
+references, exhausted attempts and genuine human conflicts are not cleared or guessed.
+
+Wire encoding can replace canonical plain review snapshots with exact loaded-requirement
+references, or self-contained historical snapshots when wording differs. Canonically
+serialized cleanup envelopes can expose their embedded original JSON to lossless text/
+identifier/table sharing. Full original snapshots, unknown prose, addenda, decision
+strings and line endings remain reconstructible. This is **not** omission of generated
+history or projection of old evidence into current approvals. The candidate is used
+only when its complete encoded request is smaller than the ordinary encoding for the
+same policy. The 96k cap, draft reserve and every read/verification step remain.
+
+New evidence receipts optionally retain `resolvedRecordIDs` alongside the original
+`definitionEvidence` response. Only exact canonical IDs or the original request's
+displayed labels resolve; no prefixes, other-request labels or fuzzy lookup. A mixed
+request may mention already detailed records, but must add an unread saved record;
+unknown references and duplicate aliases still reject. Replay reconstructs the original
+label map and checks the resolved IDs independently. Future boundary formats and
+unversioned/forged resolved evidence reject without overwriting saved work. Local and
+portable jobs share the same schema; repeated startup and clone adoption need no
+completed model calls repeated. Downgrading to an app without this boundary is unsupported.
+
+New discovery metrics optionally record allowlisted `definitionLocalMs` phase durations;
+older absent phases remain unknown. No prose or paths enter these measurements. New
+whole-refresh progress counts only requests dispatched in that owned action, separately
+from completed/reused/unfinished areas and reused receipts.
+
+Continuous manual refresh now defers its own portable folder publication until finish,
+failure or Pause/shutdown, avoiding a full continuation rebuild between each area.
+**SQLite results and request checkpoints still commit immediately.** The deferral is
+process-local, reference-counted and idempotently released; independent workspaces are
+not deferred. Existing durable dirty/journal/conflict mechanisms recover pending exports
+on reopen, respecting live worker leases. During a refresh, `.reqwizit/` may lag SQLite;
+pause first before committing or sharing the latest portable state. There is no new
+whole-refresh cap, recurring confirmation or startup inference. See
+[definition refresh efficiency](definition-coverage.md#refresh-efficiency-and-evidence-references-2026-10-27)
+for checks actually run and remaining qualification limits.
+
+## No-change refinement completion and request visibility (2026-10-27)
+
+Source/target: existing individual `refinementWork` **format 1** and pair **format 2**
+remain unchanged. SQLite stays at schema 8; material/context/plan hashes, freshness
+keys, evidence, original receipts, IDs and completed checks are preserved. There is
+no startup rewrite or inference, and no project reset or reassessment requirement.
+
+Individual wording work can finish after every exact evidence batch has been read
+when its last explicit validated draft contains no refinements. Empty implicit
+retention alone is insufficient. Pair outcomes still need the full check pass;
+proposed wording still needs every frozen-draft check. An explicit blocked/negative
+check cannot become a no-change completion. Publication replays the original ledger,
+checks exact material/coverage and result equality, then enforces the usual revision
+and target checks. No synthetic model-verification receipts are added.
+
+Explicit continuation adopts compatible older reads, including a partial check pass,
+without replaying them. If those reads already establish no changes, publication
+uses zero new requests. Old complete 2-pass results remain reusable as-is. Interrupted
+or failed requests retain their spent attempts; missing evidence still blocks.
+
+New jobs add optional `refinementRequests`, a nonnegative per-job pre-dispatch counter
+retained in local and portable jobs. It starts at zero for a new staged job, counts
+failed/dispatched attempts and excludes inherited receipts. Historical jobs without
+the counter stay unchanged: logs show only the job's own returned receipts as an
+explicit **at least** count, or unknown if none exist, never fabricate an exact total.
+Timeline projections expose counts and outcome metadata, not original response text.
+The checkpoint envelope and prompts remain readable without a new format; older
+apps do not implement the reduced no-change publication rule, so use the updated
+app for continued work/portable adoption rather than relying on downgrade behavior.
+
+Volatile sweep counters show requests, wording suggestions and unchanged requirements;
+they describe the current process/run, not historical totals. There is no new shared
+sweep allowance, periodic confirmation or automatic restart. Existing request/task
+limits, cancellation, failures, and explicit continuation after restart remain.
+Upgrade/recovery, late-proposal/full-verification, continuous-sweep, log projection
+and browser checks are recorded in [browser workspace](browser-workspace.md#continuous-refinement-and-no-change-results-2026-10-27).
+
 ## Resumable workflow planning probes and bookkeeping revisions (2026-10-27)
 
 The supplied metadata-only export contains two two-minute preparation failures at
