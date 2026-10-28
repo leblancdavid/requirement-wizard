@@ -2,6 +2,14 @@
 
 ## Confirmed product direction
 
+**Automatic Design clarification (2026-10-27).** The user approved automatically
+preparing Design questions when reviews identify unresolved choices, rather than
+requiring routine Clarify clicks, and continuing preparation to completion without
+the 32-request/fifteen-minute action cutoff. Stop, individual request timeouts,
+evidence limits, failed-attempt allowances and explicit interruption recovery remain.
+This authorizes question preparation, not answering questions, specification edits,
+approvals or coding. See [browser behavior](browser-workspace.md).
+
 **DEC-033 — Clear workspace responsibilities and consolidated logs (2026-10-24).**
 The user approved merging Project map into Specification, keeping the queue focused
 on unfinished work, separating meaningful Activity from technical Logs, and replacing

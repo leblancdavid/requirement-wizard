@@ -27,6 +27,7 @@ function assessment(epicID: string, evidenceID: string): Analysis {
 }
 function adapter(calls: string[]): DiscoveryAdapter {
   return { async analyze(_p, { context, research }) {
+    if (context.manifest.readinessQuestions) return empty();
     assert.equal(research, false); const task = context.manifest.definitionAssessment;
     assert.ok(task, "Automatic maintenance must never request gap discovery or specification edits");
     calls.push(task.epicID);
@@ -71,6 +72,7 @@ test("opt-in has no retrospective sweep; relevant changes debounce/coalesce and 
 test("saved story processing completes first, then definition updates follow without approving unrelated proposals", async () => {
   const store = new ProjectStore(":memory:"); const calls: string[] = [];
   const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(p, options) {
+    if (options.context.manifest.readinessQuestions) return empty();
     if (options.context.manifest.definitionAssessment) return adapter(calls).analyze(p, options);
     calls.push("process"); const source = p.sources.at(-1)!;
     assert.ok(options.context.manifest.submissionIDs?.length); assert.equal(options.context.manifest.epicReview, undefined);
@@ -153,7 +155,7 @@ test("staged automatic assessment honors the eight-request burst budget and reta
     const first = structuredClone(job.definitionWork!.receipts[0]);
     assert.equal(store.maintenance(p.id).paused, true);
     queue.resumeBrowser(p.id); settle(queue, store, p.id); await idle(queue, p.id);
-    const final = store.jobs(p.id).at(-1)!; assert.equal(final.status, "completed", final.diagnostic);
+    const final = store.jobs(p.id).reverse().find((j) => !!j.definitionWork)!; assert.equal(final.status, "completed", final.diagnostic);
     assert.deepEqual(final.definitionWork!.receipts[0], first); assert.equal(calls.length, final.definitionWork!.batches.length * 2);
   } finally { await queue.close(); store.close(); }
 });
@@ -192,7 +194,7 @@ test("restart preserves queued work without inference and a second app process c
     queue.configureMaintenance(p.id, queue.maintenanceView(p.id).version, "resume"); other.configureMaintenance(p.id, other.maintenanceView(p.id).version, "resume");
     const ready = store.maintenance(p.id); ready.dueAt = 0; store.saveMaintenance(p.id, ready);
     queue.maintain(p.id); other.maintain(p.id); await idle(queue, p.id); await idle(other, p.id);
-    assert.deepEqual(calls.slice().sort(), ["missions", "project", "reports"]); assert.equal(store.jobs(p.id).length, 3);
+    assert.deepEqual(calls.slice().sort(), ["missions", "project", "reports"]); assert.equal(store.jobs(p.id).filter((j) => !!j.context?.definitionAssessment).length, 3);
     assert.deepEqual(store.maintenance(p.id).tasks, {}); assert.equal(store.maintenance(p.id).paused, false);
   } finally { await other?.close(); peer?.close(); await queue.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
@@ -303,7 +305,8 @@ test("a publication/checkpoint crash is reconciled with current coverage rather 
   const store = new ProjectStore(":memory:"); const calls: string[] = [];
   let running: ReturnType<ProjectStore["maintenance"]> | undefined;
   const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(p, options) {
-    running = store.maintenance(p.id); return adapter(calls).analyze(p, options);
+    if (!options.context.manifest.readinessQuestions) running = store.maintenance(p.id);
+    return adapter(calls).analyze(p, options);
   } }));
   try {
     const p = seed(store); enable(queue, p.id); store.note(p.id, p.revision, "A mission can pause", "missions");

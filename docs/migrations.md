@@ -1,5 +1,66 @@
 # Data migrations and upgrade compatibility
 
+## Saved-response conflict questions and explicit-answer recovery (2026-10-28)
+
+Source/target: SQLite stays **schema 8**, portable continuation stays **format 1**.
+Readiness task formats 1/2 are unchanged; additive **task format 3 /
+saved-response-questions-v1** binds a terminal saved-response verdict to its original
+job, submission, exact material/plan and current evidence. The existing format-1
+readiness ledger also accepts this task; older contexts/receipt hashes are not
+re-encoded or relabelled. `submissionWork` remains format 1 with optional version-1
+`reconciliation` provenance (source job, published clarification job, permanent
+question and explicit answer source). Future variants fail closed.
+
+No startup migration, reset, automatic model sweep, assessment invalidation or lost
+history is needed. An older retained semantic blocker is replayed on explicitly
+resuming processing; no original model request is repeated. A separate exact,
+questions-only task can establish a genuine unresolved choice, or explain that the
+draft was wrong/intent settled without inventing a question. Its preparation follows
+the continuous clarification policy. Unchanged failure/Stop/no-question outcomes
+never automatically spend another clarification allowance. Permission-recovery and
+exhausted-request errors do not become product questions based on diagnostic prose.
+
+The original input/ledger is not completed by generating a question. Pending,
+deferred or delegated linked questions prevent ordinary retries of that response.
+An explicit concrete answer to its published clarification allows a **new-evidence
+draft plan** on continuation, pinning the original input/target plus that question
+and answer. This is reassessment of changed intent, not reuse of a rejected draft or
+an allowance reset for identical evidence. Earlier exact reads, rejected checks and
+spent attempts stay immutable in their original jobs; scoped authority is unchanged.
+Publication independently validates the answered question and source lineage.
+Portable projection retains those linked jobs even after the new question changes
+area freshness. Other related unapplied/conflicting input still gates preparation;
+the blocked submission does not block continuation of its own question task.
+
+Tests cover older file-backed blocked data, repeated resume without paid replay,
+explicit-answer recovery, Stop/task-only continuation, stale evidence, no-question
+and failed triage, portable source/recovery preservation and future-format rejection.
+Full real-project/live-provider recovery remains unqualified; no live calls were made.
+
+## Automatic continuous Design clarification (2026-10-27)
+
+Compatibility: no SQLite, portable or task/receipt format change. Existing format-1
+and format-2 task identities and format-1 exact readiness ledgers remain unchanged.
+Ordinary clarification now runs continuously; coordinated workflows and explicitly
+bounded service callers retain their allowances. The existing checkpoint transaction
+renews a finite lease before dispatch. Individual request timeouts, spent attempts,
+exact evidence constraints, replay validation and publication CAS remain unchanged.
+
+Definition reviews queue question preparation server-side. Completed area results
+and older complete dimension-level no-question results are reused. Matching failed,
+cancelled or interrupted attempts are not automatically retried; startup/reload never
+starts inference. Exhausted definition-request allowance is not treated as a product
+choice granting a separate automatic allowance. Related unfinished inputs take
+precedence; input-only processing and coordinated budgets are not widened.
+
+Forward recovery is behavioral, not a rewrite: explicitly continuing an older saved
+clarification retains receipt hashes, original job history and spent attempts, then
+finishes the remaining steps without the old per-action cutoff. No data reset,
+reassessment, fabricated provenance or replay of successful requests is required.
+Tests cover file-backed reopen/repeated refresh, no-question/failure/Stop reuse,
+older paused receipts continued in continuous mode, >32 requests in one action and
+late responses after per-request timeout. Future persisted formats still fail closed.
+
 ## Definition exact-wire evidence and continuous publication (2026-10-27)
 
 Source/target: SQLite remains **schema 8**, `definitionWork` remains **format 1 /

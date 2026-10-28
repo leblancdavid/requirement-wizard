@@ -76,9 +76,58 @@ The initial projection of every category into **Needs your decision** produced a
 misleading large correction backlog and has been removed. Saved assessments, scores,
 answers, manually submitted clarifications and review history remain unchanged.
 
-In **Specification**, expand **Let AI turn definition findings into Design questions**,
+Definition refresh now automatically prepares Design questions for unresolved area
+findings after the selected reviews finish. It reuses completed question/no-question
+results; a stopped or failed matching attempt requires explicit continuation, not an
+automatic retry. No calls start on render, reload or app startup. Review-triggered
+preparation uses additional AI allowance and does not change requirements or start coding.
+Ordinary queue reviews that publish assessments also prepare questions; completed,
+unpaused automatic-maintenance rounds do the same. Coordinated workflow keeps its own
+bounded orchestration. **Process saved responses only** stays within selected input;
+the saved-response conflict follow-up below is a related questions-only exception.
+Related unfinished human input takes priority over automatic question preparation.
+
+Verification (2026-10-27): `npm run check`, `npm test` (316 pretests + 665 main
+tests), UI build and the focused `specification-browser-check.ts` passed using
+deterministic adapters, including automatic question appearance without Clarify.
+An additional focused 62-test run passed after the continuous lease/time test was
+strengthened. `npm run test:browser` passed layout/model-selection checks but stopped
+at an obsolete **Project map** tab reference in `browser-check.ts:706`; the full
+browser sequence is not qualified. The separate epic-review browser check likewise
+stops at its obsolete **Project map** selector (`epic-review-browser-check.ts:122`).
+No live model calls were made.
+
+### Saved-response conflicts become Design questions (2026-10-28)
+
+A retained exact saved-response `submissionBlocked` or rejected frozen-draft check
+now triggers automatic questions-only triage, not repeated zero-request failures.
+It reads the actual original inputs and treats both the rejected draft and blocker
+as AI hypotheses. Only genuinely missing human precedence/exception intent produces
+a new Design question with options. Technical limits or settled intent can return
+no question; the failed draft is never silently approved. Preparation uses additional
+AI allowance and the continuous exact clarification runner, not general gap discovery.
+
+The original response and its completed evidence/check receipts stay saved. An
+unanswered, deferred or delegated linked question prevents retrying that response.
+Answer in Design, save/process the answer as usual, then continue the retained
+response. The explicit answer permits a new draft/evidence plan without re-entering
+the original input; earlier rejected work stays in history, not falsely current.
+No original status is marked completed merely because a question was generated.
+If preparation was stopped, **Continue clarification** resumes that task even though
+its source response is still unfinished. Other related input conflicts still block it.
+Reload/restart never repeats inference. See [compatibility and recovery](migrations.md#saved-response-conflict-questions-and-explicit-answer-recovery-2026-10-28).
+
+Verification: `npm run check`, `npm test` (321 pretests + 666 main tests), UI build,
+and the focused Specification browser check passed, including a retained conflict
+producing a question without a Clarify click or original follow-up replay. A final
+29-test saved-response/queue run also passed. The full browser suite was rerun:
+layout and model-selection passed, then the same obsolete **Project map** selector
+at `browser-check.ts:706` blocked the remaining sequence. No live calls or changes
+to the reported user's project data were made.
+
+For manual preparation/recovery, in **Specification**, expand **Let AI turn definition findings into Design questions**,
 pick an area and choose **Clarify in Design → Prepare questions in Design**. The
-confirmation explains AI usage; opening the control alone starts no call. A bounded,
+confirmation explains AI usage; opening the control alone starts no call. An exact-evidence,
 questions-only workflow reviews the area's current findings and exact evidence,
 proposing up to three focused questions with answer options. It opens **Design** and
 focuses a resulting question. Choose an option or type your own answer, then **Save
@@ -87,8 +136,11 @@ project** or **Process saved responses** when input is waiting.
 
 Large manual clarifications use exact evidence batches instead of raising the
 one-request limit. Every batch is read, then proposed questions are checked against
-every batch before any questions publish. Requests target 96,000 characters; an
-action uses at most 32 requests or 15 minutes by default. Design shows saved
+every batch before any questions publish. Requests target 96,000 characters;
+ordinary preparation continues until finished, stopped or blocked, without a 32-request
+or fifteen-minute action cutoff. Each request retains a five-minute timeout, finite
+failed-attempt/evidence limits, rolling worker lease and stale-publication protection.
+Design shows saved
 read/check progress and **Continue clarification** after a pause/reload. Continuing
 consumes allowance only for unfinished work; completed steps and spent attempts
 persist. No requirement, assessment or pending saved response is resolved by this
@@ -99,13 +151,15 @@ Paused clarification is also visible in **Processing & queue**, including its sa
 step counts and a dedicated **Continue clarification** button. With no unfinished
 saved input, the queue header prioritizes that continuation rather than offering
 general discovery. The request retains the exact saved task; changed evidence or a
-newer attempt rejects without silently restarting. A further bounded pause may need
-another explicit continuation. Diagnostic exports now include these stage counts,
+newer attempt rejects without silently restarting. Timeouts, failures and Stop still
+require explicit continuation. Diagnostic exports now include these stage counts,
 phase and next action instead of leaving the newer workflows unknown.
 
 When retained responses need follow-up, **Process saved responses only** is the
 primary queue action. It selects the saved inputs explicitly, performs no new
-research and cannot proceed into gap discovery or another clarification package.
+research and cannot proceed into gap discovery or unrelated clarification packages.
+An exact saved-response semantic blocker can prepare its own Design question as
+described above; this does not process unrelated saved input.
 Answers need not be entered again. Concrete reconciliation answers without a narrow
 requirement scope now use the same exact-batch overflow fallback; their original
 broad authority is preserved. Question-preparation progress remains saved but its

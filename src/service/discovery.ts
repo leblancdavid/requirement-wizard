@@ -389,20 +389,24 @@ export class DiscoveryService {
       let readiness: ContextPack | undefined;
       if (options.readinessQuestions) {
         const task = options.readinessQuestions;
-        const source = task.format === 2 && task.blockedJobID ? this.store.getJob(task.blockedJobID) : undefined;
+        const source = task.format !== 1 && task.blockedJobID ? this.store.getJob(task.blockedJobID) : undefined;
+        if (task.format === 3) this.store.assertSubmissionClarification(project, source!);
         const staged = this.store.jobs(projectID).some((j) => j.id !== job.id && j.readinessWork && JSON.stringify(j.readinessWork.task) === JSON.stringify(task));
         const run = async (overflow?: ContextBudgetError) => {
           clearTimeout(timer);
-          timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
+          // Ordinary question preparation runs to completion. Coordinated work and
+          // explicit bounded callers retain their own shared allowances.
+          const continuous = !workflowLimits && !this.navigation.stagedLimits;
+          if (!continuous) timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
           return completeMeasurement(await runReadinessStages(this.store, inferenceAdapter, project, job, task, {
-            signal: controller.signal, blockedJob: source, overflow, limits: workflowLimits ?? this.navigation.stagedLimits,
+            signal: controller.signal, blockedJob: source, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, continuous,
             onProgress: options.onProgress, measurement,
           }));
         };
-        if (task.format === 2 && staged) return await run();
+        if (task.format !== 1 && staged) return await run();
         try { readiness = readinessQuestionContext(project, task, source); }
         catch (error) {
-          if (!(error instanceof ContextBudgetError) || task.format !== 2) throw error;
+          if (!(error instanceof ContextBudgetError) || task.format === 1) throw error;
           options.onProgress?.("This area needs several exact evidence batches. Preparing saved read/check steps; no questions or specification changes have been published.");
           return await run(error);
         }

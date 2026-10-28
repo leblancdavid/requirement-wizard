@@ -4,6 +4,7 @@ import { analysisSchema, type Analysis, type Job, type Project, type Submission 
 import { ContextBudgetError, type ContextPack } from "./context.js";
 import { planExactTaskContext, shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure, type ContextTask } from "./working-set.js";
 import { specificationUpdateTargets } from "./specification-permissions.js";
+import { submissionClarificationQuestions } from "./readiness-questions.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
@@ -30,9 +31,28 @@ export const submissionWorkSchema = z.object({ format: z.literal(1), policy: z.l
      permissionPolicy: z.literal("staged-target-evidence-v1").optional() }).strict()).max(512),
   permissionRecovery: z.object({ format: z.literal(1), policy: z.literal("staged-target-evidence-v1"), receiptIndex: z.number().int().nonnegative(),
     atRevision: z.number().int().positive(), jobID: z.string().min(1) }).strict().optional(),
+  reconciliation: z.object({ format: z.literal(1), sourceJobID: z.string().uuid(), clarificationJobID: z.string().uuid(),
+    questionID: z.string().min(1), answerSourceID: z.string().min(1) }).strict().optional(),
   allowanceExtensions: z.array(z.object({ step: z.number().int().min(0).max(63), additionalRequests: z.literal(4),
     atRevision: z.number().int().positive(), jobID: z.string().min(1) }).strict()).max(64).optional() }).strict();
 export type SubmissionWork = z.infer<typeof submissionWorkSchema>;
+
+/** A new explicit answer can supersede an incompatible draft plan, never its
+ * original human input or immutable evidence receipts. No answer, no new plan. */
+export function submissionReconciliation(project: Project, submissionID: string, work: SubmissionWork, jobs: Job[]) {
+  for (const { job, questions } of submissionClarificationQuestions(project, jobs, submissionID).reverse()) {
+    const task = job.context!.readinessQuestions!;
+    if (task.format !== 3) continue;
+    const source = jobs.find((j) => j.id === task.blockedJobID);
+    if (!source?.submissionWork || source.submissionWork.materialKey !== work.materialKey || source.submissionWork.planKey !== work.planKey
+      || JSON.stringify(source.submissionWork.receipts) !== JSON.stringify(work.receipts)) continue;
+    const question = questions.find((q) => q.status === "answered" && q.sourceID
+      && project.sources.some((s) => s.id === q.sourceID && s.kind === "answer" && s.questionID === q.id)
+      && !project.sources.some((s) => s.supersedes === q.sourceID));
+    if (question) return { format: 1 as const, sourceJobID: source.id, clarificationJobID: job.id, questionID: question.id, answerSourceID: question.sourceID! };
+  }
+  return undefined;
+}
 const complete = (r: z.infer<typeof submissionStageResponseSchema>) => "questions" in r || "submissionKeep" in r || "submissionCheck" in r && r.submissionCheck.valid;
 export const submissionStep = (w: SubmissionWork) => w.receipts.filter((r) => complete(r.response)).length;
 export const submissionProgress = (w: SubmissionWork) => ({ completed: submissionStep(w), total: w.batches.length * 2,

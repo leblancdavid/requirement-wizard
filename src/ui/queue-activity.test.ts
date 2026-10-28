@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyExecution } from "../core/execution.js";
-import { projectSchema, type Job } from "../core/model.js";
+import { projectSchema, type Job, type Submission } from "../core/model.js";
 import { queueActivities } from "./queue-activity.js";
 import { refinementActivity, pausedRefinement } from "./refinement-progress.js";
 import { mayContinueProject, WorkflowControls } from "./workflow-controls.js";
 import type { WorkflowView } from "../service/workflow.js";
 import { workflowLimits } from "../core/workflow.js";
-import { pausedClarification } from "./clarification-recovery.js";
+import { pausedClarification, clarificationHasWaitingInput } from "./clarification-recovery.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -62,6 +62,18 @@ test("paused clarification selects the latest area attempt without reviving comp
   const other = { ...saved, id: "other-area", status: "completed" as const, context: { ...saved.context!, readinessQuestions: { ...saved.context!.readinessQuestions!, epicID: "another-area" } } };
   assert.equal(pausedClarification([saved, other]), saved, "Another area's completion does not erase this saved task");
   assert.deepEqual(saved.readinessProgress, { completed: 32, total: 42, phase: "check" });
+});
+
+test("a blocked response does not disable continuation of its own clarification, but other waiting input still takes priority", () => {
+  const item: Submission = { id: "original", projectID: project.id, status: "needs-attention", applied: true, appliedSourceID: "idea",
+    submittedAt: "2026-10-28T00:00:00Z", auto: false, research: false, input: { type: "note", epicID: "inbox", text: "Retain the original input" } };
+  const job: Job = { id: "clarification", projectID: project.id, expectedRevision: 1, model: project.model, leaseUntil: null, status: "interrupted",
+    readinessProgress: { completed: 2, total: 12, phase: "read" }, context: { revision: 1, focusEpicID: "inbox", characters: 50000, budget: 96000, includedIDs: [], omittedIDs: [],
+      readinessQuestions: { format: 3, policy: "saved-response-questions-v1", epicID: "inbox", dimension: "saved-response", inputKey: "key", checkKey: "check", blockedJobID: "source", submissionID: item.id } } };
+  assert.equal(clarificationHasWaitingInput(project, [item], job.context!.readinessQuestions), false);
+  const other = { ...item, id: "other", status: "saved" as const };
+  assert.equal(clarificationHasWaitingInput(project, [item, other], job.context!.readinessQuestions), true);
+  assert.equal(clarificationHasWaitingInput(project, [item], { format: 2, policy: "definition-area-questions-v1", epicID: "inbox", dimension: "area-review", inputKey: "key", checkKey: "check" }), true);
 });
 test("paused refinement selects saved per-requirement progress without reviving completed tasks", () => {
   const saved: Job = { id: "refine", projectID: project.id, expectedRevision: 1, model: project.model, leaseUntil: null, status: "interrupted",

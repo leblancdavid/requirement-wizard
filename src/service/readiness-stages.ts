@@ -17,14 +17,15 @@ async function boundedRequest(request: () => Promise<unknown>, signal: AbortSign
 
 export async function runReadinessStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job,
   task: ReadinessQuestionTask, options: { signal: AbortSignal; blockedJob?: Job; overflow?: ContextBudgetError;
-    limits?: { requests: number; durationMs: number }; onProgress?: (message: string) => void; measurement?: DiscoveryMeasurement }): Promise<Job> {
+    limits?: { requests: number; durationMs: number }; continuous?: boolean; requestTimeoutMs?: number;
+    onProgress?: (message: string) => void; measurement?: DiscoveryMeasurement }): Promise<Job> {
   const materials = readinessMaterials(project, task, options.blockedJob, options.overflow);
   const previous = [...store.jobs(project.id)].reverse().find((j) => j.id !== job.id && j.readinessWork
     && JSON.stringify(j.readinessWork.task) === JSON.stringify(task));
   const work = previous?.readinessWork ? structuredClone(previous.readinessWork) : planReadinessStages(materials);
   let { draft, blocked } = replayReadinessStages(project, materials, work);
   upgradeReadinessRead(work);
-  const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
+  const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = options.continuous ? Infinity : Date.now() + limits.durationMs;
   let calls = 0;
   const current = () => {
     options.signal.throwIfAborted();
@@ -50,14 +51,14 @@ export async function runReadinessStages(store: ProjectStore, adapter: Discovery
     if (!calls) options.measurement?.planned(context);
     store.checkpointReadiness(job.id, work, context.manifest);
     if (blocked) throw new Error(`Clarification needs specific evidence: ${blocked} Saved steps remain; unchanged retry does not repeat this response.`);
-    if (calls >= limits.requests || Date.now() >= deadline) return store.pauseReadiness(job.id,
+    if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline)) return store.pauseReadiness(job.id,
       `Clarification paused after ${calls} request(s) in this action; ${readinessStep(work)} / ${work.batches.length * 2} steps saved. Use Continue clarification in Design; completed requests will not repeat.`);
     if (work.attempts >= (work.indexedRead ? 4 : 3)) throw new Error("This clarification step exhausted its finite request allowance (four with indexed question retention). Exact responses and spent attempts are saved; unchanged retry cannot grant another request.");
     work.attempts++; calls++;
     store.checkpointReadiness(job.id, work, context.manifest); // Durable before dispatch.
     const progress = readinessProgress(work);
     options.onProgress?.(`${progress.phase === "read" ? "Reading exact evidence" : "Checking proposed questions"} · ${progress.completed} / ${progress.total} steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Other batches are not assumed reviewed; no questions published yet.`);
-    const timeout = AbortSignal.timeout(Math.max(1, Math.min(300000, deadline - Date.now())));
+    const timeout = AbortSignal.timeout(Math.max(1, Math.min(options.requestTimeoutMs ?? 300000, deadline - Date.now())));
     const signal = AbortSignal.any([options.signal, timeout]);
     let raw: unknown;
     try {

@@ -20,7 +20,7 @@ export const readinessWorkSchema = z.object({ format: z.literal(1), policy: z.li
   indexedRead: z.object({ format: z.literal(1), fromReceipt: z.number().int().min(0).max(256) }).strict().optional(),
   receipts: z.array(z.object({ step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(4),
     atRevision: z.number().int().positive(), jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: responseSchema }).strict()).max(256),
-}).strict().refine((work) => work.task.format === 2, "Staged clarification requires its manual area task.")
+}).strict().refine((work) => work.task.format !== 1, "Staged clarification requires its exact area or saved-response task.")
   .refine((work) => !work.indexedRead || work.indexedRead.fromReceipt <= work.receipts.length, "Indexed clarification must pin an existing receipt boundary.")
   .refine((work) => !!work.indexedRead || work.attempts <= 3 && work.receipts.every((r) => r.attempt <= 3), "Legacy clarification retains its original three-request bound.");
 export type ReadinessWork = z.infer<typeof readinessWorkSchema>;
@@ -46,7 +46,7 @@ export function readinessMaterials(project: Project, task: ReadinessQuestionTask
     try { manifest = readinessQuestionContext(project, task, blockedJob).manifest; }
     catch (error) { if (!(error instanceof ContextBudgetError)) throw error; manifest = error.manifest; }
   }
-  if (task.format !== 2 || manifest.revision !== project.revision || JSON.stringify(manifest.readinessQuestions) !== JSON.stringify(task))
+  if (task.format === 1 || manifest.revision !== project.revision || JSON.stringify(manifest.readinessQuestions) !== JSON.stringify(task))
     throw new Error("Staged clarification needs its exact current manual task.");
   const ids = new Set(manifest.includedIDs);
   const records = (["sources", "questions", "requirements", "research"] as const).flatMap((field) => project[field]

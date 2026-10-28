@@ -16,6 +16,8 @@ export const readinessQuestionTaskSchema = z.discriminatedUnion("format", [
   z.object({ format: z.literal(2), policy: z.literal("definition-area-questions-v1"),
     epicID: z.string().min(1), dimension: z.literal("area-review"), inputKey: key, checkKey: key, blockedJobID: z.string().uuid().optional(),
     pendingSourceIDs: z.array(z.string().min(1)).min(1).max(128).optional() }).strict(),
+  z.object({ format: z.literal(3), policy: z.literal("saved-response-questions-v1"), epicID: z.string().min(1),
+    dimension: z.literal("saved-response"), inputKey: key, checkKey: key, blockedJobID: z.string().uuid(), submissionID: z.string().uuid() }).strict(),
 ]);
 export type ReadinessQuestionTask = z.infer<typeof readinessQuestionTaskSchema>;
 
@@ -49,13 +51,48 @@ export function definitionQuestionTask(project: Project, epicID: string, blocked
       : area.checks), ...(blockedJob ? { blockedJobID: blockedJob.id } : {}), ...(pending.length ? { pendingSourceIDs: pending } : {}) };
 }
 
+/** Structural terminal verdict, never a classification guessed from error prose. */
+export function submissionQuestionBlock(job: Job) {
+  const work = job.submissionWork, last = work?.receipts.at(-1);
+  if (!work || !last || job.status !== "failed" || !job.context?.submissionIDs?.includes(work.submissionID)) return undefined;
+  if ("submissionCheck" in last.response && !last.response.submissionCheck.valid) return last.response.submissionCheck.reason;
+  if ("submissionBlocked" in last.response && work.permissionRecovery?.receiptIndex !== work.receipts.length - 1) return last.response.submissionBlocked.reason;
+  return undefined;
+}
+
+export function submissionQuestionTask(project: Project, epicID: string, blockedJob: Job): ReadinessQuestionTask {
+  const reason = submissionQuestionBlock(blockedJob), work = blockedJob.submissionWork;
+  if (!reason || !work || blockedJob.projectID !== project.id || !project.epics.some((e) => e.id === epicID && !e.archived))
+    throw new Error("Saved-response clarification requires its retained terminal verdict and active area.");
+  const evidenceIDs = [...new Set([...work.task.recordIDs, ...work.batches.flat()])];
+  if (evidenceIDs.some((id) => ![...project.sources, ...project.questions, ...project.requirements, ...project.research].some((r) => r.id === id)))
+    throw new Error("Saved-response clarification has missing exact evidence.");
+  return { format: 3, policy: "saved-response-questions-v1", epicID, dimension: "saved-response",
+    inputKey: definitionInputKey(project, epicID, evidenceIDs), checkKey: digest([work.materialKey, work.planKey, work.receipts.at(-1)]),
+    blockedJobID: blockedJob.id, submissionID: work.submissionID };
+}
+
+/** Resolve permanent question IDs from the published outcome, not text alone. */
+export function submissionClarificationQuestions(project: Project, jobs: Job[], submissionID: string) {
+  return jobs.filter((j) => j.status === "completed" && j.context?.readinessQuestions?.format === 3
+    && j.context.readinessQuestions.submissionID === submissionID).map((job) => ({ job,
+    questions: project.questions.filter((q) => job.result?.questions.some((r) => r.text === q.text && r.epicID === q.epicID
+      && r.whyItMatters === q.whyItMatters && JSON.stringify(r.options) === JSON.stringify(q.options)
+      && JSON.stringify(r.evidenceIDs) === JSON.stringify(q.evidenceIDs))) }));
+}
+
 /** Shared exact task validation; findings remain AI hypotheses. */
 export function readinessQuestionDetails(project: Project, input: ReadinessQuestionTask, blockedJob?: Job) {
   const task = readinessQuestionTaskSchema.parse(input), expected = task.format === 1 ? readinessQuestionTask(project, task.epicID, task.dimension)
+    : task.format === 3 ? blockedJob && submissionQuestionTask(project, task.epicID, blockedJob)
     : definitionQuestionTask(project, task.epicID, task.blockedJobID ? blockedJob : undefined, task.pendingSourceIDs);
   if (JSON.stringify(task) !== JSON.stringify(expected)) throw new Error("Readiness question inputs changed; previous evidence was preserved.");
   const area = coverage(project).epics.find((a) => a.epicID === task.epicID)!;
-  const check = task.format === 1 ? area.checks.find((c) => c.dimension === task.dimension)!
+  const check = task.format === 3 ? { explanation: submissionQuestionBlock(blockedJob!)!,
+    evidenceIDs: [...new Set([...blockedJob!.submissionWork!.task.recordIDs, ...blockedJob!.submissionWork!.batches.flat()])],
+    rejectedDraft: [...blockedJob!.submissionWork!.receipts].reverse().find((r) => "questions" in r.response)?.response,
+    limitation: "The rejected draft and terminal verdict are AI proposals, not human decisions. Inspect exact human inputs to distinguish a genuine unresolved choice from an incorrect draft or technical limitation. Never ask users to approve a mistake or reconfirm settled intent. Ask a NEW reconciliation question only if human precedence/exception intent really is missing. Preparing questions does not resolve, retry, or publish the blocked response." }
+    : task.format === 1 ? area.checks.find((c) => c.dimension === task.dimension)!
     : task.blockedJobID ? { explanation: blockedJob!.definitionBlock?.reason ?? blockedJob!.definitionWork!.blocked!, evidenceIDs: blockedJob!.context?.includedIDs ?? [] }
       : { explanation: "Check whether these assessment findings contain an actual unanswered human choice.", checks: area.checks,
         evidenceIDs: [...new Set(area.checks.flatMap((c) => c.evidenceIDs))] };
@@ -65,7 +102,7 @@ export function readinessQuestionDetails(project: Project, input: ReadinessQuest
     ...(task.format === 2 && task.pendingSourceIDs?.length ? { pendingInputGuidance: "The listed pendingSourceIDs are exact human inputs already recorded in this project. Their AI/specification follow-up is unfinished, possibly size-blocked. The finding may predate these inputs: treat it as a dated hypothesis, NOT a current assessment. Read the inputs as human evidence, not completed processing or authority to approve/rewrite behavior. Existing requirement wording may also predate them. Ask a reconciliation question if needed; do not infer which rule wins. This clarification does not complete or retry the saved responses." } : {}),
     instruction: task.format === 1
       ? "Questions only: clarify this current definition-check blocker using exact detailed evidence. The check is an AI finding, not an established missing requirement or user preference. Ask at most three focused behavioral questions for this dimension and area. Preserve existing decisions; do not repeat answered, pending, deferred or retired questions. If the problem is unavailable evidence, invalid references, or a technical assessment limitation rather than a product choice, return no questions and explain the blocker in summary. Never use omitted evidence as proof of a gap. No requirements, edits, assessment updates, approvals, tools or implementation claims are authorized."
-      : "Questions only: inspect the supplied findings using exact detailed evidence. Findings may simply describe already settled scope: they are not automatically unanswered questions or missing requirements. Ask zero to three focused behavioral questions with concrete answer options and consequences ONLY for actual unresolved human choices. When earlier human answers conflict, ask a NEW reconciliation question stating the competing rules and asking which governs, replaces another, or is an exception; never choose precedence yourself. Preserve original answers and do not repeat existing questions. Do not ask users to reconfirm settled scope. If no new human decision is needed, return no questions and explain why in summary. Unavailable evidence, invalid references and technical assessment limits are not product choices. Never use omitted evidence as proof of a gap. No requirements, edits, assessment updates, approvals, tools or implementation claims are authorized." };
+      : (task.format === 3 ? "Saved-response clarification: the rejected draft is an untrusted AI proposal, not a human choice. Its failed verification is a hypothesis to check against original inputs. Preparing questions never completes or retries the original saved response. " : "") + "Questions only: inspect the supplied findings using exact detailed evidence. Findings may simply describe already settled scope: they are not automatically unanswered questions or missing requirements. Ask zero to three focused behavioral questions with concrete answer options and consequences ONLY for actual unresolved human choices. When earlier human answers conflict, ask a NEW reconciliation question stating the competing rules and asking which governs, replaces another, or is an exception; never choose precedence yourself. Preserve original answers and do not repeat existing questions. Do not ask users to reconfirm settled scope. If no new human decision is needed, return no questions and explain why in summary. Unavailable evidence, invalid references and technical assessment limits are not product choices. Never use omitted evidence as proof of a gap. No requirements, edits, assessment updates, approvals, tools or implementation claims are authorized." };
 }
 
 /** Exact targeted evidence and guardrails, not a complete-area assessment. */
@@ -77,7 +114,7 @@ export function readinessQuestionContext(project: Project, input: ReadinessQuest
       recordIDs: [...new Set([...check.evidenceIDs, ...(task.format === 2 ? task.pendingSourceIDs ?? [] : []),
         ...project.questions.filter((q) => q.epicID === task.epicID).map((q) => q.id)])],
       isolatedTask: true, currentSpecification: true, expandMandatory: true, preferCompactEvidence: true,
-      compactReviewSnapshots: true, compactWorkflowInstructions: true, clarificationFollowup: task.format === 2 });
+      compactReviewSnapshots: true, compactWorkflowInstructions: true, clarificationFollowup: task.format !== 1 });
   } catch (error) {
     if (error instanceof ContextBudgetError) error.manifest.readinessQuestions = task;
     throw error;
@@ -85,7 +122,7 @@ export function readinessQuestionContext(project: Project, input: ReadinessQuest
   context.manifest.readinessQuestions = task;
   context.data = { ...(context.data as object), readinessQuestions: details };
   context.manifest.characters = JSON.stringify(context.data).length;
-  const ceiling = task.format === 2 ? 144000 : 96000;
+  const ceiling = task.format !== 1 ? 144000 : 96000;
   context.manifest.budget = Math.max(context.manifest.budget, context.manifest.characters > 96000 ? ceiling : context.manifest.characters > 48000 ? 96000 : 48000);
   context.manifest.sectionCharacters = Object.fromEntries(Object.entries(context.data as object).map(([name, value]) => [name, JSON.stringify(value).length]));
   if (context.manifest.characters > ceiling) throw new ContextBudgetError(context.manifest);

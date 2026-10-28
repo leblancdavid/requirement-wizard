@@ -135,6 +135,46 @@ test("indivisible oversized evidence blocks clarification without silent truncat
   } finally { f.store.close(); }
 });
 
+test("definition refresh automatically prepares actual Design choices without a manual clarification action", async () => {
+  const f = fixture(); let calls = 0;
+  const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(_p, { context, research }) {
+    calls++; assert.equal(research, false); assert.equal(context.manifest.readinessQuestions?.format, 2);
+    return f.result();
+  } }));
+  try {
+    queue.refreshDefinition(f.project.id, f.project.revision, "reports"); await queue.wait(f.project.id);
+    const current = f.store.get(f.project.id);
+    assert.equal(calls, 1); assert.equal(current.questions.length, 1);
+    assert.deepEqual(current.requirements, f.project.requirements); assert.deepEqual(current.assessments, f.project.assessments);
+    assert.deepEqual(current.sources, f.project.sources); assert.equal(f.store.execution(current.id).run, undefined);
+    assert.match(queue.progress(current.id).join("\n"), /ready in Design/);
+  } finally { await queue.close(); f.store.close(); }
+});
+
+for (const outcome of ["settled", "failed", "stopped"] as const) test(`automatic clarification does not repeat ${outcome} work on refresh or reopen`, async () => {
+  const directory = mkdtempSync(join(resolve(".reqwizit-state"), "automatic-clarification-")), file = join(directory, "state.sqlite");
+  const f = fixture(file); let calls = 0, closed = false;
+  const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze() {
+    calls++;
+    if (outcome === "stopped") queue.stop(f.project.id);
+    return outcome === "failed" ? { invalid: true } : empty();
+  } }));
+  try {
+    queue.refreshDefinition(f.project.id, f.project.revision, "reports"); await queue.wait(f.project.id);
+    const saved = f.store.jobs(f.project.id).at(-1)!;
+    assert.equal(saved.status, outcome === "settled" ? "completed" : outcome === "failed" ? "failed" : "cancelled");
+    queue.refreshDefinition(f.project.id, f.store.get(f.project.id).revision, "reports"); await queue.wait(f.project.id);
+    assert.equal(calls, 1); assert.deepEqual(f.store.getJob(saved.id), saved);
+    await queue.close(); f.store.close(); closed = true;
+    const store = new ProjectStore(file), reopened = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Startup/refresh must retain saved triage and Stop/failure"); } }));
+    try {
+      const project = store.get(f.project.id);
+      reopened.refreshDefinition(project.id, project.revision, "reports"); await reopened.wait(project.id);
+      assert.deepEqual(store.getJob(saved.id), saved); assert.equal(store.jobs(project.id).length, 2);
+    } finally { await reopened.close(); store.close(); }
+  } finally { await queue.close(); if (!closed) f.store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("manual area clarification triages settled findings once and reuses its no-question result", async () => {
   const f = fixture(); let calls = 0;
   const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(_p, { context }) {
@@ -198,6 +238,8 @@ test("older dimension receipts and new area receipts survive repeated reopen wit
         const store = new ProjectStore(file), queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Equivalent saved clarification must not be repeated on upgrade/reopen"); } }));
         try {
           assert.deepEqual(store.get(saved.id), saved); assert.deepEqual(store.jobs(saved.id), jobs);
+          queue.refreshDefinition(saved.id, saved.revision, "reports"); await queue.wait(saved.id);
+          assert.deepEqual(store.jobs(saved.id), jobs, "Automatic triage reuses both legacy dimension and area receipts");
           const result = queue.clarifyDefinition(saved.id, saved.revision, "reports");
           assert.equal(result.reused, true); assert.match(result.result!.summary, /no new decision/);
           assert.deepEqual(store.get(saved.id), saved); assert.deepEqual(store.jobs(saved.id), jobs);
@@ -285,6 +327,40 @@ function decodeStage(input: unknown) {
   return decode(input) as { sources: unknown[]; questions: unknown[]; requirements: unknown[]; research: unknown[] };
 }
 
+test("ordinary clarification passes 32 requests and fifteen minutes with rolling live leases and no partial publication", async (t) => {
+  const f = largeFixture(); let calls = 0;
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
+  const started = Date.now();
+  try {
+    assert.ok(f.work.batches.length * 2 > 32);
+    const service = new DiscoveryService(f.store, { async analyze(_p, { context, signal }) {
+      calls++;
+      t.mock.timers.tick(180000); signal.throwIfAborted();
+      assert.equal(f.store.get(f.project.id).questions.length, 0);
+      assert.ok((f.store.jobs(f.project.id).at(-1)!.leaseUntil ?? 0) > Date.now());
+      f.store.recoverExpiredJobs(); assert.equal(f.store.jobs(f.project.id).at(-1)!.status, "running");
+      return context.manifest.readinessStage!.phase === "check"
+        ? { clarificationVerdict: { keepQuestions: [0], summary: "Exact batch checked" } } : f.result();
+    } });
+    const job = await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
+    assert.equal(job.status, "completed", job.diagnostic); assert.equal(calls, f.work.batches.length * 2);
+    assert.ok(Date.now() - started > 900000);
+    assert.equal(f.store.get(f.project.id).questions.length, 1);
+  } finally { t.mock.timers.reset(); f.store.close(); }
+});
+
+test("continuous clarification ignores action bounds but still times out a non-cooperating individual request", async () => {
+  const f = largeFixture(); let calls = 0;
+  try {
+    const { job } = f.store.beginJob(f.project.id, f.project.revision); f.store.claimJob(job.id, Date.now() + 60000);
+    const paused = await runReadinessStages(f.store, { async analyze() { calls++; await delay(250); return f.result(); } }, f.project, job, f.task,
+      { signal: new AbortController().signal, continuous: true, limits: { requests: 1, durationMs: 0 }, requestTimeoutMs: 100 });
+    assert.equal(calls, 1); assert.equal(paused.status, "interrupted"); assert.match(paused.diagnostic!, /timed out/);
+    assert.equal(paused.readinessWork!.attempts, 1); await delay(300);
+    assert.equal(f.store.get(f.project.id).questions.length, 0); assert.deepEqual(f.store.getJob(job.id), paused);
+  } finally { f.store.close(); }
+});
+
 test("large clarification covers >416k exact evidence with every batch read then checked before publishing", async () => {
   const f = largeFixture(); let calls = 0;
   const readIDs = new Set<string>(), checkIDs = new Set<string>();
@@ -305,7 +381,7 @@ test("large clarification covers >416k exact evidence with every batch read then
       if (stage.phase === "check") return { clarificationVerdict: { keepQuestions: [0], summary: "All exact records checked" } };
       return stage.step === 0 ? f.result() : { ...f.result() };
     } });
-    // More than one action may be needed; unfinished receipts survive each explicit action.
+    // Ordinary preparation finishes every read/check batch in the same action.
     let job = await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
     while (job.status === "interrupted") job = await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
     assert.equal(job.status, "completed", job.diagnostic);
@@ -384,8 +460,9 @@ test("file-backed clarification pauses, reopens and reuses completed steps acros
       // Optimistic revision alone does not change semantic evidence or receipt hashes.
       const metadata = structuredClone(b.project); metadata.revision++;
       assert.deepEqual(replayReadinessStages(metadata, readinessMaterials(metadata, f.task), first.readinessWork!).draft, empty());
-      const last = await runReadinessStages(reopened, adapter, b.project, b.job, f.task, { signal: new AbortController().signal, limits: { requests: 64, durationMs: 60000 } });
+      const last = await runReadinessStages(reopened, adapter, b.project, b.job, f.task, { signal: new AbortController().signal, continuous: true });
       assert.equal(last.status, "completed", last.diagnostic); assert.equal(calls, f.work.batches.length * 2);
+      assert.deepEqual(last.readinessWork!.receipts.slice(0, first.readinessWork!.receipts.length), first.readinessWork!.receipts);
       assert.equal(reopened.get(f.project.id).questions.length, 0);
       assert.deepEqual(reopened.get(f.project.id).requirements, f.project.requirements);
     } finally { reopened.close(); }

@@ -31,6 +31,7 @@ function needsOriginalRevision(job: Job) {
  * are exact deltas against the current project, not every intermediate revision. */
 export function continuationState(project: Project, jobs: Job[], submissions: Submission[], snapshot: (revision: number) => Project): Continuation {
   const waiting = submissions.filter((s) => !["completed", "superseded"].includes(s.status) || s.overlapFollowup?.state === "pending");
+  const waitingIDs = new Set(waiting.map((s) => s.id));
   const linked = new Set(waiting.flatMap((s) => [s.jobID, s.overlapFollowup?.discoveryJobID, ...s.overlapFollowup?.pairs.map((p) => p.jobID) ?? []]).filter(Boolean));
   const selected = new Map<string, Job>();
   const requirements = new Map(project.requirements.map((r) => [r.id, r]));
@@ -42,6 +43,10 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   for (const job of jobs) {
     const task = job.context?.readinessQuestions;
     if (task?.format === 2 && task.blockedJobID && task.inputKey === currentDefinitionKey(task.epicID)) linked.add(task.blockedJobID);
+    if (task?.format === 3 && waitingIDs.has(task.submissionID)) { linked.add(task.blockedJobID); linked.add(job.id); }
+    if (job.submissionWork?.reconciliation) {
+      linked.add(job.submissionWork.reconciliation.sourceJobID); linked.add(job.submissionWork.reconciliation.clarificationJobID);
+    }
   }
   const definitionIdentity = (job: Job) => job.definitionWork && JSON.stringify([job.definitionWork.policy, job.definitionWork.epicID, job.definitionWork.inputKey, job.definitionWork.planKey]);
   const completedDefinitions = new Set(jobs.filter((j) => j.status === "completed" && j.result && j.definitionWork).map(definitionIdentity));

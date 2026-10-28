@@ -19,9 +19,9 @@ import { definitionAbortReason } from "../core/definition-interruption.js";
 import { maintenanceBasis, maintenanceLimits, observeMaintenance, type MaintenanceView } from "../core/maintenance.js";
 import { WorkflowBudgetPause } from "../core/workflow.js";
 import { canRecoverDefinition } from "../core/definition-recovery.js";
-import type { DefinitionAdditionalRequest } from "../core/definition-budget.js";
+import { definitionFailedAttempts, type DefinitionAdditionalRequest } from "../core/definition-budget.js";
 import { definitionInputKey } from "../core/definition-identity.js";
-import { definitionQuestionTask, readinessQuestionContext, readinessQuestionTask } from "../core/readiness-questions.js";
+import { definitionQuestionTask, readinessQuestionContext, readinessQuestionTask, submissionQuestionBlock, submissionQuestionTask, submissionClarificationQuestions, type ReadinessQuestionTask } from "../core/readiness-questions.js";
 import { definitionClarificationInputs } from "../core/definition-clarification-inputs.js";
 import { refinementMaterials, replayRefinementStages, sameRefinementTask } from "../core/refinement-stages.js";
 
@@ -158,6 +158,7 @@ export class DiscoveryQueue {
       const timer = setTimeout(() => controller.abort(new DOMException("Automatic maintenance time limit", "TimeoutError")), maintenanceLimits.durationMs);
       const promise = Promise.resolve().then(async () => {
         let requests = 0, areas = 0;
+        const assessed: string[] = [];
         while (!this.closing && !controller.signal.aborted) {
           // Another app process may have dispatched after our initial idle check.
           if (this.service.store.discoveryActive(id) || this.service.store.executionActive(id) || this.service.store.executionExpired(id)) break;
@@ -201,10 +202,13 @@ export class DiscoveryQueue {
           this.service.store.saveMaintenance(id, latest);
           claimed = undefined;
           if (job.status !== "completed") break;
+          assessed.push(epicID);
         }
         report(this.service.store.maintenance(id).paused
           ? "Automatic definition updates paused. Completed checks are saved; inspect the blocker or resume explicitly for another bounded burst."
           : "Definition maintenance finished this burst. Saved input, decisions and definition progress remain separate; coding and delivery never start automatically.");
+        clearTimeout(timer);
+        if (!this.service.store.maintenance(id).paused) await this.prepareClarifications(id, assessed, controller.signal, report);
       }).catch((error) => {
         const latest = this.service.store.maintenance(id);
         const conflict = error instanceof OperationConflictError;
@@ -257,7 +261,7 @@ export class DiscoveryQueue {
     const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
     const publishWorkspace = this.service.store.deferWorkspacePublication(id);
     const promise = Promise.resolve().then(async () => {
-      let refreshed = 0, blocked = 0, reused = 0, requests = 0;
+      let refreshed = 0, blocked = 0, reused = 0, requests = 0, needsAttention = false;
       for (const [areaIndex, area] of areas.entries()) {
         controller.signal.throwIfAborted();
         const snapshot = this.service.store.get(id);
@@ -287,9 +291,10 @@ export class DiscoveryQueue {
         }
         if (job.status === "completed") refreshed++;
         else { blocked++; report(`Definition assessment unfinished: ${job.diagnostic ?? job.status}`); }
-        if (["cancelled", "stale", "interrupted"].includes(job.status) || job.status === "failed" && !job.definitionBlock) break;
+        if (["cancelled", "stale", "interrupted"].includes(job.status) || job.status === "failed" && !job.definitionBlock) { needsAttention = true; break; }
       }
       report(`Definition refresh: ${refreshed} areas refreshed · ${reused} current assessments reused · ${blocked} unfinished · ${requests} model requests. Unassessed or outdated areas remain unknown; this does not certify readiness.`);
+      if (!needsAttention) await this.prepareClarifications(id, areas.map((area) => area.epicID), controller.signal, report);
     }).catch((error) => report(controller.signal.aborted ? "Definition refresh interrupted; completed area assessments are saved. Refresh explicitly to continue without repeating current areas." : safeMessage(error instanceof Error ? error.message : error)))
       .finally(() => {
         this.active.delete(id);
@@ -298,12 +303,92 @@ export class DiscoveryQueue {
       });
     this.active.set(id, { controller, promise, kind: "definition" });
   }
-  clarifyDefinition(id: string, revision: number, epicID: string, resumeJobID?: string) {
+
+  /** Follow the review, never a renderer poll or a retrospective startup sweep.
+   * Any saved attempt (including a failure/Stop) prevents automatic retries. */
+  private async prepareClarifications(id: string, epicIDs: string[], signal: AbortSignal, report: (message: string) => void) {
+    if (this.coordinator || this.service.store.workflow(id).enabled) return;
+    for (const epicID of new Set(epicIDs)) {
+      signal.throwIfAborted();
+      if (this.closing) return;
+      const project = this.service.store.get(id);
+      const inputs = definitionClarificationInputs(project, epicID, this.service.store.submissions(id));
+      // Processing saved human input takes precedence over asking more questions.
+      if (inputs.blocked.length || inputs.sourceIDs.length) continue;
+      const history = [...this.service.store.jobs(id)].reverse();
+      const latest = history.find((j) => j.context?.definitionAssessment?.epicID === epicID);
+      const blocker = latest && (latest.definitionBlock || latest.definitionWork?.blocked) && latest.status !== "completed"
+        && latest.context!.definitionAssessment!.inputKey === definitionInputKey(project, epicID) ? latest : undefined;
+      // Exhausted model requests are an operational blocker, not a new product
+      // choice or authorization to spend a separate clarification allowance.
+      if (blocker?.definitionWork && definitionFailedAttempts(blocker.definitionWork) >= 3) continue;
+      const area = coverage(project).epics.find((a) => a.epicID === epicID);
+      if (!blocker && (!area?.assessed || area.stale || !area.checks.some((c) => !["defined", "not-applicable"].includes(c.status)))) continue;
+      const task = definitionQuestionTask(project, epicID, blocker);
+      if (history.some((j) => JSON.stringify(j.context?.readinessQuestions) === JSON.stringify(task))) continue;
+      // Older dimension-level no-question receipts remain valid triage evidence.
+      if (!blocker && area!.checks.filter((c) => !["defined", "not-applicable"].includes(c.status)).every((check) => {
+        const priorTask = readinessQuestionTask(project, epicID, check.dimension);
+        return history.some((j) => j.status === "completed" && j.result?.questions.length === 0
+          && JSON.stringify(j.context?.readinessQuestions) === JSON.stringify(priorTask));
+      })) continue;
+      report(`Preparing Design questions automatically: ${project.epics.find((e) => e.id === epicID)?.title ?? epicID}. Uses your AI allowance; Stop saves progress. No specification edits or coding.`);
+      const job = await this.service.analyze(id, project.revision, { readinessQuestions: task, research: false, signal, onProgress: report });
+      report(job.status === "completed" ? job.result?.questions.length ? "Clarification questions are ready in Design."
+        : `No new product question is needed. ${job.result?.summary ?? "Existing evidence settles the findings."}`
+        : job.diagnostic ?? "Clarification needs attention; saved steps are retained. Continue explicitly to retry.");
+      if (job.status !== "completed") return;
+    }
+  }
+
+  private async prepareSubmissionClarification(id: string, source: Job, signal: AbortSignal, report: (message: string) => void) {
+    if (this.coordinator || this.service.store.workflow(id).enabled || !submissionQuestionBlock(source)) return;
+    signal.throwIfAborted();
+    try {
+      const project = this.service.store.get(id), item = this.service.store.assertSubmissionClarification(project, source);
+      const epicID = submissionEpic(project, item);
+      if (!epicID) return;
+      if (definitionClarificationInputs(project, epicID, this.service.store.submissions(id).filter((s) => s.id !== item.id)).blocked.length) {
+        report("Record or resolve other related saved input before preparing this clarification; the original blocked response remains saved."); return;
+      }
+      const task = submissionQuestionTask(project, epicID, source);
+      if (this.service.store.jobs(id).some((j) => {
+        const prior = j.context?.readinessQuestions;
+        return prior?.format === 3 && prior.submissionID === item.id && prior.checkKey === task.checkKey;
+      })) return;
+      report("Checking the saved-response blocker for an unresolved choice and preparing Design questions. Original input and rejected draft remain saved; no partial edits publish.");
+      const job = await this.service.analyze(id, project.revision, { readinessQuestions: task, research: false, signal, onProgress: report });
+      report(job.status === "completed" ? job.result?.questions.length
+        ? "Your saved response needs a choice. Answer the clarification in Design; the original response and completed checks are retained."
+        : `No new human decision was established. ${job.result?.summary ?? "The saved-response blocker still needs attention."}`
+        : job.diagnostic ?? "Question preparation stopped. Continue the saved clarification explicitly; no earlier response was repeated.");
+    } catch (error) {
+      if (signal.aborted) throw error;
+      report(safeMessage(error instanceof Error ? error.message : error));
+    }
+  }
+
+  clarifyDefinition(id: string, revision: number, epicID: string, resumeJobID?: string): { task: ReadinessQuestionTask; reused: boolean; result?: Job["result"] } {
     this.service.store.assertNoExecution(id);
     this.service.assertCanDiscover(id);
     if (this.closing || this.isActive(id)) throw new OperationConflictError("Wait for the current task before asking for clarification.");
     const project = this.service.store.get(id);
     if (project.revision !== revision) throw new Error("Project changed. Refresh before asking for clarification.");
+    const savedTask = resumeJobID && this.service.store.jobs(id).find((j) => j.id === resumeJobID);
+    if (savedTask && savedTask.context?.readinessQuestions?.format === 3) {
+      const prior = savedTask.context.readinessQuestions;
+      const source = this.service.store.getJob(prior.blockedJobID);
+      const latest = [...this.service.store.jobs(id)].reverse().find((j) => j.context?.readinessQuestions?.format === 3
+        && j.context.readinessQuestions.submissionID === prior.submissionID);
+      if (savedTask.projectID !== id || prior.epicID !== epicID || !savedTask.readinessWork || latest?.id !== savedTask.id
+        || !["interrupted", "cancelled", "failed"].includes(savedTask.status)
+        || JSON.stringify(submissionQuestionTask(project, epicID, source)) !== JSON.stringify(prior))
+        throw new OperationConflictError("This saved-response clarification is outdated or has a newer attempt; saved steps were retained.");
+      this.service.store.assertSubmissionClarification(project, source);
+      if (definitionClarificationInputs(project, epicID, this.service.store.submissions(id).filter((s) => s.id !== prior.submissionID)).blocked.length)
+        throw new OperationConflictError("Record or resolve other related saved input before continuing this clarification. The original blocked response does not prevent its own question preparation.");
+      return this.startClarification(id, revision, prior);
+    }
     const inputs = definitionClarificationInputs(project, epicID, this.service.store.submissions(id));
     if (inputs.blocked.length) throw new OperationConflictError(`${inputs.blocked.length} related saved response(s) still need to be recorded or their input conflict resolved before this area can be clarified. Unrelated responses do not block this action. Use Process saved responses for the related area; no AI call was made.`);
     const history = [...this.service.store.jobs(id)].reverse();
@@ -339,6 +424,10 @@ export class DiscoveryQueue {
     }
     try { readinessQuestionContext(project, task, blocker); }
     catch (error) { if (!(error instanceof ContextBudgetError) || task.format !== 2) throw error; } // Oversized manual tasks stage inside their durable job.
+    return this.startClarification(id, revision, task);
+  }
+
+  private startClarification(id: string, revision: number, task: ReadinessQuestionTask) {
     this.service.store.pauseQueue(id, true);
     const controller = new AbortController();
     const progress: string[] = ["Checking this area's findings for actual unresolved choices. At most three Design questions; no specification changes."];
@@ -478,8 +567,11 @@ export class DiscoveryQueue {
       const promise = Promise.resolve().then(async () => {
         const report = (message: string) => { progress.push(message); if (progress.length > 20) progress.shift(); };
         if (options.questionTarget !== undefined) await this.findQuestions(id, options, controller.signal, report);
-        else await this.service.analyze(id, project.revision, { gapMode: "epic", focusEpicID: options.focusEpicID, research: options.research,
-          signal: controller.signal, onProgress: report });
+        else {
+          const job = await this.service.analyze(id, project.revision, { gapMode: "epic", focusEpicID: options.focusEpicID, research: options.research,
+            signal: controller.signal, onProgress: report });
+          if (job.status === "completed") await this.prepareClarifications(id, job.result?.assessments?.map((a) => a.epicID) ?? [], controller.signal, report);
+        }
       }).catch((error) => { progress.push(safeMessage(error instanceof Error ? error.message : error)); }).finally(() => this.active.delete(id));
       this.active.set(id, { controller, promise });
       return;
@@ -591,6 +683,7 @@ export class DiscoveryQueue {
           : "No eligible packages remain in this scope. Review saved blockers or answer waiting questions; this is not proof of completeness.");
         return;
       }
+      await this.prepareClarifications(id, job.result.assessments?.map((a) => a.epicID) ?? [], signal, report);
       if (waitingInput()) {
         this.service.store.pauseQueue(id, true);
         report("Gap scan paused for saved responses. Resume discovery to process them before finding more questions."); return;
@@ -695,8 +788,15 @@ export class DiscoveryQueue {
         const applied = this.service.store.applyQueued(id, submissionIDs);
         const current = this.service.store.get(id);
         let localApprovals = 0;
+        let clarificationJobs: Job[] | undefined;
         const saved = applied.filter((item) => {
           if (item.overlapFollowup?.state === "pending") return true;
+          if (submissionClarificationQuestions(current, clarificationJobs ??= this.service.store.jobs(id).filter((j) => j.context?.readinessQuestions?.format === 3), item.id).some(({ questions }) =>
+            questions.some((q) => ["pending", "deferred", "delegated"].includes(q.status)))) {
+            item.status = "needs-attention"; this.service.store.saveSubmission(item);
+            report("This saved response is waiting for its clarification in Design. Answer the new reconciliation question; the original response and completed checks are retained.");
+            return false;
+          }
           const input = item.input;
           if (input.type === "review" && current.sources.some((s) => s.supersedes === item.appliedSourceID)) {
             delete item.contextBlock;
@@ -833,7 +933,12 @@ export class DiscoveryQueue {
           this.service.store.saveSubmission(item);
         }
         if (followupStopped) break; // Failure owns its pause; a newer worker must not be paused here.
-        if (job.status !== "completed" || batch.some((s) => s.status === "needs-attention")) { this.service.store.pauseQueue(id, true); break; }
+        if (job.status !== "completed" || batch.some((s) => s.status === "needs-attention")) {
+          this.service.store.pauseQueue(id, true);
+          await this.prepareSubmissionClarification(id, job, controller.signal, report);
+          break;
+        }
+        if (!manual?.processOnly) await this.prepareClarifications(id, job.result?.assessments?.map((a) => a.epicID) ?? [], controller.signal, report);
         if (manual?.questionTarget !== undefined) {
           explicit = manual;
           continue;

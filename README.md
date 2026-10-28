@@ -32,11 +32,16 @@ remain. Passed checks lead to planning, not automatic coding. See
 [coordinated workflow](docs/coordinated-workflow.md) for consent and limitations.
 Unresolved definition behavior can now produce targeted questions; answers trigger
 affected rechecks using the same allowance.
-Partial assessment categories are not individual human input tasks. In Specification,
-**Clarify in Design** can turn an area's findings into focused questions with answer
-options, or explain that no new decision is needed, after explicit AI-usage confirmation.
-Large clarifications use saved exact-evidence read/check batches; Design offers
-**Continue clarification** after a pause without repeating completed steps.
+Partial assessment categories are not individual human input tasks. Definition reviews
+automatically turn unresolved findings into focused Design questions with answer
+options, or explain that no new decision is needed. This uses AI allowance;
+**Clarify in Design** remains available for manual preparation/recovery.
+Large clarifications use saved exact-evidence read/check batches and run until finished,
+stopped or blocked, without a 32-request/fifteen-minute action cutoff. Design offers
+**Continue clarification** after an interruption without repeating completed steps.
+Conflicting saved-response checks now also prepare targeted Design questions instead
+of repeatedly stopping at the same rejected draft. Explicit answers allow a new
+draft review while keeping the original input and failed ledger in history.
 
 Oversized targeted review follow-ups and requirement-scoped answers also use saved
 evidence batches when needed. Resume processing the retained response; no duplicate

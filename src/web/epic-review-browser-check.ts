@@ -284,7 +284,7 @@ try {
   await page.locator(".topbar .queue-trigger").click();
   await expect(status.getByLabel("Staged decision review", { exact: true })).toContainText("6 / 8 stages saved");
   await expect(status).toContainText("Drafts stay unpublished");
-  await expect(status).toContainText("up to 32 requests or 15 minutes");
+  await expect(status).toContainText("continue until finished, stopped, or blocked");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-epic-staged-mobile.png"), fullPage: true });
   await page.reload(); assert.equal(stagedCalls, 7, "Reload does not start a second worker");

@@ -1868,6 +1868,7 @@ test("continuous refresh covers more than ten areas and stops on connection/resp
     p = store.organize(p.id, p.revision, Array.from({ length: 12 }, (_, i) => ({ type: "upsert" as const, epicID: `extra-${i}`, title: `Area ${i}`, purpose: "Current decisions", dependencies: [] })));
     let calls = 0;
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      if (context.manifest.readinessQuestions) return empty();
       calls++; return result(context.manifest.definitionAssessment!.epicID, context.manifest.includedIDs[0]!);
     } }));
     queue.refreshDefinition(p.id, p.revision); await queue.wait(p.id);

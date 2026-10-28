@@ -1,5 +1,14 @@
 import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
+import type { ReadinessQuestionTask } from "../core/readiness-questions.js";
+
+/** A blocked response cannot prevent continuation of the questions for its own
+ * blocker. Other unfinished input keeps its ordinary processing priority. */
+export function clarificationHasWaitingInput(project: Project, submissions: Submission[], task?: ReadinessQuestionTask) {
+  const resolved = resolvedReviewAttempts(project, submissions);
+  return submissions.some((s) => !s.archivedAt && !resolved.has(s.id) && (task?.format !== 3 || s.id !== task.submissionID)
+    && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
+}
 
 export function processableSavedResponses(project: Project, submissions: Submission[]) {
   const resolved = resolvedReviewAttempts(project, submissions);

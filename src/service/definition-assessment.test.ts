@@ -41,19 +41,20 @@ async function idle(queue: DiscoveryQueue, id: string) {
 test("explicit refresh assesses all areas without specification edits; unrelated revisions and discovery do not invalidate it", async () => {
   const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
   try {
-    let p = seed(store); const before = structuredClone(p); let calls = 0;
+    let p = seed(store); const before = structuredClone(p); let calls = 0, clarifications = 0;
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, { context, research }) {
+      if (context.manifest.readinessQuestions) { clarifications++; return empty(); }
       calls++; assert.equal(research, false); assert.equal(context.manifest.epicReview, undefined);
       assert.ok(context.manifest.definitionAssessment); const prompt = discoveryPrompt(snapshot, context);
       assert.match(prompt, /all nine distinct dimensions/); assert.doesNotMatch(prompt, /Before exploring gaps/);
       return result(context.manifest.definitionAssessment.epicID, snapshot.sources[0]!.id);
     } }));
     queue.refreshDefinition(p.id, p.revision); await idle(queue, p.id); p = store.get(p.id);
-    assert.equal(calls, 3); assert.equal(coverage(p).stale, false);
+    assert.equal(calls, 3); assert.equal(clarifications, 3); assert.equal(coverage(p).stale, false);
     const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [], [], (revision) => store.get(p.id, revision))), { providerID: "openai", modelID: "other-account-model" });
     assert.equal(coverage(portable.project).stale, false, "Portable definition identities survive model/account replacement without reassessment");
     for (const key of ["sources", "questions", "requirements", "epics", "summary", "analysisRevision", "goals", "scopeAssessment"] as const) assert.deepEqual(p[key], before[key]);
-    queue.refreshDefinition(p.id, p.revision); await idle(queue, p.id); assert.equal(calls, 3);
+    queue.refreshDefinition(p.id, p.revision); await idle(queue, p.id); assert.equal(calls, 3); assert.equal(clarifications, 3);
     p = store.note(p.id, p.revision, "Billing-only decision", "billing");
     assert.equal(coverage(p).epics.find((e) => e.epicID === "orders")!.stale, false);
     assert.equal(coverage(p).epics.find((e) => e.epicID === "billing")!.stale, true);

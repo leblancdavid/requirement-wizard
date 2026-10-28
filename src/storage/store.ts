@@ -42,11 +42,11 @@ import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSourc
 import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, epicPlanningCacheLimits, type EpicPlanningCheckpoint, type EpicContextCheckpoint } from "../core/epic-planning-checkpoint.js";
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
-import { readinessQuestionTaskSchema, validateReadinessQuestions } from "../core/readiness-questions.js";
+import { readinessQuestionTaskSchema, submissionQuestionBlock, validateReadinessQuestions } from "../core/readiness-questions.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
-import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
+import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
 import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -1334,6 +1334,19 @@ export class ProjectStore {
     }).immediate();
   }
 
+  assertSubmissionClarification(project: Project, source: Job) {
+    const work = source.submissionWork;
+    const item = this.submissions(project.id).find((s) => s.id === work?.submissionID);
+    const latest = [...this.jobs(project.id)].reverse().find((j) => j.submissionWork?.submissionID === work?.submissionID);
+    if (source.projectID !== project.id || !work || !submissionQuestionBlock(source) || !item || item.archivedAt
+      || !["saved", "needs-attention"].includes(item.status) || !latest || JSON.stringify(latest.submissionWork) !== JSON.stringify(work))
+      throw new Error("Saved-response clarification no longer matches the latest retained blocker. Original work was preserved.");
+    const materials = submissionMaterials(project, item, work.task);
+    if (!recoverSubmissionPermissions(materials, structuredClone(work), source).blocked)
+      throw new Error("This saved-response blocker needs processing recovery, not a new product question.");
+    return item;
+  }
+
   checkpointReadiness(id: string, input: ReadinessWork, context: NonNullable<Job["context"]>) {
     this.db.transaction(() => {
       const job = this.getJob(id), work = readinessWorkSchema.parse(input);
@@ -1588,9 +1601,17 @@ export class ProjectStore {
               || job.context?.readinessQuestions || job.context?.definitionAssessment || job.context?.epicReview || job.context?.gapExploration)
               throw new Error("Staged saved-response publication requires its exclusive saved task.");
             validateSubmissionPublication(project, item, job, result);
+            if (job.submissionWork.reconciliation) {
+              const provenance = job.submissionWork.reconciliation, source = this.getJob(provenance.sourceJobID);
+              const expected = source.submissionWork && submissionReconciliation(project, item.id, source.submissionWork, this.jobs(project.id));
+              if (JSON.stringify(expected) !== JSON.stringify(provenance)
+                || !job.submissionWork.task.recordIDs.includes(provenance.questionID) || !job.submissionWork.task.recordIDs.includes(provenance.answerSourceID))
+                throw new Error("Saved-response reconciliation requires its published question, explicit current answer and retained original ledger.");
+            }
           }
           if (job.context?.readinessQuestions) {
-            const source = job.context.readinessQuestions.format === 2 && job.context.readinessQuestions.blockedJobID ? this.getJob(job.context.readinessQuestions.blockedJobID) : undefined;
+            const source = job.context.readinessQuestions.format !== 1 && job.context.readinessQuestions.blockedJobID ? this.getJob(job.context.readinessQuestions.blockedJobID) : undefined;
+            if (job.context.readinessQuestions.format === 3) this.assertSubmissionClarification(project, source!);
             if (job.readinessWork) validateReadinessStagePublication(project, job, result, source);
             else validateReadinessQuestions(project, job.context, result, source);
             // Validate/replay the original wire draft first. Questions-only tasks

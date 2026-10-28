@@ -1,7 +1,7 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
-import { pausedClarification, processableSavedResponses } from "./clarification-recovery.js";
+import { pausedClarification, processableSavedResponses, clarificationHasWaitingInput } from "./clarification-recovery.js";
 import { definitionClarificationInputs } from "../core/definition-clarification-inputs.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import { captureAnswerScope } from "../core/input-scope.js";
@@ -307,7 +307,7 @@ function App() {
   async function resumeDiscovery() {
     if (connectionChanged && !creating) throw new Error("Save your connection and model selection in Settings before resuming.");
     const saved = pausedClarification(data?.jobs ?? []);
-    const unfinished = data?.submissions.some((s) => !s.archivedAt && !resolvedAttempts.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
+    const unfinished = !!project && clarificationHasWaitingInput(project, data?.submissions ?? [], saved?.context?.readinessQuestions);
     if (saved?.context?.readinessQuestions && !unfinished) {
       await clarifyDefinition(saved.context.readinessQuestions.epicID, saved.id); return;
     }
@@ -386,7 +386,7 @@ function App() {
   const clarificationResult = clarificationJob?.result ?? definitionClarification?.result;
   const clarificationFinished = clarificationJob?.status === "completed" || definitionClarification?.reused;
   const clarificationInput = useMemo(() => project && data && definitionClarification?.projectID === project.id
-    ? definitionClarificationInputs(project, definitionClarification.task.epicID, data.submissions) : undefined, [project, data?.submissions, definitionClarification]);
+    ? definitionClarificationInputs(project, definitionClarification.task.epicID, data.submissions.filter((s) => definitionClarification.task.format !== 3 || s.id !== definitionClarification.task.submissionID)) : undefined, [project, data?.submissions, definitionClarification]);
   const clarificationNeedsProcessing = !!clarificationInput && (clarificationInput.blocked.length > 0 || clarificationInput.sourceIDs.length > 0);
   useEffect(() => {
     if (!project || definitionClarification?.projectID !== project.id || !clarificationFinished) return;

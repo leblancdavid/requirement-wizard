@@ -14,7 +14,7 @@ export function MaintenanceSettings({ maintenance, disabled, pending, configure,
     <p role="status">Automatic definition updates: {maintenance.enabled ? "enabled" : "disabled"}.</p>
     <p>Automatically recheck how clearly an area is defined when your decisions change. Turning this on does not recheck the whole project immediately. Each affected area is reviewed in full, which can use more AI requests than checking only your latest edit.</p>
     <p>The app waits 20 seconds after your last relevant change, then uses up to {maintenance.limits.requests} AI requests over {maintenance.limits.durationMs / 60000} minutes for up to {maintenance.limits.areas} areas. This uses your AI plan’s usage. More changes can start another round; reaching a limit or restarting the app requires you to resume.</p>
-    <p>Automatically reviewing saved answers is a separate setting. These updates never approve suggestions, find new questions, start coding or publish code changes.</p>
+    <p>After a completed round, unresolved choices automatically get Design questions. Question preparation uses additional AI requests and continues until finished, stopped, or blocked. Automatically reviewing saved answers is a separate setting. These updates never approve suggestions, start coding or publish code changes.</p>
     <div className="button-row">{maintenance.enabled
       ? <button className="secondary" disabled={pending} onClick={() => configure("disable")}>Turn off automatic updates</button>
       : <button className="secondary" disabled={disabled} onClick={() => configure("enable")}>Enable automatic definition updates</button>}
@@ -39,6 +39,7 @@ export function MaintenanceQueue({ project, maintenance, disabled, pending, conf
     {maintenance.enabled && <p>Pause prevents the next check from starting; the current task can finish. Use Stop on that task to stop it now. Resume allows another limited round of checks but does not fix problems that still need attention.</p>}
     {maintenance.enabled && maintenance.suspended && <p>Choose Resume automatic maintenance to allow AI checks after restarting the app.</p>}
     <p>Each round can use up to {maintenance.limits.requests} AI requests, {maintenance.limits.durationMs / 60000} minutes and {maintenance.limits.areas} areas. Saved answers are reviewed first.</p>
+    <p>Completed rounds automatically prepare Design questions for unresolved choices using additional AI requests. Use Stop to pause question preparation; completed steps are saved.</p>
     {tasks.length > 0 && <ul>{tasks.map(([id, task]) => <li key={id}><strong>{project.epics.find((e) => e.id === id)?.title ?? id}</strong> · {task.state === "queued" ? "Definition update queued" : task.state}
       {task.reason && <details><summary>Why this needs attention</summary><p>{task.reason}</p></details>}</li>)}</ul>}
     <button className="quiet" onClick={settings}>Automatic maintenance settings</button>

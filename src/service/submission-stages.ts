@@ -1,7 +1,7 @@
 import { StaleRevisionError, type Job, type Project, type Submission } from "../core/model.js";
 import type { ContextTask } from "../core/working-set.js";
 import type { ContextBudgetError } from "../core/context.js";
-import { acceptSubmissionStage, planSubmissionStages, recoverSubmissionPermissions, submissionMaterials, submissionStageContext, submissionStep, submissionRequestLimit } from "../core/submission-stages.js";
+import { acceptSubmissionStage, planSubmissionStages, recoverSubmissionPermissions, submissionMaterials, submissionStageContext, submissionStep, submissionRequestLimit, submissionReconciliation } from "../core/submission-stages.js";
 import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
@@ -13,8 +13,16 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   const previous = [...store.jobs(project.id)].reverse().find((j) => j.id !== job.id && j.submissionWork?.submissionID === item.id);
   // Browsing another feature does not redefine an unfinished saved submission.
   // Reconstruct its original scope, then revalidate all current mandatory evidence.
-  const m = submissionMaterials(project, item, previous?.submissionWork?.task ?? task, previous ? undefined : options.overflow);
-  const w = previous?.submissionWork ? structuredClone(previous.submissionWork) : planSubmissionStages(m);
+  let m = submissionMaterials(project, item, previous?.submissionWork?.task ?? task, previous ? undefined : options.overflow);
+  let w = previous?.submissionWork ? structuredClone(previous.submissionWork) : planSubmissionStages(m);
+  if (previous?.submissionWork) {
+    const reconciliation = submissionReconciliation(project, item.id, w, store.jobs(project.id));
+    if (reconciliation) {
+      m = submissionMaterials(project, item, { ...w.task, recordIDs: [...new Set([...w.task.recordIDs, reconciliation.questionID, reconciliation.answerSourceID])] });
+      w = { ...planSubmissionStages(m), reconciliation };
+      options.onProgress?.("Your explicit reconciliation answer changed the evidence. Reviewing a new draft against that answer; the rejected draft, earlier completed steps and spent attempts remain in the original job. No unchanged work or allowance was reset.");
+    }
+  }
   const priorRecovery = w.permissionRecovery;
   let { draft, blocked } = recoverSubmissionPermissions(m, w, job);
   if (!priorRecovery && w.permissionRecovery) options.onProgress?.("Recovered an older staged revision-permission blocker. Original input, completed steps and spent attempts remain saved; continuing the unfinished read with exact supporting evidence.");

@@ -62,14 +62,21 @@ implemented under `src/`. See [decisions.md](decisions.md),
   remain in saved jobs; answers use the existing input and definition-refresh paths.
   Explicit manual format-2 tasks inspect a whole area's findings or a current stopped
   review for actual human choices, rather than treating each partial category as a
-  correction task. The queue/API offer a bounded, consented questions-only path to
+  correction task. The queue/API offer a questions-only path to
   Design, reusing current old/new receipts and preserving source-blocker provenance.
   Oversized manual tasks use `src/core/readiness-stages.ts` for exact mandatory-record
   batching, bounded drafts, cross-batch evidence loading, all-batch pruning and
   publication replay. `src/service/readiness-stages.ts` saves accepted steps and
-  pre-dispatch attempts through the store, enforces finite action/request bounds and
-  resumes only on explicit action. Browser snapshots carry derived progress, not the
+  pre-dispatch attempts through the store and enforces finite per-request bounds.
+  Ordinary preparation runs continuously; definition reviews queue it automatically.
+  Interrupted work resumes only on explicit action. Coordinated budgets stay bounded.
+  Browser snapshots carry derived progress, not the
   full receipt ledger; portable continuation retains the exact resumable ledger.
+  Additive task format 3 binds saved-response terminal verdicts to questions-only
+  triage, with original-job replay at dispatch/publication. A concrete answer to the
+  published question permits a new submission plan with explicit reconciliation
+  provenance; rejected ledgers remain immutable. See
+  [saved-response recovery](migrations.md#saved-response-conflict-questions-and-explicit-answer-recovery-2026-10-28).
 
 - `src/core/maintenance.ts`, `src/storage/maintenance.ts`, `src/service/queue.ts`:
   opt-in decision-triggered area scheduling with durable CAS dispatch receipts,

@@ -15,6 +15,7 @@ import { discoveryPrompt } from "../runtime/discovery.js";
 import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
 import { startApp } from "../web/server.js";
+import { submissionQuestionTask, submissionQuestionBlock, submissionClarificationQuestions } from "../core/readiness-questions.js";
 
 const empty = (): Analysis => ({ summary: "Follow up on saved review", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
 function decodeWire(input: unknown) {
@@ -81,6 +82,140 @@ function adapter(f: ReturnType<typeof fixture>, seen?: Set<string>) {
     return context.manifest.submissionStage!.step === 0 ? f.output() : { submissionKeep: true };
   } };
 }
+
+async function retainedConflict(f: ReturnType<typeof fixture>) {
+  const job = await new DiscoveryService(f.store, { async analyze(_p, { context }) {
+    return context.manifest.submissionStage!.phase === "check"
+      ? { submissionCheck: { valid: false, reason: "Earlier human answers require a network connection. The latest answer replaces an example, not explicitly that minimum. Ask which rule governs; do not silently settle this separate choice." } }
+      : context.manifest.submissionStage!.step === 0 ? f.output() : { submissionKeep: true };
+  } }).analyze(f.project.id, f.project.revision, { submissionIDs: [f.item.id], isolatedTask: true, research: false,
+    requiredEpicIDs: ["inbox"], recordIDs: f.task.recordIDs });
+  assert.equal(job.status, "failed", job.diagnostic); assert.ok(submissionQuestionBlock(job));
+  f.item.status = "needs-attention"; f.item.jobID = job.id; f.item.diagnostic = job.diagnostic; f.store.saveSubmission(f.item);
+  return job;
+}
+
+const conflictQuestion = (sourceID: string): Analysis => ({ ...empty(), questions: [{ epicID: "inbox",
+  text: "Does offline saving replace the earlier network-connection minimum, or does that minimum still apply?",
+  whyItMatters: "The new example and the earlier rule do not establish which rule governs.", evidenceIDs: [sourceID],
+  options: [{ label: "Keep the minimum", consequence: "The network rule remains; only the example changes" },
+    { label: "Replace the minimum", consequence: "The latest offline rule replaces the network requirement" }] }] });
+
+test("a retained saved-response conflict automatically becomes an exact Design question, not a partial edit or repeated follow-up", async () => {
+  const f = fixture(); const blocked = await retainedConflict(f); let calls = 0, allowReplan = false;
+  const original = f.store.getJob(blocked.id);
+  const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(p, { context }) {
+    calls++;
+    if (context.manifest.readinessQuestions) {
+      assert.equal(context.manifest.readinessQuestions.format, 3);
+      assert.match(discoveryPrompt(p, context), /rejected draft/i);
+      if (context.manifest.readinessStage?.phase === "read" && !context.manifest.includedIDs.includes(f.item.appliedSourceID!))
+        return { clarificationRead: { summary: "Retain earlier questions while reading this exact batch", keepQuestions: decodeWire(context.data).draft.questions.length ? [0] : [], questions: [] } };
+      return context.manifest.readinessStage?.phase === "check" ? { clarificationVerdict: { keepQuestions: [0], summary: "Competing human rules need precedence" } }
+        : conflictQuestion(f.item.appliedSourceID!);
+    }
+    assert.ok(allowReplan, "Do not repeat the rejected saved-response model requests before a new human choice");
+    const q = p.questions.find((q) => q.text === conflictQuestion(f.item.appliedSourceID!).questions[0]!.text)!;
+    assert.ok(context.manifest.includedIDs.includes(q.id)); assert.ok(context.manifest.includedIDs.includes(q.sourceID!));
+    return context.manifest.submissionStage!.phase === "check" ? { submissionCheck: { valid: true, reason: "The explicit new human answer resolves precedence" } }
+      : context.manifest.submissionStage!.step === 0 ? f.output() : { submissionKeep: true };
+  } }));
+  try {
+    queue.resume(f.project.id, { processOnly: true, research: false }); await queue.wait(f.project.id);
+    let p = f.store.get(f.project.id);
+    assert.equal(p.questions.length, 1, queue.progress(p.id).join("\n")); assert.deepEqual(p.requirements, f.project.requirements); assert.deepEqual(p.sources, f.project.sources);
+    assert.equal(submissionClarificationQuestions(p, f.store.jobs(p.id), f.item.id).length, 1);
+    assert.deepEqual(f.store.getJob(blocked.id), original);
+    assert.equal(f.store.submissions(p.id)[0]!.status, "needs-attention");
+    const generationCalls = calls;
+    queue.resume(p.id, { processOnly: true, research: false }); await queue.wait(p.id);
+    assert.equal(calls, generationCalls, "An unanswered Design clarification cannot repeat either workflow");
+    p = f.store.answer(p.id, p.revision, p.questions[0]!.id, { kind: "answer", text: "Replace the earlier network minimum; the offline rule now governs." });
+    allowReplan = true;
+    queue.resume(p.id, { processOnly: true, research: false }); await queue.wait(p.id);
+    const final = f.store.jobs(p.id).at(-1)!;
+    assert.equal(final.status, "completed", final.diagnostic); assert.ok(final.submissionWork?.reconciliation);
+    assert.equal(f.store.submissions(p.id)[0]!.status, "completed");
+    assert.equal(f.store.get(p.id).requirements[0]!.statement, "Save reports offline");
+    assert.deepEqual(f.store.getJob(blocked.id), original, "A new-evidence plan never rewrites the rejected ledger or its spent attempts");
+    const current = f.store.get(p.id), state = continuationState(current, f.store.jobs(p.id), f.store.submissions(p.id), (r) => f.store.get(p.id, r));
+    const portable = decodePortable(renderWorkspace(current, undefined, state), current.model);
+    assert.deepEqual(portable.continuation.jobs.find((j) => j.id === final.id)!.submissionWork!.reconciliation, final.submissionWork!.reconciliation);
+    assert.ok(portable.continuation.jobs.some((j) => j.id === final.submissionWork!.reconciliation!.sourceJobID));
+    assert.ok(portable.continuation.jobs.some((j) => j.id === final.submissionWork!.reconciliation!.clarificationJobID));
+    assert.throws(() => submissionWorkSchema.parse({ ...final.submissionWork, reconciliation: { ...final.submissionWork!.reconciliation, format: 99 } }));
+  } finally { await queue.close(); f.store.close(); }
+});
+
+test("saved-response question preparation can reject an incorrect draft without manufacturing a product decision or retrying it", async () => {
+  const f = fixture(); await retainedConflict(f); let calls = 0;
+  const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(_p, { context }) {
+    calls++; assert.ok(context.manifest.readinessQuestions);
+    return context.manifest.readinessStage?.phase === "check" ? { clarificationVerdict: { keepQuestions: [], summary: "Human intent is settled; the rejected draft was wrong" } } : empty();
+  } }));
+  try {
+    queue.resume(f.project.id, { processOnly: true, research: false }); await queue.wait(f.project.id);
+    const completed = calls;
+    assert.equal(f.store.get(f.project.id).questions.length, 0); assert.equal(f.store.submissions(f.project.id)[0]!.status, "needs-attention");
+    queue.resume(f.project.id, { processOnly: true, research: false }); await queue.wait(f.project.id);
+    assert.equal(calls, completed); assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements);
+  } finally { await queue.close(); f.store.close(); }
+});
+
+test("older failed ledgers reopen without inference; portable conflict questions retain source provenance and failed preparation never auto-retries", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true }); const directory = mkdtempSync(join(root, "submission-question-upgrade-")), file = join(directory, "state.sqlite");
+  const f = fixture(file), blocked = await retainedConflict(f), original = f.store.getJob(blocked.id); f.store.close();
+  let calls = 0;
+  const store = new ProjectStore(file), queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(_p, { context }) {
+    calls++; assert.ok(context.manifest.readinessQuestions); return { invalid: true };
+  } }));
+  try {
+    assert.equal(calls, 0); assert.deepEqual(store.getJob(blocked.id), original);
+    queue.resume(f.project.id, { processOnly: true, research: false }); await queue.wait(f.project.id);
+    assert.equal(calls, 1, queue.progress(f.project.id).join("\n"));
+    const failed = store.jobs(f.project.id).at(-1)!; assert.equal(failed.status, "failed"); assert.equal(failed.context!.readinessQuestions!.format, 3);
+    queue.resume(f.project.id, { processOnly: true, research: false }); await queue.wait(f.project.id); assert.equal(calls, 1);
+    const p = store.get(f.project.id), state = continuationState(p, store.jobs(p.id), store.submissions(p.id), (r) => store.get(p.id, r));
+    const decoded = decodePortable(renderWorkspace(p, undefined, state), p.model);
+    assert.deepEqual(decoded.continuation.jobs.find((j) => j.id === failed.id)!.readinessWork, failed.readinessWork);
+    assert.deepEqual(decoded.continuation.jobs.find((j) => j.id === blocked.id)!.submissionWork, original.submissionWork);
+    const future = { ...failed.context!.readinessQuestions!, format: 99 };
+    assert.throws(() => submissionQuestionTask(p, "inbox", { ...blocked, submissionWork: undefined }));
+    const files = renderWorkspace(p, undefined, state), changed = JSON.parse(files["continuation.json"]!);
+    changed.jobs.find((j: { id: string }) => j.id === failed.id).context.readinessQuestions = future;
+    assert.throws(() => decodePortable({ ...files, "continuation.json": JSON.stringify(changed) }, p.model));
+  } finally { await queue.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("stopped saved-response clarification resumes its own stages despite the retained original input, without retrying that response", async () => {
+  const f = fixture(); const source = await retainedConflict(f); let stop = true, calls = 0;
+  const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(_p, { context }) {
+    calls++; assert.equal(context.manifest.readinessQuestions?.format, 3, "Continuation must not run ordinary response processing");
+    if (stop) { stop = false; queue.stop(f.project.id); return empty(); }
+    return context.manifest.readinessStage?.phase === "check" ? { clarificationVerdict: { keepQuestions: [], summary: "No new question is established" } } : empty();
+  } }));
+  try {
+    queue.resume(f.project.id, { processOnly: true, research: false }); await queue.wait(f.project.id);
+    const paused = f.store.jobs(f.project.id).at(-1)!;
+    assert.equal(paused.status, "cancelled"); assert.equal(paused.readinessWork!.attempts, 1); assert.equal(calls, 1);
+    const p = f.store.get(f.project.id);
+    queue.clarifyDefinition(p.id, p.revision, "inbox", paused.id); await queue.wait(p.id);
+    const completed = f.store.jobs(p.id).at(-1)!;
+    assert.equal(completed.status, "completed", completed.diagnostic);
+    assert.deepEqual(f.store.getJob(paused.id), paused); assert.deepEqual(f.store.getJob(source.id).submissionWork, source.submissionWork);
+    assert.equal(f.store.submissions(p.id)[0]!.status, "needs-attention");
+  } finally { await queue.close(); f.store.close(); }
+});
+
+test("changed or superseded input rejects retained-conflict question preparation before inference", async () => {
+  const f = fixture(); const source = await retainedConflict(f), task = submissionQuestionTask(f.project, "inbox", source); let calls = 0;
+  try {
+    const changed = f.store.note(f.project.id, f.project.revision, "The human changed a relevant rule after the blocked review", "project");
+    const job = await new DiscoveryService(f.store, { async analyze() { calls++; return empty(); } }).analyze(changed.id, changed.revision, { readinessQuestions: task });
+    assert.equal(job.status, "failed"); assert.equal(calls, 0); assert.deepEqual(f.store.getJob(source.id).submissionWork, source.submissionWork);
+    assert.equal(f.store.get(changed.id).questions.length, 0);
+  } finally { f.store.close(); }
+});
 test("oversized saved review passes queue preflight into exact batches and applies only after every check", async () => {
   const f = fixture(), seen = new Set<string>(); let queue: DiscoveryQueue | undefined;
   try {

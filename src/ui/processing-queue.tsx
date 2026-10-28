@@ -21,7 +21,7 @@ import { definitionSteps } from "../core/definition-continuation.js";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { statusLabel } from "./user-messages.js";
 import { openLogs } from "./log-access.js";
-import { processableSavedResponses } from "./clarification-recovery.js";
+import { processableSavedResponses, clarificationHasWaitingInput } from "./clarification-recovery.js";
 
 export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, discover, stop, error, openIssue, jobs = [], processSavedResponses, extendSavedResponse, clarificationJob, continueClarification, continueRefinement, continuationAvailable = false, continueExploration, maintenance, configureMaintenance, maintenanceSettings, openRequest, workflow, configureWorkflow, openWorkflowDecision }: {
   project: Project;
@@ -62,7 +62,9 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const total = lastJob?.refinementStageProgress?.total ?? (refinementProgress ? refinementProgress.total : lastJob?.kind === "scan" ? lastJob.scanProgress?.total : lastJob?.readinessProgress?.total ?? lastJob?.submissionProgress?.total ?? (lastJob?.definitionWork ? definitionSteps(lastJob.definitionWork).length : undefined));
   const hasUnfinishedInput = submissions.some((s) => !s.archivedAt && !resolvedAttempts.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
   const processable = processableSavedResponses(project, submissions);
-  const processingFirst = processable.length > 0 && !!processSavedResponses;
+   const clarificationTask = clarificationJob?.context?.readinessQuestions;
+   const clarificationBlockedInput = clarificationHasWaitingInput(project, submissions, clarificationTask);
+   const processingFirst = processable.some((s) => clarificationTask?.format !== 3 || s.id !== clarificationTask.submissionID) && !!processSavedResponses;
   const exhausted = processable.map((item) => ({ item, job: jobs.find((job) => job.id === item.jobID) }))
     .find(({ job }) => job?.submissionAllowance?.canExtend);
   const actionablePause = (paused || !!lastJob && ["failed", "cancelled", "interrupted", "stale"].includes(lastJob.status)) && (hasUnfinishedInput || !!lastJob && lastJob.status !== "completed");
@@ -71,7 +73,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
       : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting follow-up" : "Ready when you are";
    const headline = taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? (workflow?.enabled ? `Project workflow · ${workflowLabels[workflow.phase]}` : discoveryHeadline);
     const liveStage = running[0]?.title ?? (active ? refinement?.label ?? (lastJob?.context?.definitionAssessment ? "Checking how clearly this area is defined…" : processing.length ? "Reviewing saved responses…" : "Reviewing your project information…") : undefined);
-      const clarificationResume = !!clarificationJob?.readinessProgress && !!continueClarification && !hasUnfinishedInput;
+       const clarificationResume = !!clarificationJob?.readinessProgress && !!continueClarification && !clarificationBlockedInput;
       const refinementResume = !!refinementJob && !!continueRefinement && !hasUnfinishedInput;
        const canResume = !active && !refinementResume && !clarificationResume && !processingFirst && (actionablePause || waiting.length > 0 || saved.length > 0)
      && (!continuationAvailable || waiting.length > 0 || saved.length > 0);
@@ -123,9 +125,9 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
          {clarificationJob?.readinessProgress && <section aria-label="Saved clarification progress"><h3>Question preparation paused · progress saved</h3>
            <p>Area: {project.epics.find((area) => area.id === clarificationJob.context?.readinessQuestions?.epicID)?.title ?? "Saved clarification area"}.</p>
            <p>{clarificationJob.readinessProgress.completed} / {clarificationJob.readinessProgress.total} exact read/check steps saved. No partial questions were published.</p>
-           <p>Continue clarification to resume this saved task, not general discovery. Completed requests will not repeat. Continuing unfinished steps uses your AI allowance; another pause can occur at the action limit.</p>
+            <p>Continue clarification to resume this saved task, not general discovery. Completed requests will not repeat. Continuing unfinished steps uses your AI allowance and runs until finished, stopped, or blocked. Individual request timeouts and failed-attempt limits still apply.</p>
             {hasUnfinishedInput && <p>Process the retained responses first. This question-preparation ledger remains saved.</p>}
-            {continueClarification && <button className="secondary" disabled={disabled || working || hasUnfinishedInput} onClick={() => { setOpen(false); continueClarification(); }}>Continue clarification</button>}
+             {continueClarification && <button className="secondary" disabled={disabled || working || clarificationBlockedInput} onClick={() => { setOpen(false); continueClarification(); }}>Continue clarification</button>}
          </section>}
         {running.map((item) => <section key={item.id} aria-label={item.title}><h3>{item.title}</h3><span className="badge">{statusLabel(item.status)}</span><ActivityFeedback label={item.title} completed={item.completed} total={item.total} />{item.detail && <p>{item.detail}</p>}{item.stop && <button className="secondary" disabled={stopDisabled} onClick={() => stopActivity(item.stop!)}>Stop {item.title === "Question help" ? "question help" : "implementation"}</button>}</section>)}
           {active && <section aria-label="Current task"><h3>{refinement ? "Checking requirements for clearer wording and conflicting choices" : liveStage}</h3><ActivityFeedback label={liveStage ?? "Working…"} completed={completed} total={total} />{refinement && <><p>The selected requirements are reviewed continuously. Proposed changes still need your approval; unchanged wording needs no approval.</p>{lastJob?.status === "running" && lastJob.refinementStageProgress && <p>{lastJob.refinementStageProgress.phase === "read" ? "Reading evidence" : lastJob.refinementStageProgress.phase === "check" ? "Checking proposed wording" : "Saving result"} · {lastJob.refinementStageProgress.completed} / {lastJob.refinementStageProgress.total} evidence steps saved for this requirement.</p>}</>}<button className="secondary" disabled={stopDisabled} onClick={stop}>{lastJob?.context?.definitionAssessment && !workflow?.active ? "Pause assessment" : "Stop"}</button>{!processing.length && !refinement && <p>{lastJob?.context?.definitionAssessment ? "This checks how clearly the area is defined. It won’t add questions or change requirements." : "The app is reviewing saved project information. New responses wait for the next review."}</p>}</section>}
