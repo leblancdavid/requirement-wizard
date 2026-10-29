@@ -7,8 +7,10 @@ import { createActivityIndex } from "./activity.js";
 import { workflowSchema, workflowReadinessSchema } from "../core/workflow.js";
 import { implementationPlanningWorkSchema } from "../core/implementation-planning.js";
 import { recoveryRevisionSchema } from "../core/implementation-revisions.js";
+import { processingPolicySchema } from "../core/processing-policy.js";
+import { workflowRunSchema } from "../core/workflow-run.js";
 
-export const databaseSchemaVersion = 9;
+export const databaseSchemaVersion = 11;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -128,6 +130,13 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
     db.prepare("UPDATE execution_state SET version = ?, payload = ? WHERE project_id = ?").run(state.version, JSON.stringify(state), row.project_id);
     db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(row.project_id);
   }
+} }, { version: 10, name: "project-manual-processing-policy-v1", apply(db: Database.Database) {
+  // No settings, grants, submissions or project snapshots are rewritten. An
+  // absent policy retains the exact pre-upgrade permission behavior.
+  db.exec(`CREATE TABLE processing_policy (project_id TEXT PRIMARY KEY REFERENCES projects(id), payload TEXT NOT NULL);`);
+} }, { version: 11, name: "bounded-specification-run-receipts-v1", apply(db: Database.Database) {
+  db.exec(`CREATE TABLE workflow_runs (project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY(project_id, run_id)); CREATE INDEX workflow_runs_project ON workflow_runs(project_id);`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -149,5 +158,9 @@ export function migrateDatabase(db: Database.Database) {
     }
     for (const row of db.prepare("SELECT payload FROM workflow_state").all() as { payload: string }[]) workflowSchema.parse(JSON.parse(row.payload));
     for (const row of db.prepare("SELECT payload FROM workflow_readiness_receipts").all() as { payload: string }[]) workflowReadinessSchema.parse(JSON.parse(row.payload));
+    for (const row of db.prepare("SELECT payload FROM processing_policy").all() as { payload: string }[]) processingPolicySchema.parse(JSON.parse(row.payload));
+    for (const row of db.prepare("SELECT run_id, payload FROM workflow_runs").all() as { run_id: string; payload: string }[]) {
+      if (workflowRunSchema.parse(JSON.parse(row.payload)).id !== row.run_id) throw new Error("Specification run receipt identity mismatch. Saved data was not overwritten.");
+    }
   }).immediate();
 }

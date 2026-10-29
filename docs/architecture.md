@@ -29,6 +29,28 @@ implemented under `src/`. See [decisions.md](decisions.md),
   dispatch. Inactive preferences stay intact, with existing pauses/leases honored on
   returning to separate settings; see [compatibility](migrations.md#specification-controls-and-processing-permission-grouping-2026-10-29).
 
+- `src/core/processing-policy.ts` and `src/storage/processing-policy.ts` define a
+  format-1, machine-local project policy, independently versioned from project revisions
+  and workflow/maintenance settings. SQLite 10 adds `processing_policy`; absent rows
+  use compatibility mode `legacy`. Manual is a narrowing hold, not a new automatic
+  grant. Store changes atomically check project/policy/settings versions and worker
+  exclusion; `beginJob` rejects automatic dispatch under Manual within its transaction.
+  Queue wake-ups/maintenance honor the hold; explicit saved-input scopes are finite,
+  and Manual coordination disarms at its next decision/pause. No portable or evidence
+  identity changes. See [migration ledger](migrations.md#project-local-manual-processing-2026-10-29).
+
+- `src/core/workflow-run.ts` and `src/storage/workflow-runs.ts` provide format-1 local
+  receipts for each coordinator worker pass. SQLite 11 adds `workflow_runs`, without
+  rewriting workflow grants or historical evidence. Claim/start and request reservation/
+  allowance CAS are atomic; owned release records ending revision, net record counts
+  and outcomes for jobs with reserved attempts. Old runs are not backfilled, and a
+  missing ending observation stays incomplete after crashes or lease loss. An exact
+  starting-snapshot digest prevents equal-numbered adopted history from fabricating
+  the comparison. The indexed latest receipt is read-only in `ProjectWorkflow.view`
+  and the queue UI; current follow-through remains separately revision-labelled.
+  These reports neither schedule calls nor define freshness/approval/readiness. See
+  [compatibility](migrations.md#bounded-specification-run-receipts-2026-10-29).
+
 - `src/core/follow-through.ts` projects definition review work from existing coverage
   freshness without another scheduler or persisted identity. The coordinator repairs
   outdated existing reviews before new gap discovery; initial baselines retain their

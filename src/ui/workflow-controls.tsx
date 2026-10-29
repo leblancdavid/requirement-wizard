@@ -37,6 +37,26 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
       {settings && workflow.enabled && <button className="quiet" disabled={pending} onClick={() => configure("disable")}>Use separate task settings</button>}
     </div>
     {!settings && <>
+      {workflow.lastRun && <section aria-label="Last specification run"><h4>Last specification run</h4>
+        <p>{workflow.lastRun.status === "running" ? "Work is still running. Its final summary is not available yet."
+          : workflow.lastRun.status === "interrupted" ? "This run ended without a complete summary. Saved work and recorded AI attempts are retained."
+            : "This run has stopped. See the remaining work below."}</p>
+        <p>{workflow.lastRun.requests} AI request attempts recorded for this run.</p>
+        {workflow.lastRun.result && <>
+          <p>Checks with recorded AI attempts: {workflow.lastRun.result.jobs.completed} finished · {workflow.lastRun.result.jobs.stopped} stopped or failed · {workflow.lastRun.result.jobs.unfinished} unfinished.</p>
+          {workflow.lastRun.result.changes.length ? <ul>{workflow.lastRun.result.changes.map((count) => <li key={count.label}>{count.label}: {count.added} added · {count.updated} updated · {count.removed} removed.</li>)}</ul>
+            : <p>No net changes to specification records were recorded during this run.</p>}
+          <p>Counts include proposals and any human edits—not approvals, proof of completeness or changes attributed solely to AI. Intermediate edits can cancel out.</p>
+        </>}
+        <details><summary>Run record and limits</summary>
+          <p>Started at revision {workflow.lastRun.fromRevision}.</p>
+          {workflow.lastRun.result ? <p>Ending revision {workflow.lastRun.result.throughRevision} · {workflowLabels[workflow.lastRun.result.phase]}.</p>
+            : <p>No ending revision or completion is inferred.</p>}
+          <p>Attempts are reserved before dispatch; they are not a provider billing total or a count of successful calls. Check counts cover only jobs with recorded attempts.</p>
+          <p>Change counts compare saved records at the starting and ending revisions. This record does not count AI requests saved or renew allowance.</p>
+        </details>
+        <p>Remaining work can change after the run. Reading this record does not restart work, prepare a plan or authorize coding.</p>
+      </section>}
       {workflow.outcome && <section aria-label="Saved outcome and next step"><h4>Saved outcome and next step</h4>
         <p>Current follow-through · revision {workflow.outcome.asOfRevision}.</p>
         <p>Definition counts cover active requirement areas and their dependencies, including project-wide decisions.</p>

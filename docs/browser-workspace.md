@@ -59,7 +59,42 @@ still apply. Original input flags, opt-outs, limits and separate research/coding
 permissions are unchanged. Earlier names in dated descriptions/logs below refer to
 these same operations. See [compatibility](migrations.md#specification-controls-and-processing-permission-grouping-2026-10-29).
 
+**Manual processing** is now a separate project-local choice on this computer.
+Select the radio and **Save processing mode** explicitly; inspection/selection starts
+no work. Stop active tasks first. It holds automatic saved-response follow-up,
+definition maintenance and future coordinator wake-ups without changing the browser-wide
+`reqwizit-auto` preference, original response flags, opt-ins, checks or spent allowance.
+Plain approvals still complete through local checks without AI. Explicit processing
+and **Continue specification** remain available; only already-saved responses are
+included, and a coordinated run needs explicit continuation after its next decision
+or pause. Returning to **Keep existing permissions** leaves the queue, coordinator and
+maintenance paused; it does not renew allowance or restart them. Other projects,
+research, scans, implementation preparation, coding and delivery consent remain separate.
+The machine-local policy is not exported. See [upgrade compatibility](migrations.md#project-local-manual-processing-2026-10-29).
+Focused deterministic browser check: `npm run test:browser:processing` (including
+stale settings, reload, save-only input, retained preference and mobile layout).
+
 ## Saved outcome and next step (2026-10-29)
+
+**Processing & queue → Project workflow → Last specification run** now adds a durable
+summary across all steps of the latest bounded coordinator worker pass, not just the
+last mutation. It shows starting/ending revisions, reserved AI attempt count, outcomes
+for jobs with attempts and net changes to decisions, requirements, questions, features,
+research, refinement proposals and definition reviews. Intermediate edits may cancel
+out; proposals are not approvals, and concurrent human edits are not attributed to AI.
+Attempt reservations happen before dispatch and are not provider billing totals.
+Existing current reviews remain available for reuse; the receipt does not claim a count
+of requests saved. Current remaining work stays in the separately revision-labelled
+summary below, not silently rewritten into the dated run.
+
+Each worker pass has its own receipt, even when a later decision resumes the same
+remaining allowance. A run stopped for a decision, limit, error or Stop is not proof of
+specification completion. A missing ending summary after interruption/lease loss is
+explicitly incomplete; no ending revision is reconstructed from today's project.
+Old versions' runs have no fabricated receipts. Restart/inspection starts no calls.
+All local receipts are retained, but this first UI shows only the latest; they are not
+portable authority or a report covering manual tasks, implementation or multiple bursts.
+The focused workflow browser check covers the summary, mobile and restart preservation.
 
 **Processing & queue → Project workflow → Saved outcome and next step** combines
 the latest locally recorded specification-change counts with current remaining work.

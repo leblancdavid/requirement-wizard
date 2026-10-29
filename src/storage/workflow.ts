@@ -2,15 +2,17 @@ import type Database from "better-sqlite3";
 import { randomUUID, createHash } from "node:crypto";
 import { emptyWorkflow, workflowSchema, workflowReadinessSchema, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
 import { OperationConflictError } from "../core/operations.js";
+import { beginWorkflowRun, recordWorkflowRunRequest, finishWorkflowRun } from "./workflow-runs.js";
 
 export function readWorkflow(db: Database.Database, id: string): WorkflowState {
   const row = db.prepare("SELECT payload FROM workflow_state WHERE project_id = ?").get(id) as { payload: string } | undefined;
   return row ? workflowSchema.parse(JSON.parse(row.payload)) : emptyWorkflow();
 }
-export function saveWorkflow(db: Database.Database, id: string, input: WorkflowState) {
+export function saveWorkflow(db: Database.Database, id: string, input: WorkflowState, requestJobID?: string) {
   return db.transaction(() => {
     const next = workflowSchema.parse(input), current = readWorkflow(db, id);
     if (current.version !== next.version) throw new OperationConflictError("Project workflow changed. Refresh before continuing.");
+    if (requestJobID) recordWorkflowRunRequest(db, id, next, requestJobID);
     next.version++;
     db.prepare("INSERT INTO workflow_state VALUES (?, ?) ON CONFLICT(project_id) DO UPDATE SET payload = excluded.payload").run(id, JSON.stringify(next));
     if (next.readiness) {
@@ -34,6 +36,14 @@ export function claimWorkflow(db: Database.Database, id: string) {
     const state = readWorkflow(db, id);
     if (!state.enabled || state.paused || !state.grant) throw new WorkflowBudgetPause("Continue the project explicitly to authorize a workflow burst.");
     state.owner = randomUUID(); state.leaseUntil = Date.now() + 360000;
-    state.phase = "working"; return saveWorkflow(db, id, state);
+    state.phase = "working"; beginWorkflowRun(db, id, state); return saveWorkflow(db, id, state);
+  }).immediate();
+}
+
+export function releaseWorkflow(db: Database.Database, id: string, owner: string) {
+  return db.transaction(() => {
+    const state = readWorkflow(db, id); if (state.owner !== owner) return;
+    finishWorkflowRun(db, id, state);
+    delete state.owner; delete state.leaseUntil; return saveWorkflow(db, id, state);
   }).immediate();
 }

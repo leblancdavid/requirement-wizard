@@ -5,8 +5,11 @@ import { activityPage, activitySnapshot, latestSpecificationChange, saveActivity
 import { previewAssessmentHistory, selectedHistoricalAssessment } from "./assessment-history.js";
 import type { AssessmentHistorySelection } from "../core/assessment-history.js";
 import { readMaintenance, saveMaintenance } from "./maintenance.js";
+import { readProcessingPolicy } from "./processing-policy.js";
+import { processingPolicyChangeSchema, type ProcessingPolicyChange } from "../core/processing-policy.js";
 import type { MaintenanceState } from "../core/maintenance.js";
-import { readWorkflow, saveWorkflow, claimWorkflow, workflowBusy, workflowReadinessHistory } from "./workflow.js";
+import { readWorkflow, saveWorkflow, claimWorkflow, releaseWorkflow, workflowBusy, workflowReadinessHistory } from "./workflow.js";
+import { latestWorkflowRun } from "./workflow-runs.js";
 import type { WorkflowState } from "../core/workflow.js";
 import { revisionActivity, jobActivity, submissionActivity, executionActivities, type ActivityQuery } from "../core/project-activity.js";
 import { discoveryBlockReason, executionBlockReason, OperationConflictError } from "../core/operations.js";
@@ -209,7 +212,36 @@ export class ProjectStore {
   maintenance(id: string) { this.projectRevision(id); return readMaintenance(this.db, id); }
   saveMaintenance(id: string, state: MaintenanceState) { this.projectRevision(id); return saveMaintenance(this.db, id, state); }
   workflow(id: string) { this.projectRevision(id); return readWorkflow(this.db, id); }
-  saveWorkflow(id: string, state: WorkflowState) { this.projectRevision(id); return saveWorkflow(this.db, id, state); }
+  saveWorkflow(id: string, state: WorkflowState, requestJobID?: string) { this.projectRevision(id); return saveWorkflow(this.db, id, state, requestJobID); }
+  latestWorkflowRun(id: string) { this.projectRevision(id); return latestWorkflowRun(this.db, id, this.workflow(id)); }
+  releaseWorkflow(id: string, owner: string) { this.projectRevision(id); return releaseWorkflow(this.db, id, owner); }
+  processingPolicy(id: string) { this.projectRevision(id); return readProcessingPolicy(this.db, id); }
+  configureProcessingPolicy(id: string, revision: number, raw: ProcessingPolicyChange) {
+    const input = processingPolicyChangeSchema.parse(raw);
+    return this.db.transaction(() => {
+      if (this.projectRevision(id) !== revision) throw new StaleRevisionError();
+      const current = this.processingPolicy(id), workflow = this.workflow(id), maintenance = this.maintenance(id);
+      if (current.version !== input.version || workflow.settingsVersion !== input.workflowVersion || maintenance.settingsVersion !== input.maintenanceVersion)
+        throw new OperationConflictError("Processing permissions changed. Refresh before choosing a mode.");
+      if (current.mode === input.mode) return current;
+      if (this.executionActive(id) || this.executionExpired(id) || this.workflowBusy(id)
+        || this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ? AND json_extract(payload, '$.helpRequest') IS NULL
+          AND json_extract(payload, '$.status') IN ('pending', 'running') LIMIT 1`).get(id))
+        throw new OperationConflictError("Stop or finish active work before changing processing mode. Workers and leases were not changed.");
+      // A mode switch never resumes retained automatic input permissions, even
+      // after an explicit Manual task temporarily opened the queue.
+      this.pauseQueue(id, true);
+      if (input.mode === "manual") {
+        workflow.paused = true; workflow.phase = "paused";
+        workflow.message = "Manual processing is on. Use an explicit task or Continue specification; no allowance was renewed.";
+        workflow.settingsVersion++; this.saveWorkflow(id, workflow);
+        maintenance.paused = true; maintenance.settingsVersion++; this.saveMaintenance(id, maintenance);
+      }
+      const next = { ...current, version: current.version + 1, mode: input.mode };
+      this.db.prepare("INSERT INTO processing_policy VALUES (?, ?) ON CONFLICT(project_id) DO UPDATE SET payload = excluded.payload").run(id, JSON.stringify(next));
+      return next;
+    }).immediate();
+  }
   claimWorkflow(id: string) {
     return this.db.transaction(() => {
       this.assertNoExecution(id);
@@ -530,7 +562,8 @@ export class ProjectStore {
   automaticQueueProjects(): string[] {
     return (this.db.prepare(`SELECT DISTINCT s.project_id FROM submissions s
       LEFT JOIN queue_state q ON q.project_id = s.project_id
-      WHERE COALESCE(q.paused, 0) = 0 AND json_extract(s.payload, '$.auto') = 1
+      LEFT JOIN processing_policy p ON p.project_id = s.project_id
+      WHERE COALESCE(q.paused, 0) = 0 AND COALESCE(json_extract(p.payload, '$.mode'), 'legacy') != 'manual' AND json_extract(s.payload, '$.auto') = 1
         AND json_extract(s.payload, '$.status') IN ('queued', 'saved')`).all() as { project_id: string }[])
       .map((row) => row.project_id);
   }
@@ -995,8 +1028,9 @@ export class ProjectStore {
     });
   }
 
-  beginJob(id: string, revision: number, helpRequest?: QuestionHelpRequest, scan = false, workflowOwner?: string): { project: Project; job: Job } {
+  beginJob(id: string, revision: number, helpRequest?: QuestionHelpRequest, scan = false, workflowOwner?: string, automatic = false): { project: Project; job: Job } {
     return this.db.transaction(() => {
+      if (automatic && this.processingPolicy(id).mode === "manual") throw new OperationConflictError("Manual processing is on. Start this task explicitly; no automatic model request was authorized.");
       this.recoverExpiredJobs();
       const project = this.get(id);
       if (project.revision !== revision) throw new StaleRevisionError();

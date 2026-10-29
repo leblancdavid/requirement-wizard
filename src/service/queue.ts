@@ -93,17 +93,19 @@ export class DiscoveryQueue {
 
   maintenanceView(id: string): MaintenanceView {
     const { settingsVersion: version, enabled, paused, tasks } = this.service.store.maintenance(id);
-    const suspended = enabled && !this.maintenanceArmed.has(id);
+    const manualHold = this.service.store.processingPolicy(id).mode === "manual";
+    const suspended = enabled && (!this.maintenanceArmed.has(id) || manualHold);
     if (suspended && !this.service.store.discoveryActive(id)) for (const task of Object.values(tasks)) if (task.state === "running") {
       task.state = "paused"; task.reason ??= "This saved task has no live worker. Resume explicitly; completed evidence and spent attempts are retained.";
     }
-    return { version, enabled, paused, tasks, suspended, limits: maintenanceLimits };
+    return { version, enabled, paused, tasks, suspended, manualHold, limits: maintenanceLimits };
   }
 
   configureMaintenance(id: string, version: number, action: "enable" | "disable" | "pause" | "resume") {
     let state = this.service.store.maintenance(id);
     if (state.settingsVersion !== version) throw new OperationConflictError("Automatic maintenance settings changed. Refresh before continuing.");
     if (action === "enable" || action === "resume") {
+      if (this.service.store.processingPolicy(id).mode === "manual") throw new OperationConflictError("Manual processing is on. Use an explicit definition refresh, or review processing permissions before enabling automatic updates.");
       if (this.closing || this.isActive(id)) throw new OperationConflictError("Wait for the current task before enabling or resuming maintenance.");
       this.service.store.assertNoExecution(id);
       this.service.assertCanDiscover(id);
@@ -130,6 +132,7 @@ export class DiscoveryQueue {
    * process. One bounded burst follows settled relevant changes, not a timer sweep. */
   maintain(id: string, now = Date.now()) {
     if (this.closing || !this.maintenanceArmed.has(id)) return;
+    if (this.service.store.processingPolicy(id).mode === "manual") return;
     if (this.service.store.workflow(id).enabled) return;
     const report = (message: string) => { const messages = this.messages.get(id) ?? []; messages.push(message); if (messages.length > 20) messages.shift(); this.messages.set(id, messages); };
     try {
@@ -183,7 +186,7 @@ export class DiscoveryQueue {
           this.service.store.saveMaintenance(id, current); // durable dispatch claim, before inference
           claimed = { epicID, inputKey: task.inputKey, jobID: task.jobID };
           report(`Updating definition progress: ${project.epics.find((e) => e.id === epicID)?.title ?? epicID}. Changed-area full review; no automatic approvals or gap discovery.`);
-          const job = await this.service.analyze(id, project.revision, { definitionEpicID: epicID, signal: controller.signal, research: false,
+          const job = await this.service.analyze(id, project.revision, { automatic: true, definitionEpicID: epicID, signal: controller.signal, research: false,
             definitionLimits: { requests: maintenanceLimits.requests - requests, durationMs: Math.max(1, deadline - Date.now()) }, onProgress: report,
             onJob: (job) => {
               if (claimed) claimed.jobID = job.id;
@@ -209,7 +212,7 @@ export class DiscoveryQueue {
           ? "Automatic definition updates paused. Completed checks are saved; inspect the blocker or resume explicitly for another bounded burst."
           : "Definition maintenance finished this burst. Saved input, decisions and definition progress remain separate; coding and delivery never start automatically.");
         clearTimeout(timer);
-        if (!this.service.store.maintenance(id).paused) await this.prepareClarifications(id, assessed, controller.signal, report);
+        if (!this.service.store.maintenance(id).paused) await this.prepareClarifications(id, assessed, controller.signal, report, true);
       }).catch((error) => {
         const latest = this.service.store.maintenance(id);
         const conflict = error instanceof OperationConflictError;
@@ -307,7 +310,7 @@ export class DiscoveryQueue {
 
   /** Follow the review, never a renderer poll or a retrospective startup sweep.
    * Any saved attempt (including a failure/Stop) prevents automatic retries. */
-  private async prepareClarifications(id: string, epicIDs: string[], signal: AbortSignal, report: (message: string) => void) {
+  private async prepareClarifications(id: string, epicIDs: string[], signal: AbortSignal, report: (message: string) => void, automatic = false) {
     // Only coordinator-owned work uses its separate shared budget. An enabled
     // but stopped coordinator must not suppress follow-up to explicit manual work;
     // the queue's normal live-worker guards already exclude an active owner.
@@ -337,7 +340,7 @@ export class DiscoveryQueue {
           && JSON.stringify(j.context?.readinessQuestions) === JSON.stringify(priorTask));
       })) continue;
       report(`Preparing Design questions automatically: ${project.epics.find((e) => e.id === epicID)?.title ?? epicID}. Uses your AI allowance; Stop saves progress. No specification edits or coding.`);
-      const job = await this.service.analyze(id, project.revision, { readinessQuestions: task, research: false, signal, onProgress: report });
+      const job = await this.service.analyze(id, project.revision, { automatic, readinessQuestions: task, research: false, signal, onProgress: report });
       report(job.status === "completed" ? job.result?.questions.length ? "Clarification questions are ready in Design."
         : `No new product question is needed. ${job.result?.summary ?? "Existing evidence settles the findings."}`
         : job.diagnostic ?? "Clarification needs attention; saved steps are retained. Continue explicitly to retry.");
@@ -345,7 +348,7 @@ export class DiscoveryQueue {
     }
   }
 
-  private async prepareSubmissionClarification(id: string, source: Job, signal: AbortSignal, report: (message: string) => void) {
+  private async prepareSubmissionClarification(id: string, source: Job, signal: AbortSignal, report: (message: string) => void, automatic = false) {
     if (this.coordinator || source.submissionWork?.draftRepair || !submissionQuestionBlock(source)) return;
     signal.throwIfAborted();
     try {
@@ -361,7 +364,7 @@ export class DiscoveryQueue {
         return prior?.format === 3 && prior.submissionID === item.id && prior.checkKey === task.checkKey;
       })) return;
       report("Checking the saved-response blocker for an unresolved choice and preparing Design questions. Original input and rejected draft remain saved; no partial edits publish.");
-      const job = await this.service.analyze(id, project.revision, { readinessQuestions: task, research: false, signal, onProgress: report });
+      const job = await this.service.analyze(id, project.revision, { automatic, readinessQuestions: task, research: false, signal, onProgress: report });
       report(job.status === "completed" ? job.result?.questions.length
         ? "Your saved response needs a choice. Answer the clarification in Design; the original response and completed checks are retained."
         : `No new human decision was established. ${job.result?.summary ?? "The saved-response blocker still needs attention."}`
@@ -484,7 +487,7 @@ export class DiscoveryQueue {
     const item = this.service.store.enqueue(id, raw);
     const initializing = this.service.requiresInitialization(id);
     if (initializing) this.service.store.pauseQueue(id, true);
-    if (!initializing && item.auto && this.maintenanceArmed.has(id)) {
+    if (!initializing && item.auto && this.maintenanceArmed.has(id) && this.service.store.processingPolicy(id).mode !== "manual") {
       const maintenance = this.service.store.maintenance(id);
       const unresolved = resolvedReviewAttempts(this.service.store.get(id), this.service.store.submissions(id));
       const blocked = this.service.store.submissions(id).some((s) => !s.archivedAt && s.status === "needs-attention" && !unresolved.has(s.id));
@@ -528,7 +531,7 @@ export class DiscoveryQueue {
       && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
     const last = this.service.store.jobs(id).at(-1);
     const maintenance = this.service.store.maintenance(id);
-    if (!unfinished && maintenance.enabled && Object.values(maintenance.tasks).some((task) => !!task.jobID && task.jobID === last?.id)
+    if (!unfinished && maintenance.enabled && this.service.store.processingPolicy(id).mode !== "manual" && Object.values(maintenance.tasks).some((task) => !!task.jobID && task.jobID === last?.id)
       && (!options.focusEpicID || options.focusEpicID === last?.context?.definitionAssessment?.epicID)) {
       this.configureMaintenance(id, maintenance.settingsVersion, "resume"); return;
     }
@@ -546,6 +549,10 @@ export class DiscoveryQueue {
     this.service.assertCanDiscover(id);
     if (this.isActive(id)) throw new Error("This project already has an active discovery job.");
     const project = this.service.store.get(id);
+    if (options.processOnly && !options.submissionIDs && this.service.store.processingPolicy(id).mode === "manual") {
+      options = { ...options, submissionIDs: this.service.store.submissions(id).filter((s) => !s.archivedAt && ["queued", "saved", "needs-attention"].includes(s.status)
+        && (!options.focusEpicID || submissionEpic(project, s) === options.focusEpicID)).map((s) => s.id) };
+    }
     if (options.continueRefinementJobID) {
       const job = this.service.store.getJob(options.continueRefinementJobID), work = job.refinementWork;
       const latest = [...this.service.store.jobs(id)].reverse().find((j) => work && sameRefinementTask(j, work.requirementID, work.pair));
@@ -602,7 +609,7 @@ export class DiscoveryQueue {
     work?.controller.abort(work.kind === "definition" ? definitionAbortReason("user-stop") : undefined);
   }
 
-  private async runOverlapFollowup(item: Submission, controller: AbortController, report: (message: string) => void): Promise<boolean> {
+  private async runOverlapFollowup(item: Submission, controller: AbortController, report: (message: string) => void, automatic = false): Promise<boolean> {
     const receipt = item.overlapFollowup!;
     let expectedJobID = item.jobID, ownsCheckpoint = true;
     const save = () => {
@@ -632,7 +639,7 @@ export class DiscoveryQueue {
           save(); continue;
         }
         report(`Checking duplicates/conflicts after your response · pair ${index + 1} of ${receipt.pairs.length}. Discovery is already saved; fixes still require approval.`);
-        const job = await this.service.analyze(item.projectID, current.revision, { signal: controller.signal, refinementOnly: true,
+        const job = await this.service.analyze(item.projectID, current.revision, { automatic, signal: controller.signal, refinementOnly: true,
           refinementPair: pair.requirementIDs, includeUnapproved: true, resolutionTriggerSourceIDs: receipt.triggerSourceIDs,
           savedOverlapSubmissionID: item.id,
           research: false, onProgress: report, onJob: (job) => { pair.jobID = job.id; item.jobID = job.id; save(); } });
@@ -702,6 +709,7 @@ export class DiscoveryQueue {
 
   private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; continueRefinementJobID?: string; savedEvidencePolicy?: SavedEvidencePolicy; questionTarget?: number; processOnly?: boolean; submissionIDs?: string[] }) {
     if (this.closing || this.isActive(id) || this.service.store.executionActive(id)) return;
+    if (!manual && this.service.store.processingPolicy(id).mode === "manual") return;
     if (!manual && this.service.store.workflow(id).enabled) return;
     if (!manual && this.service.store.executionExpired(id)) {
       this.service.store.pauseQueue(id, true);
@@ -790,6 +798,7 @@ export class DiscoveryQueue {
       let repairSubmissionID: string | undefined;
       let continuing = false;
       while (!this.closing && !controller.signal.aborted && !this.service.store.queuePaused(id)) {
+        if (!manual && this.service.store.processingPolicy(id).mode === "manual") break;
         if (this.service.store.executionActive(id)) break;
         const scope = manual?.focusEpicID;
         const before = this.service.store.get(id);
@@ -840,7 +849,7 @@ export class DiscoveryQueue {
         const pendingFollowup = saved.find((s) => s.overlapFollowup?.state === "pending");
         if (pendingFollowup) {
           explicit = undefined;
-          if (!await this.runOverlapFollowup(pendingFollowup, controller, report)) break;
+          if (!await this.runOverlapFollowup(pendingFollowup, controller, report, !manual)) break;
           continuing = saved.some((s) => s.id !== pendingFollowup.id);
           if (scope && !continuing) break;
           continue;
@@ -922,7 +931,7 @@ export class DiscoveryQueue {
           await this.findQuestions(id, manual, controller.signal, report);
           break;
         }
-        const job = await this.service.analyze(id, project.revision, {
+        const job = await this.service.analyze(id, project.revision, { automatic: !manual,
           savedEvidencePolicy: batch.length ? undefined : manual?.savedEvidencePolicy,
           signal: controller.signal, research, ...task(batch), submissionIDs: batch.map((s) => s.id), onProgress: report,
           onJob: (job) => {
@@ -933,7 +942,7 @@ export class DiscoveryQueue {
         for (const item of batch) {
           Object.assign(item, this.service.store.submissions(id).find((s) => s.id === item.id));
           if (job.status === "completed" && item.overlapFollowup?.state === "pending") {
-            if (!await this.runOverlapFollowup(item, controller, report)) { followupStopped = true; break; }
+            if (!await this.runOverlapFollowup(item, controller, report, !manual)) { followupStopped = true; break; }
             continue;
           }
           item.status = job.status === "completed" ? "completed" : "needs-attention";
@@ -944,7 +953,7 @@ export class DiscoveryQueue {
         if (followupStopped) break; // Failure owns its pause; a newer worker must not be paused here.
         if (job.status !== "completed" || batch.some((s) => s.status === "needs-attention")) {
           this.service.store.pauseQueue(id, true);
-          if (await this.prepareSubmissionClarification(id, job, controller.signal, report)) {
+          if (await this.prepareSubmissionClarification(id, job, controller.signal, report, !manual)) {
             controller.signal.throwIfAborted();
             const item = batch.find((s) => s.id === job.submissionWork?.submissionID)!;
             item.status = "saved"; this.service.store.saveSubmission(item);
@@ -956,7 +965,7 @@ export class DiscoveryQueue {
           }
           break;
         }
-        if (!manual?.processOnly && !repairSubmissionID) await this.prepareClarifications(id, job.result?.assessments?.map((a) => a.epicID) ?? [], controller.signal, report);
+        if (!manual?.processOnly && !repairSubmissionID) await this.prepareClarifications(id, job.result?.assessments?.map((a) => a.epicID) ?? [], controller.signal, report, !manual);
         if (manual?.questionTarget !== undefined) {
           explicit = manual;
           continue;
@@ -987,6 +996,7 @@ export class DiscoveryQueue {
       this.service.store.pauseQueue(id, true);
     }).finally(() => {
       if (refinement?.status === "running") refinement.status = controller.signal.aborted || this.closing ? "stopped" : "completed";
+      if (this.service.store.processingPolicy(id).mode === "manual") this.service.store.pauseQueue(id, true);
       this.active.delete(id);
     });
     this.active.set(id, { controller, promise });

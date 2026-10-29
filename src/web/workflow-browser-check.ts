@@ -80,6 +80,7 @@ try {
     }
   }
   const initialQueue = await advancedQueue(page);
+  await expect(initialQueue.getByRole("region", { name: "Last specification run", exact: true })).toHaveCount(0);
   await expect(initialQueue.getByRole("region", { name: "Saved outcome and next step", exact: true })).toContainText("No local specification-change receipt is available");
   await expect(initialQueue.getByRole("button", { name: "Discover missing decisions", exact: true })).toBeVisible();
   assert.equal(store.workflow(p.id).enabled, false, "Inspecting narrow operations does not enable coordinated mode");
@@ -105,6 +106,9 @@ try {
   await page.getByRole("button", { name: /Back to workspace/ }).click();
   await continueProject();
   await expect.poll(() => store.workflow(p.id).phase).toBe("needs-decision"); assert.deepEqual(calls, ["idea"]);
+  await expect.poll(() => store.latestWorkflowRun(p.id)?.status).toBe("recorded");
+  const firstRun = store.latestWorkflowRun(p.id)!;
+  assert.equal(firstRun.requests, 1); assert.equal(firstRun.result!.jobs.completed, 1);
   await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
   await permissions.getByText("Retained separate-task preferences (inactive)", { exact: true }).click();
   await expect(permissions).toContainText("Automatic saved-input processing: off");
@@ -114,6 +118,15 @@ try {
   await page.getByRole("button", { name: /Back to workspace/ }).click();
   await page.locator(".topbar .queue-trigger").click();
   const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true }), flow = drawer.getByRole("region", { name: "Project workflow", exact: true });
+  const runSummary = flow.getByRole("region", { name: "Last specification run", exact: true });
+  await expect(runSummary).toContainText("1 AI request attempts recorded for this run");
+  await expect(runSummary).toContainText("question: 1 added");
+  await expect(runSummary).toContainText("not approvals, proof of completeness");
+  const runDetails = runSummary.getByText("Run record and limits", { exact: true });
+  await runDetails.focus(); await page.keyboard.press("Enter");
+  await expect(runSummary.getByText(`Started at revision ${firstRun.fromRevision}.`, { exact: true })).toBeVisible();
+  await page.keyboard.press("Enter");
+  assert.equal(calls.length, 1, "Viewing a saved whole-run receipt starts no requests");
   await expect(flow).toContainText("Needs your decision");
   await expect(flow).toContainText("Should reports work offline?");
   await expect(drawer.getByRole("button", { name: /Resume processing|Process saved responses|Resume this assessment|Resume discovery only|Continue specification/ })).toHaveCount(0);
@@ -183,6 +196,9 @@ try {
   await expect(pendingReviews).toContainText("Needs updating");
   assert.equal(calls.length, beforeChange, "Viewing pending work does not renew paused authority");
   assert.deepEqual(store.get(p.id).assessments, priorFindings);
+  const savedRun = store.latestWorkflowRun(p.id)!;
+  assert.equal(savedRun.status, "recorded");
+  await expect(runSummary).toContainText(`Ending revision ${savedRun.result!.throughRevision}`);
   await page.screenshot({ path: ".reqwizit-state/browser-workflow.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -193,6 +209,8 @@ try {
   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue specification", exact: true })).toBeVisible();
   assert.equal(calls.length, before, "Restart cannot repeat inference");
   await page.locator(".topbar .queue-trigger").click();
+  assert.deepEqual(store.latestWorkflowRun(p.id), savedRun, "Restart preserves the dated run, not a reconstruction from today's project");
+  await expect(runSummary).toContainText(`Ending revision ${savedRun.result!.throughRevision}`);
   await expect(flow.getByRole("region", { name: "Definition review follow-through", exact: true })).toContainText("1 need updating");
   await expect(flow.getByRole("region", { name: "Saved outcome and next step", exact: true })).toContainText(`Latest recorded specification change · revision ${changedProject.revision}`);
   await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
@@ -240,6 +258,19 @@ try {
   assert.equal(calls[beforeImprove], "refine", "Improve requirements retains the scoped refinement operation, not general discovery");
   assert.deepEqual(store.get(p.id).requirements, requirementsBeforeImprove);
   await expect(page.getByRole("region", { name: "What's next?", exact: true })).toHaveCount(0);
+  // Simulate an expired worker with a durable start but no ending observation.
+  const interruptedState = store.workflow(p.id); interruptedState.enabled = true; interruptedState.paused = false;
+  interruptedState.grant = { id: "interrupted-fixture", used: 0, remainingMs: 300000, submissionIDs: [] };
+  store.saveWorkflow(p.id, interruptedState);
+  const interrupted = store.claimWorkflow(p.id); interrupted.leaseUntil = Date.now() - 1000;
+  interrupted.paused = true; interrupted.phase = "paused"; store.saveWorkflow(p.id, interrupted);
+  const callsBeforeInspection = calls.length;
+  await page.locator(".topbar .queue-trigger").click();
+  await expect(runSummary).toContainText("ended without a complete summary");
+  await expect(runSummary).not.toContainText("Ending revision");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-workflow-incomplete-run-mobile.png", fullPage: true });
+  assert.equal(calls.length, callsBeforeInspection, "Incomplete run inspection cannot reconstruct completion or repeat calls");
   console.log("Coordinated workflow browser passed: decision inbox, faithful answer/update, targeted readiness question and answer-triggered assessment, bounded continuation, planning boundary, no coding, restart and mobile. No live calls.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-workflow-failure"); throw error; }
 finally { await browser?.close(); await app.close(); store.close(); }

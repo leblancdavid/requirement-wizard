@@ -15,9 +15,26 @@ returns to those saved settings, including any opt-ins; it is not an all-automat
 switch. Pauses, saved-input flags, explicit restart consent and separate execution/
 research controls remain unchanged. See [compatibility](migrations.md#specification-controls-and-processing-permission-grouping-2026-10-29).
 
+The separate **Manual processing** mode now overrides automatic follow-up for this
+project on this machine. An explicit **Continue specification** still authorizes its
+bounded run, but only responses saved at that start are included. The coordinator
+pauses/disarms at its next decision or pause rather than waking when a later response
+arrives. Continue explicitly afterward. Original grants/spend and opt-ins are retained;
+switching back keeps existing pauses and grants no new allowance. This narrowing
+policy does not merge all automatic consent scopes; see [migration](migrations.md#project-local-manual-processing-2026-10-29).
+
 ## Implemented first slice
 
 ### Definition follow-through (2026-10-29)
+
+**Last specification run** now records each bounded coordinator worker pass across
+its steps, with revision endpoints, reserved attempts and net saved-record counts.
+It is distinct from the larger grant (which can span several decision wake-ups) and
+from today's follow-through. Finished/stopped jobs are not a completeness claim, and
+crashed runs without an ending observation stay explicitly incomplete. Original receipts
+survive restart and later decisions; older runs are not inferred or replayed. This
+report grants no calls or approval and does not cover separate manual/coding actions.
+See [migration ledger](migrations.md#bounded-specification-run-receipts-2026-10-29).
 
 **Saved outcome and next step** combines a revision-labelled latest local
 specification-change receipt with current saved/reusable evidence and pending

@@ -6,6 +6,7 @@ import { defaultDataDirectory } from "../storage/paths.js";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { processingPolicyChangeSchema } from "../core/processing-policy.js";
 import { ProjectStore } from "../storage/store.js";
 import { readinessProgress } from "../core/readiness-stages.js";
 import { submissionProgress, submissionAllowance } from "../core/submission-stages.js";
@@ -203,7 +204,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
         const previousCoverage = lastRound ? revisionSnapshot(options.store.get(id, lastRound.expectedRevision)).coverage.percent : null;
         const helpJobs = recent.helpJobs.map(({ result: _, researchEvidence: __, ...job }) => job);
-        const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), maintenance: queue.maintenanceView(id), workflow: workflow.view(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
+        const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), processingPolicy: options.store.processingPolicy(id), maintenance: queue.maintenanceView(id), workflow: workflow.view(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };
         if (known) {
           const encoded = snapshotEncoder.encode(snapshot, known, ["project", "coverage"]);
           res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", [snapshotHeader]: JSON.stringify(encoded.tokens) });
@@ -367,6 +368,12 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["enable", "disable", "pause", "resume"]) }).strict().parse(raw);
         if (["enable", "resume"].includes(input.action) && project.revision !== input.revision) throw new StaleRevisionError();
         json(res, 200, queue.configureMaintenance(id, input.version, input.action)); return;
+      }
+      if (action === "processing-policy") {
+        const input = processingPolicyChangeSchema.extend({ revision }).strict().parse(raw);
+        if (queue.isActive(id) || implementation.isActive(id) || workflow.active(id)) throw new OperationConflictError("Stop or finish active work before changing processing mode. No permission was changed.");
+        const { revision: expectedRevision, ...change } = input;
+        json(res, 200, options.store.configureProcessingPolicy(id, expectedRevision, change)); return;
       }
       if (action === "workflow") {
         const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["continue", "pause", "disable"]) }).strict().parse(raw);

@@ -15,7 +15,7 @@ import { ProcessingSettings } from "./processing-settings.js";
 import { emptyMaintenance, maintenanceLimits } from "../core/maintenance.js";
 
 test("Continue specification consistently distinguishes consent, waiting decisions, active work and resumable allowances", () => {
-  const workflow: WorkflowView = { version: 0, enabled: false, paused: true, suspended: false, phase: "idle", message: "Not started",
+  const workflow: WorkflowView = { lastRun: null, version: 0, enabled: false, paused: true, suspended: false, phase: "idle", message: "Not started",
     current: undefined, grant: undefined, limits: workflowLimits, active: false, decisions: [], definitionReviews: [], artifacts: [],
     outcome: followThroughOutcome({ project, submissions: [], definitions: [], artifacts: [], change: null, active: false, blocked: false, specificationChecked: false, readyToImplement: false }), readiness: {
       policy: "coordinated-checks-v1", revision: 1, requirementIDs: [], specificationChecked: false, readyToImplement: false,

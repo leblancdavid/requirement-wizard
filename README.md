@@ -33,7 +33,11 @@ remain. Passed checks lead to planning, not automatic coding. See
 Scoped discovery and **Improve requirements** (formerly Refine requirements) are
 under **More actions** in Design/Specification. **Settings → Project settings →
 Processing permissions** explains coordinated work versus the retained, separate
-saved-input and automatic-definition settings without changing their permissions.
+saved-input and automatic-definition settings. Its project-local **Manual processing**
+mode holds automatic follow-up without erasing those permissions; explicit tasks remain
+available, and returning to existing permissions leaves work paused.
+Processing & queue also shows a dated **Last specification run** receipt across the
+run's steps, separate from today's pending work and the latest individual change.
 In Implement, **Prepare implementation** groups code checks, plan review and setup;
 **Build and verify** keeps Start/Resume implementation and Verify delivery separate.
 Viewing preparation does not run checks, call the model or start coding.

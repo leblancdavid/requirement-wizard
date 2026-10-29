@@ -15,6 +15,31 @@ import type { ActivityPage } from "../core/project-activity.js";
 import { snapshotHeader } from "./snapshot.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 
+test("processing policy API is authenticated, revision checked, project local and never grants model calls", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const p = store.create("Manual consent API", "Keep original input", { providerID: "openai", modelID: "fixture" });
+  const other = store.create("Other project", "Independent consent", p.model);
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; assert.fail("Mode changes cannot infer"); } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const input = { revision: p.revision, version: 0, workflowVersion: 0, maintenanceVersion: 0, mode: "manual" };
+  const post = (body: unknown, auth = headers) => fetch(`${app.origin}/api/projects/${p.id}/processing-policy`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+  try {
+    assert.equal((await post(input, { ...headers, "X-Reqwizit-Token": "wrong" })).status, 403);
+    assert.equal((await post(input, { ...headers, Origin: "https://foreign.invalid" })).status, 403);
+    assert.equal((await post({ ...input, mode: "automatic" })).status, 400);
+    assert.equal((await post({ ...input, confirmAIUsage: true })).status, 400);
+    for (const key of ["revision", "version", "workflowVersion", "maintenanceVersion"] as const)
+      assert.equal((await post({ ...input, [key]: input[key] + 1 })).status, 409);
+    assert.equal((await post(input)).status, 200);
+    const snapshot = await (await fetch(`${app.origin}/api/projects/${p.id}`, { headers })).json();
+    assert.deepEqual(snapshot.processingPolicy, { format: 1, version: 1, mode: "manual" });
+    assert.equal(snapshot.queuePaused, true); assert.deepEqual(snapshot.project, p);
+    assert.equal((await post({ ...input, mode: "legacy" })).status, 409);
+    assert.equal((await post({ ...input, version: 1, workflowVersion: 1, maintenanceVersion: 1, mode: "legacy" })).status, 200);
+    assert.equal(store.queuePaused(p.id), true); assert.equal(store.processingPolicy(other.id).mode, "legacy"); assert.equal(calls, 0);
+  } finally { await app.close(); store.close(); }
+});
+
 test("processing-only API validates local selected responses and never starts subsequent gap discovery", async () => {
   const store = new ProjectStore(":memory:");
   const p = store.create("Retained input", "Save reports", { providerID: "openai", modelID: "fixture" });
@@ -143,11 +168,17 @@ test("coordinated workflow requires explicit authenticated revision/CAS-bound pe
     assert.equal((await post({ ...input, revision: project.revision + 1 })).status, 409);
     assert.equal((await post({ ...input, requests: 999 })).status, 400);
     assert.equal(store.workflow(project.id).enabled, false);
+    assert.equal(store.latestWorkflowRun(project.id), null);
     assert.equal((await post(input)).status, 200); assert.equal((await post(input)).status, 409);
     assert.equal(calls, 0); assert.deepEqual(store.get(project.id), original);
+    await until(() => store.latestWorkflowRun(project.id)?.status === "recorded");
     const snapshot = await (await fetch(`${app.origin}/api/projects/${project.id}`, { headers })).json();
     assert.equal(snapshot.workflow.enabled, true); assert.equal(snapshot.workflow.decisions[0].kind, "requirement");
     assert.equal(snapshot.workflow.readiness.readyToImplement, false);
+    assert.equal(snapshot.workflow.lastRun.requests, 0); assert.deepEqual(snapshot.workflow.lastRun.jobIDs, []);
+    assert.equal(snapshot.workflow.lastRun.result.phase, "needs-decision");
+    assert.deepEqual(snapshot.workflow.lastRun.result.changes, []);
+    assert.equal(JSON.stringify(snapshot.workflow.lastRun).includes("An unconfirmed product choice"), false, "Receipt contains counts, not copied evidence prose");
     assert.equal((await post({ revision: 1, version: snapshot.workflow.version, action: "pause" })).status, 200);
     assert.equal(store.workflow(project.id).paused, true);
   } finally { await app.close(); store.close(); }

@@ -132,8 +132,9 @@ and [implementation workspace](implementation-workspace.md).
   Reliability initially stopped at an obsolete raw-alert diagnostic assertion; after
   verifying the plain alert plus original Logs detail, its controlled-response and
   keyboard/touch checks passed. The aggregate runner still hits Project map at line 707.
-- **Next:** separately version any unified processing-consent policy before introducing
-  it. Incremental rechecks, broader operation-wide receipts and
+- **Next:** the separately versioned Manual narrowing policy is now implemented (see
+  Phase 3); unified automatic modes still need explicit migration/consent. Incremental
+  rechecks, broader operation-wide receipts and
   code/delivery impact summaries remain future work; the presentation consolidation
   is not a new shared persisted queue, permission grant or live coding qualification.
 
@@ -211,6 +212,17 @@ view's revision; it neither decodes historical project snapshots nor returns sou
 prose. Current review counts describe evidence available for reuse, not proven model
 requests saved. Status is reconstructable after restart without a new saved format.
 
+**Implemented next receipt slice:** **Last specification run** persists one format-1
+receipt per coordinator worker pass across all its steps. Atomic start/request/release
+record revision bounds, reserved attempts, job outcomes and net record changes. A
+new pass within the same grant reports only its own attempts; no run or successful
+ending is backfilled after upgrade, lease loss or a crash. The original starting
+snapshot must still match exactly to publish net counts. Today's pending work remains
+separate. SQLite 10→11 adds a local table; original evidence, grants and freshness
+identities are unchanged. Only the latest receipt is presented for now; multi-pass,
+cross-operation reports and explicit reused-check provenance remain future work.
+See [compatibility](migrations.md#bounded-specification-run-receipts-2026-10-29).
+
 The coordinator repairs **outdated existing reviews** before new gap discovery,
 after pending input, decisions, stale proposals and consistency checks. Missing
 initial baselines retain discovery-first ordering. Repair can itself pause/fail or
@@ -255,9 +267,16 @@ Processing permissions documents, rather than silently merging, these scopes:
 | Automatic definition updates | Existing project-local machine-local maintenance state; decision-triggered debounce and independent assessment/clarification allowances. | Same opt-in, queued tasks, attempts and pause/restart rules. Suspended during coordination; retained on/off values are not overwritten. |
 | Research, scans, planning, coding and delivery | Separate existing settings/actions and leases. | None are authorized by renaming controls, opening More actions/Settings, or viewing retained preferences. |
 
-No new manual/automatic policy is persisted in this slice. A real merged policy must
-first define migration/consent for these differing scopes; turning coordination off
-must not falsely imply that retained automatic settings have been disabled.
+**Implemented next consent slice:** a separately versioned project-local, machine-local
+`legacy`/`manual` policy now holds automatic follow-up across these scopes. SQLite 9→10
+adds its own table; absent policy retains previous behavior. Entering Manual pauses
+queue/workflow/maintenance without rewriting input flags, original opt-ins, grants or
+spent attempts. Explicit saved-response processing captures a finite set; coordinated
+continuation includes only its starting responses and disarms at its next decision/pause.
+Mode changes validate revision and all settings versions and refuse active workers.
+Returning to legacy does not resume anything. No policy is exported. This is not the
+full merged automatic-consent policy; automatic modes and broader cross-operation
+receipts remain future work. See [migration ledger](migrations.md#project-local-manual-processing-2026-10-29).
 
 Implementation preparation is now a separate visible group containing the existing
 Check progress, Prepare plan, Check options, plan review and execution settings.

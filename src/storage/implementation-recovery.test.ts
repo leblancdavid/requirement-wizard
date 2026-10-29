@@ -196,7 +196,7 @@ test("v1-to-v2 upgrade is backed up, transactional and repeatable without changi
     const db = new Database(f.path), legacy = { ...original, schemaVersion: 1 };
     try {
       db.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(JSON.stringify(legacy), f.project.id);
-      db.exec("DELETE FROM migration_history WHERE version = 9; PRAGMA user_version = 8;");
+      db.exec("DROP TABLE workflow_runs; DROP TABLE processing_policy; DELETE FROM migration_history WHERE version >= 9; PRAGMA user_version = 8;");
       db.exec("CREATE TRIGGER fail_recovery_upgrade BEFORE UPDATE ON execution_state BEGIN SELECT RAISE(ABORT, 'Injected upgrade failure'); END");
       assert.throws(() => new ProjectStore(f.path), /Injected upgrade failure/);
       assert.equal(db.pragma("user_version", { simple: true }), 8);

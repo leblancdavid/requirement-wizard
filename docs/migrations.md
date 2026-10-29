@@ -1,5 +1,105 @@
 # Data migrations and upgrade compatibility
 
+## Bounded specification run receipts (2026-10-29)
+
+**Implemented forward migration:** SQLite **10 → 11**, named
+`bounded-specification-run-receipts-v1`, adds indexed machine-local `workflow_runs`
+records keyed by project/worker UUID. Strict format-1 payloads hold grant identity,
+starting revision/snapshot digest/time, initial spent allowance, reserved attempts,
+job references and an optional observed ending summary. Workflow JSON remains format
+1; project/execution/portable formats, assessment fingerprints and existing CAS
+counters are unchanged. Upgrade rewrites no grants, history, checks, plans, sessions,
+approvals or attempts. It creates no historical receipts and triggers no inference.
+No reset, reassessment or repeated provider call is required.
+
+Migration/table/index/ledger changes are transactional. Validation of incompatible
+saved data rolls back the upgrade; reopening retries after that specific issue is
+resolved. Unsupported future receipt formats/identity mismatches reject without
+overwriting their payloads. Repeated startup preserves original receipts and spend.
+
+A worker claim and receipt start commit atomically. Every request reservation is
+recorded in the same transaction as its existing allowance CAS, before model dispatch;
+missing/conflicting/foreign receipts reject without spending or dispatch. Normal owned
+release captures final phase, revision, outcomes for attempted jobs and net record
+counts between exact snapshots, then releases the worker in the same transaction.
+An expired/lost owner, missing/replaced starting snapshot or inconsistent grant cannot
+fabricate a successful ending observation. Incomplete runs retain known attempts and
+show an explicitly incomplete summary on read. Neither startup nor receipt inspection
+repeats calls, changes permissions or claims readiness. Recorded endings stay immutable
+through later human edits, repeated release and reopen.
+
+Counts are observable net changes, including proposals and any human edits—not AI
+attribution, approvals, cumulative intermediate edits or measured requests saved.
+Current pending work is separately revision-labelled. A worker pass may stop for a
+decision and later resume the same remaining grant as a new pass; its receipt counts
+only its own reservations. Reservations are not provider billing totals. Receipts do
+not cover manual tasks, multiple passes or implementation/delivery, and are not exported
+as portable authority. All rows are retained; only the indexed latest is currently
+presented. Existing job/evidence ledgers remain authoritative for recovery and reuse.
+
+Verification on Node 22.23.4: type check, all **1,075 deterministic tests** (380
+pretests + 695 main), UI build, focused workflow/Manual/maintenance browser checks,
+CLI/spike help smoke checks and diff check passed. The workflow browser covers
+multi-step summaries, keyboard-opened record details, zero-call inspection,
+restart retention, separate current follow-through and an explicitly incomplete
+expired-worker summary on mobile (`.reqwizit-state/browser-workflow-incomplete-run-mobile.png`).
+Deterministic tests cover multiple jobs per pass, later wake-ups within the same
+grant, net versus intermediate edits, no invented reuse/success, Stop/failure,
+reserved-attempt atomicity, foreign/missing receipts, lost/expired owners, exact
+starting-snapshot mismatch, unmatched spend, immutable endings through later edits/
+release/reopen, source-10 upgrade without backfill, future-format rejection and
+transactional rollback/retry. The default seven-runner browser aggregate also passed
+on its final presentation rerun. The existing bundle-size warning remains. Broader automatic modes,
+multi-pass/cross-operation receipts and explicit reused-check provenance remain
+unfinished. No live inference, personal-project writes, application-repository
+commits/pushes or desktop packaging were performed; `test:browser:all` was not run.
+
+## Project-local Manual processing (2026-10-29)
+
+**Implemented forward migration:** SQLite **9 → 10**, named
+`project-manual-processing-policy-v1`, adds `processing_policy(project_id, payload)`.
+Format-1 JSON contains independent CAS `version` and `mode: legacy | manual`.
+Absent rows mean legacy compatibility, not newly granted automation. Upgrade creates
+no policy rows and rewrites no project revisions, preferences, grants, attempts,
+jobs, assessments, execution state, workspace or portable artifacts. Execution schema
+remains v2. Existing evidence/fingerprints stay valid without repeated model calls.
+
+Migration and ledger/schema updates run in the existing immediate transaction.
+Validation failure rolls back the new table/ledger; reopening retries after the
+specific incompatible data is resolved. Unsupported future policy formats reject
+without overwriting the payload. Successful reopening does not repeat conversion.
+Policy remains machine-local and per-project, outside versioned project snapshots/portable exports;
+browser-wide saved-input preference remains unchanged.
+
+Entering Manual is an explicit authenticated settings write, checking project revision,
+policy CAS and workflow/maintenance settings versions together. Active queue/workflow/
+implementation work, pending/running non-help jobs and live or expired execution
+leases block the change without stealing workers or changing their allowance.
+The transaction pauses saved-input dispatch, coordinator and maintenance, retaining
+original enabled flags, grants, tasks and response permissions. Atomic automatic-job
+creation rejects under Manual. Explicit tasks still use their existing safety gates;
+explicit saved-input runs capture a finite starting set, restore queue pause afterward,
+and Manual coordination disarms at its next decision/pause. Plain approvals need no AI.
+Returning to legacy keeps work paused and starts no requests or renewed allowance.
+
+This qualifies only the Manual narrowing slice, not unified automatic modes, safe
+finding-level incremental rechecks, whole-operation receipts or live coding/delivery.
+Verification on Node 22.23.4: type check, all **1,065 deterministic tests** (375
+pretests + 690 main), UI build, default seven-runner `npm run test:browser`, focused
+Manual/workflow/maintenance browser checks and diff check passed. Final targeted
+workflow/migration rerun also passed after tightening the selected-feature finite
+scope. Tests cover unchanged legacy routing, preserved original opt-ins/evidence/
+grants/spend, stale project and independent settings versions, other projects,
+pending workers, live/expired execution leases, cross-process atomic dispatch,
+finite explicit input sets, no Manual coordinator wake after decisions, explicit
+continuation, no restart on returning to legacy, repeated startup, future policy
+rejection and migration rollback/retry. Browser checks cover inspection/radio versus
+explicit save, concurrent settings conflict, retained browser preference, reload,
+save-only response routing and mobile layout; the new screenshot is
+`.reqwizit-state/browser-manual-processing-mobile.png`. Existing bundle warning
+remains. No live inference, personal-project writes, application-repository commits/
+pushes or desktop packaging were performed; `test:browser:all` was not run.
+
 ## Implementation reuse across assessment recovery (2026-10-29)
 
 **Implemented forward migration:** SQLite **8 → 9**, named

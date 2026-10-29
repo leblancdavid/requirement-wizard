@@ -163,7 +163,7 @@ test("schema-7 probe-pool index upgrade is transactional and legacy CPU receipts
     store.close();
     let db = new Database(path);
     const before = db.prepare("SELECT * FROM epic_planning_receipts").all(), contextsBefore = db.prepare("SELECT * FROM epic_planning_contexts").all();
-    db.exec(`DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version >= 8; PRAGMA user_version = 7;
+    db.exec(`DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version >= 8; PRAGMA user_version = 7;
       CREATE TRIGGER fail_probe_upgrade BEFORE INSERT ON migration_history WHEN new.version = 8
       BEGIN SELECT RAISE(ABORT, 'Interrupted probe index upgrade'); END;`);
     db.close();
@@ -450,7 +450,7 @@ test("v3 planning-cache migration is additive, rolls back on failure, retries an
   try {
     const store = new ProjectStore(path), p = seed(store); store.close();
     let db = new Database(path);
-    db.exec("DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DELETE FROM migration_history WHERE version >= 4; PRAGMA user_version = 3;");
+    db.exec("DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DELETE FROM migration_history WHERE version >= 4; PRAGMA user_version = 3;");
     const originals = db.prepare("SELECT * FROM revisions").all(), jobs = db.prepare("SELECT * FROM jobs").all();
     // Existing execution validation deliberately fails AFTER the table migration.
     db.prepare("INSERT INTO execution_state VALUES (?, 0, ?)").run(p.id, JSON.stringify({ schemaVersion: 999, version: 0, assessments: {}, delivered: {}, history: [] }));
@@ -551,7 +551,7 @@ test("schema-4 upgrade preserves existing root receipts; bounded intermediate ca
     const group = "a".repeat(64), receipt: EpicPlanningCheckpoint = { format: 1, tasks: [], decisions: { newPackage: 0, noCompatibleSavedPackage: 0, compatibleSavedPackage: 0 } };
     store.saveEpicPlanningReceipt(p.id, p.revision, input, group, receipt); store.close();
     let db = new Database(path);
-    db.exec("DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DELETE FROM migration_history WHERE version >= 5; PRAGMA user_version = 4;");
+    db.exec("DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DELETE FROM migration_history WHERE version >= 5; PRAGMA user_version = 4;");
     const originals = db.prepare("SELECT * FROM epic_planning_receipts").all();
     db.prepare("INSERT INTO execution_state VALUES (?, 0, ?)").run(p.id, JSON.stringify({ schemaVersion: 999, version: 0, assessments: {}, delivered: {}, history: [] }));
     db.close(); assert.throws(() => new ProjectStore(path), /Unsupported (?:future )?execution/);

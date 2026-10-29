@@ -38,6 +38,7 @@
     "test:browser:epic": "npm run build:ui && tsx src/web/epic-review-browser-check.ts",
     "test:browser:maintenance": "npm run build:ui && tsx src/web/maintenance-browser-check.ts",
     "test:browser:workflow": "npm run build:ui && tsx src/web/workflow-browser-check.ts",
+    "test:browser:processing": "npm run build:ui && tsx src/web/processing-policy-browser-check.ts",
     "test:browser:workspace": "npm run build:ui && tsx src/web/workspace-layout-browser-check.ts",
     "test:browser:definition-history": "npm run build:ui && tsx src/web/definition-history-browser-check.ts",
     "test:browser:assessment-history": "npm run build:ui && tsx src/web/assessment-history-browser-check.ts",

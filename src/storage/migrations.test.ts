@@ -11,6 +11,203 @@ import { assessmentCompatibility, canonicalJSON } from "../core/assessment-ident
 import { assessmentCurrent, assessmentFreshness, deliveredRequirement, emptyExecution, executionConfigSchema } from "../core/execution.js";
 import { requirementFingerprint } from "../core/implementation.js";
 import type { Project } from "../core/model.js";
+import { randomUUID } from "node:crypto";
+
+test("run receipt upgrade preserves original workflow, grants and evidence without inventing historical runs", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/run-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = store.create("Legacy workflow", "Keep evidence", { providerID: "openai", modelID: "fixture" });
+    const state = store.workflow(p.id); state.enabled = true; state.paused = true; state.phase = "blocked";
+    state.grant = { id: "old-grant", used: 4, remainingMs: 3210, submissionIDs: [] }; store.saveWorkflow(p.id, state);
+    const before = store.workflow(p.id), history = store.history(p.id); store.close();
+    let db = new Database(path); db.exec("DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version = 11; PRAGMA user_version = 10;"); db.close();
+    for (let i = 0; i < 2; i++) {
+      store = new ProjectStore(path); assert.deepEqual(store.workflow(p.id), before); assert.deepEqual(store.history(p.id), history);
+      assert.deepEqual(store.get(p.id), p); assert.equal(store.latestWorkflowRun(p.id), null); store.close();
+    }
+    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 11);
+    assert.deepEqual(db.prepare("SELECT * FROM workflow_runs").all(), []); db.close(); store = new ProjectStore(":memory:");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("run receipts preserve reserved attempts across expiry/reopen and atomically refuse missing or foreign receipts", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/run-workers-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = store.create("Interrupted run", "Retain original input", { providerID: "openai", modelID: "fixture" });
+    let state = store.workflow(p.id); state.enabled = true; state.paused = false;
+    state.grant = { id: "grant", used: 0, remainingMs: 300000, submissionIDs: [] }; store.saveWorkflow(p.id, state);
+    state = store.claimWorkflow(p.id); const owner = state.owner!;
+    const job = store.beginJob(p.id, p.revision, undefined, false, owner).job;
+    const current = store.workflow(p.id); current.grant!.used++;
+    const foreign = store.create("Other receipt scope", "Unrelated input", p.model), foreignJob = store.beginJob(foreign.id, foreign.revision).job;
+    assert.throws(() => store.saveWorkflow(p.id, current, foreignJob.id), /does not belong/);
+    assert.equal(store.workflow(p.id).grant!.used, 0); assert.equal(store.latestWorkflowRun(p.id)!.requests, 0);
+    store.saveWorkflow(p.id, current, job.id);
+    assert.equal(store.latestWorkflowRun(p.id)!.status, "running");
+    state = store.workflow(p.id); state.leaseUntil = Date.now() - 1000; store.saveWorkflow(p.id, state);
+    store.close(); store = new ProjectStore(path);
+    const receipt = store.latestWorkflowRun(p.id)!; assert.equal(receipt.status, "interrupted");
+    assert.equal(receipt.result, undefined); assert.equal(receipt.requests, 1); assert.deepEqual(receipt.jobIDs, [job.id]);
+    store.releaseWorkflow(p.id, "not-the-owner"); assert.deepEqual(store.latestWorkflowRun(p.id), receipt);
+    store.releaseWorkflow(p.id, owner); assert.deepEqual(store.latestWorkflowRun(p.id), receipt);
+    store.failJob(job.id, "cancelled", "Explicit fixture stop before continuation");
+    state = store.workflow(p.id); state.paused = false; store.saveWorkflow(p.id, state);
+    state = store.claimWorkflow(p.id);
+    const nextJob = store.beginJob(p.id, p.revision, undefined, false, state.owner).job;
+    assert.equal(store.latestWorkflowRun(p.id)!.initialUsed, 1);
+    const db = new Database(path); db.prepare("DELETE FROM workflow_runs WHERE run_id = ?").run(state.owner); db.close();
+    const before = store.workflow(p.id); state.grant!.used++;
+    assert.throws(() => store.saveWorkflow(p.id, state, nextJob.id), /receipt changed/);
+    assert.deepEqual(store.workflow(p.id), before, "Failed receipt reservation rolls back the allowance CAS too");
+    assert.equal(store.getJob(nextJob.id).status, "pending");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("future run formats stop startup unchanged; failed 10 to 11 conversion rolls back and retries", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/run-rollback-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path), p = store.create("Receipt validation", "Keep history", { providerID: "openai", modelID: "fixture" }); store.close();
+  try {
+    let db = new Database(path); const runID = randomUUID(), future = JSON.stringify({ format: 999 });
+    db.prepare("INSERT INTO workflow_runs VALUES (?, ?, ?)").run(p.id, runID, future); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path);
+    assert.deepEqual(db.prepare("SELECT payload FROM workflow_runs").get(), { payload: future });
+    db.exec("DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version = 11; PRAGMA user_version = 10;");
+    const badPolicy = JSON.stringify({ format: 999, mode: "manual", version: 0 });
+    db.prepare("INSERT INTO processing_policy VALUES (?, ?)").run(p.id, badPolicy); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path);
+    assert.equal(db.pragma("user_version", { simple: true }), 10);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'workflow_runs'").get(), undefined);
+    assert.equal(db.prepare("SELECT * FROM migration_history WHERE version = 11").get(), undefined);
+    assert.deepEqual(db.prepare("SELECT payload FROM processing_policy").get(), { payload: badPolicy });
+    db.prepare("DELETE FROM processing_policy").run(); db.close();
+    const reopened = new ProjectStore(path); assert.deepEqual(reopened.get(p.id), p); assert.equal(reopened.latestWorkflowRun(p.id), null); reopened.close();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("an equal-numbered replacement snapshot cannot manufacture a completed run comparison", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/run-snapshot-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path);
+  try {
+    const p = store.create("Snapshot origin", "Keep original decisions", { providerID: "openai", modelID: "fixture" });
+    const state = store.workflow(p.id); state.enabled = true; state.paused = false;
+    state.grant = { id: "original-grant", used: 0, remainingMs: 300000, submissionIDs: [] }; store.saveWorkflow(p.id, state);
+    const claimed = store.claimWorkflow(p.id), original = store.latestWorkflowRun(p.id)!;
+    const replacement = structuredClone(p); replacement.sources[0]!.text = "Different adopted decisions";
+    const db = new Database(path); db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?")
+      .run(JSON.stringify(replacement), p.id, p.revision); db.close();
+    store.releaseWorkflow(p.id, claimed.owner!);
+    const receipt = store.latestWorkflowRun(p.id)!;
+    assert.equal(receipt.status, "interrupted"); assert.equal(receipt.result, undefined);
+    assert.equal(receipt.fromSnapshotKey, original.fromSnapshotKey); assert.equal(receipt.requests, 0);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("recorded runs remain immutable across later edits, repeated release and database reopen", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/run-retention-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = store.create("Dated run", "Keep evidence", { providerID: "openai", modelID: "fixture" });
+    const state = store.workflow(p.id); state.enabled = true; state.paused = false;
+    state.grant = { id: "spent-grant", used: 2, remainingMs: 12345, submissionIDs: [] }; store.saveWorkflow(p.id, state);
+    const claimed = store.claimWorkflow(p.id); claimed.phase = "paused"; claimed.paused = true; store.saveWorkflow(p.id, claimed);
+    store.releaseWorkflow(p.id, claimed.owner!); const original = store.latestWorkflowRun(p.id)!;
+    assert.equal(original.status, "recorded"); assert.equal(original.initialUsed, 2); assert.equal(original.requests, 0);
+    assert.equal(original.result!.throughRevision, p.revision); assert.deepEqual(original.result!.changes, []);
+    store.note(p.id, p.revision, "A later human decision", "inbox");
+    store.releaseWorkflow(p.id, claimed.owner!); assert.deepEqual(store.latestWorkflowRun(p.id), original);
+    const workflow = store.workflow(p.id);
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(path); assert.deepEqual(store.latestWorkflowRun(p.id), original);
+      assert.deepEqual(store.workflow(p.id), workflow); assert.equal(store.workflow(p.id).grant!.used, 2);
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("Manual consent survives reopen, rejects stale processes and preserves live/expired execution leases", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/manual-workers-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path); const other = new ProjectStore(path);
+  try {
+    const p = store.create("Worker isolation", "Keep progress", { providerID: "openai", modelID: "fixture" });
+    const input = { version: 0, workflowVersion: 0, maintenanceVersion: 0, mode: "manual" as const };
+    const db = new Database(path);
+    try {
+      for (const until of [Date.now() + 60000, Date.now() - 60000]) {
+        db.prepare("INSERT INTO execution_leases VALUES (?, ?, ?, ?)").run("fixture-repository", p.id, "other-worker", until);
+        const original = db.prepare("SELECT * FROM execution_leases").all();
+        assert.throws(() => store.configureProcessingPolicy(p.id, p.revision, input), /Stop or finish/);
+        assert.deepEqual(db.prepare("SELECT * FROM execution_leases").all(), original);
+        assert.equal(store.processingPolicy(p.id).version, 0); db.prepare("DELETE FROM execution_leases").run();
+      }
+    } finally { db.close(); }
+    store.configureProcessingPolicy(p.id, p.revision, input);
+    assert.throws(() => other.configureProcessingPolicy(p.id, p.revision, { ...input, mode: "legacy" }), /permissions changed/);
+    assert.throws(() => other.beginJob(p.id, p.revision, undefined, false, undefined, true), /Manual processing/);
+    store.close(); store = new ProjectStore(path);
+    assert.equal(store.processingPolicy(p.id).mode, "manual"); assert.equal(store.queuePaused(p.id), true);
+    assert.deepEqual(store.get(p.id), p);
+  } finally { other.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("database 9 to 10 preserves original permissions and evidence across repeated startup; future policies reject unchanged", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/manual-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = store.create("Before Manual mode", "Retain saved work", { providerID: "openai", modelID: "fixture" });
+    const workflow = store.workflow(p.id); workflow.enabled = true; store.saveWorkflow(p.id, workflow);
+    const maintenance = store.maintenance(p.id); maintenance.enabled = true; store.saveMaintenance(p.id, maintenance);
+    const before = { workflow: store.workflow(p.id), maintenance: store.maintenance(p.id), execution: store.execution(p.id), history: store.history(p.id) };
+    store.close(); let db = new Database(path);
+    db.exec("DROP TABLE workflow_runs; DROP TABLE processing_policy; DELETE FROM migration_history WHERE version >= 10; PRAGMA user_version = 9;"); db.close();
+    for (let i = 0; i < 2; i++) {
+      store = new ProjectStore(path);
+      assert.deepEqual(store.processingPolicy(p.id), { format: 1, version: 0, mode: "legacy" });
+      assert.deepEqual(store.get(p.id), p); assert.deepEqual(store.workflow(p.id), before.workflow);
+      assert.deepEqual(store.maintenance(p.id), before.maintenance); assert.deepEqual(store.execution(p.id), before.execution);
+      assert.deepEqual(store.history(p.id), before.history);
+      store.close();
+    }
+    db = new Database(path);
+    assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history WHERE version = 10").get() as { n: number }).n, 1);
+    const future = JSON.stringify({ format: 2, version: 0, mode: "manual" });
+    db.prepare("INSERT INTO processing_policy VALUES (?, ?)").run(p.id, future); db.close();
+    assert.throws(() => new ProjectStore(path));
+    db = new Database(path); assert.deepEqual(db.prepare("SELECT payload FROM processing_policy").get(), { payload: future }); db.close();
+    store = new ProjectStore(":memory:");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("failed 9 to 10 upgrade rolls back policy table and ledger and can reopen after the incompatible row is restored", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/manual-rollback-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path), p = store.create("Rollback", "Original evidence", { providerID: "openai", modelID: "fixture" });
+  store.saveExecution(p.id, emptyExecution()); store.close();
+  try {
+    let db = new Database(path);
+    const original = (db.prepare("SELECT payload FROM execution_state WHERE project_id = ?").get(p.id) as { payload: string }).payload;
+    db.exec("DROP TABLE workflow_runs; DROP TABLE processing_policy; DELETE FROM migration_history WHERE version >= 10; PRAGMA user_version = 9;");
+    const future = JSON.stringify({ ...JSON.parse(original), schemaVersion: 999 });
+    db.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(future, p.id); db.close();
+    assert.throws(() => new ProjectStore(path), /Unsupported execution/);
+    db = new Database(path);
+    assert.equal(db.pragma("user_version", { simple: true }), 9);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'processing_policy'").get(), undefined);
+    assert.equal(db.prepare("SELECT * FROM migration_history WHERE version = 10").get(), undefined);
+    assert.deepEqual(db.prepare("SELECT payload FROM execution_state WHERE project_id = ?").get(p.id), { payload: future });
+    db.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(original, p.id); db.close();
+    const reopened = new ProjectStore(path); assert.deepEqual(reopened.get(p.id), p);
+    assert.equal(reopened.processingPolicy(p.id).mode, "legacy"); reopened.close();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("expanded provider choices preserve older selections and history across repeated startup without migration", () => {
   mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
@@ -60,7 +257,7 @@ function fixture() {
   store.saveExecution(project.id, state);
   store.close();
   const db = new Database(path);
-  db.exec("DROP TABLE project_activity; DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;");
+   db.exec("DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE project_activity; DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;");
   const raw = JSON.parse(JSON.stringify(state)); delete raw.schemaVersion;
   const payload = JSON.stringify(raw);
   db.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(payload, project.id);

@@ -232,7 +232,7 @@ export class DiscoveryService {
   async analyze(projectID: string, expectedRevision: number, options: {
     signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; onRefinementRequest?: () => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
     definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule; continuousDefinition?: boolean; definitionRecoveryJobID?: string; onDefinitionRequest?: () => void;
-    readinessQuestions?: ReadinessQuestionTask;
+    readinessQuestions?: ReadinessQuestionTask; automatic?: boolean;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
     const workflowLimits = this.navigation.workflow?.beforeJob();
@@ -299,7 +299,7 @@ export class DiscoveryService {
       || options.requiredEpicIDs?.length || options.isolatedTask || options.savedEvidencePolicy !== undefined || options.research !== undefined || options.focusEpicID !== undefined)) {
       throw new Error("Continue exploration retains its saved task, model, research permission and search policy; other discovery options are not accepted.");
     }
-    const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest, false, this.navigation.workflow?.owner);
+    const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest, false, this.navigation.workflow?.owner, options.automatic);
     const inferenceAdapter: DiscoveryAdapter = this.navigation.workflow ? { ...this.adapter, analyze: (snapshot, request) => {
       this.navigation.workflow!.beforeRequest(job.id); return this.adapter.analyze(snapshot, request);
     } } : this.adapter;

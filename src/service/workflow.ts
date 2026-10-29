@@ -72,7 +72,7 @@ export class ProjectWorkflow {
       decisions: state.enabled ? decisions : [], readiness, active, outcome,
       definitionReviews: definitions.map((area) => ({ ...area,
         title: project.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID })),
-      artifacts };
+      artifacts, lastRun: this.store.latestWorkflowRun(id) };
   }
   configure(id: string, revision: number, version: number, action: "continue" | "pause" | "disable") {
     let state = this.store.workflow(id);
@@ -128,7 +128,7 @@ export class ProjectWorkflow {
         // Release only this worker's claim; never overwrite unknown future data.
         try {
           const state = this.store.workflow(id);
-          if (state.owner === owner) { delete state.owner; delete state.leaseUntil; this.store.saveWorkflow(id, state); }
+          if (state.owner === owner) this.store.releaseWorkflow(id, owner);
         } catch { this.armed.delete(id); }
         this.runs.delete(id);
       });
@@ -162,7 +162,7 @@ export class ProjectWorkflow {
         if (state.paused || !state.enabled || state.grant!.used >= workflowLimits.requests || Date.now() >= deadline) throw new WorkflowBudgetPause("Project workflow paused before model dispatch.");
         state.grant!.used++;
         if (state.current && !state.current.jobIDs.includes(jobID)) state.current.jobIDs.push(jobID);
-        this.store.saveWorkflow(id, state);
+        this.store.saveWorkflow(id, state, jobID);
       } } });
     const queue = new DiscoveryQueue(service, { manualOnly: true, owner });
     const abort = () => queue.stop(id); controller.signal.addEventListener("abort", abort, { once: true });
@@ -190,7 +190,8 @@ export class ProjectWorkflow {
         const project = this.project(id), submissions = this.store.submissions(id), resolved = resolvedReviewAttempts(project, submissions);
         const pending = submissions.filter((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing"].includes(s.status));
         if (pending.length) {
-          const permitted = pending.filter((s) => s.auto || state.grant!.submissionIDs.includes(s.id));
+          const manual = this.store.processingPolicy(id).mode === "manual";
+          const permitted = pending.filter((s) => (!manual && s.auto) || state.grant!.submissionIDs.includes(s.id));
           if (!permitted.length) { stop("paused", "Saved-only input is waiting for processing permission. Continue specification to authorize its processing.", true); return; }
           record("input", project, permitted.map((s) => s.id).sort().join(","));
           queue.resume(id, { processOnly: true, research: false, submissionIDs: permitted.map((s) => s.id) }); await queue.wait(id);
@@ -280,7 +281,12 @@ export class ProjectWorkflow {
       const state = this.store.workflow(id);
       if (state.owner === owner) {
         state.grant!.remainingMs = Math.max(0, state.grant!.remainingMs - (Date.now() - started));
-        delete state.owner; delete state.leaseUntil; this.store.saveWorkflow(id, state);
+        if (this.store.processingPolicy(id).mode === "manual") {
+          state.paused = true;
+          state.message = `${state.message} Manual processing is on; continue explicitly for more work.`.slice(0, 1600);
+          this.armed.delete(id);
+        }
+        this.store.saveWorkflow(id, state); this.store.releaseWorkflow(id, owner);
       }
     }
   }

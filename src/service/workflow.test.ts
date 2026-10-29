@@ -15,9 +15,110 @@ import { workflowInputKey, workflowReadiness, workflowLimits, emptyWorkflow } fr
 import type { Analysis, Project } from "../core/model.js";
 import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } from "../core/follow-through.js";
 import { coverage } from "../core/coverage.js";
+import { automaticInputPermission, processingPolicySchema } from "../core/processing-policy.js";
+import { workflowRunChanges, workflowRunSchema } from "../core/workflow-run.js";
 import { proposeRefinements } from "../core/refinement.js";
 
 const empty = (): Analysis => ({ summary: "Checked existing decisions", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+function mode(store: ProjectStore, id: string, next: "manual" | "legacy") {
+  return store.configureProcessingPolicy(id, store.projectRevision(id), { mode: next, version: store.processingPolicy(id).version,
+    workflowVersion: store.workflow(id).settingsVersion, maintenanceVersion: store.maintenance(id).settingsVersion });
+}
+
+test("Manual policy strictly narrows automatic input routing without changing compatibility defaults", () => {
+  for (const browser of [true, false]) for (const workflow of [true, false]) {
+    assert.equal(automaticInputPermission(undefined, browser, workflow), browser || workflow);
+    assert.equal(automaticInputPermission({ format: 1, version: 0, mode: "manual" }, browser, workflow), false);
+  }
+  assert.throws(() => processingPolicySchema.parse({ format: 2, version: 0, mode: "manual" }));
+  assert.throws(() => processingPolicySchema.parse({ format: 1, version: 0, mode: "automatic" }));
+});
+
+test("Manual policy retains evidence, grants, attempts, original opt-ins and other projects; legacy does not resume", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), other = seed(store);
+    const input = store.enqueue(p.id, { id: randomUUID(), input: { type: "note", text: "Original permission", epicID: "reports" }, auto: true, research: false });
+    const workflow = store.workflow(p.id); workflow.enabled = true;
+    workflow.grant = { id: randomUUID(), used: 3, remainingMs: 12345, submissionIDs: [input.id] }; store.saveWorkflow(p.id, workflow);
+    const maintenance = store.maintenance(p.id); maintenance.enabled = true; store.saveMaintenance(p.id, maintenance);
+    const before = { project: store.get(p.id), jobs: store.jobs(p.id), submissions: store.submissions(p.id), execution: store.execution(p.id),
+      otherWorkflow: store.workflow(other.id), otherMaintenance: store.maintenance(other.id), history: store.history(p.id) };
+    assert.ok(store.automaticQueueProjects().includes(p.id));
+    mode(store, p.id, "manual");
+    assert.equal(store.workflow(p.id).enabled, true); assert.equal(store.maintenance(p.id).enabled, true);
+    assert.deepEqual(store.workflow(p.id).grant, workflow.grant);
+    assert.equal(store.workflow(p.id).paused, true); assert.equal(store.maintenance(p.id).paused, true);
+    assert.equal(store.queuePaused(p.id), true); assert.ok(!store.automaticQueueProjects().includes(p.id));
+    assert.deepEqual(store.get(p.id), before.project); assert.deepEqual(store.jobs(p.id), before.jobs);
+    assert.deepEqual(store.submissions(p.id), before.submissions); assert.deepEqual(store.execution(p.id), before.execution);
+    assert.deepEqual(store.history(p.id), before.history); assert.deepEqual(store.workflow(other.id), before.otherWorkflow);
+    assert.deepEqual(store.maintenance(other.id), before.otherMaintenance); assert.equal(store.processingPolicy(other.id).mode, "legacy");
+    mode(store, p.id, "legacy");
+    assert.equal(store.queuePaused(p.id), true); assert.equal(store.workflow(p.id).paused, true);
+    assert.equal(store.maintenance(p.id).paused, true); assert.deepEqual(store.workflow(p.id).grant, workflow.grant);
+    assert.ok(!store.automaticQueueProjects().includes(p.id));
+  } finally { store.close(); }
+});
+
+test("policy rejects stale project and independent settings versions atomically", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), change = { mode: "manual" as const, version: 0, workflowVersion: 0, maintenanceVersion: 0 };
+    for (const key of ["version", "workflowVersion", "maintenanceVersion"] as const) {
+      assert.throws(() => store.configureProcessingPolicy(p.id, p.revision, { ...change, [key]: 1 }), /permissions changed/);
+      assert.equal(store.processingPolicy(p.id).version, 0); assert.equal(store.queuePaused(p.id), false);
+    }
+    assert.throws(() => store.configureProcessingPolicy(p.id, p.revision - 1, change));
+    mode(store, p.id, "manual");
+    assert.throws(() => store.configureProcessingPolicy(p.id, p.revision, { ...change, mode: "legacy" }), /permissions changed/);
+    assert.equal(store.processingPolicy(p.id).mode, "manual");
+  } finally { store.close(); }
+});
+
+test("policy does not stop pending workers", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), job = store.beginJob(p.id, p.revision).job;
+    assert.throws(() => mode(store, p.id, "manual"), /Stop or finish/);
+    assert.deepEqual(store.getJob(job.id), job); assert.equal(store.processingPolicy(p.id).mode, "legacy");
+  } finally { store.close(); }
+});
+
+test("Manual policy blocks automatic service and atomic job entry but permits explicit discovery", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  try {
+    const p = seed(store); mode(store, p.id, "manual"); const jobs = store.jobs(p.id);
+    const service = new DiscoveryService(store, { async analyze() { calls++; return empty(); } });
+    assert.throws(() => store.beginJob(p.id, p.revision, undefined, false, undefined, true), /Manual processing/);
+    await assert.rejects(service.analyze(p.id, p.revision, { automatic: true, research: false }), /Manual processing/);
+    assert.equal(calls, 0); assert.deepEqual(store.jobs(p.id), jobs);
+    assert.equal((await service.analyze(p.id, p.revision, { research: false })).status, "completed"); assert.equal(calls, 1);
+  } finally { store.close(); }
+});
+
+test("Manual explicit processing captures a finite input set and restores pause after completion", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0, lateID = "";
+  const p = seed(store); mode(store, p.id, "manual");
+  const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() {
+    calls++; lateID = queue.submit(p.id, { id: randomUUID(), input: { type: "note", text: "Arrived after explicit start", epicID: "reports" }, auto: true, research: false }).id;
+    return empty();
+  } }));
+  try {
+    const outside = queue.submit(p.id, { id: randomUUID(), input: { type: "note", text: "Outside selected feature", epicID: "inbox" }, auto: true, research: false });
+    const first = queue.submit(p.id, { id: randomUUID(), input: { type: "note", text: "Explicit saved response", epicID: "reports" }, auto: true, research: false });
+    assert.equal(calls, 0); assert.equal(queue.isActive(p.id), false);
+    assert.throws(() => queue.configureMaintenance(p.id, store.maintenance(p.id).settingsVersion, "enable"), /Manual processing/);
+    queue.resume(p.id, { processOnly: true, focusEpicID: "reports", research: false });
+    for (let i = 0; i < 200 && queue.isActive(p.id); i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(queue.isActive(p.id), false); assert.equal(calls, 1);
+    assert.equal(store.submissions(p.id).find((s) => s.id === first.id)!.status, "completed");
+    assert.equal(store.submissions(p.id).find((s) => s.id === lateID)!.status, "queued");
+    assert.equal(store.submissions(p.id).find((s) => s.id === outside.id)!.status, "queued");
+    assert.equal(store.queuePaused(p.id), true);
+    mode(store, p.id, "legacy"); assert.equal(store.queuePaused(p.id), true); assert.ok(!store.automaticQueueProjects().includes(p.id));
+  } finally { await queue.close(); store.close(); }
+});
 function seed(store: ProjectStore) {
   let p = store.create("Coordinated project", "Save and reopen reports", { providerID: "openai", modelID: "fixture" });
   p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "reports", title: "Reports", purpose: "Report behavior", dependencies: [] }]);
@@ -38,6 +139,95 @@ function checks(calls: string[], defined = true): DiscoveryAdapter {
   } };
 }
 function grant(workflow: ProjectWorkflow, store: ProjectStore, id: string) { workflow.configure(id, store.projectRevision(id), workflow.view(id).version, "continue"); }
+
+test("run receipts distinguish a whole worker pass from its latest change and do not invent older runs", async () => {
+  const store = new ProjectStore(":memory:"); const calls: string[] = [];
+  const workflow = new ProjectWorkflow(store, checks(calls));
+  try {
+    const p = seed(store);
+    assert.equal(workflow.view(p.id).lastRun, null);
+    const jobsBefore = store.jobs(p.id).map((j) => j.id);
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    const first = store.latestWorkflowRun(p.id)!;
+    assert.equal(first.status, "recorded"); assert.equal(first.fromRevision, p.revision);
+    assert.equal(first.result!.throughRevision, store.projectRevision(p.id));
+    assert.equal(first.requests, store.workflow(p.id).grant!.used); assert.ok(first.requests > 1);
+    assert.ok(first.jobIDs.every((id) => !jobsBefore.includes(id)));
+    assert.equal(first.result!.jobs.completed, first.jobIDs.length); assert.equal(first.result!.jobs.stopped, 0);
+    assert.ok(first.result!.changes.some((c) => c.label === "definition review" && c.added > 0));
+    const original = structuredClone(first), before = calls.length;
+    workflow.view(p.id); assert.equal(calls.length, before); assert.deepEqual(store.latestWorkflowRun(p.id), original);
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    const next = store.latestWorkflowRun(p.id)!;
+    assert.notEqual(next.id, first.id); assert.equal(next.initialUsed, 0);
+    assert.equal(next.requests, 0); assert.deepEqual(next.jobIDs, []); assert.deepEqual(next.result!.changes, []);
+    assert.equal(calls.length, before, "Reading/reusing completed work needs no repeat calls");
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("run change counts are net records, not intermediate edits, approvals or saved calls", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), changed = structuredClone(p);
+    changed.requirements[0]!.statement += " with encryption";
+    assert.deepEqual(workflowRunChanges(p, changed), [{ label: "requirement", added: 0, updated: 1, removed: 0 }]);
+    changed.requirements[0]!.statement = p.requirements[0]!.statement;
+    assert.deepEqual(workflowRunChanges(p, changed), []);
+    changed.requirements = [];
+    assert.deepEqual(workflowRunChanges(p, changed), [{ label: "requirement", added: 0, updated: 0, removed: 1 }]);
+    assert.deepEqual(workflowRunChanges(p, p), []);
+  } finally { store.close(); }
+});
+
+test("unmatched allowance spending cannot be backfilled into a successful run receipt", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), state = store.workflow(p.id); state.enabled = true; state.paused = false;
+    state.grant = { id: "unmatched-spend", used: 0, remainingMs: 300000, submissionIDs: [] }; store.saveWorkflow(p.id, state);
+    const claimed = store.claimWorkflow(p.id); claimed.grant!.used = 1; claimed.phase = "paused"; claimed.paused = true;
+    store.saveWorkflow(p.id, claimed); store.releaseWorkflow(p.id, claimed.owner!);
+    assert.equal(store.latestWorkflowRun(p.id)!.status, "interrupted");
+    assert.equal(store.latestWorkflowRun(p.id)!.result, undefined); assert.equal(store.latestWorkflowRun(p.id)!.requests, 0);
+    assert.equal(store.workflow(p.id).grant!.used, 1, "Unknown provenance is not refunded or invented");
+  } finally { store.close(); }
+});
+
+test("failed and stopped runs keep their charged attempts and do not claim completion", async () => {
+  const store = new ProjectStore(":memory:");
+  const workflow = new ProjectWorkflow(store, { async analyze() { throw new Error("Fixture failure"); } });
+  try {
+    const p = store.create("Failed run", "Save reports", { providerID: "openai", modelID: "fixture" });
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    const receipt = store.latestWorkflowRun(p.id)!;
+    assert.equal(receipt.status, "recorded"); assert.equal(receipt.result!.phase, "blocked");
+    assert.equal(receipt.requests, 1); assert.equal(receipt.result!.jobs.stopped, 1); assert.equal(receipt.result!.jobs.completed, 0);
+    assert.equal(receipt.result!.throughRevision, p.revision); assert.deepEqual(receipt.result!.changes, []);
+    assert.throws(() => workflowRunSchema.parse({ ...receipt, format: 999 }));
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("Stop saves the bounded run receipt without refunding attempts or resuming work", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const workflow = new ProjectWorkflow(store, { async analyze(_p, { signal }) {
+    calls++;
+    return new Promise((_resolve, reject) => {
+      const stop = () => reject(signal?.reason ?? new Error("Stopped"));
+      if (signal?.aborted) stop(); else signal?.addEventListener("abort", stop, { once: true });
+    });
+  } });
+  try {
+    const p = store.create("Stop receipt", "Save reports", { providerID: "openai", modelID: "fixture" });
+    grant(workflow, store, p.id);
+    for (let i = 0; i < 100 && !calls; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(calls, 1); assert.equal(store.latestWorkflowRun(p.id)!.status, "running");
+    workflow.stop(p.id); await workflow.wait(p.id);
+    const receipt = store.latestWorkflowRun(p.id)!;
+    assert.equal(receipt.status, "recorded"); assert.equal(receipt.result!.phase, "paused");
+    assert.equal(receipt.requests, 1); assert.equal(receipt.result!.jobs.stopped, 1);
+    assert.equal(store.workflow(p.id).grant!.used, 1); assert.equal(store.workflow(p.id).paused, true);
+    workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls, 1); assert.deepEqual(store.latestWorkflowRun(p.id), receipt);
+  } finally { await workflow.close(); store.close(); }
+});
 
 test("outcome summary separates local change provenance, reusable evidence and pending work without granting authority", () => {
   const store = new ProjectStore(":memory:");
@@ -260,14 +450,47 @@ test("idea questions and explicit answers flow through existing faithful specifi
     const p = store.create("Idea", "Save reports", { providerID: "openai", modelID: "fixture" });
     grant(workflow, store, p.id); await workflow.wait(p.id);
     assert.equal(workflow.view(p.id).phase, "needs-decision"); assert.equal(calls, 1);
+    const firstPass = store.latestWorkflowRun(p.id)!;
+    assert.equal(firstPass.requests, 1); assert.equal(firstPass.initialUsed, 0);
     const question = store.get(p.id).questions[0]!;
     const item = queue.submit(p.id, { id: randomUUID(), auto: true, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: null,
       answer: { kind: "answer", text: "Reports must save offline" } } });
     workflow.tick(p.id); await workflow.wait(p.id);
+    const answerPass = store.latestWorkflowRun(p.id)!;
+    assert.equal(answerPass.grantID, firstPass.grantID); assert.notEqual(answerPass.id, firstPass.id);
+    assert.equal(answerPass.initialUsed, firstPass.requests);
+    assert.equal(answerPass.requests, store.workflow(p.id).grant!.used - answerPass.initialUsed);
+    assert.ok(answerPass.jobIDs.every((id) => !firstPass.jobIDs.includes(id)));
     assert.equal(store.submissions(p.id).find((s) => s.id === item.id)!.status, "completed");
     const requirement = store.get(p.id).requirements[0]!; assert.equal(requirement.status, "accepted"); assert.equal(requirement.authority!.kind, "answer-derived");
     assert.equal(store.get(p.id).sources.some((s) => s.kind === "confirmation"), false, "No manufactured human approval");
     assert.equal(store.execution(p.id).run, undefined);
+  } finally { await workflow.close(); await queue.close(); store.close(); }
+});
+
+test("Manual coordinator stops at its decision and ignores later automatic answers until explicit continuation", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const adapter: DiscoveryAdapter = { async analyze(p) {
+    calls++;
+    return p.questions.length ? empty() : { ...empty(), questions: [{ epicID: "inbox", text: "Should reports work offline?", whyItMatters: "Connectivity is a product decision",
+      options: [{ label: "Offline", consequence: "Save without connectivity" }, { label: "Online", consequence: "Require connectivity" }] }] };
+  } };
+  const workflow = new ProjectWorkflow(store, adapter), queue = new DiscoveryQueue(new DiscoveryService(store, adapter));
+  try {
+    const p = store.create("Manual coordinator", "Save reports", { providerID: "openai", modelID: "fixture" }); mode(store, p.id, "manual");
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.equal(calls, 1); assert.equal(store.workflow(p.id).paused, true);
+    assert.equal(store.workflow(p.id).phase, "needs-decision");
+    const question = store.get(p.id).questions[0]!, spent = store.workflow(p.id).grant!.used;
+    const item = queue.submit(p.id, { id: randomUUID(), auto: true, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: null,
+      answer: { kind: "answer", text: "Reports must save offline" } } });
+    workflow.tick(p.id); await workflow.wait(p.id);
+    assert.equal(calls, 1); assert.equal(store.submissions(p.id).find((s) => s.id === item.id)!.status, "queued");
+    assert.equal(store.workflow(p.id).grant!.used, spent);
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.ok(calls > 1); assert.equal(store.submissions(p.id).find((s) => s.id === item.id)!.status, "completed");
+    assert.equal(store.workflow(p.id).paused, true);
+    const after = calls; mode(store, p.id, "legacy"); workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls, after);
   } finally { await workflow.close(); await queue.close(); store.close(); }
 });
 
@@ -450,7 +673,7 @@ test("schema-6 upgrade adds only workflow metadata and is rollback-safe with no 
   let store = new ProjectStore(path);
   try {
     const p = seed(store), original = store.get(p.id), jobs = store.jobs(p.id), maintenance = store.maintenance(p.id); store.close();
-    let db = new Database(path); db.exec("DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version >= 7; PRAGMA user_version = 6;");
+    let db = new Database(path); db.exec("DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version >= 7; PRAGMA user_version = 6;");
     const bytes = (db.prepare("SELECT payload FROM projects WHERE id = ?").get(p.id) as { payload: string }).payload;
     db.exec("CREATE TRIGGER fail_workflow BEFORE INSERT ON migration_history WHEN new.version = 7 BEGIN SELECT RAISE(ABORT, 'Simulated workflow migration interruption'); END;"); db.close();
     assert.throws(() => new ProjectStore(path), /Simulated workflow migration interruption/);

@@ -53,9 +53,10 @@ import { GapContinuation } from "./gap-continuation.js";
 import { AppMenu } from "./app-menu.js";
 import { DesktopTitleBar } from "./desktop-titlebar.js";
 import { Logs } from "./logs.js";
+import { automaticInputPermission, type ProcessingPolicy } from "../core/processing-policy.js";
 import { LogLink, LogProject, openLogs, recordLog } from "./log-access.js";
 
-type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: (Job & { gapContinuationAvailable?: boolean })[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; maintenance: MaintenanceView; workflow?: WorkflowView; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
+type Snapshot = { project: Project; workspace: Workspace | null; coverage: ReturnType<typeof coverage>; previousCoverage: number | null; jobs: (Job & { gapContinuationAvailable?: boolean })[]; helpJobs: Job[]; active: boolean; progress: string[]; refinementProgress?: import("../core/refinement.js").RefinementProgress | null; processingPolicy?: ProcessingPolicy; maintenance: MaintenanceView; workflow?: WorkflowView; submissions: Submission[]; queuePaused: boolean; execution: ExecutionState; implementationActive: boolean; implementationOperation?: string };
 type Item = { id: string; name: string; revision: number };
 type Draft = { kind: "answer" | "delegation" | "deferral"; text: string; fingerprint?: string };
 // Carry pre-rename browser preferences forward once, without replacing newer values.
@@ -295,7 +296,7 @@ function App() {
   async function mutate(action: string, body: Record<string, unknown>, analyze = false) {
     if (!project) return;
     const updated = await api<Project>(`projects/${project.id}/${action}`, { revision: project.revision, ...body });
-    if (analyze && auto) await api(`projects/${project.id}/analyze`, { revision: updated.revision, research: updated.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
+    if (analyze && automaticInputPermission(data?.processingPolicy, auto, !!data?.workflow?.enabled)) await api(`projects/${project.id}/analyze`, { revision: updated.revision, research: updated.model.connectionID ? false : research, ...(epicID !== "all" ? { focusEpicID: epicID } : {}) });
     await list();
   }
   async function explore(target?: number) {
@@ -328,7 +329,7 @@ function App() {
     if ((input.type === "review" || input.type === "answer") && input.reviewedRevision === undefined) input = { ...input, reviewedRevision: project.revision };
     const projectID = project.id;
     const useResearch = project.model.connectionID ? false : research;
-    const processAutomatically = data?.workflow?.enabled ? true : auto;
+    const processAutomatically = automaticInputPermission(data?.processingPolicy, auto, !!data?.workflow?.enabled);
     const payload = JSON.stringify({ projectID, input, auto: processAutomatically, research: useResearch, replaces });
     const submissionID = requests.current.get(payload) ?? crypto.randomUUID();
     requests.current.set(payload, submissionID);
@@ -550,7 +551,7 @@ function App() {
           {project && !creating && <div className="connection-notice"><p><strong>Active connection:</strong> {activeConnection}</p><p>{connectionChanged ? "Your selection is not saved. Choose a model and save it to switch this project's connection." : "This saved connection will be used by Discover missing decisions and question help."}</p><button title={busyReason || (!model ? "Choose a model first." : !connectionChanged ? "This connection and model are already saved." : undefined)} disabled={busy || !providerID || !model || !connectionChanged} className="primary" onClick={() => void act(() => mutate("model", { model: { providerID, modelID: model, ...(connectionID ? { connectionID } : {}) } }))}>Save model</button></div>}
         </AIConnections> : <ActivityFeedback label="Loading saved AI selection…" />}
         {project && !creating ? <><h2>Project settings</h2>
-          <ProcessingSettings workflow={data?.workflow} maintenance={data?.maintenance} auto={auto} setAuto={setAuto} disabled={busy || connectionChanged || needsInitialization} pending={pending}
+          <ProcessingSettings key={project.id} policy={data?.processingPolicy} configurePolicy={async (change) => { let saved = false; await act(async () => { await api(`projects/${project.id}/processing-policy`, { revision: project.revision, ...change }); saved = true; }); return saved; }} workflow={data?.workflow} maintenance={data?.maintenance} auto={auto} setAuto={setAuto} disabled={busy || connectionChanged || needsInitialization} pending={pending}
             configureWorkflow={configureWorkflow} configureMaintenance={configureMaintenance} openQueue={openProcessingQueue} />
           </> : <p>Your selected connection and model will be used when you create a project.</p>}
         <label><input type="checkbox" checked={!connectionID && !(project?.model.connectionID && !creating) && research} disabled={!!connectionID || !!project?.model.connectionID && !creating} onChange={(event) => setResearch(event.target.checked)} /> Allow targeted research in future rounds</label>{(connectionID || project?.model.connectionID && !creating) && <p>Direct ChatGPT discovery runs without web research.</p>}
