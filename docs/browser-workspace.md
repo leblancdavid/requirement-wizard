@@ -1,5 +1,38 @@
 # Browser workspace, epics, and estimated completeness
 
+## Organization changes and related saved work (2026-10-29)
+
+Merging, splitting, restoring organization or explicitly retiring an area no longer
+discards its saved definition findings. Archived-area findings remain dated evidence,
+outside current coverage; new split areas still need their own reviews. Restoring an
+old organization never undoes later human decisions. Its original assessments can be
+reused only when the existing exact evidence checks match.
+
+**Processing & queue → Project workflow → Related saved work** now explains pending
+refinement and implementation-plan status: needs updating, needs your review,
+unfinished or current. Plan explanations identify changed specification revision,
+workspace or implementation settings. They do not start model calls, regenerate a
+plan or approve coding. Use **Prepare plan** explicitly in Implement after resolving
+setup issues; Continue project does not prepare or approve implementation plans.
+Earlier versions' already removed assessments are not automatically recovered.
+See [compatibility](migrations.md#organization-assessment-retention-and-related-artifact-explanations-2026-10-29).
+
+## Visible definition follow-through (2026-10-29)
+
+**Processing & queue → Project workflow → Definition reviews** distinguishes saved
+current reviews, reviews needing an update and never-assessed areas. Expand **Areas
+and saved review status** for names and explanations. These labels reconstruct from
+saved evidence after restart; they neither start calls nor imply that current findings
+are fully resolved. Enabled workflow controls remain in the drawer when the header
+offers scoped saved-response processing.
+
+Within existing authorized coordination, outdated reviews are updated before more
+gap exploration, after saved input, required decisions and consistency checks. New
+baseline reviews retain discovery-first ordering. Stop, failure, usage limits and
+restart still preserve work and require the appropriate explicit continuation.
+See [coordinated workflow](coordinated-workflow.md#definition-follow-through-2026-10-29)
+and [remaining consolidation work](workflow-consolidation.md).
+
 ## Refinement preserves definition review evidence (2026-10-29)
 
 Approving wording refinement or a pair resolution, or removing a duplicate, now

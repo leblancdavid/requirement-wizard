@@ -13,6 +13,9 @@ import { emptyExecution, executionConfigSchema } from "../core/execution.js";
 import { planningConfigFingerprint } from "../core/implementation-planning.js";
 import { workflowInputKey, workflowReadiness, workflowLimits, emptyWorkflow } from "../core/workflow.js";
 import type { Analysis, Project } from "../core/model.js";
+import { artifactFollowThrough, definitionFollowThrough } from "../core/follow-through.js";
+import { coverage } from "../core/coverage.js";
+import { proposeRefinements } from "../core/refinement.js";
 
 const empty = (): Analysis => ({ summary: "Checked existing decisions", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 function seed(store: ProjectStore) {
@@ -35,6 +38,46 @@ function checks(calls: string[], defined = true): DiscoveryAdapter {
   } };
 }
 function grant(workflow: ProjectWorkflow, store: ProjectStore, id: string) { workflow.configure(id, store.projectRevision(id), workflow.view(id).version, "continue"); }
+
+test("artifact follow-through explains refinement and plan gates without rewriting evidence or approval", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), target = p.requirements[0]!;
+    proposeRefinements(p, [{ requirementID: target.id, statement: "Save reports durably", rationale: "Clear behavior",
+      acceptance: ["A saved report remains available"], reason: "Clarify persistence" }], randomUUID);
+    const execution = emptyExecution();
+    execution.config = executionConfigSchema.parse({ repository: "fixture/reports", strategy: "main", providerID: "openai", modelID: "fixture", checks: ["npm test"] });
+    execution.planning = { format: 1, id: "saved-plan", revision: p.revision, bindingID: "binding", createdAt: "2026-10-29", status: "approved",
+      configFingerprint: planningConfigFingerprint(execution), model: { providerID: "openai", modelID: "fixture" },
+      output: { summary: "Saved implementation steps", packages: [{ requirementID: target.id, title: "Reports", reason: "Persistence",
+        steps: ["Save reports"], verification: ["Reopen a report"], prerequisites: [], questions: [] }] } };
+    const before = structuredClone({ p, execution });
+    let items = artifactFollowThrough(p, execution, "binding");
+    assert.equal(items.find((item) => item.kind === "refinement")!.state, "needs-review");
+    assert.equal(items.find((item) => item.kind === "implementation-plan")!.state, "current");
+    assert.match(items.find((item) => item.kind === "implementation-plan")!.reason, /does not authorize coding/);
+    const changed = structuredClone(p); changed.revision++; changed.requirements[0]!.statement = "Save encrypted reports";
+    items = artifactFollowThrough(changed, execution, "binding");
+    assert.equal(items.find((item) => item.kind === "refinement")!.state, "outdated");
+    assert.match(items.find((item) => item.kind === "refinement")!.reason, /wording, status or supporting evidence changed/);
+    assert.match(items.find((item) => item.kind === "implementation-plan")!.reason, /specification revision changed/);
+    assert.match(items.find((item) => item.kind === "implementation-plan")!.next, /Continue project does not prepare or approve plans/);
+    assert.deepEqual({ p, execution }, before);
+    assert.match(artifactFollowThrough(p, execution, "other-binding").find((item) => item.kind === "implementation-plan")!.reason, /workspace no longer matches/);
+    const settings = structuredClone(execution); settings.config!.checks = ["npm run check"];
+    assert.match(artifactFollowThrough(p, settings, "binding").find((item) => item.kind === "implementation-plan")!.reason, /settings no longer match/);
+    for (const status of ["proposed", "interrupted", "failed", "generating", "dismissed"] as const) {
+      const state = structuredClone(execution); state.planning!.status = status;
+      const plan = artifactFollowThrough(p, state, "binding").find((item) => item.kind === "implementation-plan");
+      assert.equal(plan?.state, status === "dismissed" ? undefined : status === "proposed" ? "needs-review" : "unfinished");
+    }
+    const unconfigured = structuredClone(execution); delete unconfigured.config;
+    assert.match(artifactFollowThrough(p, unconfigured).find((item) => item.kind === "implementation-plan")!.next, /connect the workspace/);
+    const dismissed = structuredClone(p); dismissed.refinements[0]!.status = "dismissed";
+    assert.ok(!artifactFollowThrough(dismissed, emptyExecution()).length, "Dismissed historical work is not a new task");
+  } finally { store.close(); }
+});
+
 async function settle(workflow: ProjectWorkflow, store: ProjectStore, id: string, bursts = 5) {
   for (let at = 0; at < bursts; at++) {
     await workflow.wait(id); const view = workflow.view(id);
@@ -43,6 +86,98 @@ async function settle(workflow: ProjectWorkflow, store: ProjectStore, id: string
   }
   return workflow.view(id);
 }
+
+test("definition follow-through distinguishes missing, outdated and current findings without mutating evidence", async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, checks(calls, false));
+  try {
+    const initial = seed(store), before = structuredClone(initial);
+    assert.ok(definitionFollowThrough(coverage(initial).epics).every((area) => area.state === "not-assessed"));
+    assert.deepEqual(initial, before);
+    grant(workflow, store, initial.id); await settle(workflow, store, initial.id);
+    const assessed = store.get(initial.id), saved = structuredClone(assessed);
+    assert.ok(workflow.view(initial.id).definitionReviews.every((area) => area.state === "current"), "Current means evidence-matching, not fully defined");
+    assert.equal(workflow.view(initial.id).readiness.specificationChecked, false);
+    assert.deepEqual(store.get(initial.id), saved);
+    const changed = store.note(initial.id, assessed.revision, "Retain the draft after a failed save", "reports");
+    const pending = workflow.view(initial.id).definitionReviews;
+    assert.equal(pending.find((area) => area.epicID === "reports")!.state, "outdated");
+    assert.equal(pending.find((area) => area.epicID === "project")!.state, "current");
+    assert.match(pending.find((area) => area.epicID === "reports")!.reason, /Previous findings are retained/);
+    assert.deepEqual(changed.assessments, saved.assessments);
+    const used = calls.length; workflow.view(initial.id); assert.equal(calls.length, used, "Reading pending work grants no model authority");
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("changed-area reviews run before new gap discovery and unchanged areas reuse saved evidence", async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, checks(calls));
+  try {
+    const p = seed(store); grant(workflow, store, p.id); await settle(workflow, store, p.id);
+    workflow.stop(p.id); await workflow.wait(p.id);
+    const baseline = store.get(p.id), projectReview = structuredClone(baseline.assessments.find((a) => a.epicID === "project"));
+    store.note(p.id, baseline.revision, "Reports must retain their last saved version", "reports");
+    const offset = calls.length;
+    workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, offset, "A change does not renew a stopped grant");
+    grant(workflow, store, p.id); const result = await settle(workflow, store, p.id);
+    const followUp = calls.slice(offset);
+    assert.equal(followUp[0], "definition:reports", "Repair saved conclusions before asking the model to explore again");
+    assert.ok(followUp.includes("discover"), "Existing explicitly authorized exploration still runs afterward");
+    assert.equal(followUp.filter((call) => call === "definition:reports").length, 1);
+    assert.ok(!followUp.includes("definition:project"));
+    assert.deepEqual(store.get(p.id).assessments.find((a) => a.epicID === "project"), projectReview);
+    assert.equal(result.phase, "ready-to-plan", result.message);
+    assert.equal(store.execution(p.id).run, undefined);
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("failed changed-area follow-through retains old findings and blocks exploration without automatic retry", async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = [];
+  let fail = false;
+  const workflow = new ProjectWorkflow(store, { async analyze(p, options) {
+    if (fail) { calls.push("failed-definition"); assert.equal(options.context.manifest.definitionAssessment?.epicID, "reports"); throw new Error("Fixture review failure"); }
+    return checks(calls).analyze(p, options);
+  } });
+  try {
+    const p = seed(store); grant(workflow, store, p.id); await settle(workflow, store, p.id);
+    workflow.stop(p.id); await workflow.wait(p.id);
+    const baseline = store.get(p.id); store.note(p.id, baseline.revision, "Preserve reports after an interrupted save", "reports");
+    fail = true; const offset = calls.length;
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.equal(workflow.view(p.id).phase, "blocked");
+    assert.deepEqual(calls.slice(offset), ["failed-definition"]);
+    assert.deepEqual(store.get(p.id).assessments, baseline.assessments);
+    assert.equal(workflow.view(p.id).definitionReviews.find((area) => area.epicID === "reports")!.state, "outdated");
+    workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, offset + 1);
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("pending definition follow-through coalesces from saved evidence across restart without granting calls", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "follow-through-restart-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  const calls: string[] = [];
+  let workflow = new ProjectWorkflow(store, checks(calls));
+  try {
+    const p = seed(store); grant(workflow, store, p.id); await settle(workflow, store, p.id);
+    workflow.stop(p.id); await workflow.wait(p.id);
+    const baseline = store.get(p.id);
+    let changed = store.note(p.id, baseline.revision, "Keep reports offline", "reports");
+    changed = store.note(p.id, changed.revision, "Retain saved reports after restart", "reports");
+    const pending = workflow.view(p.id).definitionReviews, jobs = store.jobs(p.id), offset = calls.length;
+    assert.equal(pending.filter((area) => area.state === "outdated").length, 1, "Repeated changes yield one area, not duplicate tasks");
+    assert.deepEqual(changed.assessments, baseline.assessments);
+    await workflow.close(); store.close(); store = new ProjectStore(path); workflow = new ProjectWorkflow(store, checks(calls));
+    assert.deepEqual(workflow.view(p.id).definitionReviews, pending);
+    workflow.tick(p.id); await workflow.wait(p.id);
+    assert.equal(calls.length, offset); assert.deepEqual(store.jobs(p.id), jobs);
+    assert.equal(workflow.view(p.id).suspended, true);
+    grant(workflow, store, p.id); const result = await settle(workflow, store, p.id);
+    assert.equal(calls[offset], "definition:reports");
+    assert.equal(calls.slice(offset).filter((call) => call === "definition:reports").length, 1);
+    assert.equal(result.phase, "ready-to-plan", result.message);
+    assert.ok(result.definitionReviews.every((area) => area.state === "current"));
+    for (const job of jobs) assert.deepEqual(store.getJob(job.id), job, "Old completed receipts are never rewritten");
+  } finally { await workflow.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("coordinator reuses existing checks and reaches a revision-bound planning boundary without approving or coding", async () => {
   const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, checks(calls));
@@ -53,6 +188,7 @@ test("coordinator reuses existing checks and reaches a revision-bound planning b
     assert.equal(result.readiness.readyToImplement, false); assert.match(result.readiness.explanation, /implementation plan/);
     assert.equal(calls.filter((c) => c === "refine").length, 0, "Human-reviewed wording does not need another routine cleanup approval");
     assert.equal(calls.filter((c) => c === "definition:reports").length, 1);
+    assert.ok(calls.indexOf("discover") < calls.indexOf("definition:reports"), "Initial baseline review retains discovery-first ordering");
     assert.deepEqual(store.get(p.id).requirements, before.requirements); assert.deepEqual(store.get(p.id).sources, before.sources);
     assert.equal(store.execution(p.id).run, undefined);
     const count = calls.length; grant(workflow, store, p.id); await workflow.wait(p.id); assert.equal(calls.length, count, "Current proofs must not cause repeat calls");

@@ -857,7 +857,8 @@ export class ProjectStore {
       project.epics = [...previous.epics, ...project.epics.filter((item) => !previous.epics.some((old) => old.id === item.id)).map((item) => ({ ...item, archived: true }))];
       const available = new Set(project.epics.filter((item) => !item.archived).map((item) => item.id));
       for (const record of [...project.questions, ...project.requirements, ...project.research, ...project.sources.filter((item) => item.kind === "note")]) record.epicID = available.has(old.get(record.id) ?? "") ? old.get(record.id)! : "inbox";
-      project.assessments = [];
+      // Retain original findings. Exact evidence identity determines whether a
+      // restored area can reuse them; intervening decisions still make them stale.
       for (const review of project.organizationReviews) if (review.status === "pending") review.status = "rejected";
       project.roundChanges = ["Restored an earlier epic map. All current requirements, answers, and research were retained; new records are in the inbox."];
       organize(project, []);

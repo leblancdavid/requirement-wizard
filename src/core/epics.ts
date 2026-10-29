@@ -103,7 +103,8 @@ export function organize(project: Project, operations: Organization[]) {
         if (ids.has(epic.id) && epic.id !== target.id) epic.archived = true;
         epic.dependencies = [...new Set(epic.dependencies.map((id) => ids.has(id) ? target.id : id))].filter((id) => id !== epic.id);
       }
-      project.assessments = project.assessments.filter((item) => !ids.has(item.epicID) && item.epicID !== target.id);
+      // Preserve original findings under their original area IDs. Archived areas
+      // leave current coverage; surviving areas use exact-input freshness checks.
     } else {
       const source = get(op.epicID);
       if (["project", "inbox"].includes(source.id)) throw new Error("Reserved areas cannot be split.");
@@ -125,7 +126,8 @@ export function organize(project: Project, operations: Organization[]) {
       for (const epic of project.epics) if (!epic.archived && epic.dependencies.includes(source.id)) {
         epic.dependencies = [...new Set(epic.dependencies.flatMap((id) => id === source.id ? destinations : [id]))].filter((id) => id !== epic.id);
       }
-      project.assessments = project.assessments.filter((item) => item.epicID !== source.id && !destinations.includes(item.epicID));
+      // A split does not transfer the source assessment to its destinations.
+      // Retain all dated evidence and let each destination establish its own review.
     }
   }
   for (const record of records) get(record.epicID);

@@ -60,6 +60,15 @@ try {
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: /Coordinated workflow browser/ }).click();
   async function continueProject() {
     const action = page.locator(".queue-header").getByRole("button", { name: "Continue project", exact: true });
+    // A retained-response shortcut can occupy the header after a bounded pause.
+    // Resume the coordinator through its existing drawer, not that manual action.
+    if (store.workflow(p.id).enabled && store.workflow(p.id).paused) {
+      await page.locator(".topbar .queue-trigger").click();
+      const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+      await drawer.getByRole("region", { name: "Project workflow", exact: true }).getByRole("button", { name: "Continue project", exact: true }).click();
+      await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
+      return;
+    }
     await expect(action).toHaveCount(1); await expect(action).toBeEnabled(); await action.click();
     if (!store.workflow(p.id).enabled) {
       const consent = page.getByRole("dialog", { name: "Processing & queue", exact: true });
@@ -130,6 +139,17 @@ try {
   await finishBurst("Save encrypted reports offline");
   assert.equal(store.get(p.id).requirements[0]!.statement, "Save encrypted reports offline"); assert.equal(store.execution(p.id).run, undefined);
   await page.locator(".topbar .queue-trigger").click();
+  await expect(flow.getByRole("region", { name: "Definition review follow-through", exact: true })).toContainText("2 current");
+  await flow.getByRole("button", { name: "Pause project workflow", exact: true }).click();
+  const saved = store.get(p.id), priorFindings = structuredClone(saved.assessments), beforeChange = calls.length;
+  store.note(p.id, saved.revision, "Keep saved encrypted reports available after restart", "inbox");
+  const pendingReviews = flow.getByRole("region", { name: "Definition review follow-through", exact: true });
+  await expect(pendingReviews).toContainText("1 need updating");
+  await expect(pendingReviews).toContainText("Previous findings are saved");
+  await pendingReviews.getByText("Areas and saved review status", { exact: true }).click();
+  await expect(pendingReviews).toContainText("Needs updating");
+  assert.equal(calls.length, beforeChange, "Viewing pending work does not renew paused authority");
+  assert.deepEqual(store.get(p.id).assessments, priorFindings);
   await page.screenshot({ path: ".reqwizit-state/browser-workflow.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -139,6 +159,29 @@ try {
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: /Coordinated workflow browser/ }).click();
   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue project", exact: true })).toBeVisible();
   assert.equal(calls.length, before, "Restart cannot repeat inference");
+  await page.locator(".topbar .queue-trigger").click();
+  await expect(flow.getByRole("region", { name: "Definition review follow-through", exact: true })).toContainText("1 need updating");
+  await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await continueProject(); await finishBurst();
+  assert.equal(calls[before], "definition:inbox", "Explicit continuation updates saved reviews before new gap exploration");
+  await page.locator(".topbar .queue-trigger").click();
+  await flow.getByRole("button", { name: "Pause project workflow", exact: true }).click();
+  await expect.poll(() => store.workflowBusy(p.id)).toBe(false);
+  const execution = store.execution(p.id);
+  execution.planning = { format: 1, id: "dated-plan", revision: store.projectRevision(p.id) - 1,
+    bindingID: "previous-workspace", createdAt: "2026-10-29", status: "interrupted", configFingerprint: "previous-settings",
+    model: { providerID: "openai", modelID: "fixture" } };
+  store.saveExecution(p.id, execution);
+  const artifactCalls = calls.length, savedPlan = structuredClone(store.execution(p.id).planning);
+  const related = flow.getByRole("region", { name: "Related work follow-through", exact: true });
+  await expect(related).toContainText("Implementation plan · Needs updating");
+  await expect(related).toContainText("The specification revision changed since this plan");
+  await expect(related).toContainText("Review implementation settings and connect the workspace");
+  await related.scrollIntoViewIfNeeded();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-workflow-artifacts-mobile.png", fullPage: true });
+  assert.equal(calls.length, artifactCalls, "Showing plan impact neither replans nor starts coding");
+  assert.deepEqual(store.execution(p.id).planning, savedPlan);
   await expect(page.getByRole("region", { name: "What's next?", exact: true })).toHaveCount(0);
   console.log("Coordinated workflow browser passed: decision inbox, faithful answer/update, targeted readiness question and answer-triggered assessment, bounded continuation, planning boundary, no coding, restart and mobile. No live calls.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-workflow-failure"); throw error; }

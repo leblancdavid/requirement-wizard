@@ -71,8 +71,8 @@ export function workflowAreas(project: Project) {
   for (const id of [...ids]) visit(id);
   return coverage(project).epics.filter((e) => ids.has(e.epicID));
 }
-export function definitionGatesPass(project: Project) {
-  const areas = workflowAreas(project), active = new Map(project.epics.filter((e) => !e.archived).map((e) => [e.id, e]));
+export function definitionGatesPass(project: Project, areas = workflowAreas(project)) {
+  const active = new Map(project.epics.filter((e) => !e.archived).map((e) => [e.id, e]));
   const visiting = new Set<string>(), checked = new Set<string>();
   const valid = (id: string): boolean => {
     if (visiting.has(id) || !active.has(id)) return false;
@@ -81,7 +81,7 @@ export function definitionGatesPass(project: Project) {
   };
   return areas.every((a) => valid(a.epicID) && a.assessed && !a.stale && a.checks.every((c) => ["defined", "not-applicable"].includes(c.status)));
 }
-export function workflowReadiness(project: Project, submissions: Submission[], state: WorkflowState, execution: ExecutionState, bindingID?: string) {
+export function workflowReadiness(project: Project, submissions: Submission[], state: WorkflowState, execution: ExecutionState, bindingID?: string, areas?: ReturnType<typeof workflowAreas>) {
   const requirements = workflowRequirements(project), decisions = workflowDecisions(project, submissions), receipt = state.readiness;
   const resolved = resolvedReviewAttempts(project, submissions);
   const evidence = new Set([...project.sources, ...project.questions, ...project.requirements, ...project.research].map((r) => r.id));
@@ -90,7 +90,7 @@ export function workflowReadiness(project: Project, submissions: Submission[], s
   const spec = !!receipt && receipt.inputKey === workflowInputKey(project) && requirements.length > 0
     && receipt.requirementIDs.length === requirements.length && requirements.every((r) => receipt.requirementIDs.includes(r.id) && r.status === "accepted"
       && r.acceptance.length > 0 && r.sourceIDs.every((id) => evidence.has(id)))
-    && !pending && !decisions.length && definitionGatesPass(project);
+    && !pending && !decisions.length && definitionGatesPass(project, areas);
   const plan = execution.planning;
   const planReady = spec && !!execution.config && !!bindingID && plan?.status === "approved" && planningCurrent(project, execution, bindingID)
     && plan.output?.packages.length === requirements.length && requirements.every((r) => plan.output!.packages.some((p) => p.requirementID === r.id && !p.questions.length));

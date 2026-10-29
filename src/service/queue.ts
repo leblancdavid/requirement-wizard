@@ -17,6 +17,7 @@ import type { SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { coverage } from "../core/coverage.js";
 import { definitionAbortReason } from "../core/definition-interruption.js";
 import { maintenanceBasis, maintenanceLimits, observeMaintenance, type MaintenanceView } from "../core/maintenance.js";
+import { definitionFollowThrough } from "../core/follow-through.js";
 import { WorkflowBudgetPause } from "../core/workflow.js";
 import { canRecoverDefinition } from "../core/definition-recovery.js";
 import { definitionFailedAttempts, type DefinitionAdditionalRequest } from "../core/definition-budget.js";
@@ -144,11 +145,11 @@ export class DiscoveryQueue {
       project ??= this.service.store.get(id);
       const inputs = this.service.store.submissions(id), resolved = resolvedReviewAttempts(project, inputs);
       if (inputs.some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status))) return;
-      const areas = coverage(project).epics;
+      const areas = definitionFollowThrough(coverage(project).epics);
       let cleaned = false;
       for (const [area, task] of Object.entries(state.tasks)) {
         const current = areas.find((e) => e.epicID === area);
-        if (current?.assessed && !current.stale && task.state !== "running") { delete state.tasks[area]; cleaned = true; }
+        if (current?.state === "current" && task.state !== "running") { delete state.tasks[area]; cleaned = true; }
       }
       if (cleaned) state = this.service.store.saveMaintenance(id, state);
       if (!Object.values(state.tasks).some((task) => task.state === "queued")) return;
@@ -176,8 +177,8 @@ export class DiscoveryQueue {
             current.paused = true; this.service.store.saveMaintenance(id, current); report("Automatic maintenance paused at its burst limit. Completed checks are saved; resume explicitly for remaining areas."); break;
           }
           const [epicID, task] = entry;
-          const area = coverage(project).epics.find((e) => e.epicID === epicID);
-          if (area?.assessed && !area.stale) { delete current.tasks[epicID]; this.service.store.saveMaintenance(id, current); continue; }
+          const area = definitionFollowThrough(coverage(project).epics).find((e) => e.epicID === epicID);
+          if (area?.state === "current") { delete current.tasks[epicID]; this.service.store.saveMaintenance(id, current); continue; }
           task.state = "running"; delete task.reason;
           this.service.store.saveMaintenance(id, current); // durable dispatch claim, before inference
           claimed = { epicID, inputKey: task.inputKey, jobID: task.jobID };

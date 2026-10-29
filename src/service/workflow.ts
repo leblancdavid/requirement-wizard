@@ -15,6 +15,7 @@ import { DiscoveryQueue } from "./queue.js";
 import { definitionAbortReason } from "../core/definition-interruption.js";
 import { readinessQuestionTask } from "../core/readiness-questions.js";
 import { dimensionLabels } from "../core/epics.js";
+import { artifactFollowThrough, definitionFollowThrough } from "../core/follow-through.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Run = { controller: AbortController; promise: Promise<void> };
@@ -52,7 +53,9 @@ export class ProjectWorkflow {
   }
   view(id: string) {
     const state = this.store.workflow(id), project = this.project(id), submissions = this.store.submissions(id);
-    const readiness = workflowReadiness(project, submissions, state, this.store.execution(id), this.store.workspace(id)?.bindingID);
+    const areas = workflowAreas(project);
+    const execution = this.store.execution(id), bindingID = this.store.workspace(id)?.bindingID;
+    const readiness = workflowReadiness(project, submissions, state, execution, bindingID, areas);
     const suspended = state.enabled && !this.armed.has(id);
     const changed = state.phase === "ready-to-plan" && !readiness.specificationChecked;
     const remainingMs = state.grant && Math.max(0, state.grant.remainingMs - (state.owner && state.leaseUntil
@@ -62,7 +65,10 @@ export class ProjectWorkflow {
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
       current: state.current && { kind: state.current.kind, target: state.current.target },
       grant: state.grant && { used: state.grant.used, remainingMs: remainingMs! }, limits: workflowLimits,
-      decisions: state.enabled ? workflowDecisions(project, submissions) : [], readiness, active: this.active(id) };
+      decisions: state.enabled ? workflowDecisions(project, submissions) : [], readiness, active: this.active(id),
+      definitionReviews: definitionFollowThrough(areas).map((area) => ({ ...area,
+        title: project.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID })),
+      artifacts: artifactFollowThrough(project, execution, bindingID) };
   }
   configure(id: string, revision: number, version: number, action: "continue" | "pause" | "disable") {
     let state = this.store.workflow(id);
@@ -208,9 +214,15 @@ export class ProjectWorkflow {
                 const audit = await auditApprovedRequirements(project, { signal: controller.signal,
                   candidateFilter: (finding) => resolutionPairEligible(project, [finding.leftID, finding.rightID], jobs) });
                 const pair = audit.findings[0];
+                const outdatedArea = !pair ? definitionFollowThrough(workflowAreas(project)).find((area) => area.state === "outdated") : undefined;
                 if (pair) {
                   record("conflicts", project, `${pair.leftID}:${pair.rightID}`);
                   if (!check(await service.analyze(id, project.revision, { refinementOnly: true, refinementPair: [pair.leftID, pair.rightID], research: false, signal: controller.signal }))) return;
+                } else if (outdatedArea) {
+                  // Repair existing conclusions before broadening exploration. Missing
+                  // baseline reviews retain the original discovery-first ordering.
+                  record("definition", project, outdatedArea.epicID);
+                  if (!check(await service.analyze(id, project.revision, { definitionEpicID: outdatedArea.epicID, research: false, signal: controller.signal }))) return;
                 } else if (state.discovery?.inputKey !== workflowInputKey(project)) {
                   record("discover", project);
                   const job = await service.analyze(id, project.revision, { gapMode: "epic", signal: controller.signal, research: false }); if (!check(job)) return;

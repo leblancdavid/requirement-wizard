@@ -2,6 +2,30 @@
 
 ## Implemented first slice
 
+### Definition follow-through (2026-10-29)
+
+The workflow drawer now lists current, outdated and never-assessed definition
+reviews for the coordinator's requirement/dependency scope. These are evidence
+freshness labels, not completion claims; a current review may still contain gaps.
+Previous findings stay saved when outdated. Viewing status starts no requests.
+Enabled coordinator controls remain available in the drawer even when a retained
+saved-response shortcut takes priority in the header.
+
+**Related saved work** separately explains pending refinement and implementation-plan
+freshness/approval/interruption using their existing rules. Changed plan revision,
+workspace and settings have explicit explanations. This is not another task grant:
+implementation planning stays explicit in Implement, and no plan or suggestion is
+approved by these notices. Organization changes now retain original definition
+findings, including dated archived-area evidence, without assigning it to new areas.
+
+After authorized input, required decisions and consistency checks, coordinated work
+updates outdated existing reviews **before** broader gap discovery. Missing initial
+baselines retain discovery-first ordering. This still uses the existing eight-request/
+five-minute grant; failures pause/block, restart requires explicit continuation and
+unchanged current reviews are reused. It does not add coding/scanning authority or
+delta-only assessment. See [compatibility](migrations.md#definition-follow-through-projection-and-repair-first-coordination-2026-10-29)
+and the [remaining consolidation work](workflow-consolidation.md).
+
 Enable per project through **Continue project**, or Settings → Project settings →
 **Coordinated workflow (preview)**. Processing & queue shows current work, allowance,
 Stop/pause, blockers, and a decision inbox linking to existing questions, requirement

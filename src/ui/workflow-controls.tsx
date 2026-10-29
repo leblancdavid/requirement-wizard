@@ -16,6 +16,8 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
   openDecision?: (decision: WorkflowDecision) => void; settings?: boolean;
 }) {
   const mayContinue = mayContinueProject(workflow);
+  const relatedArtifacts = workflow.artifacts?.filter((item) => !workflow.decisions.some((decision) =>
+    decision.kind === "refinement" && item.id === `refinement:${decision.id}`)) ?? [];
   return <section className="workflow-controls" aria-label={settings ? "Coordinated workflow settings" : "Project workflow"}>
     <h3>{settings ? "Coordinated workflow (preview)" : `Project workflow · ${workflowLabels[workflow.phase]}`}</h3>
     {settings ? <>
@@ -35,6 +37,24 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
       {settings && workflow.enabled && <button className="quiet" disabled={pending} onClick={() => configure("disable")}>Use advanced workflow instead</button>}
     </div>
     {!settings && <>
+      {workflow.definitionReviews && <section aria-label="Definition review follow-through">
+        <h4>Definition reviews</h4>
+        <p>{workflow.definitionReviews.filter((area) => area.state === "current").length} current · {workflow.definitionReviews.filter((area) => area.state === "outdated").length} need updating · {workflow.definitionReviews.filter((area) => area.state === "not-assessed").length} not assessed.</p>
+        {workflow.definitionReviews.some((area) => area.state === "outdated") && <p>Previous findings are saved. After authorized input and required decisions or consistency checks, Continue project updates outdated reviews before exploring more gaps, within its AI usage limit.</p>}
+        <details><summary>Areas and saved review status</summary>
+          <PagedList items={workflow.definitionReviews} itemID={(area) => area.epicID} label="Definition review areas">{(area) => <article className="queue-item">
+            <strong>{area.title} · {area.state === "current" ? "Current" : area.state === "outdated" ? "Needs updating" : "Not assessed"}</strong><p>{area.reason}</p>
+          </article>}</PagedList>
+        </details>
+        <p>Opening this view starts no AI requests. Current reviews can still contain unresolved findings; they do not mean the specification is complete.</p>
+      </section>}
+      {relatedArtifacts.length > 0 && <section aria-label="Related work follow-through"><h4>Related saved work</h4>
+        <p>Suggestions and plans keep their original evidence. These notices explain what needs attention; viewing them starts no AI requests or coding.</p>
+        <PagedList items={relatedArtifacts} itemID={(item) => item.id} label="Related saved work">{(item) => <article className="queue-item">
+          <strong>{item.title} · {item.state === "outdated" ? "Needs updating" : item.state === "needs-review" ? "Needs your review" : item.state === "unfinished" ? "Unfinished" : "Current"}</strong>
+          <p>{item.reason}</p><p>{item.next}</p>
+        </article>}</PagedList>
+      </section>}
       {workflow.enabled && workflow.decisions.length > 0 && <section aria-label="Workflow decision inbox"><h4>Needs your decision · {workflow.decisions.length}</h4>
         <p>Answer these questions, review proposed choices or resolve problems with saved responses. AI suggestions are not treated as your approval.</p>
         <PagedList items={workflow.decisions} itemID={(item) => `${item.kind}:${item.id}`} label="Workflow decisions">{(decision) => <article className="queue-item">

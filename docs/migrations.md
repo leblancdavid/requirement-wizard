@@ -1,5 +1,87 @@
 # Data migrations and upgrade compatibility
 
+## Organization assessment retention and related-artifact explanations (2026-10-29)
+
+**Compatible mutation-policy correction and additive view fields; no schema or
+fingerprint migration.** Merge, split, organization restoration and authorized feature
+archival retain existing definition assessments under their original area IDs. Archived
+areas are already excluded from active coverage; their assessments remain dated
+evidence in the current SQLite/portable payload, not transferred readiness credit.
+New split areas do not inherit source findings. Existing destination and dependency
+reviews use unchanged exact-input freshness. Restoring an exact old organization may
+reuse findings only if its evidence matches; intervening human decisions are retained
+and continue to invalidate affected reviews.
+
+Source/target project schema and portable format versions are unchanged. No startup
+rewrite, model replay, allowance reset or optimistic-version migration is needed.
+Normal expected-revision transactions save the retained assessments with organization
+changes. Failure after an earlier operation in a multi-operation batch still rolls
+back atomically. Original history is unchanged. Existing lazy legacy-input enrichment
+still uses only exact matching original snapshots; missing history remains governed
+by the conservative existing rule. This prevents future loss but does not restore
+assessments already removed by an earlier app version.
+
+The API adds read-only related-artifact notices for pending refinements and saved
+implementation plans. The UI tolerates the field being absent during mixed-version
+reload. Notices use existing stale-reason, plan-revision, workspace and settings gates;
+they do not alter those gates, regenerate/approve plans, rewrite failed/unfinished
+receipts or certify coding readiness. Dismissed plans/refinements stay history, not
+new pending work. Planning remains conservatively revision-bound, including after
+bookkeeping-only revisions. No new persisted state, credential fields or machine-local
+execution data enters portable exports.
+Current refinement decisions already present in the inbox are not duplicated in
+Related saved work; outdated suggestions can still explain why a recheck is needed.
+
+Verification on Node 22.23.4: type check, all 1,028 tests (344 pretests + 684 main), UI
+build and the focused workflow browser passed. Organization tests cover rename/move,
+merge, split into new/existing destinations, exact restoration, later human decisions,
+archival, stale/failed transactions, older saved provenance, repeated reopen and
+portable round trips preserving archived findings. Artifact tests cover input/settings/
+binding mismatches, current versus unapproved/unfinished/dismissed work and projection
+purity. The workflow browser verifies mobile plan-impact explanations without inference,
+replanning or coding. The aggregate browser runner passed layout/model selection,
+then hit its known obsolete Project map selector at `src/web/browser-check.ts:706`;
+later aggregate scripts did not run. Existing bundle-size warning remains. No personal
+data recovery, live model calls or desktop packaging were performed.
+
+## Definition follow-through projection and repair-first coordination (2026-10-29)
+
+**No saved-format, identity or schema change.** The API/UI adds definition review
+status derived from existing current specification/assessment evidence. It distinguishes
+current, outdated and never assessed, including when coordination is off or paused.
+Original assessments, readiness receipts, exact-stage attempts and model results are
+not rewritten. Older clients can ignore the additive view field; new controls tolerate
+its absence during a mixed-version UI/server transition.
+
+The enabled coordinator now updates outdated existing definition reviews before broad
+gap discovery, after authorized input, decisions, stale proposals and pair checks.
+Never-assessed baselines keep the original discovery-first order. Existing readiness
+and publication checks remain unchanged: reordered scheduling does not establish any
+new semantic compatibility or retroactively make old findings current. A paused
+coordinator's controls stay visible in the drawer even when scoped saved-response
+processing occupies the header; either action still requires explicit invocation.
+
+Pending review status reconstructs from existing durable evidence, so repeated changes
+coalesce without a new queue migration. Maintenance consumes the same status labels
+but keeps its narrower decision-trigger projection, settings, debounce, CAS tasks and
+usage limits. No opt-in/backlog sweep, consent widening, automatic retry or startup
+dispatch is introduced. Failure preserves dated findings and blocks exploration;
+completed exact stages and spent attempts retain their existing continuation rules.
+Historical missing assessment recovery and organization-retention gaps remain in the
+[consolidation plan](workflow-consolidation.md).
+
+Verification: type check, 1,018 tests (343 pretests + 675 main), UI build and focused
+workflow/maintenance browser runners passed on Node 22.23.4. Coverage includes
+projection purity, current-but-unresolved findings, changed-area priority, unaffected
+reuse, failure without automatic retry, coalescing, SQLite reopen and no renewed
+authority on view/startup. Browser checks cover paused retained-input coordinator
+continuation, pending evidence explanations, mobile and explicit repair-first restart.
+The workflow runner initially assumed its Continue button was always in the header;
+it now exercises the drawer path, also exposing/fixing the hidden-controls issue.
+Aggregate browser checks still stop at the known Project map selector at
+`src/web/browser-check.ts:706` after layout/model selection pass. Existing bundle-size
+warning remains. No live inference, personal-data writes or desktop packaging ran.
+
 ## Preserve definition assessments through requirement cleanup (2026-10-29)
 
 **Compatible mutation-policy correction; no schema or fingerprint change.** Wording

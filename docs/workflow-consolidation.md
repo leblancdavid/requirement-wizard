@@ -14,8 +14,33 @@ and [implementation workspace](implementation-workspace.md).
   42-test focused refinement suite, UI build and diff whitespace check passed.
   UI build retains the existing chunk-size warning. No browser runners, desktop
   packaging, live model calls or personal-project recovery were performed.
-- **Next:** phase 2 impact/consent inventory and shared pending-follow-through contract.
-  No new scheduler, consent setting or consolidated primary control ships in phase 1.
+- **Phase 2 first slice implemented:** shared read-only definition follow-through
+  projection, visible current/outdated/not-assessed area status, and coordinator
+  priority for outdated reviews before broader discovery. Existing input, human
+  decisions and consistency checks still take priority. Maintenance shares the status
+  projection without gaining new dispatch authority. Enabled coordinator controls
+  remain available in the drawer when a retained-input shortcut occupies the header.
+- Phase 2 checks: type check, 1,018 tests (343 pretests + 675 main), UI build and focused
+  workflow/maintenance browser runners passed. Workflow browser covers pending review
+  visibility, mobile, paused changes, restart and explicit repair-first continuation.
+  Aggregate browser checks passed layout/model selection, then stopped at the known
+  obsolete Project map selector (`src/web/browser-check.ts:706`). No live calls,
+  personal-data changes or desktop packaging were performed.
+- **Phase 2 second slice implemented:** merge/split/restoration and authorized area
+  archival retain original assessments, including archived-area findings. New areas
+  do not inherit old findings. Exact restored evidence may reuse original reviews;
+  later human decisions still require rechecking. Related saved work explains pending
+  refinement and implementation-plan freshness through their existing gates, without
+  preparing plans or approving changes.
+- Second-slice checks: type check, 1,028 tests (344 pretests + 684 main), UI build and
+  focused workflow browser checks passed. Added organization cases cover SQLite reopen,
+  portable round trips, older saved provenance, failed/stale transactions, destination
+  reuse and intervening human decisions. The full browser runner again passed layout/
+  model selection, then stopped at its known Project map selector. No live calls or
+  personal-project writes were made; the existing bundle warning remains.
+- **Next:** safe historical recovery and completion summaries spanning affected
+  artifacts, then the phase 3 control/consent consolidation. This is not yet a shared
+  durable queue for every downstream artifact or a consent/UI overhaul.
 
 ## Intended experience
 
@@ -51,6 +76,40 @@ rather than never assessed, unrelated exact-input coverage stays current, and re
 does not lose the retained work. Detailed stale reasons/recovery remain phase 2 work.
 
 ## Phase 2 — Shared impact and follow-through
+
+### Mutation and authority inventory (first slice)
+
+| Entry point | Durable publication and existing follow-through | Consent boundary / remaining gap |
+| --- | --- | --- |
+| Answers, notes, corrections and requirement reviews | Saved submissions apply through queue/service validation and revision-checked store writes; faithful changes, related pair checks and clarification use retained jobs. | Save-only input waits; the coordinator processes only automatic or explicitly included inputs. Failures and Stop do not renew grants. |
+| Refinement/resolution approval and duplicate removal | Direct revision-checked store mutations; phase 1 retains assessments. Existing evidence identities expose affected/dependency reviews without an extra write. | Opted-in maintenance observes relevant decision changes; an armed coordinator can use only its remaining grant. Paused/restarted workers need continuation. |
+| Organization, dependency edits, restoration and authorized archival | Revision-checked organization writes/reviews retain original assessments; existing identities include area/dependency records. Archived findings leave active coverage, while unchanged exact restored inputs can reuse their original review. | New split areas need their own baseline. Changed existing destinations/dependents need rechecks. Assessments removed by older versions are not automatically restored. |
+| Initialize/rescan folder | Explicit bounded snapshot jobs, validated proposals and revision-checked publication; accepted decisions remain authoritative. | Scanning is not authorized by coordinator continuation. Proposal review still gates decisions; model-only changes do not themselves grant maintenance calls. |
+| Implementation checks, planning, coding and delivery | Separate execution state, CAS/leases, frozen runs, planning freshness and code/delivery evidence. Related saved work now explains plan revision/workspace/settings mismatches and pending approval/interruption. | Remain explicit. Follow-through status does not prepare/approve a plan, run commands or start coding. Code/delivery impact and historical recovery remain separate. |
+
+`src/core/follow-through.ts` currently projects definition review state from the
+existing coverage freshness rules. It is not a new freshness hash or persisted job
+format. Pending areas reconstruct from durable specification/assessment data on every
+read and naturally coalesce repeated changes. Original saved job ledgers still own
+attempts, blocking diagnostics and exact continuation; the projection grants no calls
+and cannot override those ledgers. Reasons are deliberately general when no detailed
+historical input comparison is available, rather than inventing a specific cause.
+
+The same module also explains pending refinement freshness with the existing
+`refinementStaleReason` gate and implementation plans with `planningCurrent` and the
+existing configuration fingerprint. It distinguishes input freshness from unfinished
+preparation and human approval. Planning remains revision-bound: even a bookkeeping
+revision can make a plan outdated under the existing conservative rule. These notices
+expose that rule; they do not introduce semantic plan reuse or automatic regeneration.
+Dismissed/historical proposals do not become new tasks merely because of this view.
+Current refinement decisions shown in the inbox are not repeated in the related-work
+list; outdated suggestions remain explainable without inventing a human decision task.
+
+The coordinator repairs **outdated existing reviews** before new gap discovery,
+after pending input, decisions, stale proposals and consistency checks. Missing
+initial baselines retain discovery-first ordering. Repair can itself pause/fail or
+become outdated again if later exploration changes evidence. Full-area evidence
+review remains necessary; no finding-level or semantic-equivalence reuse is inferred.
 
 - Inventory mutation entry points (answers, notes, corrections, refinements,
   organization, scans) and their existing scheduler/lease/consent behavior.

@@ -143,7 +143,7 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
       for (const question of project.questions.filter((q) => q.epicID === epic.id && ["pending", "deferred", "delegated"].includes(q.status))) {
         question.status = "retired"; question.retirementReason = change.reason;
       }
-      project.assessments = project.assessments.filter((a) => a.epicID !== epic.id);
+      // Archived areas leave current coverage without discarding dated findings.
       project.roundChanges.push(`Archived feature ${epic.title}: ${change.reason}`);
     } else {
       const requirement = project.requirements.find((r) => r.id === change.requirementID);

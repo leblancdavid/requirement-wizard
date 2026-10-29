@@ -6,6 +6,18 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/core/follow-through.ts` projects definition review work from existing coverage
+  freshness without another scheduler or persisted identity. The coordinator repairs
+  outdated existing reviews before new gap discovery; initial baselines retain their
+  ordering. Maintenance shares the status projection but not broader consent. The API
+  and workflow drawer expose saved/current/outdated areas, reconstructable after restart.
+  Existing exact job ledgers own attempts and continuation. See the
+  [consolidation plan and remaining mutation gaps](workflow-consolidation.md).
+  It also projects pending refinement/plan notices using existing stale-reason and
+  planning-current gates. Organization changes retain original assessments under
+  original area IDs; archived evidence stays out of current coverage and is never
+  copied onto new split areas. No new persisted queue format or permission is added.
+
 - Workflow planning has a questions-only `staged-records-v4` fallback for otherwise
   unsplittable evidence chains. The mandatory exact record union is distributed
   across durable discovery/check batches, with target/original-input pins repeated.

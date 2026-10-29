@@ -13,7 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 test("Continue project consistently distinguishes consent, waiting decisions, active work and resumable allowances", () => {
   const workflow: WorkflowView = { version: 0, enabled: false, paused: true, suspended: false, phase: "idle", message: "Not started",
-    current: undefined, grant: undefined, limits: workflowLimits, active: false, decisions: [], readiness: {
+    current: undefined, grant: undefined, limits: workflowLimits, active: false, decisions: [], definitionReviews: [], artifacts: [], readiness: {
       policy: "coordinated-checks-v1", revision: 1, requirementIDs: [], specificationChecked: false, readyToImplement: false,
       explanation: "Checks pending", limitation: "No coding authority" } };
   assert.equal(mayContinueProject(workflow), true);
@@ -21,6 +21,30 @@ test("Continue project consistently distinguishes consent, waiting decisions, ac
   assert.match(consent, /Continue project lets the app guide your next steps/);
   assert.match(consent, /across all project areas/); assert.match(consent, /Advanced actions/);
   assert.doesNotMatch(consent, /Resume processing/);
+  const followThrough = renderToStaticMarkup(createElement(WorkflowControls, { workflow: { ...workflow, definitionReviews: [
+    { epicID: "saved", title: "Saved reports", state: "outdated", reason: "Previous findings are retained" },
+    { epicID: "current", title: "Current area", state: "current", reason: "Matches evidence" },
+    { epicID: "new", title: "New area", state: "not-assessed", reason: "No saved review" },
+  ] }, disabled: false, pending: false, configure() {} }));
+  assert.match(followThrough, /1 current · 1 need updating · 1 not assessed/);
+  assert.match(followThrough, /Previous findings are saved/);
+  assert.match(followThrough, /before exploring more gaps/);
+  assert.match(followThrough, /Opening this view starts no AI requests/);
+  assert.match(followThrough, /do not mean the specification is complete/);
+  const artifacts = renderToStaticMarkup(createElement(WorkflowControls, { workflow: { ...workflow, artifacts: [
+    { id: "implementation-plan:plan", kind: "implementation-plan", title: "Implementation plan", state: "outdated", reason: "The specification revision changed since this plan.",
+      next: "Use Prepare plan explicitly. Continue project does not prepare or approve plans." },
+  ] }, disabled: false, pending: false, configure() {} }));
+  assert.match(artifacts, /Related saved work/); assert.match(artifacts, /Implementation plan · Needs updating/);
+  assert.match(artifacts, /Continue project does not prepare or approve plans/);
+  assert.match(artifacts, /viewing them starts no AI requests or coding/);
+  const decisionOnly = renderToStaticMarkup(createElement(WorkflowControls, { workflow: { ...workflow, enabled: true,
+    decisions: [{ kind: "refinement", id: "suggestion", title: "Clarify saved report behavior" }], artifacts: [
+      { id: "refinement:suggestion", kind: "refinement", title: "Requirement wording suggestion", state: "needs-review",
+        reason: "Matches current evidence", next: "Review in Specification" },
+    ] }, disabled: false, pending: false, configure() {} }));
+  assert.match(decisionOnly, /Clarify saved report behavior/);
+  assert.doesNotMatch(decisionOnly, /Related saved work/, "Do not duplicate the same current refinement in the decision inbox and follow-through list");
   for (const phase of ["needs-decision", "working", "ready-to-plan", "ready-to-implement"] as const) {
     const waiting = { ...workflow, enabled: true, paused: false, phase };
     assert.equal(mayContinueProject(waiting), false);

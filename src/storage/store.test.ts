@@ -211,7 +211,11 @@ test("AI review follow-up is batch/source bound, revises stable IDs, and archive
     const output = proposal(project);
     output.organization = [{ type: "upsert", epicID: "new:jobs", title: "Jobs", purpose: "Manage jobs", dependencies: [] }];
     output.requirements[0]!.epicID = "new:jobs"; output.questions[0]!.epicID = "new:jobs";
+    output.assessments = [{ epicID: "new:jobs", confidence: "medium", explanation: "Original saved findings", checks: [
+      { dimension: "data", importance: "important", status: "partial", evidenceIDs: [project.sources[0]!.id], explanation: "Job persistence needs review" },
+    ] }];
     project = complete(store, project, output);
+    const originalAssessments = structuredClone(project.assessments);
     const r = project.requirements[0]!;
     const enqueue = (note: string) => {
       const current = store.get(project.id).requirements[0]!;
@@ -241,6 +245,7 @@ test("AI review follow-up is batch/source bound, revises stable IDs, and archive
     project = store.get(project.id);
     assert.equal(project.epics.find((e) => e.id === r.epicID)!.archived, true);
     assert.equal(project.requirements[0]!.status, "rejected"); assert.equal(project.questions[0]!.status, "retired");
+    assert.deepEqual(project.assessments, originalAssessments, "Archival retains dated findings under the original feature ID");
     assert.equal(store.get(project.id, revision).requirements[0]!.statement, "Record jobs", "history retains original wording");
     assert.equal(store.getJob(job.id).result!.reviewResponses![0]!.sourceID, removal.appliedSourceID);
   } finally { store.close(); }

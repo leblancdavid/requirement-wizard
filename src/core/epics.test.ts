@@ -6,6 +6,13 @@ import { coverage } from "./coverage.js";
 import { dimensions } from "./epics.js";
 import { buildContext, ContextBudgetError } from "./context.js";
 import { applyRound } from "./round.js";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { renderWorkspace } from "../storage/workspace.js";
+import { decodePortable } from "../storage/portable.js";
+import { emptyExecution } from "./execution.js";
+import { definitionFollowThrough } from "./follow-through.js";
+import Database from "better-sqlite3";
 
 function fixture(store: ProjectStore) { return store.create("Jobs", "A single owner needs to track jobs on one computer.", { providerID: "openai", modelID: "fixture" }); }
 function round(store: ProjectStore, project: Project, extra: Record<string, unknown> = {}) {
@@ -18,6 +25,140 @@ function round(store: ProjectStore, project: Project, extra: Record<string, unkn
 }
 const epic = (id: string, title = "Jobs") => ({ type: "upsert", epicID: id, title, purpose: `Define ${title}`, dependencies: [] });
 const question = (epicID: string, localID = "new:q") => ({ localID, epicID, text: "Who uses this?", whyItMatters: "Permissions", options: [{ label: "Owner", consequence: "Single account" }, { label: "Team", consequence: "Shared access" }] });
+
+function organizationBaseline(store: ProjectStore) {
+  let p = fixture(store);
+  p = store.organize(p.id, p.revision, ["a", "b", "dependent", "unrelated"].map((id) => ({ type: "upsert", epicID: id,
+    title: id, purpose: `Define ${id}`, dependencies: id === "dependent" ? ["a"] : [] })));
+  p = round(store, p, { requirements: ["a", "b"].map((id) => ({ epicID: id, statement: `Save ${id} records`, rationale: "Explicit idea",
+    acceptance: [`A saved ${id} record survives restart`], sourceIDs: [p.sources[0]!.id] })) });
+  for (const requirement of p.requirements) p = store.review(p.id, p.revision, requirement.id, "accepted", "Keep saved records");
+  return round(store, p, { assessments: p.epics.filter((e) => e.id !== "inbox").map((e) => ({ epicID: e.id,
+    confidence: "medium", explanation: "Original full-area findings", checks: dimensions.map((dimension) => ({ dimension,
+      importance: "important", status: "defined", explanation: "Saved exact evidence", evidenceIDs: [p.sources[0]!.id] })) })) });
+}
+
+for (const operation of ["rename", "move", "merge", "split", "restore"] as const) {
+  test(`${operation} retains original definition reviews across organization changes, reopen and portable continuation`, () => {
+    const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+    const directory = mkdtempSync(join(root, "organization-preservation-")), path = join(directory, "projects.sqlite");
+    let store = new ProjectStore(path);
+    try {
+      let p = organizationBaseline(store);
+      const original = structuredClone(p), baseline = structuredClone(p.assessments);
+      assert.ok(coverage(p).epics.filter((e) => e.epicID !== "inbox").every((e) => !e.stale));
+      if (operation === "rename") p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "a", title: "Renamed A", purpose: "Define a", dependencies: [] }]);
+      if (operation === "move") p = store.organize(p.id, p.revision, [{ type: "move", recordID: p.requirements[0]!.id, epicID: "b" }]);
+      if (operation === "merge" || operation === "restore") {
+        p = store.organize(p.id, p.revision, [{ type: "merge", epicIDs: ["a", "b"], targetEpicID: "a", reason: "One workflow" }]);
+        assert.deepEqual(p.assessments, baseline, "Merge retains both original assessments under their original area IDs");
+        if (operation === "restore") p = store.restoreOrganization(p.id, p.revision, original.revision);
+      }
+      if (operation === "split") p = store.organize(p.id, p.revision, [
+        { type: "upsert", epicID: "x", title: "X", purpose: "First split area", dependencies: [] },
+        { type: "upsert", epicID: "y", title: "Y", purpose: "Second split area", dependencies: [] },
+        { type: "split", epicID: "a", destinations: [{ epicID: "x", recordIDs: [p.requirements[0]!.id] }, { epicID: "y", recordIDs: [] }], reason: "Separate scope" },
+      ]);
+      assert.deepEqual(p.assessments, baseline, "Organization never rewrites original evidence, dates or input keys");
+      const states = definitionFollowThrough(coverage(p).epics);
+      assert.equal(states.find((e) => e.epicID === "unrelated")!.state, "current");
+      assert.equal(states.find((e) => e.epicID === "dependent")!.state, operation === "restore" ? "current" : "outdated");
+      if (operation === "split") {
+        assert.ok(!states.some((e) => e.epicID === "a"), "Archived findings do not count in current coverage");
+        assert.equal(states.find((e) => e.epicID === "x")!.state, "not-assessed", "Do not copy old findings onto newly split areas");
+        assert.equal(states.find((e) => e.epicID === "y")!.state, "not-assessed");
+      } else assert.equal(states.find((e) => e.epicID === "a")!.state, operation === "restore" ? "current" : "outdated");
+      if (operation === "merge") assert.ok(!states.some((e) => e.epicID === "b"));
+      assert.deepEqual(p.requirements.map((r) => r.id), original.requirements.map((r) => r.id));
+      assert.deepEqual(p.sources, original.sources);
+      const decoded = decodePortable(renderWorkspace(p, emptyExecution()), p.model).project;
+      assert.deepEqual(decoded.assessments, baseline);
+      assert.deepEqual(definitionFollowThrough(coverage(decoded).epics), states);
+      const jobs = store.jobs(p.id);
+      for (let reopen = 0; reopen < 2; reopen++) {
+        store.close(); store = new ProjectStore(path);
+        assert.deepEqual(store.get(p.id), p);
+        assert.deepEqual(store.get(p.id, original.revision), original);
+        assert.deepEqual(store.jobs(p.id), jobs);
+      }
+    } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test("restoring an earlier organization does not undo later human decisions or make changed assessments current", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const original = organizationBaseline(store);
+    let p = store.organize(original.id, original.revision, [{ type: "merge", epicIDs: ["a", "b"], targetEpicID: "a", reason: "One workflow" }]);
+    p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", "Keep the user's encrypted original as well as the saved record");
+    const decisions = structuredClone(p.sources), requirements = structuredClone(p.requirements);
+    p = store.restoreOrganization(p.id, p.revision, original.revision);
+    assert.deepEqual(p.assessments, original.assessments);
+    assert.deepEqual(p.sources, decisions);
+    assert.deepEqual(p.requirements.map(({ epicID: _, ...r }) => r), requirements.map(({ epicID: _, ...r }) => r));
+    assert.equal(coverage(p).epics.find((e) => e.epicID === "a")!.stale, true);
+    assert.equal(coverage(p).epics.find((e) => e.epicID === "unrelated")!.stale, false);
+  } finally { store.close(); }
+});
+
+test("splitting into existing destinations retains their assessments without merging source findings", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const original = organizationBaseline(store);
+    const p = store.organize(original.id, original.revision, [{ type: "split", epicID: "a", destinations: [
+      { epicID: "b", recordIDs: [original.requirements[0]!.id] }, { epicID: "unrelated", recordIDs: [] },
+    ], reason: "Separate existing scopes" }]);
+    assert.deepEqual(p.assessments, original.assessments);
+    assert.equal(coverage(p).epics.find((e) => e.epicID === "b")!.stale, true);
+    assert.equal(coverage(p).epics.find((e) => e.epicID === "unrelated")!.stale, false, "An empty destination with unchanged evidence can reuse its own review");
+  } finally { store.close(); }
+});
+
+test("invalid or stale organization changes preserve saved assessments atomically", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = organizationBaseline(store), before = structuredClone(p);
+    assert.throws(() => store.organize(p.id, p.revision - 1, [{ type: "merge", epicIDs: ["a", "b"], targetEpicID: "a", reason: "Stale" }]), /Project changed/);
+    assert.throws(() => store.organize(p.id, p.revision, [
+      { type: "merge", epicIDs: ["a", "b"], targetEpicID: "a", reason: "First operation" },
+      { type: "upsert", epicID: "a", title: "a", purpose: "Invalid cycle", dependencies: ["dependent"] },
+    ]), /cycle/);
+    assert.deepEqual(store.get(p.id), before, "Even a later validation failure rolls back all organization/evidence changes");
+  } finally { store.close(); }
+});
+
+test("older saved organization assessments retain exact historical provenance through merge and restore", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "organization-legacy-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const original = organizationBaseline(store);
+    const saved = round(store, original);
+    for (const assessment of saved.assessments) delete assessment.inputBasis;
+    store.close();
+    const db = new Database(path);
+    try {
+      db.transaction(() => {
+        db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(saved), saved.id);
+        db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(saved), saved.id, saved.revision);
+      })();
+    } finally { db.close(); }
+    store = new ProjectStore(path);
+    const upgraded = store.get(saved.id);
+    assert.deepEqual(upgraded.assessments, original.assessments, "Only the matching original revision supplies old input identities");
+    let p = store.organize(upgraded.id, upgraded.revision, [{ type: "merge", epicIDs: ["a", "b"], targetEpicID: "a", reason: "One workflow" }]);
+    assert.deepEqual(p.assessments, original.assessments);
+    p = store.restoreOrganization(p.id, p.revision, original.revision);
+    assert.deepEqual(p.assessments, original.assessments);
+    assert.equal(coverage(p).epics.find((e) => e.epicID === "a")!.stale, false);
+    const jobs = store.jobs(p.id);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.get(p.id), p); assert.deepEqual(store.jobs(p.id), jobs);
+      assert.deepEqual(store.get(p.id, original.revision), original);
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("legacy project records gain project/inbox epics without losing IDs or sources", () => {
   const store = new ProjectStore(":memory:");
