@@ -35,7 +35,7 @@ export function AssessmentHistory({ project, actions, disabled }: { project: Pro
   return <details className="progress-stage"><summary>Recover missing saved assessments</summary>
     <section aria-label="Saved assessment recovery">
       <p>Older versions may have removed definition assessments. Preview a bounded window of local revision history, then explicitly restore a missing result to its original area. No AI calls, approvals or coding are started. Existing results are never replaced; dated findings do not automatically count as current.</p>
-      <p>Restoration adds a revision. Projects with saved implementation or planning evidence are protected until revision-based reuse can be preserved. Do not discard saved work to bypass this protection.</p>
+      <p>Restoration adds a revision without changing implementation inputs. Valid plans and code evidence remain reusable; already outdated work stays outdated. Original revisions, delivery evidence and spent attempts are retained. Active work and unresolved saved input must be paused or resolved first.</p>
       {areas.length ? <><label>Recovery area<select value={selectedArea} disabled={busy} onChange={(event) => { setEpicID(event.target.value); setPreview(null); setError(""); }}>{areas.map((e) => <option key={e.id} value={e.id}>{e.title}</option>)}</select></label>
         <button type="button" className="secondary" disabled={busy || disabled} onClick={() => void inspect()}>Preview saved assessment</button></> : <p>No active areas have missing assessments.</p>}
       {busy && <p role="status">Reading or restoring saved evidence…</p>}

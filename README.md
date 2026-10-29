@@ -37,6 +37,9 @@ saved-input and automatic-definition settings without changing their permissions
 In Implement, **Prepare implementation** groups code checks, plan review and setup;
 **Build and verify** keeps Start/Resume implementation and Verify delivery separate.
 Viewing preparation does not run checks, call the model or start coding.
+Missing definition assessments removed by older versions can be explicitly previewed
+and restored from Overall progress. Recovery-only revisions preserve valid implementation
+work without rewriting evidence or repeating model calls; already stale work stays stale.
 Unresolved definition behavior can now produce targeted questions; answers trigger
 affected rechecks using the same allowance.
 Partial assessment categories are not individual human input tasks. Definition reviews

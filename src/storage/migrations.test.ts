@@ -72,7 +72,7 @@ test("legacy execution migration preserves evidence, delivery, original payload 
   const f = fixture();
   try {
     const store = new ProjectStore(f.path), upgraded = store.execution(f.project.id);
-    assert.equal(upgraded.schemaVersion, 1); assert.equal(upgraded.version, f.state.version + 1);
+    assert.equal(upgraded.schemaVersion, 2); assert.equal(upgraded.version, f.state.version + 1);
     assert.equal(upgraded.workspaceAssessments![f.id]!.compatibility, assessmentCompatibility);
     assert.equal(upgraded.workspaceAssessments![f.id]!.legacyContextFingerprint, f.fingerprint);
     assert.equal(upgraded.workspaceAssessments![f.id]!.contextFingerprint, assessmentContextFingerprint(f.project, f.id));
@@ -131,7 +131,7 @@ test("failed migration rolls back backups, payloads and schema, then retries aft
     assert.deepEqual(db.prepare("SELECT payload FROM execution_state").all(), [{ payload: f.payload }]);
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'execution_migration_backups'").get(), undefined);
     db.prepare("DELETE FROM execution_leases").run(); db.close();
-    const store = new ProjectStore(f.path); assert.equal(store.execution(f.project.id).schemaVersion, 1); store.close();
+    const store = new ProjectStore(f.path); assert.equal(store.execution(f.project.id).schemaVersion, 2); store.close();
   } finally { rmSync(f.directory, { recursive: true, force: true }); }
 });
 

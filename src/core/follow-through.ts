@@ -6,6 +6,7 @@ import { planningConfigFingerprint, planningCurrent } from "./implementation-pla
 import type { SpecificationChangeSummary } from "./project-activity.js";
 import { workflowDecisions, type WorkflowDecision } from "./workflow.js";
 import { resolvedReviewAttempts } from "./review-attempts.js";
+import { implementationRevisionMatches } from "./implementation-revisions.js";
 
 type DefinitionArea = ReturnType<typeof coverage>["epics"][number];
 
@@ -36,7 +37,7 @@ export function artifactFollowThrough(project: Project, execution: ExecutionStat
   const plan = execution.planning;
   if (plan && plan.status !== "dismissed") {
     const current = planningCurrent(project, execution, bindingID);
-    const reasons = [plan.revision !== project.revision ? "The specification revision changed since this plan." : undefined,
+    const reasons = [!implementationRevisionMatches(project, execution, plan.revision) ? "The specification revision changed since this plan." : undefined,
       plan.bindingID !== bindingID ? "The connected workspace no longer matches this plan." : undefined,
       plan.configFingerprint !== planningConfigFingerprint(execution) ? "Implementation settings no longer match this plan." : undefined].filter(Boolean);
     const state = !current ? "outdated" : plan.status === "approved" ? "current" : plan.status === "proposed" ? "needs-review" : "unfinished";

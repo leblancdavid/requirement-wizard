@@ -17,6 +17,7 @@ import { assessmentCompatibility } from "../core/assessment-identity.js";
 import { planningConfigFingerprint, planningCurrent, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanning } from "../core/implementation-planning.js";
 import { implementationPlanningContext, PlanningContextOverflow } from "./planning-context.js";
 import { runImplementationStages, PlanningBudgetPause } from "./planning-stages.js";
+import { implementationRevisionMatches } from "../core/implementation-revisions.js";
 
 const codeResult = z.object({ outcome: z.enum(["complete", "blocked"]), summary: z.string().min(1).max(12000) }).strict();
 type Scope = { requirementID?: string; epicID?: string };
@@ -390,7 +391,7 @@ export class ImplementationService {
           scope, requirementIDs: selected.map((p) => p.requirement.id), units: [], status: "running", progress: [], createdAt: new Date().toISOString() };
       } else {
         if (scope.requirementID && state.run.scope.requirementID !== scope.requirementID || scope.epicID && state.run.scope.epicID !== scope.epicID) throw new Error("Continue or archive the saved run before starting a different scope.");
-        if (state.run.revision !== revision || state.run.bindingID !== binding.bindingID) throw new Error("Saved run is stale. Archive it before replanning; existing branches and sessions are retained.");
+        if (!implementationRevisionMatches(project, state, state.run.revision) || state.run.bindingID !== binding.bindingID) throw new Error("Saved run is stale. Archive it before replanning; existing branches and sessions are retained.");
       }
       const run = state.run; run.status = "running"; run.diagnostic = undefined; save();
       for (const requirementID of run.requirementIDs) {

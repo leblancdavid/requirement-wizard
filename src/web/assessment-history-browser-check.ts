@@ -7,6 +7,9 @@ import { dimensions } from "../core/epics.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
 import { workspaceMenu } from "./menu-check-helpers.js";
+import { executionConfigSchema, assessmentCurrent } from "../core/execution.js";
+import { planningConfigFingerprint, planningCurrent } from "../core/implementation-planning.js";
+import { requirementFingerprint } from "../core/implementation.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -16,14 +19,24 @@ let store = new ProjectStore(path);
 let p = store.create("Historical recovery fixture", "Preserve original decisions", { providerID: "openai", modelID: "fixture" });
 p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "saved", title: "Saved area", purpose: "Original evidence", dependencies: [] }]);
 const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
-store.finishJob(job.id, { summary: "Original", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
+store.finishJob(job.id, { summary: "Original", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [],
+  requirements: [{ statement: "Preserve saved work", rationale: "Original intent", acceptance: ["Saved work remains available"], epicID: "saved", sourceIDs: [p.sources[0]!.id] }],
   assessments: p.epics.map((area) => ({ epicID: area.id, confidence: "high", explanation: "Original evidence", checks: dimensions.map((dimension) => ({ dimension, status: "defined", importance: "important", explanation: "Saved", evidenceIDs: [p.sources[0]!.id] })) })) });
-p = store.get(p.id); const original = structuredClone(p.assessments.find((a) => a.epicID === "saved")!);
+p = store.get(p.id); p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", "");
+const original = structuredClone(p.assessments.find((a) => a.epicID === "saved")!);
 p.revision++; p.assessments = p.assessments.filter((a) => a.epicID !== "saved"); store.close();
 const db = new Database(path);
 db.prepare("UPDATE projects SET revision = ?, payload = ? WHERE id = ?").run(p.revision, JSON.stringify(p), p.id);
 db.prepare("INSERT INTO revisions VALUES (?, ?, ?, ?)").run(p.id, p.revision, "Historical loss fixture", JSON.stringify(p)); db.close();
 store = new ProjectStore(path);
+const workspace = join(directory, "workspace"); await mkdir(workspace);
+store.connectWorkspace(p.id, p.revision, workspace);
+const execution = store.execution(p.id), target = p.requirements[0]!;
+execution.config = executionConfigSchema.parse({ repository: "fixture/repo", strategy: "main", providerID: "openai", modelID: "fixture", checks: ["fixture-check"] });
+execution.planning = { format: 1, id: "saved-approved-plan", revision: p.revision, bindingID: store.workspace(p.id)!.bindingID!, status: "approved", createdAt: "2026-10-29", approvedAt: "2026-10-29", model: p.model, configFingerprint: planningConfigFingerprint(execution),
+  output: { summary: "Original approved plan", packages: [{ requirementID: target.id, title: "Retain saved work", reason: "Original", steps: ["Build"], verification: ["Check"], questions: [], prerequisites: [] }] } };
+execution.assessments[target.id] = { status: "complete", fingerprint: requirementFingerprint(target), specificationRevision: p.revision, head: "original-head", capturedAt: "2026-10-29", scope: "workspace", files: [], omissions: 0, verified: false, explanation: "Original legacy code findings", evidenceIDs: [], scenarios: [] };
+store.saveExecution(p.id, execution); const savedExecution = structuredClone(store.execution(p.id));
 let calls = 0;
 const app = await startApp({ store, port: 0, catalog: new OpenCodeCatalog("unused", async () => ({ connected: ["openai"], all: [{ id: "openai", name: "OpenAI", models: { fixture: { name: "Fixture" } } }] })),
   adapter: { async analyze() { calls++; assert.fail("Recovery must never infer"); } } });
@@ -56,10 +69,26 @@ try {
   await restore.click();
   await expect.poll(() => store.get(p.id).revision).toBe(p.revision + 1);
   assert.deepEqual(store.get(p.id).assessments.find((a) => a.epicID === "saved"), original);
+  assert.deepEqual(store.execution(p.id).planning, savedExecution.planning);
+  assert.deepEqual(store.execution(p.id).assessments, savedExecution.assessments);
+  assert.equal(planningCurrent(store.get(p.id), store.execution(p.id), store.workspace(p.id)!.bindingID), true);
+  assert.equal(assessmentCurrent(store.get(p.id), store.execution(p.id), target.id), true);
   await expect(recovery).toContainText("No active areas have missing assessments");
+  await dialog.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Implement/ }).click();
+  const planning = page.getByRole("region", { name: "Implementation planning", exact: true });
+  await expect(planning).toContainText("Original approved plan");
+  await expect(planning).toContainText(`Specification r${savedExecution.planning!.revision}`);
+  await expect(planning).not.toContainText("Decisions, workspace or settings changed");
+  await expect(page.locator(".implementation-tab .view-intro").filter({ hasText: /^Code assessment:/ })).toContainText("1 complete");
   await page.reload(); await page.getByRole("button", { name: /Overall progress/ }).click();
   await dialog.getByText("Recover missing saved assessments", { exact: true }).click();
   await expect(recovery).toContainText("No active areas have missing assessments");
+  await dialog.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.getByRole("tab", { name: /^Implement/ }).click();
+  await expect(planning).not.toContainText("Decisions, workspace or settings changed");
+  await expect(page.locator(".implementation-tab .view-intro").filter({ hasText: /^Code assessment:/ })).toContainText("1 complete");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   assert.equal(calls, 0);
-  console.log("Historical assessment recovery browser passed: no automatic history reads, explicit preview/restore, workflow blocker, preserved original findings, reload and mobile; zero inference.");
+  console.log("Historical assessment recovery browser passed: explicit preview/restore, workflow blocker, original findings, approved-plan and legacy-code reuse across recovery/reload, mobile and zero inference.");
 } finally { await browser.close(); await app.close(); store.close(); await rm(directory, { recursive: true, force: true }); }

@@ -9,7 +9,7 @@ import { dimensions } from "../core/epics.js";
 import { coverage } from "../core/coverage.js";
 import { assessmentHistoryLimits } from "../core/assessment-history.js";
 import { executionConfigSchema } from "../core/execution.js";
-import { planningConfigFingerprint } from "../core/implementation-planning.js";
+import { planningConfigFingerprint, planningCurrent } from "../core/implementation-planning.js";
 import { startApp } from "../web/server.js";
 import { renderWorkspace } from "./workspace.js";
 import { decodePortable } from "./portable.js";
@@ -124,7 +124,7 @@ test("recovery rollback preserves old data and permits an explicit retry after a
   } finally { f.cleanup(); }
 });
 
-test("authorized workflows and revision-bound implementation evidence block restoration without altering their state", () => {
+test("authorized workflows block restoration; once paused, revision-bound planning survives recovery", () => {
   const f = fixture();
   try {
     const preview = f.store.previewAssessmentRecovery(f.id, "a"), before = f.store.get(f.id), select = { epicID: "a", ...preview.candidate! };
@@ -137,9 +137,11 @@ test("authorized workflows and revision-bound implementation evidence block rest
     const execution = f.store.execution(f.id); execution.config = executionConfigSchema.parse({ repository: "fixture/repo", providerID: "openai", modelID: "fixture", strategy: "main", checks: ["npm test"] });
     execution.planning = { format: 1, id: "valid-plan", revision: before.revision, bindingID: "binding", createdAt: "2026-10-29", status: "approved", model: before.model, configFingerprint: planningConfigFingerprint(execution) };
     f.store.saveExecution(f.id, execution); const protectedState = structuredClone(f.store.execution(f.id));
-    assert.match(f.store.previewAssessmentRecovery(f.id, "a").blocker!, /Do not discard that work/);
-    assert.throws(() => f.store.restoreAssessmentHistory(f.id, before.revision, select), /revision-based reuse/);
-    assert.deepEqual(f.store.execution(f.id), protectedState); assert.deepEqual(f.store.get(f.id), before);
+    assert.equal(f.store.previewAssessmentRecovery(f.id, "a").blocker, null);
+    const restored = f.store.restoreAssessmentHistory(f.id, before.revision, select), after = f.store.execution(f.id);
+    assert.deepEqual(after.planning, protectedState.planning);
+    assert.equal(planningCurrent(restored, after, "binding"), true);
+    assert.equal(after.version, protectedState.version + 1);
   } finally { f.cleanup(); }
 });
 
@@ -204,7 +206,10 @@ test("configuration alone does not require discarding setup or repeating a model
     f.store.saveExecution(f.id, state); const saved = structuredClone(f.store.execution(f.id));
     const preview = f.store.previewAssessmentRecovery(f.id, "a"); assert.equal(preview.blocker, null);
     f.store.restoreAssessmentHistory(f.id, preview.revision, { epicID: "a", ...preview.candidate! });
-    assert.deepEqual(f.store.execution(f.id), saved);
+    const after = f.store.execution(f.id);
+    assert.deepEqual(after.config, saved.config);
+    assert.deepEqual(after.assessments, saved.assessments);
+    assert.equal(after.version, saved.version + 1);
   } finally { f.cleanup(); }
 });
 

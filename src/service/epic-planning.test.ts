@@ -163,7 +163,7 @@ test("schema-7 probe-pool index upgrade is transactional and legacy CPU receipts
     store.close();
     let db = new Database(path);
     const before = db.prepare("SELECT * FROM epic_planning_receipts").all(), contextsBefore = db.prepare("SELECT * FROM epic_planning_contexts").all();
-    db.exec(`DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version = 8; PRAGMA user_version = 7;
+    db.exec(`DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version >= 8; PRAGMA user_version = 7;
       CREATE TRIGGER fail_probe_upgrade BEFORE INSERT ON migration_history WHEN new.version = 8
       BEGIN SELECT RAISE(ABORT, 'Interrupted probe index upgrade'); END;`);
     db.close();
@@ -454,7 +454,7 @@ test("v3 planning-cache migration is additive, rolls back on failure, retries an
     const originals = db.prepare("SELECT * FROM revisions").all(), jobs = db.prepare("SELECT * FROM jobs").all();
     // Existing execution validation deliberately fails AFTER the table migration.
     db.prepare("INSERT INTO execution_state VALUES (?, 0, ?)").run(p.id, JSON.stringify({ schemaVersion: 999, version: 0, assessments: {}, delivered: {}, history: [] }));
-    db.close(); assert.throws(() => new ProjectStore(path), /Unsupported execution/);
+    db.close(); assert.throws(() => new ProjectStore(path), /Unsupported (?:future )?execution/);
     db = new Database(path);
     assert.equal(db.pragma("user_version", { simple: true }), 3);
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'epic_planning_receipts'").get(), undefined);
@@ -554,7 +554,7 @@ test("schema-4 upgrade preserves existing root receipts; bounded intermediate ca
     db.exec("DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DELETE FROM migration_history WHERE version >= 5; PRAGMA user_version = 4;");
     const originals = db.prepare("SELECT * FROM epic_planning_receipts").all();
     db.prepare("INSERT INTO execution_state VALUES (?, 0, ?)").run(p.id, JSON.stringify({ schemaVersion: 999, version: 0, assessments: {}, delivered: {}, history: [] }));
-    db.close(); assert.throws(() => new ProjectStore(path), /Unsupported execution/);
+    db.close(); assert.throws(() => new ProjectStore(path), /Unsupported (?:future )?execution/);
     db = new Database(path);
     assert.equal(db.pragma("user_version", { simple: true }), 4);
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'epic_planning_contexts'").get(), undefined);

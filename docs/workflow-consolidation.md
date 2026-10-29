@@ -7,6 +7,25 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Protected-project recovery enabled:** explicit missing-definition recovery now
+  records an exact recovery-only revision certificate alongside execution state.
+  Otherwise-current plans, legacy code findings and paused-run revision matching retain
+  reuse without rebasing original evidence or resetting spent calls. Already stale work
+  stays stale; any ordinary revision ends the recovery interval. Existing worker, lease,
+  input and permission gates remain. SQLite 8→9/execution 1→2 migration is transactional,
+  backed up and does not manufacture certificates or request reassessment. Portable v1
+  execution upgrades forward; v2 retains certificates while sessions stay machine-local.
+  See [migration details](migrations.md#implementation-reuse-across-assessment-recovery-2026-10-29).
+- Recovery-reuse checks: type check, all 1,054 tests (368 pretests + 686 main), UI
+  build, the seven-runner default browser aggregate and diff check passed. Upgrade
+  fixtures verify backups, rollback/retry, repeated startup and live/expired leases;
+  recovery fixtures verify no rebasing, no repeated completed planning reads/packages,
+  unchanged spent attempts, stale-work retention, explicit paused-run continuation,
+  portable adoption and real-edit invalidation. Browser recovery preserves approved-plan
+  and legacy-code reuse after reload/mobile. Existing bundle warning remains; no live
+  inference, personal-project writes or desktop packaging were performed. Broader live
+  coding/in-flight/GitHub qualification is unchanged.
+
 - **Consolidated browser path qualified:** the default `npm run test:browser` now
   passes its layout, model selection, main workflow, portable continuation,
   Specification, review-draft and historical-recovery runners. Removed Project map,
@@ -31,8 +50,8 @@ and [implementation workspace](implementation-workspace.md).
   model calls, worker resumes or new permissions occur. Curated older SQLite fixtures
   cover reopen, immutable history, legacy/missing provenance, stale selection, limits,
   rollback/retry and safety gates; focused browser recovery passes including mobile.
-  Projects with saved implementation/planning evidence remain protected until preserving
-  revision-bound reuse is qualified; do not discard their work to bypass the blocker.
+  That initial slice blocked saved implementation/planning projects; the recovery-only
+  certificate slice above now replaces that blanket blocker without discarding work.
   See [recovery guide](assessment-history-recovery.md). Unified consent, operation-wide
   receipts and incremental rechecks remain separate unfinished work.
 - Recovery checks: type check, all 1,044 tests (358 pretests + 686 main), UI build,
@@ -113,9 +132,8 @@ and [implementation workspace](implementation-workspace.md).
   Reliability initially stopped at an obsolete raw-alert diagnostic assertion; after
   verifying the plain alert plus original Logs detail, its controlled-response and
   keyboard/touch checks passed. The aggregate runner still hits Project map at line 707.
-- **Next:** qualify preservation of revision-bound implementation reuse before allowing
-  historical recovery in protected projects; separately version any unified consent
-  policy before introducing it. Incremental rechecks, broader operation-wide receipts and
+- **Next:** separately version any unified processing-consent policy before introducing
+  it. Incremental rechecks, broader operation-wide receipts and
   code/delivery impact summaries remain future work; the presentation consolidation
   is not a new shared persisted queue, permission grant or live coding qualification.
 

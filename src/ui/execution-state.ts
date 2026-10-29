@@ -7,7 +7,7 @@ export function executionEvaluation(state: ExecutionState, previous: ExecutionEv
   return shareSnapshot(previous, {
     config: state.config, assessments: state.assessments, workspaceAssessments: state.workspaceAssessments,
     mainAssessments: state.mainAssessments, delivered: state.delivered, assessmentRequests: state.assessmentRequests,
-    run: state.run, history: state.history,
+    run: state.run, history: state.history, recoveryRevision: state.recoveryRevision,
     assessmentRuns: state.assessmentRuns?.map(({ operation, capture, head, impacts }) => ({ operation, capture, head, impacts })),
   });
 }

@@ -15,7 +15,8 @@ See [qualification details](workspace-navigation.md#default-aggregate-qualified-
 Missing definition reviews from older versions can be previewed and explicitly
 restored under **Overall progress → Recover missing saved assessments**. Opening the
 controls makes no history request or model call. Existing results are never replaced;
-projects with saved implementation evidence are protected from revision invalidation.
+recovery-only revisions preserve valid saved implementation work without rewriting
+original plans, code findings or delivery evidence. Already outdated work stays outdated.
 See [recovery guidance and current limits](assessment-history-recovery.md).
 
 ## Prepare implementation, then build explicitly (2026-10-29)

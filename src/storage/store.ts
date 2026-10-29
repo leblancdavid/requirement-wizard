@@ -15,6 +15,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { z } from "zod";
 import { emptyExecution, type ExecutionState } from "../core/execution.js";
 import { executionSchemaVersion } from "../core/assessment-identity.js";
+import { extendRecoveryRevision, recoveryRevisionSchema } from "../core/implementation-revisions.js";
 import { databaseSchemaVersion, migrateDatabase } from "./migrations.js";
 import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, migrateWorkspaceDirectory, readPortableWorkspace, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace } from "./workspace.js";
 import { continuationState, decodePortable, portableDigest } from "./portable.js";
@@ -224,11 +225,13 @@ export class ProjectStore {
     const row = this.db.prepare("SELECT payload FROM execution_state WHERE project_id = ?").get(id) as { payload: string } | undefined;
     const state = row ? JSON.parse(row.payload) as ExecutionState : emptyExecution();
     assertImplementationPlanningFormats(state);
+    if (state.recoveryRevision !== undefined) recoveryRevisionSchema.parse(state.recoveryRevision);
     return state;
   }
 
   saveExecution(id: string, state: ExecutionState, owner?: string, expected?: { revision: number; bindingID?: string }) {
     assertImplementationPlanningFormats(state);
+    if (state.recoveryRevision !== undefined) recoveryRevisionSchema.parse(state.recoveryRevision);
     if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution data format. Refresh before saving.");
     this.db.transaction(() => {
       if (expected && this.get(id).revision !== expected.revision) throw new StaleRevisionError();
@@ -829,12 +832,7 @@ export class ProjectStore {
     if (maintenance.enabled && !maintenance.paused) return "Pause automatic definition updates before restoring. Recovery never enables or resumes maintenance.";
     const project = this.get(id), submissions = this.submissions(id), resolved = resolvedReviewAttempts(project, submissions);
     if (submissions.some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status))) return "Process or resolve unfinished saved input before restoring assessment history. Do not resubmit the same answers.";
-    const execution = this.execution(id);
-    if (execution.planning || execution.planningHistory?.length || execution.run || execution.history.length || execution.assessmentRuns?.length
-      || execution.assessmentStatus || execution.deliveryHistory?.length
-      || [execution.assessments, execution.workspaceAssessments, execution.mainAssessments, execution.delivered, execution.assessmentRequests].some((records) => records && Object.keys(records).length)) {
-      return "This project has saved implementation or planning work. Recovery is blocked until preserving its revision-based reuse is qualified. Do not discard that work or repeat model calls to clear this gate.";
-    }
+    this.execution(id); // Reject unsupported saved evidence/certificate formats before offering apply.
     return null;
   }
 
@@ -847,9 +845,15 @@ export class ProjectStore {
     return this.mutate(id, revision, `Human restored saved definition assessment from revision ${selection.sourceRevision}`, (project) => {
       const blocker = this.assessmentRecoveryBlocker(id);
       if (blocker) throw new OperationConflictError(blocker);
+      const before = structuredClone(project);
       const { assessment, candidate } = selectedHistoricalAssessment(this.db, project, selection);
       project.assessments.push(assessment);
       project.roundChanges = [`Restored original definition findings for ${selection.epicID} from saved revision ${selection.sourceRevision}. Original assessment revision: ${assessment.atRevision}. ${candidate.freshness === "current" ? "Original evidence matches current inputs; findings can still contain gaps." : "Dated findings remain outdated and need a current review."} No AI calls, approvals or coding were started.`];
+      const execution = this.execution(id);
+      execution.recoveryRevision = extendRecoveryRevision(before, { ...project, revision: project.revision + 1 }, execution.recoveryRevision);
+      // Nested savepoint and outer revision publication commit/rollback together.
+      // Original plan/run revisions, evidence and attempts are never rebased.
+      this.saveExecution(id, execution, undefined, { revision });
     });
   }
 

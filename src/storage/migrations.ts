@@ -6,8 +6,9 @@ import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
 import { workflowSchema, workflowReadinessSchema } from "../core/workflow.js";
 import { implementationPlanningWorkSchema } from "../core/implementation-planning.js";
+import { recoveryRevisionSchema } from "../core/implementation-revisions.js";
 
-export const databaseSchemaVersion = 8;
+export const databaseSchemaVersion = 9;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -18,6 +19,7 @@ const savedAssessment = savedIdentity.extend({ contextPolicy: z.string().optiona
   semanticOrigin: z.object({ scope: z.enum(["workspace", "main"]), head: z.string(), capturedAt: z.string() }).strict().optional(),
   skill: z.object({ name: z.string(), version: z.string() }).passthrough().optional() });
 const executionEnvelope = z.object({ schemaVersion: z.number().int().nonnegative().optional(), version: z.number().int().nonnegative(),
+  recoveryRevision: recoveryRevisionSchema.optional(),
   planning: z.object({ format: z.literal(1), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough().optional(), planningHistory: z.array(z.object({ format: z.literal(1), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough()).optional(),
   assessments: z.record(savedAssessment), workspaceAssessments: z.record(savedAssessment).optional(), mainAssessments: z.record(savedAssessment).optional(),
   delivered: z.record(savedIdentity), deliveryHistory: z.array(savedIdentity).optional(), history: z.array(z.unknown()) }).passthrough();
@@ -39,6 +41,7 @@ function upgradeIdentity(record: z.infer<typeof savedIdentity>) {
 export function upgradeExecutionPayload(raw: unknown): ExecutionState {
   const state = executionEnvelope.parse(raw);
   if ((state.schemaVersion ?? 0) > executionSchemaVersion) throw new Error("Unsupported future execution data format. Upgrade the app; saved data was not overwritten.");
+  if (state.recoveryRevision && state.schemaVersion !== 2) throw new Error("Recovery revision certificates require execution format 2. Saved evidence was not overwritten.");
   if ((state.schemaVersion ?? 0) === 0) {
     for (const records of [state.assessments, state.workspaceAssessments, state.mainAssessments]) for (const assessment of Object.values(records ?? {})) {
       const upgraded = upgradeIdentity(assessment);
@@ -49,6 +52,9 @@ export function upgradeExecutionPayload(raw: unknown): ExecutionState {
     for (const delivery of [...Object.values(state.delivered), ...state.deliveryHistory ?? []]) upgradeIdentity(delivery);
     state.schemaVersion = 1;
   }
+  // v2 adds an optional, strictly versioned recovery-only revision certificate.
+  // Old rows receive no certificate or manufactured equivalence.
+  if (state.schemaVersion === 1) state.schemaVersion = 2;
   return state as ExecutionState;
 }
 
@@ -107,6 +113,21 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   db.exec(`CREATE INDEX IF NOT EXISTS epic_planning_context_pool ON epic_planning_contexts
     (project_id, (json_extract(payload, '$.outcome') = 'context'), format,
      json_extract(payload, '$.format'), json_extract(payload, '$.outcome'), json_extract(payload, '$.kind'));`);
+} }, { version: 9, name: "implementation-recovery-revisions-v1", apply(db: Database.Database) {
+  const rows = db.prepare("SELECT project_id, version, payload FROM execution_state").all() as { project_id: string; version: number; payload: string }[];
+  const upgrades = rows.map((row) => {
+    const state = upgradeExecutionPayload(JSON.parse(row.payload));
+    if (state.version !== row.version) throw new Error("Execution revision mismatch; recovery migration stopped without replacing saved data.");
+    return { row, state };
+  }).filter(({ row }) => JSON.parse(row.payload).schemaVersion !== executionSchemaVersion);
+  if (db.prepare("SELECT 1 FROM execution_leases WHERE lease_until > ?").get(Date.now()))
+    throw new Error("Stop active implementation workers before upgrading project data, then reopen the app.");
+  for (const { row, state } of upgrades) {
+    db.prepare("INSERT INTO execution_migration_backups VALUES (?, ?, ?, ?, ?)").run(row.project_id, 9, row.version, row.payload, new Date().toISOString());
+    state.version++;
+    db.prepare("UPDATE execution_state SET version = ?, payload = ? WHERE project_id = ?").run(state.version, JSON.stringify(state), row.project_id);
+    db.prepare("UPDATE workspaces SET dirty = 1 WHERE project_id = ?").run(row.project_id);
+  }
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

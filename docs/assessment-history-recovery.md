@@ -18,16 +18,45 @@ unchanged. A legacy evidence key can be derived only from an available matching 
 snapshot, never from today's inputs. Missing provenance stays unkeyed and outdated.
 Matching inputs permit reuse, not a claim that the findings have no gaps.
 
+## Preserve implementation reuse (2026-10-29)
+
+Recovery is now available in idle projects with saved implementation/planning evidence.
+It preserves work that was valid immediately before recovery without changing original
+plan/run revisions, approvals, code findings, dates, sessions, delivery evidence or spent
+request attempts. Already outdated work stays outdated. Restoring an assessment does
+not prepare/approve a plan, repeat a model call, resume a worker or verify new delivery.
+
+An app-owned, versioned `execution.recoveryRevision` certificate records a contiguous
+interval of recovery-only writes and the exact unchanged project inputs. Only the
+definition-assessment array, revision, restoration receipt prose and local discovery
+model/account routing are excluded from its digest. The restoration operation separately
+checks that it did not change model routing. Workspace, implementation settings/model,
+requirement, evidence, code-footprint and manual-reassessment gates still apply.
+
+This is not general semantic equivalence. Any ordinary project revision ends the
+interval, even if it appears to be bookkeeping. Another restoration starts a new interval
+and cannot bridge earlier edits. The certificate only supports plan reuse, the saved-run
+revision gate, and the legacy code-assessment revision fallback. It does not weaken any
+request's expected-current-revision check or certify older losses retroactively.
+
+Upgrades convert execution payloads **v1 → v2** under SQLite migration **8 → 9**, backing
+up source payloads transactionally and preserving existing semantic identities. Upgrade
+alone issues no certificate and runs no model. Older portable execution v1 checkpoints
+remain accepted and upgrade without inference; new v2 checkpoints retain certificates.
+Local coding sessions remain machine-local, and portable runs retain their existing
+explicit adoption/continuation restrictions. See the
+[upgrade ledger](migrations.md#implementation-reuse-across-assessment-recovery-2026-10-29).
+
 ## Safety gates and limits
 
 - Pending/running non-help jobs, active workflow/execution workers, expired execution
   leases, unresolved saved input, and enabled unpaused workflow/maintenance block apply.
   Recovery does not stop workers, release leases, process answers, change permissions,
   grant allowance or repeat inference. Use the existing controls to resolve active work.
-- **Projects with saved implementation/planning evidence remain blocked.** Adding a
-  revision can invalidate revision-bound reuse. Preserving that reuse is not yet
-  qualified. Do not discard plans, runs or assessments, or repeat model calls to bypass
-  the protection. Configuration alone does not block restoration.
+- Saved plans, runs, code findings and delivery evidence no longer block recovery merely
+  by existing. Their original evidence is retained; outdated work is not refreshed.
+  Do not discard work or repeat model calls just to restore a missing definition result.
+  Live/expired execution leases and other active-work gates above still block apply.
 - Each explicit page considers at most 25 revisions within 32 MiB of snapshot payloads;
   candidates are limited to 2 MiB. Legacy provenance may additionally read one original
   snapshot capped at 32 MiB. Limits are byte bounds, not silent truncation.
@@ -38,5 +67,5 @@ Matching inputs permit reuse, not a claim that the findings have no gaps.
   requires another preview. A failed transaction preserves data and supports explicit
   retry; no background startup rewrite is performed.
 
-Source and target assessment formats are unchanged. See the
+Source and target definition-assessment formats are unchanged. See the historical
 [migration ledger](migrations.md#explicit-missing-assessment-history-recovery-2026-10-29).

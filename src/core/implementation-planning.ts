@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Project } from "./model.js";
 import { eligibleRequirements, executionConfigSchema, implementationPlan, type ExecutionState } from "./execution.js";
 import { canonicalJSON } from "./assessment-identity.js";
+import { implementationRevisionMatches } from "./implementation-revisions.js";
 
 const text = z.string().trim().min(1).max(2000);
 export const implementationPlanningSchema = z.object({
@@ -57,7 +58,7 @@ export function planningConfigFingerprint(state: ExecutionState) {
 }
 export function planningCurrent(project: Project, state: ExecutionState, bindingID?: string) {
   const plan = state.planning;
-  return !!plan && plan.revision === project.revision && plan.bindingID === bindingID && plan.configFingerprint === planningConfigFingerprint(state);
+  return !!plan && implementationRevisionMatches(project, state, plan.revision) && plan.bindingID === bindingID && plan.configFingerprint === planningConfigFingerprint(state);
 }
 export function validateImplementationPlanning(raw: unknown, project: Project, allowedEvidenceIDs: string[], targetIDs = eligibleRequirements(project).map((r) => r.id)) {
   const output = implementationPlanningSchema.parse(raw), ids = new Set(eligibleRequirements(project).map((r) => r.id));

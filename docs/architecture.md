@@ -6,6 +6,15 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/core/implementation-revisions.ts` defines a strict, execution-side recovery-only
+  revision certificate. Explicit definition-history restoration publishes it atomically
+  with the project revision. Plan reuse, frozen-run continuation and legacy code-review
+  revision fallback recognize only its current, exact-input contiguous interval; normal
+  concurrency checks remain exact. Ordinary revisions end the interval. Original saved
+  evidence is never rebased. SQLite migration 9 upgrades execution schema 1→2 with
+  transactional backups; portable readers accept v1 and retain v2 certificates without
+  exporting local coding sessions. See [compatibility](migrations.md#implementation-reuse-across-assessment-recovery-2026-10-29).
+
 - `src/ui/implementation.tsx` separates the Prepare implementation group (existing
   check/planning/review/settings operations) from Build and verify (explicit coding/
   delivery). No composite worker, new permission, changed freshness gate or migration

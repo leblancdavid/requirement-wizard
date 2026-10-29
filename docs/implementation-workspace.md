@@ -8,6 +8,24 @@ assessment and real GitHub delivery/installer integration remain unqualified.
 
 ## Browser workflow
 
+### Recovery-only revisions preserve valid work (2026-10-29)
+
+Explicit recovery of missing definition assessments no longer requires discarding
+saved implementation work. A versioned execution-side certificate recognizes only
+contiguous recovery-only project revisions. Otherwise-valid plans and legacy code
+assessments remain reusable; a paused run retains its original revision, frozen scope,
+sessions and delivery evidence for explicit continuation. Actual decision changes,
+workspace/settings/model changes, code impact and manual reassessment still use their
+existing gates. Already stale work is never upgraded to current by recovery.
+
+Original records are not rebased, and recovery starts no commands, model calls or
+workers. SQLite/execution format upgrades preserve completed work and attempts, with
+transactional source backups and strict future-format rejection. Portable checkpoints
+keep the certificate but not local coding sessions. This is deterministic recovery
+qualification, not new live coding or in-flight session qualification. See
+[recovery controls](assessment-history-recovery.md) and
+[migration contract](migrations.md#implementation-reuse-across-assessment-recovery-2026-10-29).
+
 ### Preparation versus building (2026-10-29)
 
 **Prepare implementation** groups existing code checks, plan preparation/review and

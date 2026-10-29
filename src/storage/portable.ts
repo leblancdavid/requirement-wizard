@@ -13,6 +13,8 @@ import { submissionWorkSchema } from "../core/submission-stages.js";
 import { refinementStageSchema, refinementWorkSchema } from "../core/refinement-stages.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionInterruptionSchema } from "../core/definition-interruption.js";
+import { recoveryRevisionSchema, recoveryRevisionCurrent } from "../core/implementation-revisions.js";
+import { upgradeExecutionPayload } from "./migrations.js";
 
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 export const portableDigest = (value: unknown) => createHash("sha256").update(canonicalJSON(value)).digest("hex");
@@ -151,6 +153,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
 export function portableExecution(state: ExecutionState): ExecutionState {
   if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution format; portable publication was not performed.");
   const output = emptyExecution();
+  if (state.recoveryRevision !== undefined) output.recoveryRevision = recoveryRevisionSchema.parse(state.recoveryRevision);
   output.config = state.config;
   output.assessments = state.assessments;
   output.workspaceAssessments = state.workspaceAssessments;
@@ -211,7 +214,8 @@ const codingRunSchema = z.object({ id: z.string(), revision: z.number().int().po
       commit: z.string().optional(), tree: z.string().optional(), checks: z.array(check) }).strict()),
   }).strict()),
 }).strict();
-const executionSchema = z.object({ schemaVersion: z.literal(executionSchemaVersion), version: z.literal(0), config: executionConfigSchema.optional(),
+const executionSchema = z.object({ schemaVersion: z.union([z.literal(1), z.literal(executionSchemaVersion)]), version: z.literal(0), config: executionConfigSchema.optional(),
+  recoveryRevision: recoveryRevisionSchema.optional(),
   assessments: z.record(assessment), workspaceAssessments: z.record(assessment).optional(), mainAssessments: z.record(assessment).optional(),
   delivered: z.record(delivery), deliveryHistory: z.array(delivery.extend({ requirementID: z.string() })).optional(), history: z.array(codingRunSchema), run: codingRunSchema.optional(),
   assessmentRequests: z.record(z.object({ token: z.string(), reason: z.string(), at: z.string() }).strict()).optional(),
@@ -290,7 +294,10 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     sources: records(evidence.sources), research: records(evidence.research), scans: records(evidence.scans) });
   for (const feature of featureData) for (const record of [...feature.requirements, ...feature.questions]) if ((record as { epicID?: string }).epicID !== feature.feature.id) throw new Error("Portable record is stored under a different feature.");
   validatePortableReferences(project);
-  const execution = z.object({ formatVersion: z.literal(1), execution: executionSchema }).strict().parse(read("execution.json")).execution as ExecutionState;
+  const execution = upgradeExecutionPayload(z.object({ formatVersion: z.literal(1), execution: executionSchema }).strict().parse(read("execution.json")).execution);
+  if (execution.recoveryRevision && (execution.recoveryRevision.throughRevision > project.revision
+    || execution.recoveryRevision.throughRevision === project.revision && !recoveryRevisionCurrent(project, execution.recoveryRevision)))
+    throw new Error("Portable recovery revision certificate does not match its project. Saved work was not overwritten.");
   const continuation = z.object({ formatVersion: z.literal(1), jobs: z.array(portableJobSchema).max(10000),
     submissions: z.array(z.object({ id: z.string(), projectID: z.literal(project.id), auto: z.literal(false), status: z.enum(["queued", "saved", "completed", "needs-attention", "superseded"]) }).passthrough()),
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),

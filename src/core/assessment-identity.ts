@@ -1,7 +1,7 @@
 /** Bump only when evidence/acceptance semantics change, not for workflow prose.
  * A bump needs an explicit compatibility/migration decision in docs/migrations.md. */
 export const assessmentCompatibility = "assessment-evidence-v1";
-export const executionSchemaVersion = 1;
+export const executionSchemaVersion = 2;
 
 export function canonicalJSON(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) => item && typeof item === "object" && !Array.isArray(item)

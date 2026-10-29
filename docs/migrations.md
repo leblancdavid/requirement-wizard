@@ -1,5 +1,72 @@
 # Data migrations and upgrade compatibility
 
+## Implementation reuse across assessment recovery (2026-10-29)
+
+**Implemented forward migration:** SQLite **8 → 9**, named
+`implementation-recovery-revisions-v1`; execution JSON **schemaVersion 1 → 2**.
+Schema versions remain separate from project revisions and execution CAS `version`.
+Migration backs up each old execution payload once in `execution_migration_backups`
+with migration 9, validates all rows before replacing any, and commits payloads, CAS
+increments, dirty-workspace flags and the migration ledger transactionally. Failure
+rolls back; reopening retries. A repeated successful startup does not migrate again.
+Live execution leases block the conversion without changing their owners/allowance;
+expired leases are retained. Unsupported future formats reject without overwrite.
+
+The v1-to-v2 representation change preserves all original assessment/plan/run/delivery
+records, settings, histories, semantic hashes, dates, approvals, sessions, completed
+steps and spent attempts. No specification revision, human source or model call is
+created by migration. Each changed execution row's CAS counter advances once to reject
+old readers, independently of its new schema version. Older databases upgrading through
+the existing original assessment-identity migration also reach v2 while preserving its
+historical source backup and compatibility rules. No reset or reassessment is required.
+
+**New optional field:** `execution.recoveryRevision`, format 1, policy
+`assessment-recovery-only-v1`, with `fromRevision`, `throughRevision` and SHA-256
+`inputKey`. Upgrade alone adds no certificate or invented ancestry. An explicit missing-
+assessment restore issues/extends it only after proving that the full project inputs
+are unchanged except assessment history, revision, receipt prose and local discovery
+routing; routing is additionally checked unchanged during the restore operation.
+All other product fields remain in the frozen `assessment-recovery-inputs-v1` digest.
+Configuration/workspace/model/code/manual-recheck gates remain independent.
+
+Restoration atomically commits the certificate/execution CAS update with its ordinary
+project revision and Activity receipt. It does not rebase the original evidence or
+edit immutable historical snapshots. Contiguous recovery-only revisions preserve
+otherwise-current plans, paused-run revision matching and legacy code-assessment
+revision fallback. Modern assessment/delivery identities are unchanged. An ordinary
+revision ends the interval; later recovery cannot bridge across it or revive already
+stale evidence. Runtime publication/CAS checks still require the actual current revision.
+
+**Portable compatibility:** wrapper versions and definition-assessment formats stay
+unchanged. `execution.json` emits execution schema v2; the reader accepts old schema v1
+and projects it forward without inference or fabricated certificates. Certificates
+survive export/adoption, with strict format/range/current-input validation. Local
+discovery routing may differ on adoption; implementation configuration/evidence remain
+original. Sessions retain their existing machine-local boundary. Older apps reject
+database v9/new portable execution v2 rather than silently stripping the certificate.
+
+The old blanket saved-implementation blocker is removed. Active/pending jobs, live or
+expired execution leases, busy workflows, unpaused automatic settings and unresolved
+saved input still block apply without stopping work, releasing leases or granting
+calls. This qualifies local recovery/reuse, not new live coding, provider subscription
+compatibility, in-flight session recovery or GitHub delivery. See
+[recovery guidance](assessment-history-recovery.md).
+
+Verification on Node 22.23.4: type check, all **1,054 deterministic tests** (368
+pretests + 686 main), UI build, default seven-runner `npm run test:browser` and diff
+whitespace check passed. New tests cover approved/proposed/interrupted work, consecutive
+recovery, already-stale work, exact-stage receipt/attempt preservation, frozen-run
+continuation with fixture Git responses and zero coding requests, actual-decision
+invalidation, transactional restore/upgrade failure and retry, repeated startup,
+source-payload backups, lease preservation, portable adoption and invalid/future
+certificates. Browser recovery now includes an existing approved plan and a legacy
+code assessment, checking retained reuse after restoration/reload on mobile without
+model calls. Legacy planning-cache upgrade fixtures now rewind newer ledger entries
+and accept future-format rejection at the new migration boundary; their rollback and
+evidence-preservation assertions remain. Existing bundle warning remains. No live
+inference, personal-project writes, application-repository commits/pushes or desktop
+packaging were performed; the separate `test:browser:all` command was not run.
+
 ## Preserve active review drafts and disabled-control identity (2026-10-29)
 
 **UI-only fixes; no forward data conversion.** Source and target SQLite/JSON/portable
@@ -35,9 +102,13 @@ then exactly one enabled control after completion, retaining the project unchang
 The former Project map aggregate blocker is resolved for this command. The separate
 broader `test:browser:all` command was not run; no live inference, personal-project
 writes, desktop packaging, commits or pushes were performed. Existing bundle-size
-warning remains. Protected implementation-state history recovery is still unqualified.
+warning remains. Protected implementation-state history recovery was still unqualified
+at that checkpoint; the recovery-certificate entry above records its later local checks.
 
 ## Explicit missing-assessment history recovery (2026-10-29)
+
+Historical first-slice contract. The later recovery-certificate entry above supersedes
+its blanket implementation blocker and records the execution/SQLite forward migration.
 
 **Opt-in additive recovery, not a startup migration.** Source: existing saved revision
 assessment arrays (including legacy records without `inputBasis`). Target: the same

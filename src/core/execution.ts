@@ -6,6 +6,7 @@ import { assessmentSkill } from "./execution-skills.js";
 import { assessmentCompatibility, executionSchemaVersion } from "./assessment-identity.js";
 import { assessmentImpactPolicy, assessmentPathSchema, reviewedAssessmentPaths, type AssessmentFootprint, type AssessmentImpact } from "./assessment-impact.js";
 import type { ImplementationPlanning } from "./implementation-planning.js";
+import { implementationRevisionMatches, recoveryRevisionCurrent, type RecoveryRevision } from "./implementation-revisions.js";
 
 const branch = z.string().trim().min(1).max(200).refine((s) => !s.startsWith("-") && !/[\s~^:?*\[\\]|\.\.|@\{|\/\/|\/$|\.$/.test(s), "Invalid branch name");
 export const executionConfigSchema = z.object({
@@ -77,6 +78,7 @@ export type ExecutionRun = {
 };
 export type MainDelivery = { fingerprint: string; contextFingerprint?: string; legacyContextFingerprint?: string; main: string; at: string; repository: string; checks: CheckResult[] };
 export type ExecutionState = {
+  recoveryRevision?: RecoveryRevision;
   planning?: ImplementationPlanning; planningHistory?: ImplementationPlanning[];
   schemaVersion: number; version: number; config?: ExecutionConfig; assessments: Record<string, Assessment>;
   workspaceAssessments?: Record<string, Assessment>; mainAssessments?: Record<string, Assessment>;
@@ -87,7 +89,7 @@ export type ExecutionState = {
 };
 /** Read-only inputs to freshness/progress/order calculations. Worker progress,
  * sessions, command output and historical diagnostics do not affect these results. */
-export type ExecutionEvaluation = Pick<ExecutionState, "config" | "assessments" | "workspaceAssessments" | "mainAssessments" | "delivered" | "assessmentRequests" | "run" | "history"> & {
+export type ExecutionEvaluation = Pick<ExecutionState, "config" | "assessments" | "workspaceAssessments" | "mainAssessments" | "delivered" | "assessmentRequests" | "run" | "history" | "recoveryRevision"> & {
   assessmentRuns?: Pick<AssessmentRun, "operation" | "capture" | "head" | "impacts">[];
 };
 export const emptyExecution = (): ExecutionState => ({ schemaVersion: executionSchemaVersion, version: 0, assessments: {}, delivered: {}, history: [] });
@@ -108,7 +110,12 @@ export function eligibleRequirements(project: Project) {
 export function createExecutionIndex(project: Project, state: ExecutionEvaluation) {
   const requirements = new Map(eligibleRequirements(project).map((r) => [r.id, r]));
   const contexts = new Map<string, string | undefined>();
-  return { requirements, context(id: string) {
+  let recoveryCurrent: boolean | undefined;
+  return { requirements, matchesRevision(revision: number | undefined) {
+    if (revision === project.revision) return true;
+    recoveryCurrent ??= recoveryRevisionCurrent(project, state.recoveryRevision);
+    return recoveryCurrent && revision !== undefined && revision >= state.recoveryRevision!.fromRevision && revision <= project.revision;
+  }, context(id: string) {
     if (!contexts.has(id)) {
       try { contexts.set(id, assessmentContextFingerprint(project, id, state.config?.dependencies)); }
       catch { contexts.set(id, undefined); }
@@ -147,7 +154,8 @@ export function assessmentFreshness(project: Project, state: ExecutionEvaluation
   if (!assessmentWorkflowCompatible(assessment)) return stale("policy", "Saved assessment workflow is incompatible or lacks required provenance; a fresh assessment is needed. Previous evidence is retained.");
   if (assessment.contextFingerprint && !assessment.contextFingerprint.startsWith('["decisions-v1",'))
     return stale("policy", "Saved decision-context format could not be migrated with proven compatibility. A fresh assessment is needed; previous evidence is retained.");
-  if (assessment.contextFingerprint ? !contextMatches(project, id, assessment.contextFingerprint, state.config?.dependencies, index) : assessment.specificationRevision !== project.revision)
+  if (assessment.contextFingerprint ? !contextMatches(project, id, assessment.contextFingerprint, state.config?.dependencies, index)
+    : !(index ? index.matchesRevision(assessment.specificationRevision) : implementationRevisionMatches(project, state, assessment.specificationRevision)))
     return stale("decisions", "Supporting decisions or guardrails changed, or legacy revision-bound evidence no longer matches.");
   if (assessment.model && state.config && (assessment.model.providerID !== state.config.providerID || assessment.model.modelID !== state.config.modelID))
     return stale("model", "Selected assessment model changed.");
