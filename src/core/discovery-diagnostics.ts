@@ -62,6 +62,7 @@ export type DiagnosticSource = {
   planningPartial: number | null;
   interruptionCause?: string | null;
   savedStageFormat?: number | null;
+  savedDraftRepairFormat?: number | null;
 };
 const nullableCount = (value: number | null) => value === null ? null : count.parse(value);
 export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
@@ -73,6 +74,8 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
     runs: rows.map((row, index) => {
       if (row.savedStageFormat !== undefined && row.savedStageFormat !== null && row.savedStageFormat !== 1)
         throw new Error("Unsupported saved clarification/response stage format. Upgrade the app; saved work was not overwritten.");
+      if (row.savedDraftRepairFormat !== undefined && row.savedDraftRepairFormat !== null && row.savedDraftRepairFormat !== 1)
+        throw new Error("Unsupported saved-response corrective review format. Upgrade the app; saved work was not overwritten.");
       const metrics = row.metrics === null ? null : discoveryMetricsSchema.parse(JSON.parse(row.metrics));
       const adapterMs = metrics?.state === "finished" && metrics.requests.every((request) => request.durationMs !== null)
         ? metrics.requests.reduce((sum, request) => sum + request.durationMs!, 0) : null;
@@ -81,12 +84,12 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
       const stored = row.sections === null ? {} : JSON.parse(row.sections) as Record<string, unknown>;
       for (const key of diagnosticSections) if (typeof stored[key] === "number") sections[key] = count.parse(stored[key]);
       const exactStages = ["exact-readiness-batches-v1", "exact-submission-batches-v1"].includes(row.policy ?? "");
-      const totalSteps = exactStages && row.stagedBatches !== null ? count.parse(row.stagedBatches) * 2 : null;
+      const totalSteps = exactStages && row.stagedBatches !== null ? count.parse(row.stagedBatches) * 2 + Number(row.savedDraftRepairFormat === 1) : null;
       const completedSteps = nullableCount(row.stagedCompleted);
       return { id: `run-${index + 1}`, revision: count.parse(row.revision),
         status: z.enum(["pending", "running", "completed", "failed", "cancelled", "interrupted", "stale"]).parse(row.status),
         package: row.packageID ? packages.get(row.packageID)! : null,
-        policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "definition-exact-batches-v1", "current-spec-v1", "exact-readiness-batches-v1", "exact-submission-batches-v1"].includes(row.policy ?? "") ? row.policy : null,
+        policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "definition-exact-batches-v1", "current-spec-v1", "exact-readiness-batches-v1", "exact-submission-batches-v1"].includes(row.policy ?? "") ? row.policy : null,
         interruptionCause: definitionInterruptionCauses.find((cause) => cause === row.interruptionCause) ?? null,
         measurements: metrics,
         timing: metrics ? { initialPlanningMs: metrics.planningMs, adapterRequestMs: adapterMs,
@@ -97,7 +100,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
         savedWork: { navigationStages: nullableCount(row.stages), attempts: nullableCount(row.savedAttempts), reusedStages: nullableCount(row.reusedStages),
           reusedFinal: row.reusedFinal === null ? null : !!row.reusedFinal, stagedBatches: nullableCount(row.stagedBatches), completedBatches: completedSteps,
           totalSteps, remainingSteps: totalSteps !== null && completedSteps !== null ? Math.max(0, totalSteps - completedSteps) : null,
-          phase: totalSteps !== null && completedSteps !== null ? completedSteps >= totalSteps ? "complete" : completedSteps < row.stagedBatches! ? "read" : "check" : null,
+          phase: totalSteps !== null && completedSteps !== null ? completedSteps >= totalSteps ? "complete" : completedSteps < row.stagedBatches! || row.savedDraftRepairFormat === 1 && completedSteps === row.stagedBatches ? "read" : "check" : null,
           continuationAction: exactStages && ["interrupted", "cancelled", "failed"].includes(row.status)
             ? row.policy === "exact-readiness-batches-v1" ? "continue-clarification" : "process-saved-responses" : null },
         backlog: { scope: row.planningPartial === 1 ? "examined-prefix" : "saved-scope", reviewed: nullableCount(row.reviewed), pending: nullableCount(row.pending), waiting: nullableCount(row.waiting), blocked: nullableCount(row.blocked) } };

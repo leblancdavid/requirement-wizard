@@ -1,5 +1,430 @@
 # Data migrations and upgrade compatibility
 
+## Preserve definition assessments through requirement cleanup (2026-10-29)
+
+**Compatible mutation-policy correction; no schema or fingerprint change.** Wording
+refinement approval, pair resolution approval and human duplicate removal previously
+removed entire current definition assessments citing changed requirements. They now
+retain the original records, input basis, revision, checks and evidence. Existing
+coverage freshness marks affected areas/dependencies outdated; unchanged unrelated
+areas remain current unless a project-wide decision changed. Findings are not
+reclassified as current merely because a human approved replacement wording.
+
+Source/target SQLite and portable formats are unchanged. No startup rewrite, model
+replay, reset or concurrency-version migration is needed. Existing lazy projection
+for older assessments without input keys still derives a basis only from an exact
+matching original revision. Missing origin history retains conservative revision-bound
+freshness. The ordinary expected-revision transaction saves the changed requirement
+and retained assessments together; stale writes still reject atomically.
+
+This prevents future removal; it does **not** restore assessments already absent
+from current state. Original revision history is retained where available. A safe
+historical recovery workflow remains planned in [workflow consolidation](workflow-consolidation.md);
+do not manufacture provenance, restore old scores as current, or require a data reset.
+Full-area rechecks and their unchanged exact-evidence continuation rules remain;
+this is not incremental semantic reassessment or automatic follow-through.
+
+Regression tests reproduce the original removal and cover proposal/dismissal,
+wording approval, consolidation, coordinated two-requirement revision, duplicate
+removal, dependency/unrelated freshness, stale writes and repeated SQLite reopen.
+Older-shape fixtures cover both available and missing original history, preserving
+existing exact-history enrichment without manufacturing current-input evidence.
+Verification: type check, 1,014 tests (339 pretests + 675 main), focused 42-test
+refinement suite, UI build and diff check passed on Node 22.23.4. Existing UI chunk-size
+warning remains. No browser runner, desktop rebuild or personal-project/live-model
+recovery was performed. The initial suite run exposed an incorrect test expectation
+about existing legacy-key enrichment; the corrected fixture covers both history paths.
+
+## Reveal the explicit Design clarification outcome (2026-10-28)
+
+**Renderer-only, no persisted-data migration.** Preparing questions switched to
+Design but left keyboard focus and page scroll at the initiating Specification
+card. Reusing an identical saved no-question result could therefore appear inert,
+especially from a deep page. Each successful explicit prepare/continue action now
+focuses and scrolls its labelled clarification status into view, including repeated
+actions for the same saved task. Polling does not move focus. Errors are also
+surfaced globally because the initiating card can be hidden after navigation.
+
+No task identity, completed model receipt, failed attempt, authorization, score,
+workflow allowance or publication rule changes. Reuse still requires the existing
+exact-task checks; this does not force another AI call or manufacture questions.
+The focus/action counter is ephemeral and is not restored as a new action on reload.
+
+The Specification browser regression first failed its new focus assertion against
+the previous UI. With the correction it passes focused/visible status checks for
+new questions, no-question outcomes and repeated reuse from a deep initiating card.
+It also checks an API refusal stays visible, no navigation occurs on refusal, and
+reuse/refusal adds no model calls or jobs. Type check and UI build passed.
+All 11 queue-activity unit tests and the diff check passed. The full browser
+command passed layout/model-selection checks, then stopped at the known obsolete
+`Project map` selector in `src/web/browser-check.ts:706`; later scripts were not
+reached by that command. The Specification script was run separately and passed.
+
+## Questions-only exact-record workflow fallback (2026-10-28)
+
+**Implemented policy extension, not a SQLite schema migration.** Workflow contexts,
+staged ledgers and disposable CPU receipts now recognize `staged-records-v4`.
+Existing v1/v2/v3 model receipts, completed checks, failed attempts and portable
+continuation remain in their original protocol; none are relabelled as v4.
+The fallback is attempted only for otherwise unsplittable leaves after earlier
+policies cannot fit. Safe compatible reviews retain their existing path. Exhausted
+compatible work does not receive fresh model attempts.
+
+V4 starts from the current-spec mandatory union, restores exact projected human
+review/receipt sources and closes human evidence links. Existing explicit static
+workspace-file deferral remains. Missing references reject preparation. Exact
+targets and original human input repeat; remaining exact records are distributed
+deterministically, grouped near 50,000 raw characters and split further as needed.
+Lossless encoding remains available; no record is sliced, summarized or substituted.
+Every batch plus its full 8,000-character accumulated-draft reserve and stage
+envelope must fit 96,000 characters; sixteen batches remains the limit. Individually
+oversized records/pins still block with section/record diagnostics. Unsafe
+comparisons can return `reviewBlocked`; this is not exhaustive cross-record coverage.
+
+This protocol authorizes **questions only**, never requirements, edits or approvals.
+Runtime output schema and independent saved-response replay both enforce this.
+Every discovery batch and every validation batch must complete before publication.
+Partial drafts, attempts and receipts survive failures, SQLite reopen and portable
+continuation through the existing format-1 staged ledger. Canonical plan/evidence
+replay and expected-revision checks still guard publication. Extra loads are forbidden.
+
+Derived CPU skip receipts use `planningPolicy: staged-records-v4`. Earlier local
+size/unknown blockers are reconsidered lazily with the same exact-input identity;
+non-size reviewed/waiting/attempt-limit work remains reusable. Transactional cache
+adoption is unchanged. Interrupted preparation can retry without rewriting model
+history or resetting project data. Future policies still reject before replacement.
+No database version bump, assessment-key change or automatic inference on upgrade.
+Older apps cannot understand v4 ledgers; do not downgrade an active v4 workspace.
+
+Deterministic tests cover exact human text/union preservation, repeated pins, missing
+references, individual overflow, requirement rejection, all-batch publication, unsafe
+comparison blocking, interrupted validation, spent-attempt preservation, completed
+read reuse after reopen, portable round trips and completed/old/exhausted work.
+Existing future-policy and transactional recovery tests also pass. `npm test` passed
+339 pretests and 668 main tests.
+
+A read-only preflight of the reported project at revision 2664, with saved CPU
+contexts/receipts and epic-review history, selected the first eligible v4 package in
+about 10 seconds (latest run 10.1): six batches, one examined package, zero blockers and zero model requests.
+This is a prefix result, not a whole-project check. No user-project data was written.
+Three representative old seed/target/batch-limit blockers also fit in 9/6/6
+batches during implementation preflight. Live provider
+acceptance and complete-project discovery remain unverified.
+
+Type check, UI build, diff check and the focused Specification browser regression
+passed. The separate epic-review browser script stops at its obsolete **Project map**
+selector (`src/web/epic-review-browser-check.ts:122`), before workflow assertions.
+The previously reported full-browser **Project map** blocker also remains; neither
+browser script is claimed fully qualified by deterministic engine tests.
+
+## Reused clarification UI outcome attribution (2026-10-28)
+
+**UI-only; no persisted format, schema, freshness or fingerprint change.** A completed
+clarification can be returned by `clarify-definition` with `reused:true`, without a
+new job or model request. The newest database job can therefore remain an unrelated
+failed general-discovery planning attempt. The UI previously kept presenting that
+failure as its current outcome after the successful no-call clarification action.
+
+The renderer now retains the explicit clarification action's project/revision and
+latest-job baseline in memory. When unchanged, Design and Processing & queue show
+the reused result and explain that no AI request was made. An earlier job diagnostic
+is labelled as a separate historical task, with its existing logs link retained.
+A new job/revision/project invalidates the local notice; active tasks and unfinished
+saved input keep their ordinary status priority. Reload does not manufacture a new
+durable success record or erase the old failure. Reusing the result again requires
+only the same existing exact-task compatibility checks, not inference.
+
+All job payloads, successful clarification receipts, local package-planning caches,
+failure diagnostics, assessed findings and package size/dependency blockers remain
+unchanged. The two-minute planner bound and exact-evidence limits are not relaxed.
+No general-discovery job is started or approved by the clarification action.
+
+Unit coverage checks project/revision/job baseline changes. A browser regression
+completes a no-question clarification, records an unrelated planner failure,
+reloads, then invokes Clarify in Design again. The reused result is clearly shown,
+no model call or job is added, and the earlier job and pending saved response remain
+byte-equivalent in the store. The separate historical diagnostic remains accessible
+through its labelled section and Logs.
+
+Read-only inspection of the reported Skating area confirms its completed 50-step
+no-question result still matches the current task at revision 2664. The reported
+two-minute timeout belongs to a separate general workflow-planning run with no
+clarification context and zero model requests. No user-project writes or live model
+calls were performed. This display fix does not resolve that planner's real size
+blockers or declare the definition finding/product complete.
+
+## Non-retroactive saved-draft authoring guidance (2026-10-28)
+
+SQLite remains **schema 8**; submission/portable continuation remain **format 1**.
+Newly authored analysis receipts now carry optional `draftPolicy:"product-rationale-v1"`.
+Checks use `checkPolicy:"staged-check-scope-v2"`; v1 receipts remain supported.
+The optional manifest `submissionDraftPolicy` distinguishes an unmarked legacy
+producing read from a new one. Retention/evidence/check responses do not turn a
+legacy draft into a newly authored one. These additions do not change working data,
+context hashes, material/plan keys, completed jobs or assessment freshness.
+
+Check-scope v1 introduced product-focused rationale guidance but failed to separate
+new authoring from verification of existing frozen wording. That could reject a
+semantically valid older draft solely for retained workflow commentary, after
+forbidding any check-stage rewrite. V2 explicitly limits the writing convention to
+new reads/correction. Legacy workflow prose remains dated AI explanation, not
+human authority or product behavior. Factual claims still require exact evidence;
+product contradictions, unsupported claims and unauthorized changes still reject.
+The original rationale is not silently removed, rewritten or labelled human intent.
+
+Optional `legacyStyleRecovery:{format:1,receiptIndex}` permits one explicit recheck
+only when replay finds an old unmarked producing draft and a terminal failed v1
+check. This structural condition is not proof that the rejection was stylistic:
+the independent v2 check must decide whether a genuine factual/product conflict
+remains. The rejected receipt, frozen draft and absolute attempt count are kept.
+No new corrective draft, question sweep or allowance is granted. The next request
+uses the next existing attempt; exhaustion still prevents dispatch. V2 rejections,
+newly authored drafts and an existing style-recovery boundary cannot gain another
+style recovery. Publication replays both earlier recovery boundaries and all
+remaining checks before applying ordinary transaction/authorization/staleness gates.
+
+No startup migration or history rewrite is required. Future policy/marker formats
+fail closed. File-backed tests reopen twice without changing the source job, then
+verify both independent outcomes: compatible legacy wording publishes unchanged
+after all checks; unsupported facts still block and cannot be retried automatically.
+Tests retain two spent requests, dispatch attempt three, preserve exhausted counts,
+reject future formats, exclude new drafts and round-trip the portable marker.
+
+Reported-state read-only preflight preserves 11/21 steps, every receipt, the frozen
+draft and attempts=2; continuation would dispatch attempt 3. It supplies both the
+non-retroactive instruction and original rejection context. No user-project writes
+or live model requests were made. Verification: 67 focused tests, full `npm test`
+(337 pretests + 666 main tests), type check and focused Specification browser check
+passed. Live semantic completion is unverified; the known full-browser selector
+blocker was not rerun for this backend-only correction.
+
+## Staged verification scope and dated rejection context (2026-10-28)
+
+SQLite remains **schema 8**; submission ledger/portable continuation stay **format 1**.
+New check receipts carry optional `checkPolicy:"staged-check-scope-v1"`. Optional
+`checkScopeRecovery:{format:1,receiptIndex}` retains one older rejected check while
+allowing its unfinished check to be independently repeated under corrected prompt
+instructions. New-policy rejections and ledgers already containing this boundary
+cannot receive another recovery. Unsupported marker/policy formats reject.
+
+The previous prompt computed check eligibility only from this batch's detailed
+targets. That could incorrectly revoke an unchanged draft target's eligibility
+when moving to another batch. Check prompts now distinguish structural candidates
+across the original staged evidence union from records detailed in this request.
+Candidates still do not prove human authorization. Exact comparisons must load
+missing indispensable evidence; neither omission nor a candidate ID establishes
+semantic correctness. Read-stage loading and publication permissions are unchanged.
+Corrective checks also receive the exact original rejected verdict through optional
+manifest `submissionPriorRejection`, explicitly labelled a dated AI hypothesis, not
+human input or approval. New read/correction instructions prohibit workflow disputes
+and request/eligibility commentary in product rationale/reason.
+
+Explicit continuation may add the recovery marker only after valid replay of an
+unmarked terminal failed check whose frozen specification update target is a valid
+structural candidate in the original evidence union but absent from that batch's
+local candidate list. This structural test does not interpret rejection prose or
+declare a semantic rejection false. It grants **reverification only**, not approval,
+new draft wording, another corrective draft pass, a question sweep or more allowance.
+The rejected receipt, frozen draft, material/plan keys, context hashes, source jobs
+and all spent attempts remain unchanged. The repeated check consumes the next
+attempt in the existing finite allowance; a further rejection remains terminal.
+Every remaining original batch must pass, and publication replays this boundary
+and runs ordinary authorization/target/staleness checks transactionally.
+
+No startup migration or existing completed-job rewrite is needed. The new manifest
+context is reconstructed without changing hashed working-context data. Portable
+continuation retains the versioned marker alongside identical historical receipts.
+File-backed regression reopens twice and verifies both outcomes: independent valid
+checks finish the unchanged draft without repeating reads; a new invalid check
+preserves the product state and cannot repeat on retry. Tests also reject future
+formats and supply original corrective rejection context on subsequent checks.
+
+Read-only preflight of the reported ledger preserves 11/21 steps, all receipts,
+the frozen draft and attempts=1; it resumes at the same failed check with a valid
+global target list and original rejection text supplied. No user-project writes
+or live calls were performed. Verification: 65 focused tests, full `npm test`
+(335 pretests + 666 main tests), type check and focused Specification browser check
+passed. Live semantic acceptance is unverified; the prior full-browser selector
+blocker was not rerun for this backend-only correction.
+
+## Clarification evidence-progress accounting (2026-10-28)
+
+SQLite remains **schema 8** and staged clarification/portable continuation remain
+**format 1**. Optional `readinessWork.evidenceProgress:{format:1}` distinguishes
+successful exact evidence loading from failed output requests. Explicit dispatch
+or continuation first replays the saved ledger under its original representation,
+then adds this marker to unfinished work only. No startup writes, completed-job
+rewrites, material/plan-key changes, context hash changes or assessment invalidations
+are introduced. Unsupported future evidence-progress formats fail closed.
+
+Previously the indexed step allowance of four total requests could be consumed by
+four valid retrievals, leaving no request for the actual question draft/verdict.
+Marked work retains the absolute `attempts` and receipt `attempt` numbers, but its
+dispatch ceiling is four (three before an indexed-read boundary) plus the number
+of validated successful evidence receipts at that step. Every retrieval must add
+known distinct records not already detailed; duplicates, unknown IDs, malformed
+output, timeouts and provider failures do not earn progress credit. Replay verifies
+each original context/response before credit is used. A blocked semantic response
+remains terminal. Genuine spent failures survive reopen and cannot reset on retry.
+
+Numeric attempt fields now support up to 260 only with the marker; unmarked legacy
+work retains its original three/four-request bound. The existing 256-receipt bound
+remains, with a pre-dispatch safety stop rather than overflowing the ledger. Exact
+record sets, eight-record retrieval responses, 96,000-character context bounds,
+Stop, request timeouts and all-batch verification/publication gates remain intact.
+Completion reconstructs its final pre-verdict context with the actual saved attempt
+number, including when successful retrievals put the final verdict above attempt 4.
+
+File-backed upgrade regression saves an older exhausted four-retrieval ledger,
+reopens twice without mutation, continues with attempt 5 without repeating those
+reads, completes a final check after four more exact retrievals, and round-trips
+portable state with identical receipt prefixes. Negative tests preserve four failed
+attempts after successful retrieval, reject duplicate evidence and future formats,
+and prevent allowance renewal on explicit retry. Completed legacy jobs still publish
+without adding the marker or changing saved evidence.
+
+Read-only preflight of the reported application state retains 13/36 completed steps,
+all four current-step retrievals and absolute attempts=4. The reconstructed context
+is 76,201/96,000 characters; there are no failed calls at that step to exhaust the
+four-failure allowance. No user-project writes or live model calls were made.
+Verification: `npm test` passed (333 pretests + 666 main tests), type check and focused
+Specification browser check passed. Live completion remains unqualified; the earlier
+full-browser Project map selector blocker was not rerun for this backend change.
+
+## Separate staged evidence pins from input authorization (2026-10-28)
+
+SQLite remains **schema 8**; continuation and staged ledgers remain **format 1**.
+The optional context-manifest `submissionAuthorizationSourceIDs` is derived from
+the original saved submission using the same concrete-input eligibility function
+as publication. It does not change working-context data, material/plan keys or
+receipt hashes. Reconstructed manifests gain this field on dispatch, not startup;
+older saved manifests, jobs, inputs, reconciliations and spent attempts stay intact.
+No new permission, model-call grant, assessment invalidation or history rewrite is
+introduced. Reopen/retry keeps the original finite allowance and exact saved reads.
+
+The staged prompt previously mistook all `taskRecordIDs` source pins for current
+input authority. A reconciliation adds its later answer to those pins as evidence,
+but that answer still has its own submission and is not in the original batch.
+The prompt now uses only the explicit derived authority list; the advertised
+activation/revision schema restricts every authorization source ID to that list.
+Missing authority metadata fails closed. Pins and later clarification answers stay
+available as evidence, not permission to edit unrelated behavior. All publication
+checks and the separate clarification submission's own follow-up remain unchanged.
+
+Regression verifies a pinned concrete reconciliation answer remains detailed while
+excluded from both prompt authority and schema enums; an adapter ignoring the
+schema still cannot save the unauthorized draft. Existing file-backed reopen,
+reconciliation and receipt tests continue passing. Read-only preflight of the
+reported state replays its single completed evidence receipt, retains three spent
+attempts, and produces a schema authorizing only the original answer. Rejected
+draft bodies are not saved, so their exact offending citation cannot be recovered
+from this ledger. The prompt/validator mismatch is reproduced independently.
+There is no completed draft to publish without inference in this case; explicit
+continuation needs a new draft request, not another clarification sweep or reset.
+No user-project writes or live calls were performed during inspection.
+Verification: full `npm test` passed (329 pretests + 666 main tests), type check
+and focused Specification browser check passed. After adding a final file-backed
+legacy-manifest regression, the 50-test staged/specification suite and type check
+passed again. That regression reopens twice, preserves the older manifest and
+receipt, and dispatches attempt four rather than resetting three spent requests.
+Live semantic completion remains unverified; the existing full-browser selector
+blocker was not rerun as part of this backend-only correction.
+
+## Checked saved-response authorization citation projection (2026-10-28)
+
+SQLite remains **schema 8**; portable continuation and `submissionWork` remain
+**format 1**. No startup migration or fingerprint change is required. New staged
+draft acceptance validates authorization citations using the same concrete-input
+source selection as publication, before saving a draft or spending batch-check
+requests. Historical supporting citations are not current-input authorization.
+
+An explicit retry of a fully checked, unpublished legacy ledger may project its
+publication citations without changing any checked wording: for an existing
+`revise` target only, remove redundant confirmation IDs already in that target's
+retained `sourceIDs` and the exact reviewed evidence union. At least one current
+concrete input citation must already exist. Unknown/unrelated sources, duplicate
+citations, historical-only authority, non-confirmation extras and activation are
+not repaired. The ordinary authorization, target/scope, conflicting-change,
+stale-revision and transactional publication checks still apply unchanged.
+
+The original wire receipts, context hashes, source jobs and historical support
+remain unchanged. The published job result records the projected citations and
+the requirement's answer-derived authority cites only current input. Publication
+independently reconstructs this exact projection from replay; arbitrary edits to
+wording or citation sets are not accepted. Existing completed jobs are not rewritten.
+Retry after failure/reopen reuses completed checks without further inference.
+No model output or missing human authority is manufactured.
+
+File-backed upgrade regression constructs older mixed answer/confirmation receipts,
+reopens twice, then publishes with zero adapter requests while preserving source
+jobs, receipts, historical confirmation and checked wording. Negative cases cover
+historical-only, duplicate, unknown/non-confirmation citations and incomplete work.
+New draft regression rejects the mixed array before any verification requests.
+Read-only preflight of the reported application ledger passes replay, projected
+publication validation and update authorization/target checks on an in-memory copy.
+No user database writes or live model calls were performed. Checks: 328 pretests +
+666 main tests, 61 focused tests, type check and Specification browser check passed.
+The previously documented full-browser Project map selector blocker is unchanged.
+
+## No-question clarification to bounded corrective draft review (2026-10-28)
+
+SQLite remains **schema 8**, portable continuation and `submissionWork` remain
+**format 1**. The optional version-1 `draftRepair` boundary binds a retained rejected
+verification to its source job and an already completed format-3 no-question result.
+It records the original receipt boundary, prior spent attempts and exact failed-check
+evidence. Original material/plan keys and every earlier wire receipt/hash remain
+unchanged. Earlier completed checks are retained historically; a revised draft must
+pass every batch anew. Receipt step 64 is additionally supported for the final check
+of a maximal 32-batch corrective run. Unsupported future repair formats fail closed.
+
+This is a new **correction phase**, not resetting the failed verification allowance
+or treating an AI conclusion as human input. It allows one complete corrective draft
+with up to four requests (including exact-evidence retrieval), then freezes that draft
+for all original batch checks. Those checks retain their finite per-step allowance.
+Existing extra-request grants do not roll into correction, and correction cannot
+receive automatic extra grants. A further semantic rejection stops without another
+question sweep or another correction boundary on unchanged work. Missing/changed
+evidence and stale results still reject; original target/input authority is unchanged.
+Dispatch and publication independently validate the source ledger and completed
+no-question outcome. The latter authorizes review only, never a product preference,
+approval or proof that the old rejected draft was right. Speculative quoted IDs in
+the old rejection must be checked against exact records too.
+
+Already completed no-question clarification results are reusable on explicit saved-
+response continuation; their model calls do not repeat. When new question preparation
+finishes with no question, the manual queue can continue only that original response
+into correction in the same action, leaving unrelated/new save-only input waiting.
+No startup writes or model sweep are introduced. No data reset, duplicated original
+answer, assessment invalidation or rewrite of old completed jobs is required.
+Portable exports retain both referenced source jobs. Progress/diagnostics count the
+additional correction step without counting obsolete checks as current verification.
+
+Upgrade tests use an older file-backed rejected ledger plus completed no-question
+result, pause after the corrective draft, reopen twice, finish only the remaining
+checks and round-trip portable state. Original source/clarification jobs, receipt
+prefixes and spent attempts remain unchanged. Tests also cover forged source/boundary
+metadata, future formats, finite malformed-output attempts and semantic re-rejection.
+The reported user state was inspected read-only: its existing clarification is
+reusable and the corrective envelope fits the normal input limit. No live model call
+or user-project mutation was performed; actual provider resolution is unqualified.
+
+## Manual clarification with a stopped enabled coordinator (2026-10-28)
+
+Behavior-only correction; SQLite remains schema 8 and all task/receipt formats,
+material keys, completed checks and spent attempts are unchanged. An enabled workflow
+setting is not a live worker. Explicit manual saved-response processing and definition
+refresh can prepare their related Design questions even while the coordinator is
+enabled but paused/blocked/suspended. The coordinator-owned queue still uses its own
+bounded policy; live worker exclusion is still enforced by the normal job/workflow
+leases. Manual work never enables/resumes the coordinator or changes its grant.
+
+Existing blocked input needs one explicit manual continuation after upgrading; no
+startup model sweep or saved-setting rewrite is required. Regression tests retain the
+enabled/stopped settings throughout question generation and explicit-answer recovery.
+The reported saved state was inspected read-only: its semantic blocker replay and
+exact question-preparation plan both pass local validation, with no provider request.
+This is local preflight evidence, not qualification of a live generated question.
+
 ## Saved-response conflict questions and explicit-answer recovery (2026-10-28)
 
 Source/target: SQLite stays **schema 8**, portable continuation stays **format 1**.

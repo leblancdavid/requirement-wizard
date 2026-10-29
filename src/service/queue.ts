@@ -3,7 +3,7 @@ import { refinementCandidates, type RefinementProgress } from "../core/refinemen
 import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
 import { planContext, planExactTaskContext } from "../core/working-set.js";
-import { canStageSubmission, planSubmissionStages, submissionMaterials } from "../core/submission-stages.js";
+import { canStageSubmission, planSubmissionStages, submissionMaterials, submissionDraftRepair } from "../core/submission-stages.js";
 import { ContextBudgetError } from "../core/context.js";
 import { refinementEvidenceRecords } from "../core/refinement-context.js";
 import { refinementCheckCurrent, resolutionPairEligible } from "./refinement-tasks.js";
@@ -307,7 +307,10 @@ export class DiscoveryQueue {
   /** Follow the review, never a renderer poll or a retrospective startup sweep.
    * Any saved attempt (including a failure/Stop) prevents automatic retries. */
   private async prepareClarifications(id: string, epicIDs: string[], signal: AbortSignal, report: (message: string) => void) {
-    if (this.coordinator || this.service.store.workflow(id).enabled) return;
+    // Only coordinator-owned work uses its separate shared budget. An enabled
+    // but stopped coordinator must not suppress follow-up to explicit manual work;
+    // the queue's normal live-worker guards already exclude an active owner.
+    if (this.coordinator) return;
     for (const epicID of new Set(epicIDs)) {
       signal.throwIfAborted();
       if (this.closing) return;
@@ -342,7 +345,7 @@ export class DiscoveryQueue {
   }
 
   private async prepareSubmissionClarification(id: string, source: Job, signal: AbortSignal, report: (message: string) => void) {
-    if (this.coordinator || this.service.store.workflow(id).enabled || !submissionQuestionBlock(source)) return;
+    if (this.coordinator || source.submissionWork?.draftRepair || !submissionQuestionBlock(source)) return;
     signal.throwIfAborted();
     try {
       const project = this.service.store.get(id), item = this.service.store.assertSubmissionClarification(project, source);
@@ -362,6 +365,10 @@ export class DiscoveryQueue {
         ? "Your saved response needs a choice. Answer the clarification in Design; the original response and completed checks are retained."
         : `No new human decision was established. ${job.result?.summary ?? "The saved-response blocker still needs attention."}`
         : job.diagnostic ?? "Question preparation stopped. Continue the saved clarification explicitly; no earlier response was repeated.");
+      if (job.status === "completed" && job.result?.questions.length === 0) {
+        const current = this.service.store.get(id);
+        return !!submissionDraftRepair(submissionMaterials(current, item, source.submissionWork!.task), source.submissionWork!, this.service.store.jobs(id));
+      }
     } catch (error) {
       if (signal.aborted) throw error;
       report(safeMessage(error instanceof Error ? error.message : error));
@@ -779,12 +786,13 @@ export class DiscoveryQueue {
         return;
       }
       let explicit = manual;
+      let repairSubmissionID: string | undefined;
       let continuing = false;
       while (!this.closing && !controller.signal.aborted && !this.service.store.queuePaused(id)) {
         if (this.service.store.executionActive(id)) break;
         const scope = manual?.focusEpicID;
         const before = this.service.store.get(id);
-        const submissionIDs = manual?.submissionIDs ?? (scope ? this.service.store.submissions(id).filter((s) => submissionEpic(before, s) === scope).map((s) => s.id) : undefined);
+        const submissionIDs = repairSubmissionID ? [repairSubmissionID] : manual?.submissionIDs ?? (scope ? this.service.store.submissions(id).filter((s) => submissionEpic(before, s) === scope).map((s) => s.id) : undefined);
         const applied = this.service.store.applyQueued(id, submissionIDs);
         const current = this.service.store.get(id);
         let localApprovals = 0;
@@ -811,7 +819,7 @@ export class DiscoveryQueue {
           this.service.store.saveSubmission(item); return false;
         });
         if (localApprovals) report(`Saved ${localApprovals} approval${localApprovals === 1 ? "" : "s"} after local safety checks; no AI follow-up needed.`);
-        if (manual?.processOnly && !saved.length) {
+        if ((manual?.processOnly || repairSubmissionID) && !saved.length) {
           const remaining = this.service.store.submissions(id), resolved = resolvedReviewAttempts(current, remaining);
           const retained = remaining.some((s) => !s.archivedAt && !resolved.has(s.id)
             && ["queued", "saved", "needs-attention"].includes(s.status));
@@ -908,7 +916,7 @@ export class DiscoveryQueue {
         continuing = waiting > 0;
         if (batch.length) report(`Processing one saved response in its own context; waiting: ${waiting}.`);
         for (const item of batch) { delete item.contextBlock; delete item.diagnostic; this.service.store.saveSubmission(item); }
-        const research = manual?.research ?? batch.some((s) => s.research);
+        const research = repairSubmissionID ? false : manual?.research ?? batch.some((s) => s.research);
         if (!batch.length && manual?.questionTarget !== undefined) {
           await this.findQuestions(id, manual, controller.signal, report);
           break;
@@ -935,10 +943,19 @@ export class DiscoveryQueue {
         if (followupStopped) break; // Failure owns its pause; a newer worker must not be paused here.
         if (job.status !== "completed" || batch.some((s) => s.status === "needs-attention")) {
           this.service.store.pauseQueue(id, true);
-          await this.prepareSubmissionClarification(id, job, controller.signal, report);
+          if (await this.prepareSubmissionClarification(id, job, controller.signal, report)) {
+            controller.signal.throwIfAborted();
+            const item = batch.find((s) => s.id === job.submissionWork?.submissionID)!;
+            item.status = "saved"; this.service.store.saveSubmission(item);
+            // Continue only the failed input, never newly arrived save-only work.
+            repairSubmissionID = item.id;
+            this.service.store.pauseQueue(id, false); continuing = true;
+            report("No new human choice was established. Continuing this saved response with one bounded corrective draft pass; unrelated input stays waiting.");
+            continue;
+          }
           break;
         }
-        if (!manual?.processOnly) await this.prepareClarifications(id, job.result?.assessments?.map((a) => a.epicID) ?? [], controller.signal, report);
+        if (!manual?.processOnly && !repairSubmissionID) await this.prepareClarifications(id, job.result?.assessments?.map((a) => a.epicID) ?? [], controller.signal, report);
         if (manual?.questionTarget !== undefined) {
           explicit = manual;
           continue;

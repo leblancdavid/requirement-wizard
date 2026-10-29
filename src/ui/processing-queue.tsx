@@ -21,9 +21,9 @@ import { definitionSteps } from "../core/definition-continuation.js";
 import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { statusLabel } from "./user-messages.js";
 import { openLogs } from "./log-access.js";
-import { processableSavedResponses, clarificationHasWaitingInput } from "./clarification-recovery.js";
+import { processableSavedResponses, clarificationHasWaitingInput, currentReusedClarification, type ClarificationActionOutcome } from "./clarification-recovery.js";
 
-export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, discover, stop, error, openIssue, jobs = [], processSavedResponses, extendSavedResponse, clarificationJob, continueClarification, continueRefinement, continuationAvailable = false, continueExploration, maintenance, configureMaintenance, maintenanceSettings, openRequest, workflow, configureWorkflow, openWorkflowDecision }: {
+export function ProcessingQueue({ project, active, progress, refinementProgress, submissions, paused, lastJob, activities, stopActivity, scope, disabled, stopDisabled, resume, discover, stop, error, openIssue, jobs = [], processSavedResponses, extendSavedResponse, clarificationJob, reusedClarification, continueClarification, continueRefinement, continuationAvailable = false, continueExploration, maintenance, configureMaintenance, maintenanceSettings, openRequest, workflow, configureWorkflow, openWorkflowDecision }: {
   project: Project;
   active: boolean; progress: string[]; submissions: Submission[]; paused: boolean; lastJob?: Job;
   refinementProgress?: RefinementProgress | null;
@@ -32,6 +32,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   discover: () => void;
   openIssue?: (submissionID: string) => void; jobs?: Job[];
   clarificationJob?: Job; continueClarification?: () => void;
+  reusedClarification?: ClarificationActionOutcome;
   processSavedResponses?: () => void;
   continueRefinement?: (jobID: string) => void;
   extendSavedResponse?: (submissionID: string, jobID: string) => void;
@@ -61,6 +62,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const completed = lastJob?.refinementStageProgress?.completed ?? (refinementProgress ? refinementProgress.completed : lastJob?.kind === "scan" ? lastJob.scanProgress?.completed : lastJob?.readinessProgress?.completed ?? lastJob?.submissionProgress?.completed ?? lastJob?.definitionWork?.receipts.length);
   const total = lastJob?.refinementStageProgress?.total ?? (refinementProgress ? refinementProgress.total : lastJob?.kind === "scan" ? lastJob.scanProgress?.total : lastJob?.readinessProgress?.total ?? lastJob?.submissionProgress?.total ?? (lastJob?.definitionWork ? definitionSteps(lastJob.definitionWork).length : undefined));
   const hasUnfinishedInput = submissions.some((s) => !s.archivedAt && !resolvedAttempts.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
+  const reuse = !working && currentReusedClarification(project, lastJob, reusedClarification);
   const processable = processableSavedResponses(project, submissions);
    const clarificationTask = clarificationJob?.context?.readinessQuestions;
    const clarificationBlockedInput = clarificationHasWaitingInput(project, submissions, clarificationTask);
@@ -71,7 +73,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
    const discoveryHeadline = active ? refinement?.headline ?? (processing.length ? `Processing ${processing.length} ${processing.length === 1 ? "response" : "responses"}` : lastJob?.kind === "scan" ? "Reading project files" : lastJob?.context?.definitionAssessment ? "Checking definition" : "Reviewing your project")
       : blocked.length ? "Some responses need attention" : actionablePause ? "Processing paused" : attention.length ? "Needs attention"
       : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting follow-up" : "Ready when you are";
-   const headline = taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? (workflow?.enabled ? `Project workflow · ${workflowLabels[workflow.phase]}` : discoveryHeadline);
+    const headline = reuse && !hasUnfinishedInput ? "Clarification complete · saved result reused" : taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? (workflow?.enabled ? `Project workflow · ${workflowLabels[workflow.phase]}` : discoveryHeadline);
     const liveStage = running[0]?.title ?? (active ? refinement?.label ?? (lastJob?.context?.definitionAssessment ? "Checking how clearly this area is defined…" : processing.length ? "Reviewing saved responses…" : "Reviewing your project information…") : undefined);
        const clarificationResume = !!clarificationJob?.readinessProgress && !!continueClarification && !clarificationBlockedInput;
       const refinementResume = !!refinementJob && !!continueRefinement && !hasUnfinishedInput;
@@ -114,6 +116,11 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
       description={<p role="status">{taskCount} active {taskCount === 1 ? "task" : "tasks"} · Responses: {processing.length} processing · {waiting.length} waiting{attentionCount ? ` · ${attentionCount} need attention` : ""}{actionablePause && !active ? lastJob?.context?.definitionAssessment ? " · Definition processing paused" : " · Discovery paused" : ""}</p>}>
         {error && error !== jobDiagnostic && <DiagnosticNotice detail={error} alert />}
           <p>Work across your project appears here. Saved responses are reviewed one at a time.</p>
+          {reuse && <section aria-label="Reused clarification result"><h3>Clarification complete · saved result reused</h3>
+            <p>Area: {project.epics.find((area) => area.id === reuse.task.epicID)?.title ?? "Saved clarification area"}.</p>
+            <p>No new AI request was made. {reuse.result?.questions.length ? "The saved Design questions are still available." : "No new product question was established."} This does not resolve the original definition finding or declare the project complete.</p>
+            <p>{reuse.result?.summary}</p>
+          </section>}
           {refinementJob?.refinementStageProgress && <section aria-label="Saved refinement progress"><h3>Refinement paused · progress saved</h3>
             <p>{(refinementJob.context?.refinementPair?.requirementIDs ?? [refinementJob.context?.refinementTarget?.requirementID]).map((id) => project.requirements.find((r) => r.id === id)?.statement).filter(Boolean).join(" · ")}</p>
             <p>{refinementJob.refinementStageProgress.completed} / {refinementJob.refinementStageProgress.total} exact read/check steps saved. No partial proposals were published.</p>
@@ -136,7 +143,8 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
          {!workflow?.enabled && maintenance && configureMaintenance && maintenanceSettings && <MaintenanceQueue project={project} maintenance={maintenance} disabled={disabled} pending={stopDisabled} configure={configureMaintenance}
            settings={() => { setOpen(false); maintenanceSettings(); }} />}
           {(active || lastJob?.context?.definitionAssessment) && /^Definition (coverage|refresh)/.test(progress.at(-1) ?? "") && <section aria-label="Definition refresh progress"><h3>Definition refresh progress</h3>{progress.at(-1)!.split("\n").map((line, index) => <p key={index}>{line}</p>)}</section>}
-          {jobDiagnostic && <DiagnosticNotice detail={jobDiagnostic} summary={savedPause ? "Paused—progress saved." : "The last review couldn’t finish. Check what needs attention before continuing."} alert={!savedPause} />}
+          {jobDiagnostic && (reuse ? <details><summary>Earlier task needs attention · separate from clarification</summary><p>This diagnostic belongs to the earlier task, not the clarification result reused above. Its saved work and blockers are unchanged.</p><DiagnosticNotice detail={jobDiagnostic} alert={false} /></details>
+            : <DiagnosticNotice detail={jobDiagnostic} summary={savedPause ? "Paused—progress saved." : "The last review couldn’t finish. Check what needs attention before continuing."} alert={!savedPause} />)}
           {!workflow?.enabled && paused && !active && <p role="status">{lastJob?.context?.definitionAssessment ? lastJob.status === "completed" ? "The latest definition assessment was saved. No automatic task is running." : "Definition processing is paused. Saved evidence and completed checks are retained; use Advanced actions to resume only this assessment, or Continue project to coordinate outstanding work." : actionablePause ? "Discovery is paused. Saved submissions are retained." : "No automatic task is running. Saved work is retained."}</p>}
         {executionWaiting && !paused && waiting.length > 0 && <p role="status">Responses are saved and waiting for assessment or implementation to finish. Automatic follow-up resumes afterward for responses submitted with automatic processing enabled.</p>}
          {blocked.length > 0 && <p role="status">{blocked.length} saved {blocked.length === 1 ? "response previously exceeded" : "responses previously exceeded"} the single-request context limit. Answers and approvals are still saved. Process saved responses only can now use exact evidence batches for concrete answers and reviews without re-entering them. Unsupported or indivisible input may still need attention; no evidence is silently trimmed.</p>}

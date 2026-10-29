@@ -1,7 +1,7 @@
 import { StaleRevisionError, type Job, type Project, type Submission } from "../core/model.js";
 import type { ContextTask } from "../core/working-set.js";
 import type { ContextBudgetError } from "../core/context.js";
-import { acceptSubmissionStage, planSubmissionStages, recoverSubmissionPermissions, submissionMaterials, submissionStageContext, submissionStep, submissionRequestLimit, submissionReconciliation } from "../core/submission-stages.js";
+import { acceptSubmissionStage, planSubmissionStages, recoverSubmissionPermissions, recoverSubmissionCheckScope, recoverSubmissionLegacyStyle, replaySubmissionStages, submissionDraftRepair, submissionMaterials, submissionStageContext, submissionStep, submissionTotalSteps, submissionRequestLimit, submissionReconciliation, submissionPublicationDraft } from "../core/submission-stages.js";
 import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
@@ -25,13 +25,28 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   }
   const priorRecovery = w.permissionRecovery;
   let { draft, blocked } = recoverSubmissionPermissions(m, w, job);
+  const priorCheckRecovery = w.checkScopeRecovery;
+  ({ draft, blocked } = recoverSubmissionCheckScope(m, w));
+  if (!priorCheckRecovery && w.checkScopeRecovery) options.onProgress?.("Rechecking one legacy batch-local eligibility rejection under corrected verification instructions. Frozen wording, rejected receipts and spent attempts stay unchanged; the new check may still reject unsupported content. No approval or extra allowance was granted.");
+  const priorStyleRecovery = w.legacyStyleRecovery;
+  ({ draft, blocked } = recoverSubmissionLegacyStyle(m, w));
+  if (!priorStyleRecovery && w.legacyStyleRecovery) options.onProgress?.("Rechecking an older frozen draft without retroactively applying new prose-style guidance. Original wording, evidence and spent attempts are unchanged; factual conflicts and unauthorized changes still reject. No new draft pass or request allowance was granted.");
+  if (blocked && !w.draftRepair) {
+    const repair = submissionDraftRepair(m, w, store.jobs(project.id));
+    if (repair) {
+      w.draftRepair = repair; w.attempts = 0;
+      ({ draft, blocked } = replaySubmissionStages(m, w));
+      options.onProgress?.("Clarification found no new question. Correcting the rejected draft against exact saved input; earlier reads and rejected checks stay saved. The revised draft must pass every evidence check before any changes publish. No human decision or approval is inferred.");
+    }
+  }
   if (!priorRecovery && w.permissionRecovery) options.onProgress?.("Recovered an older staged revision-permission blocker. Original input, completed steps and spent attempts remain saved; continuing the unfinished read with exact supporting evidence.");
+  store.assertSubmissionDraftRepair(project, item, w);
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;
   const current = () => { options.signal.throwIfAborted(); if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError(); };
   for (;;) {
     current();
-    const done = submissionStep(w) === w.batches.length * 2;
+    const done = submissionStep(w) === submissionTotalSteps(w);
     const context = done ? submissionStageContext(m, { ...w, receipts: w.receipts.slice(0, -1) }, draft) : submissionStageContext(m, w, draft);
     context.manifest.reviewSourceIDs = item.input.type === "review" ? [item.appliedSourceID!] : [];
     context.manifest.scopedAnswerSourceIDs = item.answerScope ? [item.appliedSourceID!] : [];
@@ -41,16 +56,22 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
       context.manifest.selectionReason = "Publication authorized only by replay of all exact saved-response read/check batches; original input is not reapplied.";
     }
     store.checkpointSubmission(job.id, w, context.manifest);
-    if (done) return store.finishJob(job.id, draft);
+    if (done) {
+      const publication = submissionPublicationDraft(m, w, draft);
+      if (JSON.stringify(publication) !== JSON.stringify(draft)) options.onProgress?.("Separated redundant historical confirmation citations from current-answer authorization. Checked wording and original receipts are unchanged; historical evidence remains on the target. No model requests repeated.");
+      return store.finishJob(job.id, publication);
+    }
     if (blocked) throw new Error(`Saved-response follow-up blocked: ${blocked} Original input and completed steps remain saved.`);
     if (calls >= limits.requests || Date.now() >= deadline) return store.pauseSubmission(job.id,
-      `Saved-response follow-up paused: ${submissionStep(w)} / ${w.batches.length * 2} steps saved. Continue processing explicitly; completed requests will not repeat.`);
-    if (w.attempts >= submissionRequestLimit(w)) throw new Error(submissionRequestLimit(w) === 4
+      `Saved-response follow-up paused: ${submissionStep(w)} / ${submissionTotalSteps(w)} steps saved. Continue processing explicitly; completed requests will not repeat.`);
+    if (w.attempts >= submissionRequestLimit(w)) throw new Error(w.draftRepair
+      ? "Corrective saved-response review exhausted its finite request allowance. Earlier work remains saved; unchanged retry cannot grant another corrective pass."
+      : submissionRequestLimit(w) === 4
       ? "Saved-response step exhausted its four-request allowance. Earlier completed work and spent attempts remain saved. Use Allow 4 more requests in Processing & queue to explicitly extend only this unfinished step."
       : "Saved-response step exhausted its extended eight-request allowance. Earlier completed work and spent attempts remain saved; no further requests were granted.");
     if (!calls) options.measurement?.planned(context);
     w.attempts++; calls++; store.checkpointSubmission(job.id, w, context.manifest);
-    options.onProgress?.(`Following up on saved input · ${submissionStep(w)} / ${w.batches.length * 2} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial changes published.`);
+    options.onProgress?.(`Following up on saved input · ${submissionStep(w)} / ${submissionTotalSteps(w)} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial changes published.`);
     const timeout = AbortSignal.timeout(Math.max(1, Math.min(300000, deadline - Date.now())));
     const signal = AbortSignal.any([options.signal, timeout]);
     let abort: () => void = () => {};

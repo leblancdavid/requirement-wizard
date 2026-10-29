@@ -33,11 +33,18 @@ const connections: Connections = {
 let calls = 0;
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(snapshot, { context }) {
   calls++;
+  if (snapshot.name === "Saved-response no-question correction" && context.manifest.submissionStage?.phase === "read") {
+    const source = snapshot.sources.at(-1)!;
+    return { ...empty(), reviewResponses: [{ sourceID: source.id, text: "Corrected from your explicit replacement request" }],
+      pendingChanges: { format: 1, changes: [{ type: "revise-requirement", requirementID: snapshot.requirements[0]!.id,
+        statement: "Save reports offline", rationale: "Explicit human replacement", acceptance: ["Reports save without connectivity"], sourceIDs: [source.id], reason: "The saved request explicitly replaces the connectivity rule" }] } };
+  }
   if (context.manifest.submissionStage) return context.manifest.submissionStage.phase === "check"
     ? { submissionCheck: { valid: true, reason: "Frozen draft matches this exact batch" } } : { submissionKeep: true };
   if (context.manifest.readinessStage?.phase === "check") return { clarificationVerdict: { keepQuestions: [], summary: "Every saved evidence batch checked; no new question remains." } };
   if (context.manifest.readinessQuestions) {
     const task = context.manifest.readinessQuestions;
+    if (snapshot.name === "Saved-response no-question correction") return { ...empty(), summary: "The saved request already states which rule it replaces. No new human choice is needed." };
     if (snapshot.name === "Saved-response conflict question") return { ...empty(), questions: [{ epicID: task.epicID,
       text: "Does the offline example replace the earlier connectivity rule?", whyItMatters: "The example and the earlier rule leave precedence unclear.", evidenceIDs: [snapshot.sources[0]!.id],
       options: [{ label: "Keep the connectivity rule", consequence: "Only the example changes" }, { label: "Replace the connectivity rule", consequence: "Offline saving now governs" }] }] };
@@ -240,14 +247,58 @@ try {
     await panel.getByRole("button", { name: "Prepare questions in Design", exact: true }).click();
     await expect(page.getByRole("tab", { name: /^Design/ })).toHaveAttribute("aria-selected", "true");
     const notice = page.getByRole("status", { name: "Definition clarification", exact: true });
+    await expect(notice).toBeFocused();
+    await expect(notice).toBeInViewport();
     if (settled) {
       await expect(notice).toContainText("No new product question was established");
       await expect(notice).toContainText("already settled");
       assert.equal(store.get(review.id).questions.length, 0);
+      const current = store.get(review.id), earlier = store.beginJob(review.id, current.revision).job;
+      store.claimJob(earlier.id, Date.now() + 60000);
+      const plannerDiagnostic = "Local workflow preparation exceeded its two-minute bound. No model request was made. The examined prefix has 33 blocked packages.";
+      store.failJob(earlier.id, "failed", plannerDiagnostic);
+      const historicalFailure = store.getJob(earlier.id), jobsBeforeReuse = store.jobs(review.id).length;
+      await page.reload();
       await page.getByRole("tab", { name: /^Specification/ }).click();
+      await panel.getByText("Let AI turn definition findings into Design questions", { exact: true }).click();
+      await panel.getByRole("button", { name: "Clarify in Design", exact: true }).click();
       await panel.getByRole("button", { name: "Prepare questions in Design", exact: true }).click();
       await expect(notice).toContainText("No new product question was established");
+      await expect(notice).toContainText("Saved clarification result reused");
+      await expect(notice).toBeFocused();
+      await expect(notice).toBeInViewport();
       assert.equal(calls, before + 1, "Unchanged no-question result is reused without another call");
+      assert.equal(store.jobs(review.id).length, jobsBeforeReuse, "Reusing clarification must not start general package planning or another job");
+      assert.deepEqual(store.getJob(earlier.id), historicalFailure);
+      await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+      const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
+      await expect(drawer.getByRole("region", { name: "Reused clarification result" })).toContainText("No new AI request was made");
+      await expect(drawer.getByRole("region", { name: "Reused clarification result" })).toContainText("This does not resolve the original definition finding");
+      await expect(drawer.getByText(plannerDiagnostic, { exact: true })).not.toBeVisible();
+      await drawer.getByText("Earlier task needs attention · separate from clarification", { exact: true }).click();
+      await expect(drawer.getByText("This diagnostic belongs to the earlier task, not the clarification result reused above. Its saved work and blockers are unchanged.", { exact: true })).toBeVisible();
+      await expect(drawer.locator("details").filter({ has: page.getByText("Earlier task needs attention · separate from clarification", { exact: true }) }).getByRole("button", { name: "View logs", exact: true })).toBeVisible();
+      await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
+      // Repeating the exact no-call action must reveal its outcome again, not
+      // depend on a changed task key or a new model job. Stress a deep origin.
+      await page.getByRole("tab", { name: /^Specification/ }).click();
+      const prepareAgain = panel.getByRole("button", { name: "Prepare questions in Design", exact: true });
+      await prepareAgain.evaluate((button) => { button.style.marginTop = "1400px"; });
+      await prepareAgain.click();
+      await expect(notice).toBeFocused();
+      await expect(notice).toBeInViewport();
+      assert.equal(calls, before + 1);
+      assert.equal(store.jobs(review.id).length, jobsBeforeReuse);
+      // Backend refusal stays visible at the initiating action, with no tab
+      // switch or inference, rather than silently swallowing the rejection.
+      await page.getByRole("tab", { name: /^Specification/ }).click();
+      const refusal = "Fixture: wait for the current task before asking for clarification.";
+      await page.route("**/clarify-definition", (route) => route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: refusal }) }));
+      await prepareAgain.click();
+      await expect(panel.getByRole("alert").filter({ hasText: refusal })).toBeVisible();
+      await expect(page.getByRole("tab", { name: /^Specification/ })).toHaveAttribute("aria-selected", "true");
+      assert.equal(calls, before + 1);
+      await page.unroute("**/clarify-definition");
     } else {
       await expect(notice).toContainText("Focused questions are ready");
       await page.getByRole("button", { name: /Choose One trick earns both rewards\./ }).click();
@@ -365,6 +416,7 @@ try {
     checks: dimensions.map((dimension) => ({ dimension, status: dimension === "failures" ? "partial" : "defined", importance: "important",
       explanation: "Read original decisions", evidenceIDs: [automatic.sources[0]!.id] })) }] });
   automatic = store.get(automatic.id);
+  store.saveWorkflow(automatic.id, { ...store.workflow(automatic.id), enabled: true, paused: true, phase: "paused", message: "Coordinator paused before manual definition refresh." });
   await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: automatic.name, exact: true }).click();
   const automaticCalls = calls;
   // Scope the request to the already reviewed area; no other assessment is authorized here.
@@ -379,37 +431,49 @@ try {
   await expect(page.getByText("Which minimum governs the combination reward for a single-trick landing?", { exact: true }).first()).toBeVisible();
   assert.equal(calls, automaticCalls + 1); assert.equal(store.get(automatic.id).requirements.length, 0);
   // Retained saved-response conflicts get questions too, not just definition findings.
-  let conflict = store.create("Saved-response conflict question", "Reports normally require connectivity", p.model);
-  const conflictSeed = store.beginJob(conflict.id, conflict.revision).job; store.claimJob(conflictSeed.id, Date.now() + 60000);
-  store.finishJob(conflictSeed.id, { ...empty(), requirements: [{ epicID: "inbox", statement: "Save reports with connectivity", rationale: "Earlier human rule",
-    acceptance: ["A report saves while connected"], sourceIDs: [conflict.sources[0]!.id] }] });
-  conflict = store.get(conflict.id);
-  const originalRequirement = structuredClone(conflict.requirements[0]!);
-  const conflictInput = store.enqueue(conflict.id, { id: randomUUID(), auto: false, research: false,
-    input: { type: "review", requirementID: originalRequirement.id, requirementText: originalRequirement.statement, fingerprint: reviewFingerprint(originalRequirement),
-      action: "changes-requested", note: "Replace the example with an offline report", reviewedRevision: conflict.revision } });
-  store.applyQueued(conflict.id, [conflictInput.id]); conflict = store.get(conflict.id);
-  const retainedConflict = store.submissions(conflict.id).find((s) => s.id === conflictInput.id)!;
-  const responseConflictJob = store.beginJob(conflict.id, conflict.revision).job; store.claimJob(responseConflictJob.id, Date.now() + 60000);
-  try {
-    await runSubmissionStages(store, { async analyze(_p, { context }) {
-      return context.manifest.submissionStage!.phase === "check" ? { submissionCheck: { valid: false, reason: "Replacing the example does not clearly replace the earlier connectivity rule" } }
-        : { ...empty(), reviewResponses: [{ sourceID: retainedConflict.appliedSourceID!, text: "Review the proposed offline example" }] };
-    } }, conflict, responseConflictJob, retainedConflict, { recordIDs: [originalRequirement.id, retainedConflict.appliedSourceID!], isolatedTask: true, submissionFollowup: true, expandMandatory: true },
-    { signal: new AbortController().signal, research: false });
-    assert.fail("The conflicting draft must stop");
-  } catch (error) { assert.match(String(error), /Saved-response follow-up blocked/); }
-  store.failJob(responseConflictJob.id, "failed", "Saved-response follow-up blocked: replacing the example did not settle the earlier rule.");
-  retainedConflict.status = "needs-attention"; retainedConflict.jobID = responseConflictJob.id; store.saveSubmission(retainedConflict);
-  await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: conflict.name, exact: true }).click();
-  const conflictCalls = calls;
-  await page.locator(".queue-header-action", { hasText: "Process saved responses only" }).click();
-  await expect.poll(() => store.get(conflict.id).questions.length).toBe(1);
-  await page.getByRole("tab", { name: /^Design/ }).click();
-  await expect(page.getByText("Does the offline example replace the earlier connectivity rule?", { exact: true }).first()).toBeVisible();
-  assert.equal(calls, conflictCalls + 1, "Only question preparation called the adapter; the rejected follow-up was not repeated");
-  assert.deepEqual(store.get(conflict.id).requirements[0], originalRequirement);
-  assert.equal(store.submissions(conflict.id).find((s) => s.id === conflictInput.id)!.status, "needs-attention");
+  for (const noQuestion of [false, true]) {
+    let conflict = store.create(noQuestion ? "Saved-response no-question correction" : "Saved-response conflict question", "Reports normally require connectivity", p.model);
+    const conflictSeed = store.beginJob(conflict.id, conflict.revision).job; store.claimJob(conflictSeed.id, Date.now() + 60000);
+    store.finishJob(conflictSeed.id, { ...empty(), requirements: [{ epicID: "inbox", statement: "Save reports with connectivity", rationale: "Earlier human rule",
+      acceptance: ["A report saves while connected"], sourceIDs: [conflict.sources[0]!.id] }] });
+    conflict = store.get(conflict.id);
+    const originalRequirement = structuredClone(conflict.requirements[0]!);
+    const conflictInput = store.enqueue(conflict.id, { id: randomUUID(), auto: false, research: false,
+      input: { type: "review", requirementID: originalRequirement.id, requirementText: originalRequirement.statement, fingerprint: reviewFingerprint(originalRequirement),
+        action: "changes-requested", note: noQuestion ? "Save reports offline; this replaces the earlier connectivity requirement" : "Replace the example with an offline report", reviewedRevision: conflict.revision } });
+    store.applyQueued(conflict.id, [conflictInput.id]); conflict = store.get(conflict.id);
+    const retainedConflict = store.submissions(conflict.id).find((s) => s.id === conflictInput.id)!;
+    const responseConflictJob = store.beginJob(conflict.id, conflict.revision).job; store.claimJob(responseConflictJob.id, Date.now() + 60000);
+    try {
+      await runSubmissionStages(store, { async analyze(_p, { context }) {
+        return context.manifest.submissionStage!.phase === "check" ? { submissionCheck: { valid: false, reason: "Replacing the example does not clearly replace the earlier connectivity rule" } }
+          : { ...empty(), reviewResponses: [{ sourceID: retainedConflict.appliedSourceID!, text: "Review the proposed offline example" }] };
+      } }, conflict, responseConflictJob, retainedConflict, { recordIDs: [originalRequirement.id, retainedConflict.appliedSourceID!], isolatedTask: true, submissionFollowup: true, expandMandatory: true },
+      { signal: new AbortController().signal, research: false });
+      assert.fail("The conflicting draft must stop");
+    } catch (error) { assert.match(String(error), /Saved-response follow-up blocked/); }
+    store.failJob(responseConflictJob.id, "failed", "Saved-response follow-up blocked: replacing the example did not settle the earlier rule.");
+    retainedConflict.status = "needs-attention"; retainedConflict.jobID = responseConflictJob.id; store.saveSubmission(retainedConflict);
+    store.saveWorkflow(conflict.id, { ...store.workflow(conflict.id), enabled: true, paused: true, phase: "blocked", message: "Coordinator stopped before manual saved-response recovery." });
+    await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: conflict.name, exact: true }).click();
+    const conflictCalls: number = calls;
+    await page.locator(".queue-header-action", { hasText: "Process saved responses only" }).click();
+    if (noQuestion) {
+      await expect.poll(() => store.submissions(conflict.id).find((s) => s.id === conflictInput.id)!.status).toBe("completed");
+      assert.equal(store.get(conflict.id).questions.length, 0);
+      assert.equal(store.get(conflict.id).requirements[0]!.statement, "Save reports offline");
+      assert.equal(calls, conflictCalls + 3, "No-question triage proceeds to one correction and the exact batch check, not another question sweep");
+      assert.ok(store.jobs(conflict.id).at(-1)!.submissionWork!.draftRepair);
+    } else {
+      await expect.poll(() => store.get(conflict.id).questions.length).toBe(1);
+      await page.getByRole("tab", { name: /^Design/ }).click();
+      await expect(page.getByText("Does the offline example replace the earlier connectivity rule?", { exact: true }).first()).toBeVisible();
+      assert.equal(calls, conflictCalls + 1, "Only question preparation called the adapter; the rejected follow-up was not repeated");
+      assert.deepEqual(store.get(conflict.id).requirements[0], originalRequirement);
+      assert.equal(store.submissions(conflict.id).find((s) => s.id === conflictInput.id)!.status, "needs-attention");
+    }
+    assert.equal(store.workflow(conflict.id).paused, true, "Manual clarification must not resume the paused coordinator");
+  }
   console.log("Specification/browser lists, staged Design continuation and oversized saved-review continuation passed, including reload recovery, explicit continuation and bounded snapshot progress.");
 } catch (error) { await diagnose?.(resolve(".reqwizit-state/browser-continuous-specification-failure")); throw error; }
 finally { await browser?.close(); await app.close(); store.close(); }

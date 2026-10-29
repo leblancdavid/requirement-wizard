@@ -46,7 +46,7 @@ import { readinessQuestionTaskSchema, submissionQuestionBlock, validateReadiness
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
-import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
+import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
 import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -95,7 +95,7 @@ function readStoredJob(payload: string): Job {
   if (job.epicReviewReport !== undefined) epicReviewReportSchema.parse(job.epicReviewReport);
   if (job.retrievalWork !== undefined) retrievalWorkSchema.parse(job.retrievalWork);
   if (job.retrievalWork?.epicStages && !isStagedPolicy(job.context?.epicReview?.contextPolicy)) throw new Error("Staged checkpoints require their saved staged context policy; original work was not overwritten.");
-  if (job.retrievalWork?.epicStages && ((["staged-headroom-v2", "staged-current-spec-v3"].includes(job.context?.epicReview?.contextPolicy ?? "")
+  if (job.retrievalWork?.epicStages && ((["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"].includes(job.context?.epicReview?.contextPolicy ?? "")
     && job.retrievalWork.epicStages.contextPolicy !== job.context?.epicReview?.contextPolicy) || job.retrievalWork.epicStages.contextPolicy !== undefined
     && job.retrievalWork.epicStages.contextPolicy !== job.context?.epicReview?.contextPolicy))
     throw new Error("Staged checkpoint policy does not match its saved protocol. Original work was not overwritten.");
@@ -1010,7 +1010,8 @@ export class ProjectStore {
         WHEN json_type(payload, '$.submissionWork') IS NOT NULL THEN json_extract(payload, '$.submissionWork.policy')
         WHEN json_type(payload, '$.definitionWork') IS NOT NULL THEN 'definition-exact-batches-v1' ELSE json_extract(payload, '$.context.epicReview.contextPolicy') END AS policy,
       CASE WHEN json_extract(payload, '$.definitionInterruption.format') = 1 THEN json_extract(payload, '$.definitionInterruption.cause') END AS interruptionCause,
-      COALESCE(json_extract(payload, '$.readinessWork.format'), json_extract(payload, '$.submissionWork.format')) AS savedStageFormat,
+       COALESCE(json_extract(payload, '$.readinessWork.format'), json_extract(payload, '$.submissionWork.format')) AS savedStageFormat,
+       json_extract(payload, '$.submissionWork.draftRepair.format') AS savedDraftRepairFormat,
       json_extract(payload, '$.context.characters') AS characters, json_extract(payload, '$.context.budget') AS budget,
       json_array_length(payload, '$.context.includedIDs') AS included, json_array_length(payload, '$.context.omittedIDs') AS omitted,
       json_array_length(payload, '$.context.epicIDs') AS areas, json_extract(payload, '$.context.sectionCharacters') AS sections,
@@ -1019,6 +1020,8 @@ export class ProjectStore {
       COALESCE(json_array_length(payload, '$.readinessWork.batches'), json_array_length(payload, '$.submissionWork.batches'), json_extract(payload, '$.retrievalWork.epicStages.batches'), json_array_length(payload, '$.definitionWork.batches')) AS stagedBatches,
       CASE WHEN json_type(payload, '$.readinessWork') IS NOT NULL THEN
         (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.readinessWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_type(r.value, '$.response.clarificationRead') IS NOT NULL OR json_type(r.value, '$.response.clarificationVerdict') IS NOT NULL)
+        WHEN json_type(payload, '$.submissionWork.draftRepair') IS NOT NULL THEN
+        json_array_length(payload, '$.submissionWork.batches') + (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE CAST(r.key AS INTEGER) >= json_extract(payload, '$.submissionWork.draftRepair.fromReceipt') AND (json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1))
         WHEN json_type(payload, '$.submissionWork') IS NOT NULL THEN
         (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1)
         ELSE COALESCE(json_array_length(payload, '$.retrievalWork.epicStages.receipts'), json_array_length(payload, '$.definitionWork.receipts')) END AS stagedCompleted,
@@ -1155,7 +1158,7 @@ export class ProjectStore {
     if (rows.some((row) => row.format !== 1)) throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
     for (const row of rows) {
       const value = JSON.parse(row.payload) as { format?: unknown; planningPolicy?: unknown };
-      if (value.format !== 1 || value.planningPolicy !== undefined && (typeof value.planningPolicy !== "string" || !["staged-headroom-v2", "staged-current-spec-v3"].includes(value.planningPolicy)))
+      if (value.format !== 1 || value.planningPolicy !== undefined && (typeof value.planningPolicy !== "string" || !["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"].includes(value.planningPolicy)))
         throw new Error("Unsupported local planning receipt policy. Saved work was not overwritten.");
     }
     return new Map(rows.filter((row) => row.input_key === inputKey).map((row) => [row.group_key, epicPlanningCheckpointSchema.parse(JSON.parse(row.payload))]));
@@ -1170,7 +1173,7 @@ export class ProjectStore {
         throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
       if (this.db.prepare(`SELECT 1 FROM epic_planning_receipts WHERE project_id = ? AND
         (COALESCE(json_extract(payload, '$.format'), 0) != 1 OR
-        (json_type(payload, '$.planningPolicy') IS NOT NULL AND json_extract(payload, '$.planningPolicy') NOT IN ('staged-headroom-v2', 'staged-current-spec-v3')))` ).get(projectID))
+        (json_type(payload, '$.planningPolicy') IS NOT NULL AND json_extract(payload, '$.planningPolicy') NOT IN ('staged-headroom-v2', 'staged-current-spec-v3', 'staged-records-v4')))` ).get(projectID))
         throw new Error("Unsupported local planning receipt policy. Saved work was not overwritten.");
       // One input generation per project, capped at 4 MiB/2,000 roots/subtrees.
       // This is disposable derived state, never original decisions or checks.
@@ -1345,6 +1348,18 @@ export class ProjectStore {
     if (!recoverSubmissionPermissions(materials, structuredClone(work), source).blocked)
       throw new Error("This saved-response blocker needs processing recovery, not a new product question.");
     return item;
+  }
+
+  assertSubmissionDraftRepair(project: Project, item: Submission, work: SubmissionWork) {
+    const repair = work.draftRepair;
+    if (!repair) return;
+    const source = this.getJob(repair.sourceJobID), original = source.submissionWork;
+    const expected = source.projectID === project.id && original
+      && submissionDraftRepair(submissionMaterials(project, item, original.task), original, this.jobs(project.id));
+    if (JSON.stringify(expected) !== JSON.stringify(repair) || original?.materialKey !== work.materialKey || original.planKey !== work.planKey
+      || JSON.stringify(original.task) !== JSON.stringify(work.task)
+      || JSON.stringify(work.receipts.slice(0, repair.fromReceipt)) !== JSON.stringify(original.receipts))
+      throw new Error("Corrective review requires its completed no-question clarification and unchanged original rejected ledger.");
   }
 
   checkpointReadiness(id: string, input: ReadinessWork, context: NonNullable<Job["context"]>) {
@@ -1601,6 +1616,7 @@ export class ProjectStore {
               || job.context?.readinessQuestions || job.context?.definitionAssessment || job.context?.epicReview || job.context?.gapExploration)
               throw new Error("Staged saved-response publication requires its exclusive saved task.");
             validateSubmissionPublication(project, item, job, result);
+            this.assertSubmissionDraftRepair(project, item, job.submissionWork);
             if (job.submissionWork.reconciliation) {
               const provenance = job.submissionWork.reconciliation, source = this.getJob(provenance.sourceJobID);
               const expected = source.submissionWork && submissionReconciliation(project, item.id, source.submissionWork, this.jobs(project.id));

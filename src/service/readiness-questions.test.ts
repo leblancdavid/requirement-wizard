@@ -11,7 +11,7 @@ import { definitionInputKey } from "../core/definition-identity.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 import { ContextBudgetError } from "../core/context.js";
 import type { Analysis } from "../core/model.js";
-import { acceptReadinessStage, planReadinessStages, readinessMaterials, readinessStageContext, readinessStep, replayReadinessStages, validateReadinessStagePublication, readinessWorkSchema, upgradeReadinessRead } from "../core/readiness-stages.js";
+import { acceptReadinessStage, planReadinessStages, readinessMaterials, readinessStageContext, readinessStep, replayReadinessStages, validateReadinessStagePublication, readinessWorkSchema, upgradeReadinessRead, readinessRequestAllowance } from "../core/readiness-stages.js";
 import { runReadinessStages } from "./readiness-stages.js";
 import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
@@ -303,6 +303,109 @@ function largeFixture(file = ":memory:") {
   const materials = readinessMaterials(project, task), work = planReadinessStages(materials);
   return { ...f, project, task, materials, work };
 }
+
+test("four successful legacy evidence reads resume after reopen, preserving receipts and allowing a final verdict beyond attempt four", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "clarification-evidence-progress-")), file = join(directory, "state.sqlite");
+  const f = largeFixture(file); let closed = false;
+  try {
+    const work = f.work; upgradeReadinessRead(work);
+    const originalJob = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(originalJob.id, Date.now() + 60000);
+    let draft = replayReadinessStages(f.project, f.materials, work).draft;
+    const context = readinessStageContext(f.project, f.materials, work, draft);
+    const additions = f.materials.evidenceIDs.filter((id) => !context.manifest.includedIDs.includes(id)).slice(0, 4);
+    assert.equal(additions.length, 4);
+    for (const id of additions) {
+      work.attempts++;
+      draft = acceptReadinessStage(f.project, f.materials, work, draft, { clarificationEvidence: { recordIDs: [id], reason: "Load a distinct exact linked source" } }, originalJob);
+    }
+    const checkpoint = readinessStageContext(f.project, f.materials, work, draft);
+    f.store.checkpointReadiness(originalJob.id, work, checkpoint.manifest);
+    f.store.failJob(originalJob.id, "failed", "Legacy four-request allowance exhausted after successful retrievals");
+    const original = f.store.getJob(originalJob.id);
+    assert.equal(work.attempts, 4); assert.equal(work.evidenceProgress, undefined);
+    f.store.close(); closed = true;
+    for (let reopen = 0; reopen < 2; reopen++) {
+      const store = new ProjectStore(file);
+      try {
+        assert.deepEqual(store.getJob(originalJob.id), original);
+        if (!reopen) continue;
+        const job = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+        let calls = 0, finalReads = 0;
+        const final = await runReadinessStages(store, { async analyze(_p, { context: current }) {
+          calls++;
+          assert.equal(store.get(f.project.id).questions.length, 0, "No partial publication");
+          assert.ok(current.manifest.characters <= 96000);
+          if (calls === 1) {
+            assert.equal(store.getJob(job.id).readinessWork!.attempts, 5);
+            for (const id of additions) assert.ok(current.manifest.includedIDs.includes(id), "Saved evidence must not be requested again");
+          }
+          if (current.manifest.readinessStage!.step === work.batches.length * 2 - 1 && finalReads < 4) {
+            finalReads++;
+            const id = f.materials.evidenceIDs.find((id) => !current.manifest.includedIDs.includes(id))!;
+            return { clarificationEvidence: { recordIDs: [id], reason: "Compare distinct exact source before final verdict" } };
+          }
+          return current.manifest.readinessStage!.phase === "check"
+            ? { clarificationVerdict: { keepQuestions: [], summary: "Every exact batch checked" } } : empty();
+        } }, store.get(f.project.id), job, f.task, { signal: new AbortController().signal, continuous: true });
+        assert.equal(final.status, "completed", final.diagnostic);
+        assert.equal(calls, work.batches.length * 2 + 4);
+        assert.deepEqual(final.readinessWork!.receipts.slice(0, 4), original.readinessWork!.receipts);
+        assert.deepEqual(final.readinessWork!.evidenceProgress, { format: 1 });
+        assert.equal(final.readinessWork!.receipts.at(-1)!.attempt, 5);
+        assert.deepEqual(store.getJob(originalJob.id), original);
+        const project = store.get(f.project.id), state = continuationState(project, store.jobs(project.id), store.submissions(project.id), (r) => store.get(project.id, r));
+        const portable = decodePortable(renderWorkspace(project, undefined, state), project.model);
+        assert.deepEqual(portable.continuation.jobs.find((j) => j.id === final.id)!.readinessWork, final.readinessWork);
+      } finally { store.close(); }
+    }
+  } finally { if (!closed) f.store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("evidence progress does not forgive failed calls, duplicate loads or forged future formats", () => {
+  const f = largeFixture();
+  try {
+    upgradeReadinessRead(f.work); f.work.evidenceProgress = { format: 1 };
+    const job = f.store.beginJob(f.project.id, f.project.revision).job;
+    let draft = replayReadinessStages(f.project, f.materials, f.work).draft;
+    const context = readinessStageContext(f.project, f.materials, f.work, draft);
+    const id = f.materials.evidenceIDs.find((id) => !context.manifest.includedIDs.includes(id))!;
+    f.work.attempts = 3; // Two earlier malformed/failed requests stay spent.
+    draft = acceptReadinessStage(f.project, f.materials, f.work, draft, { clarificationEvidence: { recordIDs: [id], reason: "New exact source" } }, job);
+    assert.equal(readinessRequestAllowance(f.work), 5);
+    f.work.attempts = 5; // Two more failed calls exhaust the original four-failure bound.
+    assert.equal(replayReadinessStages(f.project, f.materials, f.work).blocked, undefined);
+    assert.equal(f.work.attempts, readinessRequestAllowance(f.work));
+    assert.throws(() => acceptReadinessStage(f.project, f.materials, f.work, draft, { clarificationEvidence: { recordIDs: [id], reason: "Duplicate" } }, job), /already detailed/);
+    assert.equal(readinessRequestAllowance(f.work), 5);
+    assert.throws(() => replayReadinessStages(f.project, f.materials, { ...f.work, attempts: 6 }), /attempt accounting/);
+    assert.throws(() => readinessWorkSchema.parse({ ...f.work, evidenceProgress: { format: 2 } }));
+    assert.throws(() => readinessWorkSchema.parse({ ...f.work, evidenceProgress: undefined }), /Legacy clarification/);
+  } finally { f.store.close(); }
+});
+
+test("four failed calls still stop after a successful evidence read and cannot reset on explicit retry", async () => {
+  const f = largeFixture(); let calls = 0;
+  const adapter: DiscoveryAdapter = { async analyze(_p, { context }) {
+    calls++;
+    if (calls === 1) return { clarificationEvidence: { recordIDs: [f.materials.evidenceIDs.find((id) => !context.manifest.includedIDs.includes(id))!], reason: "Distinct required evidence" } };
+    return { malformed: true };
+  } };
+  try {
+    for (let retry = 0; retry < 6; retry++) {
+      const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+      try {
+        await runReadinessStages(f.store, adapter, f.project, job, f.task, { signal: new AbortController().signal, continuous: true });
+        assert.fail("Malformed output cannot publish");
+      } catch (error) { f.store.failJob(job.id, "failed", String(error)); }
+    }
+    assert.equal(calls, 5, "One successful retrieval plus the original four failed attempts, not another allowance on retry");
+    const last = f.store.jobs(f.project.id).at(-1)!;
+    assert.equal(last.readinessWork!.attempts, 5); assert.equal(last.readinessWork!.receipts.length, 1);
+    assert.match(last.diagnostic!, /failed-attempt allowance/);
+    assert.equal(f.store.get(f.project.id).questions.length, 0);
+  } finally { f.store.close(); }
+});
 
 /** Independent wire decoder: staged requests must retain full original records. */
 function decodeStage(input: unknown) {

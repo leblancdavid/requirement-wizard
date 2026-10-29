@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
 import { reviewFingerprint, type Analysis, type Project } from "../core/model.js";
 import { ContextBudgetError } from "../core/context.js";
 import { planExactTaskContext } from "../core/working-set.js";
-import { acceptSubmissionStage, planSubmissionStages, replaySubmissionStages, recoverSubmissionPermissions, submissionAllowance, submissionDraftSchema, submissionMaterials, submissionStageContext, submissionStep, submissionWorkSchema } from "../core/submission-stages.js";
+import { acceptSubmissionStage, planSubmissionStages, replaySubmissionStages, recoverSubmissionPermissions, recoverSubmissionCheckScope, recoverSubmissionLegacyStyle, submissionAllowance, submissionDraftSchema, submissionDraftRepair, submissionMaterials, submissionStageContext, submissionStep, submissionTotalSteps, submissionWorkSchema, submissionPublicationDraft } from "../core/submission-stages.js";
 import { DiscoveryService } from "./discovery.js";
 import { DiscoveryQueue } from "./queue.js";
 import { runSubmissionStages } from "./submission-stages.js";
@@ -18,6 +18,294 @@ import { startApp } from "../web/server.js";
 import { submissionQuestionTask, submissionQuestionBlock, submissionClarificationQuestions } from "../core/readiness-questions.js";
 
 const empty = (): Analysis => ({ summary: "Follow up on saved review", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
+
+for (const valid of [true, false]) test(`legacy frozen rationale reopens under compatible writing guidance without rewrite or new allowance: ${valid ? "valid" : "still factually invalid"}`, async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "submission-legacy-style-")), file = join(directory, "state.sqlite");
+  const f = fixture(file, "reconciliation"); let closed = false;
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    let draft = replaySubmissionStages(m, w).draft;
+    const accept = (raw: unknown) => { w.attempts++; draft = acceptSubmissionStage(m, w, draft, raw, job).draft; };
+    const missing = f.project.requirements[0]!.sourceIDs.filter((id) => !submissionStageContext(m, w, draft).manifest.includedIDs.includes(id));
+    if (missing.length) accept({ submissionEvidence: { recordIDs: missing } });
+    const output = f.output();
+    const change = output.specificationUpdates!.changes[0]!; assert.equal(change.type, "revise");
+    if (change.type === "revise") change.rationale += " The staged eligible target list includes this requirement.";
+    accept(output);
+    while (submissionStep(w) < w.batches.length) accept({ submissionKeep: true });
+    const producer = w.receipts.find((r) => "questions" in r.response)!;
+    assert.equal(producer.draftPolicy, "product-rationale-v1");
+    w.attempts = 1; // A preceding failed call stays spent; the v1 rejection is attempt two.
+    accept({ submissionCheck: { valid: false, reason: "The chosen rule matches, but the new writing instructions prohibit old workflow commentary" } });
+    w.receipts.at(-1)!.checkPolicy = "staged-check-scope-v1";
+    assert.ok(recoverSubmissionLegacyStyle(m, structuredClone(w)).blocked, "Newly authored drafts cannot claim legacy compatibility");
+    delete producer.draftPolicy; // Exact older wire draft, predating authoring markers.
+    const beforeCheck = { ...w, receipts: w.receipts.slice(0, -1) };
+    const context = submissionStageContext(m, beforeCheck, draft);
+    assert.equal(context.manifest.submissionDraftPolicy, "legacy");
+    assert.match(discoveryPrompt(f.project, context), /Do NOT reject it merely because its retained rationale contains workflow commentary/);
+    const recovered = structuredClone(w), replay = recoverSubmissionLegacyStyle(m, recovered);
+    assert.equal(replay.blocked, undefined); assert.equal(recovered.attempts, 2);
+    assert.deepEqual(replay.draft, draft); assert.deepEqual(recovered.receipts, w.receipts);
+    assert.throws(() => submissionWorkSchema.parse({ ...recovered, legacyStyleRecovery: { format: 2, receiptIndex: w.receipts.length - 1 } }));
+    const exhausted = { ...structuredClone(w), attempts: 4 }; recoverSubmissionLegacyStyle(m, exhausted);
+    assert.equal(exhausted.attempts, 4, "Compatibility cannot reset an exhausted finite allowance");
+    f.store.checkpointSubmission(job.id, w, context.manifest);
+    f.store.failJob(job.id, "failed", "Legacy rationale style rejection under check-scope v1");
+    const original = f.store.getJob(job.id);
+    f.store.close(); closed = true;
+    for (let reopen = 0; reopen < 2; reopen++) {
+      const store = new ProjectStore(file);
+      try {
+        assert.deepEqual(store.getJob(job.id), original);
+        if (!reopen) continue;
+        let calls = 0;
+        const adapter = { async analyze(_p: Project, { context: current }: Parameters<import("./discovery.js").DiscoveryAdapter["analyze"]>[1]) {
+          calls++; assert.equal(current.manifest.submissionStage!.phase, "check");
+          assert.equal(current.manifest.submissionDraftPolicy, "legacy");
+          assert.match(discoveryPrompt(_p, current), /Wrong product behavior, factual contradictions, unsupported claims and unauthorized edits must still reject/);
+          if (calls === 1) assert.equal(store.jobs(f.project.id).at(-1)!.submissionWork!.attempts, 3);
+          return { submissionCheck: { valid, reason: valid ? "Product intent and exact facts match; legacy phrasing is not a new permission" : "A product claim is factually unsupported, not merely old style" } };
+        } };
+        const next = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(next.id, Date.now() + 60000);
+        if (valid) {
+          const final = await runSubmissionStages(store, adapter, store.get(f.project.id), next, f.item, f.task, { research: false, signal: new AbortController().signal });
+          assert.equal(final.status, "completed", final.diagnostic); assert.equal(calls, w.batches.length);
+          assert.deepEqual(final.submissionWork!.receipts.slice(0, w.receipts.length), w.receipts);
+          assert.equal(final.submissionWork!.receipts.at(-1)!.checkPolicy, "staged-check-scope-v2");
+          assert.deepEqual(final.result, draft, "No rationale or product-rule rewrite is permitted during compatibility replay");
+          const p = store.get(f.project.id), state = continuationState(p, store.jobs(p.id), store.submissions(p.id), (r) => store.get(p.id, r));
+          assert.deepEqual(decodePortable(renderWorkspace(p, undefined, state), p.model).continuation.jobs.find((j) => j.id === final.id)!.submissionWork!.legacyStyleRecovery, final.submissionWork!.legacyStyleRecovery);
+        } else {
+          await assert.rejects(runSubmissionStages(store, adapter, store.get(f.project.id), next, f.item, f.task, { research: false, signal: new AbortController().signal }), /factually unsupported/);
+          store.failJob(next.id, "failed", "Saved-response follow-up blocked");
+          const again = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(again.id, Date.now() + 60000);
+          await assert.rejects(runSubmissionStages(store, adapter, store.get(f.project.id), again, f.item, f.task, { research: false, signal: new AbortController().signal }), /factually unsupported/);
+          assert.equal(calls, 1, "A new-policy rejection must not automatically repeat");
+          assert.deepEqual(store.get(f.project.id).requirements, f.project.requirements);
+        }
+        assert.deepEqual(store.getJob(job.id), original);
+      } finally { store.close(); }
+    }
+  } finally { if (!closed) f.store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const valid of [true, false]) test(`legacy batch-local eligibility rejection gets one unchanged recheck after reopen, then ${valid ? "finishes" : "remains blocked"}`, async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "submission-check-scope-")), file = join(directory, "state.sqlite");
+  const f = fixture(file, "reconciliation"); let closed = false;
+  try {
+    const target = f.project.requirements[0]!;
+    const task = { ...f.task, recordIDs: f.task.recordIDs.filter((id) => id !== target.id) };
+    const m = submissionMaterials(f.project, f.item, task), w = planSubmissionStages(m);
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    let draft = replaySubmissionStages(m, w).draft;
+    const accept = (raw: unknown) => { w.attempts++; const next = acceptSubmissionStage(m, w, draft, raw, job); draft = next.draft; return next; };
+    const missing = [target.id, ...target.sourceIDs].filter((id) => !submissionStageContext(m, w, draft).manifest.includedIDs.includes(id));
+    if (missing.length) accept({ submissionEvidence: { recordIDs: missing } });
+    accept(f.output());
+    while (submissionStep(w) < w.batches.length) accept({ submissionKeep: true });
+    const rejectedContext = submissionStageContext(m, w, draft);
+    assert.ok(!rejectedContext.manifest.includedIDs.includes(target.id));
+    const prompt = discoveryPrompt(f.project, rejectedContext);
+    assert.ok(JSON.parse(prompt.match(/Existing eligible exact IDs: (\[[^\]]*\])/u)![1]!).includes(target.id));
+    assert.match(prompt, /Omission from this batch cannot revoke eligibility/);
+    accept({ submissionCheck: { valid: false, reason: "Legacy checker mistook omitted target for an ineligible target" } });
+    assert.equal(recoverSubmissionCheckScope(m, structuredClone(w)).blocked, "Legacy checker mistook omitted target for an ineligible target", "New-policy rejections cannot gain another recheck");
+    delete w.receipts.at(-1)!.checkPolicy; // Older saved wire receipt, not a new-policy rejection.
+    f.store.checkpointSubmission(job.id, w, rejectedContext.manifest);
+    f.store.failJob(job.id, "failed", "Legacy batch-local eligibility rejection");
+    const original = f.store.getJob(job.id);
+    const recovered = structuredClone(w), replay = recoverSubmissionCheckScope(m, recovered);
+    assert.equal(replay.blocked, undefined); assert.equal(recovered.attempts, 1);
+    assert.deepEqual(replay.draft, draft); assert.deepEqual(recovered.receipts, w.receipts);
+    assert.throws(() => submissionWorkSchema.parse({ ...recovered, checkScopeRecovery: { format: 2, receiptIndex: w.receipts.length - 1 } }));
+    f.store.close(); closed = true;
+    for (let reopen = 0; reopen < 2; reopen++) {
+      const store = new ProjectStore(file);
+      try {
+        assert.deepEqual(store.getJob(job.id), original);
+        if (!reopen) continue;
+        let calls = 0;
+        const adapter = { async analyze(_p: Project, { context }: Parameters<import("./discovery.js").DiscoveryAdapter["analyze"]>[1]) {
+          calls++; assert.equal(context.manifest.submissionStage!.phase, "check", "No saved reads or corrective drafts repeat");
+          if (calls === 1) assert.equal(store.jobs(f.project.id).at(-1)!.submissionWork!.attempts, 2);
+          return { submissionCheck: { valid, reason: valid ? "Exact constraints are consistent" : "The rationale still contains an unsupported factual claim" } };
+        } };
+        const next = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(next.id, Date.now() + 60000);
+        if (valid) {
+          const final = await runSubmissionStages(store, adapter, store.get(f.project.id), next, f.item, task, { research: false, signal: new AbortController().signal });
+          assert.equal(final.status, "completed", final.diagnostic);
+          assert.equal(calls, w.batches.length);
+          assert.deepEqual(final.submissionWork!.receipts.slice(0, w.receipts.length), w.receipts);
+          assert.deepEqual(final.result, draft);
+          const p = store.get(f.project.id), state = continuationState(p, store.jobs(p.id), store.submissions(p.id), (r) => store.get(p.id, r));
+          assert.deepEqual(decodePortable(renderWorkspace(p, undefined, state), p.model).continuation.jobs.find((j) => j.id === final.id)!.submissionWork!.checkScopeRecovery, final.submissionWork!.checkScopeRecovery);
+        } else {
+          await assert.rejects(runSubmissionStages(store, adapter, store.get(f.project.id), next, f.item, task, { research: false, signal: new AbortController().signal }), /unsupported factual claim/);
+          store.failJob(next.id, "failed", "Saved-response follow-up blocked");
+          const again = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(again.id, Date.now() + 60000);
+          await assert.rejects(runSubmissionStages(store, adapter, store.get(f.project.id), again, f.item, task, { research: false, signal: new AbortController().signal }), /unsupported factual claim/);
+          assert.equal(calls, 1, "No automatic second recheck or approval");
+          assert.deepEqual(store.get(f.project.id).requirements, f.project.requirements);
+        }
+        assert.deepEqual(store.getJob(job.id), original);
+      } finally { store.close(); }
+    }
+  } finally { if (!closed) f.store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("reconciliation evidence pins never become prompt or schema authorization for the original submission", () => {
+  const f = fixture(":memory:", "reconciliation");
+  try {
+    const project = structuredClone(f.project), answerID = randomUUID(), questionID = randomUUID();
+    project.questions.push({ ...structuredClone(project.questions[0]!), id: questionID, sourceID: answerID, status: "answered" });
+    project.sources.push({ id: answerID, kind: "answer", text: "A separate explicit replacement for the clarification", questionID, epicID: "inbox" });
+    const task = { ...f.task, recordIDs: [...f.task.recordIDs, questionID, answerID] };
+    const m = submissionMaterials(project, f.item, task), w = planSubmissionStages(m);
+    const context = submissionStageContext(m, w, replaySubmissionStages(m, w).draft);
+    assert.ok(context.manifest.taskRecordIDs!.includes(answerID));
+    assert.ok(context.manifest.includedIDs.includes(answerID));
+    assert.deepEqual(context.manifest.submissionAuthorizationSourceIDs, [f.item.appliedSourceID]);
+    const prompt = discoveryPrompt(project, context);
+    assert.ok(prompt.includes(`concrete input source IDs ${JSON.stringify([f.item.appliedSourceID])}`));
+    assert.match(prompt, /taskRecordIDs are evidence pins, NOT an authorization list/);
+    const schema = JSON.parse(prompt.split("Stage response schema: ")[1]!.split("\nWorking evidence batch:")[0]!);
+    const options = schema.anyOf[0].properties.specificationUpdates.properties.changes.items.anyOf;
+    for (const option of options) assert.deepEqual(option.properties.sourceIDs.items.enum ?? [option.properties.sourceIDs.items.const], [f.item.appliedSourceID]);
+    const bad = f.output(); bad.specificationUpdates!.changes[0]!.sourceIDs = [answerID];
+    const job = f.store.beginJob(f.project.id, f.project.revision).job;
+    let draft = replaySubmissionStages(m, w).draft;
+    const missing = project.requirements[0]!.sourceIDs.filter((id) => !context.manifest.includedIDs.includes(id));
+    if (missing.length) {
+      w.attempts = 1;
+      draft = acceptSubmissionStage(m, w, draft, { submissionEvidence: { recordIDs: missing } }, job).draft;
+    }
+    const savedReceipts = structuredClone(w.receipts); w.attempts++;
+    // Even an adapter ignoring the advertised schema cannot publish the pinned answer.
+    assert.throws(() => acceptSubmissionStage(m, w, draft, bad, job), /must cite current concrete/);
+    assert.deepEqual(w.receipts, savedReceipts);
+  } finally { f.store.close(); }
+});
+
+test("mixed authorization is rejected before new drafts spend any verification requests", async () => {
+  const f = fixture(":memory:", "reconciliation"); let checks = 0;
+  try {
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    const historical = f.project.sources.find((s) => s.kind === "confirmation")!.id;
+    const bad = f.output(); bad.specificationUpdates!.changes[0]!.sourceIDs.push(historical);
+    await assert.rejects(runSubmissionStages(f.store, { async analyze(_p, { context }) {
+      if (context.manifest.submissionStage!.phase === "check") checks++;
+      const loaded = context.manifest.includedIDs;
+      const missing = f.project.requirements[0]!.sourceIDs.filter((id) => !loaded.includes(id));
+      return missing.length ? { submissionEvidence: { recordIDs: missing } } : bad;
+    } }, f.project, job, f.item, f.task, { research: false, signal: new AbortController().signal }), /must cite current concrete/);
+    assert.equal(checks, 0);
+    assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements);
+  } finally { f.store.close(); }
+});
+
+test("legacy authority-less manifests reopen without resetting spent attempts or repeating saved evidence requests", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "submission-authority-")), file = join(directory, "state.sqlite");
+  const f = fixture(file, "reconciliation"); let closed = false;
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    let draft = replaySubmissionStages(m, w).draft;
+    const context = submissionStageContext(m, w, draft);
+    const extra = m.evidenceIDs.find((id) => !context.manifest.includedIDs.includes(id))!;
+    w.attempts = 1;
+    draft = acceptSubmissionStage(m, w, draft, { submissionEvidence: { recordIDs: [extra] } }, job).draft;
+    w.attempts = 3;
+    const legacy = submissionStageContext(m, w, draft); delete legacy.manifest.submissionAuthorizationSourceIDs;
+    f.store.checkpointSubmission(job.id, w, legacy.manifest);
+    f.store.failJob(job.id, "failed", "Older prompt authority mismatch");
+    const original = f.store.getJob(job.id);
+    f.store.close(); closed = true;
+    for (let reopen = 0; reopen < 2; reopen++) {
+      const store = new ProjectStore(file);
+      try {
+        assert.deepEqual(store.getJob(job.id), original);
+        assert.equal(store.getJob(job.id).submissionWork!.attempts, 3);
+        if (!reopen) continue;
+        const resumed = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(resumed.id, Date.now() + 60000);
+        let calls = 0;
+        const paused = await runSubmissionStages(store, { async analyze(_p, { context: current }) {
+          calls++;
+          assert.deepEqual(current.manifest.submissionAuthorizationSourceIDs, [f.item.appliedSourceID]);
+          assert.ok(current.manifest.includedIDs.includes(extra));
+          assert.equal(store.getJob(resumed.id).submissionWork!.attempts, 4, "Dispatch retains the three previously spent requests");
+          return empty();
+        } }, store.get(f.project.id), resumed, store.submissions(f.project.id).find((s) => s.id === f.item.id)!, f.task,
+        { research: false, signal: new AbortController().signal, limits: { requests: 1, durationMs: 60000 } });
+        assert.equal(paused.status, "interrupted"); assert.equal(calls, 1);
+        assert.deepEqual(paused.submissionWork!.receipts.slice(0, w.receipts.length), w.receipts);
+        assert.deepEqual(store.getJob(job.id), original);
+      } finally { store.close(); }
+    }
+  } finally { if (!closed) f.store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("checked legacy mixed citations recover on reopen without model calls, new authority or altered receipts", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "submission-citations-")), file = join(directory, "state.sqlite");
+  const f = fixture(file, "reconciliation"); let closed = false;
+  try {
+    const m = submissionMaterials(f.project, f.item, f.task), w = planSubmissionStages(m);
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    const historical = f.project.sources.find((s) => s.kind === "confirmation")!.id;
+    const mixed = f.output(); mixed.specificationUpdates!.changes[0]!.sourceIDs.push(historical);
+    let draft = replaySubmissionStages(m, w).draft;
+    // Older app receipts: retain exact original wire responses and context hashes.
+    const append = (response: typeof w.receipts[number]["response"]) => {
+      const context = submissionStageContext(m, w, draft);
+      w.receipts.push({ step: submissionStep(w), contextKey: createHash("sha256").update(JSON.stringify(context.data)).digest("hex"),
+        attempt: w.attempts + 1, atRevision: f.project.revision, jobID: job.id, model: job.model, response, permissionPolicy: "staged-target-evidence-v1" });
+      w.attempts = "submissionEvidence" in response ? w.attempts + 1 : 0;
+      draft = replaySubmissionStages(m, w).draft;
+    };
+    const missing = f.project.requirements[0]!.sourceIDs.filter((id) => !submissionStageContext(m, w, draft).manifest.includedIDs.includes(id));
+    if (missing.length) append({ submissionEvidence: { recordIDs: missing } });
+    append(mixed);
+    while (submissionStep(w) < w.batches.length) append({ submissionKeep: true });
+    while (submissionStep(w) < submissionTotalSteps(w)) append({ submissionCheck: { valid: true, reason: "Exact batch checked" } });
+    const projected = submissionPublicationDraft(m, w, draft);
+    assert.deepEqual(projected.specificationUpdates!.changes[0]!.sourceIDs, [f.item.appliedSourceID]);
+    const invalid = (ids: string[]) => { const value = structuredClone(draft); value.specificationUpdates!.changes[0]!.sourceIDs = ids; return value; };
+    for (const ids of [[historical], [f.item.appliedSourceID!, historical, historical], [f.item.appliedSourceID!, randomUUID()],
+      [f.item.appliedSourceID!, f.project.sources[0]!.id]])
+      assert.throws(() => submissionPublicationDraft(m, w, invalid(ids)), /must cite current concrete/);
+    assert.throws(() => submissionPublicationDraft(m, { ...w, receipts: w.receipts.slice(0, -1) }, draft), /fully checked/);
+    const context = submissionStageContext(m, { ...w, receipts: w.receipts.slice(0, -1) }, draft);
+    context.manifest.includedIDs = m.evidenceIDs;
+    f.store.checkpointSubmission(job.id, w, context.manifest);
+    f.store.failJob(job.id, "failed", "Legacy publication rejected mixed authorization citations");
+    const original = f.store.getJob(job.id);
+    f.store.close(); closed = true;
+    for (let reopen = 0; reopen < 2; reopen++) {
+      const store = new ProjectStore(file);
+      try {
+        assert.deepEqual(store.getJob(job.id), original);
+        if (!reopen) continue;
+        const resumed = store.beginJob(f.project.id, f.project.revision).job; store.claimJob(resumed.id, Date.now() + 60000);
+        const final = await runSubmissionStages(store, { async analyze() { assert.fail("Completed AI work must not repeat"); } },
+          store.get(f.project.id), resumed, store.submissions(f.project.id).find((s) => s.id === f.item.id)!, f.task,
+          { research: false, signal: new AbortController().signal });
+        assert.equal(final.status, "completed", final.diagnostic);
+        assert.deepEqual(final.submissionWork!.receipts, w.receipts);
+        assert.deepEqual(final.result, projected);
+        const target = store.get(f.project.id).requirements[0]!;
+        assert.equal(target.statement, mixed.specificationUpdates!.changes[0]!.type === "revise" ? mixed.specificationUpdates!.changes[0]!.statement : "");
+        assert.ok(target.sourceIDs.includes(historical));
+        assert.deepEqual(target.authority!.sourceIDs, [f.item.appliedSourceID]);
+        assert.deepEqual(store.getJob(job.id), original);
+      } finally { store.close(); }
+    }
+  } finally { if (!closed) f.store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 function decodeWire(input: unknown) {
   const wire = input as { sharedText?: { values: Record<string, string> }; identifierTable?: { values: string[] } };
   const decode = (value: unknown, field = ""): any => {
@@ -101,8 +389,10 @@ const conflictQuestion = (sourceID: string): Analysis => ({ ...empty(), question
   options: [{ label: "Keep the minimum", consequence: "The network rule remains; only the example changes" },
     { label: "Replace the minimum", consequence: "The latest offline rule replaces the network requirement" }] }] });
 
-test("a retained saved-response conflict automatically becomes an exact Design question, not a partial edit or repeated follow-up", async () => {
+for (const workflowEnabled of [false, true]) test(`a retained saved-response conflict automatically becomes an exact Design question with workflow ${workflowEnabled ? "enabled but blocked" : "disabled"}`, async () => {
   const f = fixture(); const blocked = await retainedConflict(f); let calls = 0, allowReplan = false;
+  if (workflowEnabled) f.store.saveWorkflow(f.project.id, { ...f.store.workflow(f.project.id), enabled: true, paused: true, phase: "blocked", message: "Coordinator is stopped at a retained blocker." });
+  const workflow = f.store.workflow(f.project.id);
   const original = f.store.getJob(blocked.id);
   const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(p, { context }) {
     calls++;
@@ -144,21 +434,136 @@ test("a retained saved-response conflict automatically becomes an exact Design q
     assert.ok(portable.continuation.jobs.some((j) => j.id === final.submissionWork!.reconciliation!.sourceJobID));
     assert.ok(portable.continuation.jobs.some((j) => j.id === final.submissionWork!.reconciliation!.clarificationJobID));
     assert.throws(() => submissionWorkSchema.parse({ ...final.submissionWork, reconciliation: { ...final.submissionWork!.reconciliation, format: 99 } }));
+    assert.deepEqual(f.store.workflow(p.id), workflow, "Manual processing must not resume the coordinator or change its grant/settings");
   } finally { await queue.close(); f.store.close(); }
 });
 
-test("saved-response question preparation can reject an incorrect draft without manufacturing a product decision or retrying it", async () => {
-  const f = fixture(); await retainedConflict(f); let calls = 0;
+test("no-question clarification continues into one corrected draft and all frozen checks without repeating original reads or publishing partial changes", async () => {
+  const f = fixture(), original = await retainedConflict(f); let calls = 0, repairs = 0, checks = 0;
+  let queuedInput: ReturnType<ProjectStore["enqueue"]> | undefined;
   const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(_p, { context }) {
-    calls++; assert.ok(context.manifest.readinessQuestions);
-    return context.manifest.readinessStage?.phase === "check" ? { clarificationVerdict: { keepQuestions: [], summary: "Human intent is settled; the rejected draft was wrong" } } : empty();
+    calls++;
+    assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements, "Never publish a partially corrected draft");
+    if (context.manifest.readinessQuestions) {
+      queuedInput ??= f.store.enqueue(f.project.id, { id: randomUUID(), auto: false, research: false,
+        input: { type: "note", epicID: "inbox", text: "A newly saved instruction that has not authorized follow-up" } });
+      return context.manifest.readinessStage?.phase === "check"
+        ? { clarificationVerdict: { keepQuestions: [], summary: "No additional human choice established" } } : empty();
+    }
+    if (context.manifest.submissionStage!.phase === "read") {
+      repairs++; const repair = decodeWire(context.data).submissionStage.draftRepair;
+      assert.ok(repair); assert.match(repair.instruction, /NOT human decisions or approval/);
+      assert.match(discoveryPrompt(_p, context), /ONE-TIME CORRECTIVE DRAFT REVIEW/);
+      const result = f.output(); result.pendingChanges!.changes[0]!.reason = "Corrected using the original explicit offline request, not AI clarification as authority";
+      return result;
+    }
+    checks++;
+    const rejected = original.submissionWork!.receipts.at(-1)!.response;
+    assert.ok("submissionCheck" in rejected);
+    assert.equal(context.manifest.submissionPriorRejection, rejected.submissionCheck.reason);
+    assert.ok(discoveryPrompt(_p, context).includes(JSON.stringify(rejected.submissionCheck.reason)), "The earlier rejection stays supplied as a dated AI hypothesis, not human authority");
+    return { submissionCheck: { valid: true, reason: "Corrected draft matches the original human input and this exact batch" } };
+  } }));
+  try {
+    queue.resume(f.project.id, { processOnly: true, research: false, submissionIDs: [f.item.id] }); await queue.wait(f.project.id);
+    const completed = calls;
+    const final = f.store.jobs(f.project.id).at(-1)!;
+    assert.equal(final.status, "completed", final.diagnostic ?? queue.progress(f.project.id).join("\n"));
+    assert.equal(repairs, 1); assert.equal(checks, original.submissionWork!.batches.length);
+    assert.equal(f.store.get(f.project.id).questions.length, 0); assert.equal(f.store.submissions(f.project.id)[0]!.status, "completed");
+    assert.deepEqual(final.submissionWork!.receipts.slice(0, original.submissionWork!.receipts.length), original.submissionWork!.receipts);
+    assert.deepEqual(f.store.getJob(original.id), original);
+    assert.equal(f.store.get(f.project.id).requirements[0]!.statement, "Save reports offline");
+    const diagnostic = f.store.discoveryDiagnostics(f.project.id, [final.id]).runs[0]!;
+    assert.equal(diagnostic.savedWork.totalSteps, submissionTotalSteps(final.submissionWork!));
+    assert.equal(diagnostic.savedWork.completedBatches, diagnostic.savedWork.totalSteps);
+    assert.deepEqual(f.store.submissions(f.project.id).find((s) => s.id === queuedInput!.id), queuedInput, "Correction must not process newly arrived save-only input");
+    queue.resume(f.project.id, { processOnly: true, research: false, submissionIDs: [f.item.id] }); await queue.wait(f.project.id);
+    assert.equal(calls, completed);
+  } finally { await queue.close(); f.store.close(); }
+});
+
+test("a corrective semantic rejection stops once without another question sweep, implicit allowance or changed decision", async () => {
+  const f = fixture(); await retainedConflict(f); let calls = 0, repairs = 0;
+  const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(_p, { context }) {
+    calls++;
+    if (context.manifest.readinessQuestions) return context.manifest.readinessStage?.phase === "check"
+      ? { clarificationVerdict: { keepQuestions: [], summary: "No new question retained" } } : empty();
+    repairs++; assert.ok(decodeWire(context.data).submissionStage.draftRepair);
+    return { submissionBlocked: { reason: "Exact human precedence is still unresolved. The no-question result is not authority to choose." } };
   } }));
   try {
     queue.resume(f.project.id, { processOnly: true, research: false }); await queue.wait(f.project.id);
-    const completed = calls;
-    assert.equal(f.store.get(f.project.id).questions.length, 0); assert.equal(f.store.submissions(f.project.id)[0]!.status, "needs-attention");
+    const before = calls, failed = f.store.jobs(f.project.id).at(-1)!;
+    assert.equal(repairs, 1); assert.equal(failed.status, "failed"); assert.ok(failed.submissionWork!.draftRepair);
     queue.resume(f.project.id, { processOnly: true, research: false }); await queue.wait(f.project.id);
-    assert.equal(calls, completed); assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements);
+    assert.equal(calls, before); assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements);
+  } finally { await queue.close(); f.store.close(); }
+});
+
+test("older completed no-question clarification enables a resumable corrective pass without replaying its reads or rewriting original evidence", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "submission-draft-repair-")), file = join(directory, "state.sqlite");
+  const f = fixture(file), original = await retainedConflict(f); let closed = false, calls = 0;
+  try {
+    const clarification = await new DiscoveryService(f.store, { async analyze(_p, { context }) {
+      return context.manifest.readinessStage?.phase === "check" ? { clarificationVerdict: { keepQuestions: [], summary: "No new question remained in the earlier completed review" } } : empty();
+    } }).analyze(f.project.id, f.project.revision, { readinessQuestions: submissionQuestionTask(f.project, "inbox", original) });
+    assert.equal(clarification.status, "completed", clarification.diagnostic);
+    const p = f.store.get(f.project.id), m = submissionMaterials(p, f.item, original.submissionWork!.task);
+    const repair = submissionDraftRepair(m, original.submissionWork!, f.store.jobs(p.id))!;
+    assert.ok(repair); const work = { ...structuredClone(original.submissionWork!), draftRepair: repair, attempts: 0 };
+    assert.equal(replaySubmissionStages(m, work).blocked, undefined);
+    assert.throws(() => replaySubmissionStages(m, { ...work, draftRepair: { ...repair, evidenceIDs: repair.evidenceIDs.slice(1) } }), /exact evidence/);
+    assert.throws(() => replaySubmissionStages(m, { ...work, draftRepair: { ...repair, priorAttempts: repair.priorAttempts + 1 } }), /spent attempts/);
+    assert.throws(() => submissionWorkSchema.parse({ ...work, draftRepair: { ...repair, format: 99 } }));
+    assert.throws(() => f.store.assertSubmissionDraftRepair(p, f.item, { ...work, draftRepair: { ...repair, clarificationJobID: randomUUID() } }), /completed no-question/);
+    const job = f.store.beginJob(p.id, p.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    const paused = await runSubmissionStages(f.store, { async analyze(_p, { context }) {
+      calls++; assert.ok(decodeWire(context.data).submissionStage.draftRepair); return f.output();
+    } }, p, job, f.item, f.task, { research: false, signal: new AbortController().signal, limits: { requests: 1, durationMs: 60000 } });
+    assert.equal(paused.status, "interrupted", paused.diagnostic); assert.equal(calls, 1);
+    assert.deepEqual(paused.submissionWork!.receipts.slice(0, repair.fromReceipt), original.submissionWork!.receipts);
+    const sourcePayload = f.store.getJob(original.id), readyPayload = f.store.getJob(clarification.id);
+    f.store.close(); closed = true;
+    for (let reopen = 0; reopen < 2; reopen++) {
+      const store = new ProjectStore(file);
+      try {
+        assert.deepEqual(store.getJob(original.id), sourcePayload); assert.deepEqual(store.getJob(clarification.id), readyPayload);
+        assert.deepEqual(store.getJob(paused.id), paused);
+        const project = store.get(p.id), continuation = continuationState(project, store.jobs(p.id), store.submissions(p.id), (r) => store.get(p.id, r));
+        const decoded = decodePortable(renderWorkspace(project, undefined, continuation), project.model);
+        assert.deepEqual(decoded.continuation.jobs.find((j) => j.id === paused.id)!.submissionWork, paused.submissionWork);
+        assert.ok(decoded.continuation.jobs.some((j) => j.id === repair.clarificationJobID));
+        if (reopen === 1) {
+          const finished = await new DiscoveryService(store, { async analyze(_p, { context }) {
+            calls++; assert.equal(context.manifest.submissionStage?.phase, "check", "Saved corrective draft and original reads must not repeat");
+            return { submissionCheck: { valid: true, reason: "Corrected draft independently checked against this batch" } };
+          } }).analyze(p.id, project.revision, { submissionIDs: [f.item.id], isolatedTask: true, research: false,
+            requiredEpicIDs: ["inbox"], recordIDs: f.task.recordIDs });
+          assert.equal(finished.status, "completed", finished.diagnostic); assert.equal(calls, 1 + original.submissionWork!.batches.length);
+          assert.deepEqual(finished.submissionWork!.receipts.slice(0, paused.submissionWork!.receipts.length), paused.submissionWork!.receipts);
+          assert.deepEqual(store.getJob(original.id), sourcePayload); assert.deepEqual(store.getJob(clarification.id), readyPayload);
+        }
+      } finally { store.close(); }
+    }
+  } finally { if (!closed) f.store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("failed corrective output spends a separate finite phase allowance and cannot reset on unchanged resume", async () => {
+  const f = fixture(); await retainedConflict(f); let repairCalls = 0;
+  const queue = new DiscoveryQueue(new DiscoveryService(f.store, { async analyze(_p, { context }) {
+    if (context.manifest.readinessQuestions) return context.manifest.readinessStage?.phase === "check"
+      ? { clarificationVerdict: { keepQuestions: [], summary: "No new question retained" } } : empty();
+    repairCalls++; return { invalid: true };
+  } }));
+  try {
+    for (let at = 0; at < 6; at++) { queue.resume(f.project.id, { processOnly: true, research: false }); await queue.wait(f.project.id); }
+    assert.equal(repairCalls, 4);
+    const last = f.store.jobs(f.project.id).reverse().find((j) => j.submissionWork?.draftRepair)!;
+    assert.equal(last.submissionWork!.attempts, 4); assert.equal(last.submissionWork!.draftRepair!.priorAttempts, 1);
+    assert.equal(submissionAllowance(last.submissionWork!).canExtend, false);
+    assert.deepEqual(f.store.get(f.project.id).requirements, f.project.requirements);
   } finally { await queue.close(); f.store.close(); }
 });
 

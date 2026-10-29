@@ -8,7 +8,7 @@ import type { ContextPack } from "./context.js";
  * Pending work is deliberately excluded: it always gets a fresh exact context.
  */
 export const epicPlanningCheckpointSchema = z.object({ format: z.literal(1),
-  planningPolicy: z.enum(["staged-headroom-v2", "staged-current-spec-v3"]).optional(),
+  planningPolicy: z.enum(["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"]).optional(),
   tasks: z.array(z.object({ review: epicReviewSchema, state: z.enum(["reviewed", "waiting", "blocked"]),
     reason: z.string().optional(), contextCharacters: z.number().int().nonnegative().optional(),
     blocker: z.object({ kind: z.enum(["context-limit", "staged-target", "staged-seed", "stage-limit", "saved-blocker", "attempt-limit"]),
@@ -22,7 +22,7 @@ export type EpicPlanningBlocker = NonNullable<EpicPlanningCheckpoint["tasks"][nu
  * Old unknown blockers are replanned conservatively; saved model history is
  * reconstructed before the new policy can be selected. */
 export function reusablePlanningCheckpoint(value: EpicPlanningCheckpoint) {
-  return value.planningPolicy === "staged-current-spec-v3" || !value.tasks.some((task) => task.state === "blocked"
+  return value.planningPolicy === "staged-records-v4" || !value.tasks.some((task) => task.state === "blocked"
     && task.blocker?.kind !== "saved-blocker" && task.blocker?.kind !== "attempt-limit");
 }
 

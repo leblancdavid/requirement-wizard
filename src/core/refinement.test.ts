@@ -24,6 +24,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { refinementEvidenceRecords, assertRefinementEvidence } from "./refinement-context.js";
+import { coverage } from "./coverage.js";
+import { dimensions } from "./epics.js";
 
 const empty = (): Analysis => ({ summary: "Game", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 async function seed(store: ProjectStore) {
@@ -44,6 +46,117 @@ async function refine(store: ProjectStore, p: Project, output = proposal(p)) {
     assert.equal(options.research, false);
     return { ...empty(), refinements: [output] };
   } }).analyze(p.id, p.revision, { refinementOnly: true, research: true });
+}
+
+function saveDefinitionBaseline(store: ProjectStore, p: Project) {
+  let job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { ...empty(), organization: [
+    { type: "upsert", epicID: "new:unrelated", title: "Independent", purpose: "Independent area", dependencies: [] },
+    { type: "upsert", epicID: "new:dependent", title: "Dependent", purpose: "Uses the changed feature", dependencies: ["inbox"] },
+  ] });
+  p = store.get(p.id);
+  job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  const target = p.requirements[0]!;
+  store.finishJob(job.id, { ...empty(), assessments: p.epics.map((e) => ({ epicID: e.id,
+    confidence: "high", explanation: "Saved full definition review",
+    checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "defined",
+      explanation: "Original evidence supports this finding", evidenceIDs: [e.id === "inbox" ? target.id : p.sources[0]!.id] })),
+  })) });
+  return store.get(p.id);
+}
+
+for (const operation of ["wording", "consolidate", "revise", "duplicate", "dismiss"] as const) {
+  test(`${operation} retains saved definition findings across repeated reopen without making affected evidence current`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "reqwizit-definition-preservation-"));
+    const file = join(directory, "projects.db");
+    let store = new ProjectStore(file);
+    try {
+      let p = saveDefinitionBaseline(store, approvedPair(store));
+      const baseline = structuredClone(p.assessments), originalRevision = p.revision;
+      assert.ok(coverage(p).epics.every((e) => e.assessed && !e.stale));
+      if (operation === "wording" || operation === "dismiss") {
+        assert.equal((await refine(store, p)).status, "completed");
+      } else if (operation !== "duplicate") {
+        const pair = p.requirements.map((r) => r.id) as [string, string];
+        const result = await new DiscoveryService(store, { async analyze(snapshot) {
+          const refinement = resolutionProposal(snapshot, pair);
+          if (operation === "revise") {
+            refinement.resolution!.basis = "human-decision";
+            refinement.resolution!.change = { type: "revise",
+              statement: "Guests retain the second access policy", rationale: "Keep both policies", acceptance: ["Second policy remains observable"] };
+          }
+          return { ...empty(), refinements: [refinement], resolutionCheck: { format: 1, outcome: "proposal", explanation: "Review the two policies" } };
+        } }).analyze(p.id, p.revision, { refinementOnly: true, refinementPair: pair });
+        assert.equal(result.status, "completed", result.diagnostic);
+      }
+      p = store.get(p.id);
+      assert.deepEqual(p.assessments, baseline, "Preparing a proposal does not replace saved assessments");
+      assert.ok(coverage(p).epics.every((e) => !e.stale));
+      const before = structuredClone(p);
+      assert.throws(() => operation === "duplicate"
+        ? store.removeDuplicate(p.id, p.revision - 1, p.requirements[0]!.id, p.requirements[1]!.id, "Same behavior")
+        : store.reviewRefinement(p.id, p.revision - 1, p.refinements.at(-1)!.id, operation !== "dismiss"), /Project changed/);
+      assert.deepEqual(store.get(p.id), before, "Stale writes preserve all evidence");
+      p = operation === "duplicate"
+        ? store.removeDuplicate(p.id, p.revision, p.requirements[0]!.id, p.requirements[1]!.id, "Same behavior")
+        : store.reviewRefinement(p.id, p.revision, p.refinements.at(-1)!.id, operation !== "dismiss");
+      assert.deepEqual(p.assessments, baseline, "Keep original checks, input keys, dates and citations intact");
+      const state = coverage(p).epics;
+      assert.ok(state.every((e) => e.assessed), "Previously assessed areas never become Not assessed");
+      assert.equal(state.find((e) => e.epicID === "inbox")!.stale, operation !== "dismiss");
+      assert.equal(state.find((e) => e.epicID === p.epics.find((area) => area.title === "Dependent")!.id)!.stale, operation !== "dismiss");
+      assert.equal(state.find((e) => e.epicID === p.epics.find((area) => area.title === "Independent")!.id)!.stale,
+        operation === "consolidate" || operation === "revise", "Changing project-wide policy legitimately affects every area");
+      assert.deepEqual(store.get(p.id, originalRevision).assessments, baseline);
+      const jobs = store.jobs(p.id);
+      for (let reopen = 0; reopen < 2; reopen++) {
+        store.close(); store = new ProjectStore(file);
+        assert.deepEqual(store.get(p.id), p);
+        assert.deepEqual(store.jobs(p.id), jobs, "Startup does not enqueue inference or rewrite receipts");
+        assert.deepEqual(coverage(store.get(p.id)), coverage(p));
+      }
+    } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+for (const history of ["available", "missing"] as const) {
+test(`older saved definition assessments with ${history} origin history survive approval without manufactured freshness`, async () => {
+  const directory = mkdtempSync(join(tmpdir(), "reqwizit-legacy-definition-"));
+  const file = join(directory, "projects.db");
+  let store = new ProjectStore(file);
+  try {
+    let p = saveDefinitionBaseline(store, approvedPair(store));
+    await refine(store, p); p = store.get(p.id);
+    const originalBasis = structuredClone(p.assessments);
+    // Reproduce the older saved shape, not a new identity inferred from current data.
+    for (const assessment of p.assessments) delete assessment.inputBasis;
+    const saved = structuredClone(p), baseline = structuredClone(p.assessments);
+    store.close();
+    const db = new Database(file);
+    try {
+      db.transaction(() => {
+        db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(p), p.id);
+        db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(p), p.id, p.revision);
+        if (history === "missing") db.prepare("DELETE FROM revisions WHERE project_id = ? AND revision = ?").run(p.id, baseline[0]!.atRevision);
+      })();
+    } finally { db.close(); }
+    store = new ProjectStore(file);
+    const expected = history === "available" ? { ...saved, assessments: originalBasis } : saved;
+    assert.deepEqual(store.get(p.id), expected, "Only exact original history may supply an older input key");
+    p = store.reviewRefinement(p.id, p.revision, p.refinements.at(-1)!.id, true);
+    assert.deepEqual(p.assessments, expected.assessments);
+    if (history === "missing") assert.ok(coverage(p).epics.every((e) => e.assessed && e.stale), "Missing history retains conservative revision-bound freshness");
+    else {
+      assert.equal(coverage(p).epics.find((e) => e.epicID === "inbox")!.stale, true);
+      assert.equal(coverage(p).epics.find((e) => e.epicID === p.epics.find((a) => a.title === "Independent")!.id)!.stale, false);
+    }
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(file);
+      assert.deepEqual(store.get(p.id), p);
+      assert.deepEqual(store.get(p.id, saved.revision), expected);
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 }
 
 test("approved requirement cleanup stays a separate proposal until explicit approval, preserving history and progress linkage", async () => {

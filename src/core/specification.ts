@@ -2,6 +2,20 @@ import { decisionAvailability } from "./decision-availability.js";
 import { requirementEvidenceIDs, type Analysis, type Job, type Project, type Submission } from "./model.js";
 import { proposeRefinements } from "./refinement.js";
 
+export function specificationAuthorizationSources(project: Project, batch: Submission[], includedIDs: string[]) {
+  const eligible = new Set(requirementEvidenceIDs(project)), included = new Set(includedIDs);
+  return new Set(batch.filter((s) => s.applied && (s.input.type === "note" || s.input.type === "answer" && s.input.answer.kind === "answer"
+    || s.input.type === "review" && s.input.action === "changes-requested")).flatMap((s) => s.appliedSourceID ? [s.appliedSourceID] : [])
+    .filter((id) => eligible.has(id) && included.has(id)));
+}
+
+export function assertSpecificationAuthorization(result: Analysis, inputs: Set<string>) {
+  for (const change of result.specificationUpdates?.changes ?? []) {
+    if (!change.sourceIDs.length || new Set(change.sourceIDs).size !== change.sourceIDs.length || change.sourceIDs.some((id) => !inputs.has(id)))
+      throw new Error("Automatic specification updates must cite current concrete answers, notes or change requests from this batch; delegation, deferral, reviews and workspace observations cannot authorize them.");
+  }
+}
+
 /** Apply only explicit, current-batch intent. The model judges semantic fidelity;
  * these structural gates cannot prove that prose faithfully captures an answer. */
 export function applySpecificationUpdates(before: Project, project: Project, result: Analysis, aliases: Map<string, string>, job: Job, submissions: Submission[], newID: () => string) {
@@ -10,10 +24,8 @@ export function applySpecificationUpdates(before: Project, project: Project, res
   if (!job.context?.submissionIDs?.length || job.context.refinementOnly || job.context.epicReview || job.context.gapExploration) throw new Error("Automatic specification updates require concrete queued human input, not scans, gap checks or refinement passes.");
   const included = new Set(job.context.includedIDs);
   const batch = submissions.filter((s) => job.context!.submissionIDs!.includes(s.id) && s.applied);
-  const eligible = new Set(requirementEvidenceIDs(project));
-  const inputs = new Set(batch.filter((s) => s.input.type === "note" || s.input.type === "answer" && s.input.answer.kind === "answer"
-    || s.input.type === "review" && s.input.action === "changes-requested").flatMap((s) => s.appliedSourceID ? [s.appliedSourceID] : [])
-    .filter((id) => eligible.has(id) && included.has(id)));
+  const inputs = specificationAuthorizationSources(project, batch, job.context.includedIDs);
+  assertSpecificationAuthorization(result, inputs);
   const waiting = submissions.filter((s) => !job.context!.submissionIDs!.includes(s.id));
   const seen = new Set<string>();
   let applied = 0;
@@ -21,7 +33,6 @@ export function applySpecificationUpdates(before: Project, project: Project, res
     const id = aliases.get(change.requirementID) ?? change.requirementID;
     if (seen.has(id)) throw new Error("Automatic specification updates repeat a target.");
     seen.add(id);
-    if (!change.sourceIDs.length || new Set(change.sourceIDs).size !== change.sourceIDs.length || change.sourceIDs.some((id) => !inputs.has(id))) throw new Error("Automatic specification updates must cite current concrete answers, notes or change requests from this batch; delegation, deferral, reviews and workspace observations cannot authorize them.");
     const old = before.requirements.find((r) => r.id === id);
     const target = project.requirements.find((r) => r.id === id);
     const created = !old && result.requirements.some((r) => r.localID === change.requirementID && aliases.get(r.localID!) === id);

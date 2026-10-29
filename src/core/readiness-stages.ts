@@ -16,13 +16,15 @@ export const readinessReadSchema = z.object({ clarificationRead: z.object({ summ
   keepQuestions: z.array(z.number().int().min(0).max(2)).max(3), questions: analysisSchema.shape.questions.max(3) }).strict() }).strict();
 const responseSchema = z.union([analysisSchema, readinessReadSchema, readinessVerdictSchema, readinessEvidenceSchema, readinessBlockedSchema]);
 export const readinessWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-readiness-batches-v1"), task: readinessQuestionTaskSchema,
-  materialKey: key, planKey: key, batches: z.array(z.array(z.string().min(1)).min(1).max(10000)).min(1).max(32), attempts: z.number().int().min(0).max(4),
+  materialKey: key, planKey: key, batches: z.array(z.array(z.string().min(1)).min(1).max(10000)).min(1).max(32), attempts: z.number().int().min(0).max(260),
+  evidenceProgress: z.object({ format: z.literal(1) }).strict().optional(),
   indexedRead: z.object({ format: z.literal(1), fromReceipt: z.number().int().min(0).max(256) }).strict().optional(),
-  receipts: z.array(z.object({ step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(4),
+  receipts: z.array(z.object({ step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(260),
     atRevision: z.number().int().positive(), jobID: z.string().min(1), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(), response: responseSchema }).strict()).max(256),
 }).strict().refine((work) => work.task.format !== 1, "Staged clarification requires its exact area or saved-response task.")
   .refine((work) => !work.indexedRead || work.indexedRead.fromReceipt <= work.receipts.length, "Indexed clarification must pin an existing receipt boundary.")
-  .refine((work) => !!work.indexedRead || work.attempts <= 3 && work.receipts.every((r) => r.attempt <= 3), "Legacy clarification retains its original three-request bound.");
+  .refine((work) => !!work.evidenceProgress || work.attempts <= (work.indexedRead ? 4 : 3)
+    && work.receipts.every((r) => r.attempt <= (work.indexedRead ? 4 : 3)), "Legacy clarification retains its original request bound.");
 export type ReadinessWork = z.infer<typeof readinessWorkSchema>;
 type Response = z.infer<typeof responseSchema>;
 const completed = (response: Response) => "questions" in response || "clarificationRead" in response || "clarificationVerdict" in response;
@@ -33,6 +35,11 @@ export function upgradeReadinessRead(work: ReadinessWork) {
   return work;
 }
 export const readinessStep = (work: ReadinessWork) => work.receipts.filter((r) => completed(r.response)).length;
+/** Successful exact retrieval is progress, not a failed output attempt. Each
+ * receipt must load new records; replay validates it before any allowance is used. */
+export function readinessRequestAllowance(work: ReadinessWork, step = readinessStep(work)) {
+  return (indexed(work) ? 4 : 3) + (work.evidenceProgress ? work.receipts.filter((r) => r.step === step && "clarificationEvidence" in r.response).length : 0);
+}
 export const readinessProgress = (work: ReadinessWork) => ({ completed: readinessStep(work), total: work.batches.length * 2,
   phase: readinessStep(work) >= work.batches.length * 2 ? "complete" as const : readinessStep(work) < work.batches.length ? "read" as const : "check" as const });
 const empty = (): Analysis => ({ summary: "Exact evidence review in progress; no decision established yet.", questions: [], requirements: [], retireQuestions: [], goals: [], actors: [], assumptions: [] });
@@ -173,14 +180,14 @@ export function replayReadinessStages(project: Project, materials: ReadinessMate
   const prefix: ReadinessWork = { ...work, receipts: [], attempts: 0 };
   let draft = empty(), priorAttempt = 0, blocked: string | undefined;
   for (const receipt of work.receipts) {
-    if (blocked || receipt.step !== readinessStep(prefix) || receipt.attempt <= priorAttempt || receipt.attempt > 3 && !indexed(prefix)
+    if (blocked || receipt.step !== readinessStep(prefix) || receipt.attempt <= priorAttempt || receipt.attempt > readinessRequestAllowance(prefix)
       || receipt.contextKey !== hash(pack(materials, prefix, draft).data)) throw new Error("Invalid saved clarification transition; no completed call was repeated.");
     const next = accept(project, materials, prefix, draft, receipt.response); draft = next.draft;
     blocked = "clarificationBlocked" in receipt.response ? receipt.response.clarificationBlocked.reason : undefined;
     priorAttempt = completed(receipt.response) ? 0 : receipt.attempt;
     prefix.receipts.push(receipt);
   }
-  if (readinessStep(work) > work.batches.length * 2 || work.attempts < priorAttempt) throw new Error("Invalid clarification stage/attempt accounting.");
+  if (readinessStep(work) > work.batches.length * 2 || work.attempts < priorAttempt || work.attempts > readinessRequestAllowance(work)) throw new Error("Invalid clarification stage/attempt accounting.");
   return { draft, blocked };
 }
 

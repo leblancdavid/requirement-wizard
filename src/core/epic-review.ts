@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Analysis, Job, Project, Submission } from "./model.js";
 import { ContextBudgetError, type ContextPack } from "./context.js";
-import { planContext, contextPreparationIndex, type ContextPreparationIndex } from "./working-set.js";
+import { planContext, contextPreparationIndex, shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure, type ContextPreparationIndex } from "./working-set.js";
 import { gapEvidence } from "./gap-backlog.js";
 import { decisionAvailability } from "./decision-availability.js";
 import { retrievalEvidenceBasis, validateGapFinal } from "./gap-retrieval.js";
@@ -70,6 +70,14 @@ function groups(project: Project, records: Record[], size: number): Record[][] {
 
 type ContextMemo = Pick<EpicPlanningOptions, "contexts" | "onContext"> & { projectKeys?: WeakMap<Project, string> };
 export function epicReviewContext(project: Project, review: EpicReview, extraIDs: string[] = [], final = false, guardrailIDs?: string[], index?: EvidenceGraph, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo): ContextPack {
+  if (review.contextPolicy === "staged-records-v4") {
+    if (extraIDs.length) throw new Error("Record-staged question review does not authorize extra loads.");
+    const planned = recordStagedReview(project, review, onPrepare, preparation, memo);
+    const selected = guardrailIDs ?? review.guardrailBatches?.[0];
+    const batch = planned.review.guardrailBatches!.findIndex((ids) => JSON.stringify(ids) === JSON.stringify(selected));
+    if (batch < 0) throw new Error("Record-staged context requires its canonical exact batch.");
+    return planned.contexts[batch]!;
+  }
   if (!memo?.contexts) return computeEpicReviewContext(project, review, extraIDs, final, guardrailIDs, index, onPrepare, preparation);
   const projectKey = memo.projectKeys?.get(project) ?? epicPlanningProjectKey(project);
   memo.projectKeys?.set(project, projectKey);
@@ -215,6 +223,7 @@ class StagedBatchLimitError extends Error {
   constructor() { super("Staged review needs more than sixteen exact decision batches; narrow the project/dependency scope. No evidence was dropped."); }
 }
 export function stagedEpicReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo): { review: EpicReview; contexts: ContextPack[] } {
+  if (base.contextPolicy === "staged-records-v4") return recordStagedReview(project, base, onPrepare, preparation, memo);
   const policy = isStagedPolicy(base.contextPolicy) ? base.contextPolicy : "staged-guardrails-v1";
   const review: EpicReview = { ...base, contextPolicy: policy, guardrailBatches: [] };
   const headroom = policy !== "staged-guardrails-v1";
@@ -267,7 +276,83 @@ export function stagedEpicReview(project: Project, base: EpicReview, onPrepare?:
   return { review: epicReviewSchema.parse(review), contexts };
 }
 
+/** Last-resort QUESTIONS ONLY protocol. Preserve the original mandatory evidence
+ * union, but do not re-close each decision seed back into an indivisible chain.
+ * Every exact record is read and every surviving proposal checked in all batches. */
+function recordStagedReview(project: Project, base: EpicReview, onPrepare?: () => void, preparation?: ContextPreparationIndex, memo?: ContextMemo) {
+  const plain = { ...base, contextPolicy: "current-spec-v1" as const }; delete plain.guardrailBatches;
+  let original: ContextPack["manifest"];
+  try { original = epicReviewContext(project, plain, [], false, undefined, undefined, onPrepare, preparation, memo).manifest; }
+  catch (error) { if (!(error instanceof ContextBudgetError)) throw error; original = error.manifest; }
+  const ids = new Set([...original.includedIDs, ...original.decisionProjection?.omittedReviewSourceIDs ?? [],
+    ...original.decisionProjection?.projectedReceiptSourceIDs ?? []]);
+  const requiredFiles = new Set([...original.includedIDs, ...base.recordIDs]);
+  const graph = preparation?.graph ?? evidenceGraph(project);
+  // Restore exact human provenance hidden only by canonical review projection.
+  // Static-file deferral stays explicit and identical to the existing protocol.
+  const closed = graph.close(ids, (edge) => {
+    const record = graph.records.get(edge.to);
+    return !(record && "kind" in record && record.kind === "workspace") || requiredFiles.has(edge.to);
+  });
+  if (closed.missingIDs.length) throw new Error("Record-staged review has missing mandatory evidence; no record was omitted.");
+  const records = (["sources", "questions", "requirements", "research"] as const).flatMap((field) => project[field].filter((r) => ids.has(r.id)).map((record) => ({ field, record })));
+  if (records.length !== ids.size) throw new Error("Record-staged review cannot reconstruct every mandatory record.");
+  const pins = new Set([...base.recordIDs, ...project.sources.filter((s) => s.kind === "initial" && ids.has(s.id)).map((s) => s.id)]);
+  const review: EpicReview = { ...base, contextPolicy: "staged-records-v4", guardrailBatches: [] };
+  const render = (seeds: string[]): ContextPack => {
+    onPrepare?.();
+    const included = new Set([...pins, ...seeds]);
+    const data = { id: project.id, name: project.name, revision: project.revision, focusEpicID: review.epicID, partial: true,
+      taskRecordIDs: review.recordIDs, goals: project.goals, actors: project.actors, assumptions: project.assumptions,
+      projectOrigin: project.origin ?? null,
+      focusedEpics: project.epics.filter((e) => original.epicIDs?.includes(e.id)),
+      pendingOrganization: project.organizationReviews.filter((r) => r.status === "pending"),
+      deferredGapEvidence: { explanation: "Linked workspace records absent from this batch are unread navigation, not file facts or human preferences. Existing static-file deferral is unchanged. This questions-only protocol cannot load extra evidence: return reviewBlocked if a safe comparison requires an unavailable file. Never claim the files were checked." },
+      ...Object.fromEntries((["sources", "questions", "requirements", "research"] as const).map((field) => [field, records.filter((r) => r.field === field && included.has(r.record.id)).map((r) => r.record)])),
+      epicWorkflowReview: { kind: review.kind, recordIDs: review.recordIDs, epicIDs: review.epicIDs, finalResponseRequired: true,
+        instruction: "QUESTIONS ONLY exact-record fallback. The full mandatory evidence union is distributed across saved batches; links are navigation, not evidence detailed here. Exact targets and initial human input are repeated. Other linked sources, answers, confirmations and dependency constraints are read and checked separately, not dropped or assumed reviewed. Return consequential gap questions only; requirements and unrelated arrays must be empty. Do not infer missing choices from an omitted linked record. A human answer without its question, or a confirmation without its target, is insufficient to invent intent. If an indispensable comparison cannot be made safely, return reviewBlocked. Proposals remain untrusted drafts until every original record batch has independently checked them. No edits, research, loads, approval, completeness or implementation claims." },
+    };
+    let wire: unknown = data;
+    for (const encode of [shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure]) {
+      const next = encode(wire).data; if (JSON.stringify(next).length < JSON.stringify(wire).length) wire = next;
+    }
+    const context: ContextPack = { data: wire, manifest: { revision: project.revision, focusEpicID: review.epicID,
+      characters: JSON.stringify(wire).length, budget: 96000, includedIDs: records.filter((r) => included.has(r.record.id)).map((r) => r.record.id),
+      omittedIDs: [...ids].filter((id) => !included.has(id)), epicIDs: original.epicIDs, partial: true, isolatedTask: true,
+      taskRecordIDs: review.recordIDs, epicReview: review,
+      sectionCharacters: Object.fromEntries(Object.entries(data).map(([key, value]) => [key, JSON.stringify(value).length])),
+      selectionReason: "Questions-only record-staged fallback. Every original mandatory record and restored exact human provenance is assigned to an explicit read/check batch. No linked record is assumed reviewed or used as authority when absent. No constraints are truncated and no requirements or approvals may publish." } };
+    const size = reservedStageCharacters(context);
+    if (size > 96000) throw new ContextBudgetError({ ...context.manifest, characters: size }, records.filter((r) => included.has(r.record.id))
+      .map((r) => ({ id: r.record.id, kind: "kind" in r.record ? `source/${r.record.kind}` : r.field, characters: JSON.stringify(r.record).length })));
+    return context;
+  };
+  try { render([]); } catch (error) { if (!(error instanceof ContextBudgetError)) throw error; throw new StagedBudgetError("target", error.manifest, error.message); }
+  const contexts: ContextPack[] = [];
+  const split = (seeds: string[]) => {
+    let context: ContextPack;
+    try { context = render(seeds); }
+    catch (error) {
+      if (!(error instanceof ContextBudgetError)) throw error;
+      if (seeds.length < 2) throw new StagedBudgetError("seed", error.manifest, error.message);
+      const middle = Math.ceil(seeds.length / 2); split(seeds.slice(0, middle)); split(seeds.slice(middle)); return;
+    }
+    if (contexts.length >= 16) throw new StagedBatchLimitError();
+    review.guardrailBatches!.push(seeds); contexts.push(context);
+  };
+  // Cheap raw-size grouping avoids repeatedly rendering the full closure.
+  let seeds: string[] = [], bytes = 0;
+  for (const { record } of records.filter((r) => !pins.has(r.record.id)).sort((a, b) => a.record.id.localeCompare(b.record.id))) {
+    const size = JSON.stringify(record).length;
+    if (seeds.length && bytes + size > 50000) { split(seeds); seeds = []; bytes = 0; }
+    seeds.push(record.id); bytes += size;
+  }
+  if (seeds.length || !contexts.length) split(seeds);
+  return { review: epicReviewSchema.parse(review), contexts };
+}
+
 export function epicReviewBatches(project: Project, review: EpicReview): ContextPack[] {
+  if (review.contextPolicy === "staged-records-v4") return recordStagedReview(project, review).contexts;
   return isStagedPolicy(review.contextPolicy)
     ? review.guardrailBatches!.map((ids) => epicReviewContext(project, review, [], true, ids)) : [epicReviewContext(project, review)];
 }
@@ -356,7 +441,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       const withoutIdentity = { ...context, manifest: { ...context.manifest } };
       delete withoutIdentity.manifest.epicReview;
       review.inputKey = hash({ semantic: review.inputKey, exact: batchKey ?? retrievalEvidenceBasis(withoutIdentity).key,
-        ...(contextPolicy === "staged-headroom-v2" || contextPolicy === "staged-current-spec-v3" ? { contextPolicy } : {}) });
+        ...(["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"].includes(contextPolicy ?? "") ? { contextPolicy } : {}) });
       if (staged) for (const batch of batches!) batch.manifest.epicReview = review;
     }
     catch (cause) {
@@ -380,7 +465,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
   const matches = (j: Job, candidate: Candidate) => {
     const { review, context } = candidate;
     if (!context || j.context?.epicReview?.packageID !== review.packageID || j.context.epicReview.inputKey !== review.inputKey) return false;
-    if ((["staged-headroom-v2", "staged-current-spec-v3"].includes(review.contextPolicy ?? "") || ["staged-headroom-v2", "staged-current-spec-v3"].includes(j.context.epicReview.contextPolicy ?? ""))
+    if ((["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"].includes(review.contextPolicy ?? "") || ["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"].includes(j.context.epicReview.contextPolicy ?? ""))
       && j.context.epicReview.contextPolicy !== review.contextPolicy) return false;
     if (isStagedPolicy(review.contextPolicy)) return j.retrievalWork?.epicStages?.planKey === candidate.batchKey;
     const stage = j.retrievalWork?.stages[0];
@@ -459,7 +544,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
       // that can still be divided into ordinary <=72k packages.
       const splittable = kind === "workflow" ? records.length > 1 : records.length > 2
         && epicIDs.every((id) => records.some((record) => record.epicID === id));
-      const policies = splittable ? ["staged-guardrails-v1"] as const : ["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3"] as const;
+      const policies = splittable ? ["staged-guardrails-v1"] as const : ["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"] as const;
       for (const policy of policies) {
         staged = build(epicID, epicIDs, kind, records, policy);
         stageFailure = staged.batchLimit?.message; stageLimit = !!staged.batchLimit;
@@ -538,7 +623,7 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     for (const field of Object.keys(planningDecisions) as (keyof typeof planningDecisions)[]) planningDecisions[field] += cached.decisions[field];
   };
   const checkpoint = (key: string, start: number, before: typeof planningDecisions) => {
-    const value: EpicPlanningCheckpoint = { format: 1, planningPolicy: "staged-current-spec-v3", tasks: tasks.slice(start).map((task) => ({
+    const value: EpicPlanningCheckpoint = { format: 1, planningPolicy: "staged-records-v4", tasks: tasks.slice(start).map((task) => ({
       review: task.review, state: task.state as "reviewed" | "waiting" | "blocked",
       ...(task.reason !== undefined ? { reason: task.reason } : {}),
       ...(task.blocker ? { blocker: task.blocker } : {}),

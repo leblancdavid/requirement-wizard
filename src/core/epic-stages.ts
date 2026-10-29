@@ -15,6 +15,8 @@ const proposalKey = (value: object) => {
 
 export function mergeEpicDraft(project: Project, context: ContextPack, draft: Analysis, response: Analysis, batch: number): Analysis {
   validateEpicReviewFinal(project, context, response);
+  if (context.manifest.epicReview?.contextPolicy === "staged-records-v4" && response.requirements.length)
+    throw new Error("Record-staged fallback prepares questions only; it cannot propose requirements from a partial evidence chain.");
   if (response.retireQuestions.length || response.researchFindings?.length || response.reviewResponses?.length) throw new Error("Staged reviews only draft new gap questions and requirements; no retirements, research or review changes.");
   const next = structuredClone(draft);
   for (const [index, q] of response.questions.entries()) {
@@ -46,7 +48,7 @@ export function applyGuardrailVerdict(draft: Analysis, raw: unknown): Analysis {
 /** Reconstruct all saved transitions independently before resuming or publishing. */
 export function validateEpicStages(project: Project, review: EpicReview, work: EpicStages, contexts = epicReviewBatches(project, review)): Analysis {
   epicStagesSchema.parse(work);
-  if ((["staged-headroom-v2", "staged-current-spec-v3"].includes(review.contextPolicy ?? "") && work.contextPolicy !== review.contextPolicy)
+  if ((["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"].includes(review.contextPolicy ?? "") && work.contextPolicy !== review.contextPolicy)
     || work.contextPolicy !== undefined && work.contextPolicy !== review.contextPolicy)
     throw new Error("Staged checkpoint policy does not match its saved protocol. Original stages were not relabelled or overwritten.");
   const canonical = stagedEpicReview(project, review);

@@ -24,7 +24,7 @@ export const retrievalAllowanceSchema = z.object({ format: z.literal(1), attempt
 export type RetrievalAllowance = z.infer<typeof retrievalAllowanceSchema>;
 export const epicStagesSchema = z.object({
   format: z.literal(1), planKey: z.string().regex(/^[a-f0-9]{64}$/), batches: z.number().int().min(1).max(16),
-  contextPolicy: z.enum(["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3"]).optional(),
+  contextPolicy: z.enum(["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"]).optional(),
   phase: z.enum(["discover", "validate", "complete"]), nextBatch: z.number().int().min(0).max(16),
   candidates: analysisSchema,
   receipts: z.array(z.object({ phase: z.enum(["discover", "validate"]), batch: z.number().int().min(0).max(15),

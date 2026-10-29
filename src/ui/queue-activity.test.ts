@@ -7,7 +7,7 @@ import { refinementActivity, pausedRefinement } from "./refinement-progress.js";
 import { mayContinueProject, WorkflowControls } from "./workflow-controls.js";
 import type { WorkflowView } from "../service/workflow.js";
 import { workflowLimits } from "../core/workflow.js";
-import { pausedClarification, clarificationHasWaitingInput } from "./clarification-recovery.js";
+import { pausedClarification, clarificationHasWaitingInput, currentReusedClarification, type ClarificationActionOutcome } from "./clarification-recovery.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -51,6 +51,20 @@ test("refinement labels distinguish stage progress, run scope and terminal outco
 const project = projectSchema.parse({ id: "project", name: "Queue", revision: 1, model: { providerID: "openai", modelID: "fixture" },
   sources: [{ id: "idea", kind: "initial", text: "Save responses" }], questions: [], summary: "Queue", goals: [], actors: [], assumptions: [],
   requirements: [{ id: "save", statement: "Save a response", rationale: "Persistence", sourceIDs: ["idea"], epicID: "inbox", acceptance: ["Survives restart"], status: "accepted" }] });
+
+test("no-call clarification status belongs to its explicit view baseline, not the previous failed discovery job", () => {
+  const failed: Job = { id: "planner-failure", projectID: project.id, expectedRevision: 1, model: project.model, leaseUntil: null, status: "failed",
+    diagnostic: "Local workflow preparation exceeded its two-minute bound" };
+  const outcome: ClarificationActionOutcome = { projectID: project.id, revision: 1, latestJobID: failed.id, reused: true,
+    task: { format: 2, policy: "definition-area-questions-v1", epicID: "inbox", dimension: "area-review", inputKey: "key", checkKey: "check" },
+    result: { summary: "Exact recorded decisions settle this finding", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] } };
+  assert.equal(currentReusedClarification(project, failed, outcome), outcome);
+  assert.equal(currentReusedClarification({ ...project, id: "other" }, failed, outcome), undefined);
+  assert.equal(currentReusedClarification({ ...project, revision: 2 }, failed, outcome), undefined);
+  assert.equal(currentReusedClarification(project, { ...failed, id: "new-task" }, outcome), undefined);
+  assert.equal(currentReusedClarification(project, failed, { ...outcome, reused: false }), undefined);
+  assert.deepEqual(failed.diagnostic, "Local workflow preparation exceeded its two-minute bound", "Display scoping cannot resolve or erase the old failure");
+});
 
 test("paused clarification selects the latest area attempt without reviving completed or superseded tasks", () => {
   const saved: Job = { id: "clarification", projectID: project.id, expectedRevision: 1, model: project.model, leaseUntil: null, status: "interrupted",

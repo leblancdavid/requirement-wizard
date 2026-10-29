@@ -551,7 +551,7 @@ export class DiscoveryService {
           if (adapterOptions.research) throw new Error("Staged decision review does not support research. Retry with research disabled; no provider or mode was silently changed.");
           const batches = epicPlan.task.batches ?? epicReviewBatches(project, review);
           const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
-            ...(review.contextPolicy === "staged-headroom-v2" || review.contextPolicy === "staged-current-spec-v3" ? { contextPolicy: review.contextPolicy } : {}),
+            ...(review.contextPolicy === "staged-headroom-v2" || review.contextPolicy === "staged-current-spec-v3" || review.contextPolicy === "staged-records-v4" ? { contextPolicy: review.contextPolicy } : {}),
             phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
           validateEpicStages(project, review, staged, batches);
           stagedRun = true;
@@ -566,6 +566,7 @@ export class DiscoveryService {
             context = epicStageContext(batches[staged.nextBatch]!, staged);
             if (review.contextPolicy === "staged-headroom-v2") report(`Staged headroom policy v2: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters including stage instructions and current drafts. ${context.manifest.characters > 72000 ? "Above the 72,000-character preferred target; reduced headroom is explicit." : "Within the preferred target."} Exact evidence is unchanged; planning reserved the full 12,000-character draft allowance.`);
             if (review.contextPolicy === "staged-current-spec-v3") report(`Near-limit current-spec policy v3: ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. Exact human evidence is retained; draft proposal capacity is bounded to 8,000 characters instead of 12,000. Fewer concise proposals may be returned; no evidence or drafts are silently truncated.`);
+            if (review.contextPolicy === "staged-records-v4") report("Questions-only exact-record fallback: linked evidence is distributed across saved batches, not dropped. All records must be read and every surviving question checked against every batch before publication. No new requirements, approvals or completeness claims are authorized. Unsafe comparisons still block.");
             checkpoint();
             if (work.attempts >= 3) return block("Three attempts spent on this exact decision stage. Earlier completed stages remain saved; unchanged work will not retry automatically.");
             if (callsThisRun >= limits.requests || Date.now() - started >= limits.durationMs) {

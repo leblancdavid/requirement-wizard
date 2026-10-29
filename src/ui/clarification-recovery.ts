@@ -2,6 +2,16 @@ import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import type { ReadinessQuestionTask } from "../core/readiness-questions.js";
 
+export type ClarificationActionOutcome = { projectID: string; revision: number; latestJobID?: string;
+  task: ReadinessQuestionTask; reused: boolean; result?: Job["result"] };
+
+/** A no-call action must not inherit a different job's failure. Scope the notice
+ * to the exact view baseline; a new job/revision/project restores normal status. */
+export function currentReusedClarification(project: Project | null | undefined, lastJob: Job | undefined, outcome?: ClarificationActionOutcome) {
+  return project && outcome?.reused && outcome.result && outcome.projectID === project.id
+    && outcome.revision === project.revision && outcome.latestJobID === lastJob?.id ? outcome : undefined;
+}
+
 /** A blocked response cannot prevent continuation of the questions for its own
  * blocker. Other unfinished input keeps its ordinary processing priority. */
 export function clarificationHasWaitingInput(project: Project, submissions: Submission[], task?: ReadinessQuestionTask) {

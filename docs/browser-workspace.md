@@ -1,5 +1,47 @@
 # Browser workspace, epics, and estimated completeness
 
+## Refinement preserves definition review evidence (2026-10-29)
+
+Approving wording refinement or a pair resolution, or removing a duplicate, now
+retains previous definition assessments rather than removing whole assessments that
+cited changed requirements. Affected areas show **Assessment outdated**, not **Not
+assessed**, and unchanged unrelated areas remain current. Changes to project-wide
+rules can legitimately affect multiple areas. Original findings remain dated evidence,
+not proof that replacement wording is fully defined. Use **Refresh definition coverage**
+or the existing coordinated workflow to update affected reviews within its consent.
+
+This does not yet add a unified automatic repair queue or restore assessments removed
+by earlier app versions. See the [consolidation plan](workflow-consolidation.md) for
+the staged follow-through/control work and [upgrade compatibility](migrations.md#preserve-definition-assessments-through-requirement-cleanup-2026-10-29).
+An already running desktop/backend must be rebuilt/restarted to load this correction.
+
+## Visible question-preparation feedback (2026-10-28)
+
+**Prepare questions in Design** and explicit clarification continuation now move
+focus and scroll to the Design clarification status. This also happens when an
+unchanged saved result is reused: no new question or AI call is required just to
+show feedback. Background polling does not steal focus. Refusals/errors remain
+visible rather than being confined to a source card hidden by navigation.
+The focused Specification browser regression covers new/no-question results,
+repeated no-call reuse from a deep page and API rejection. There is no persisted
+state or evidence-policy change; see [compatibility](migrations.md#reveal-the-explicit-design-clarification-outcome-2026-10-28).
+
+## Large linked-evidence workflow packages (2026-10-28)
+
+General discovery can recover otherwise unsplittable linked-evidence packages using
+a **questions-only exact-record fallback**. Exact records are distributed across
+saved read/check batches rather than pulling the entire linked chain into each
+request. Original input and target records repeat. Nothing publishes until all
+batches finish; this cannot propose requirements or approve decisions. Missing
+evidence, an individually oversized record or an unsafe comparison can still block.
+The two-minute local planner bound and evidence limits are unchanged.
+
+A read-only preflight of the reported 51-blocker project selected an eligible
+six-batch package in about 10 seconds without inference or database writes. This only
+qualifies preparation of the first package, not live provider acceptance or
+whole-project completion. Existing completed calls and interrupted stages remain
+in their original protocols. See [compatibility and verification](migrations.md#questions-only-exact-record-workflow-fallback-2026-10-28).
+
 ## Continuous refinement and no-change results (2026-10-27)
 
 **Refine requirements** continues automatically through its selected finite target
@@ -98,6 +140,115 @@ stops at its obsolete **Project map** selector (`epic-review-browser-check.ts:12
 No live model calls were made.
 
 ### Saved-response conflicts become Design questions (2026-10-28)
+
+**Reused results and earlier failures:** when **Clarify in Design** reuses a current
+completed result, Design and Processing & queue now say **Saved clarification result
+reused** and **No new AI request was made**. A separate prior discovery/planning
+failure is labelled as an earlier task rather than shown as this clarification's
+outcome. Its diagnostic and logs remain available, and its package blockers are not
+resolved. The local result notice expires when a new job/revision/project arrives;
+saved-input and active-work status still take priority. No new job, model call,
+approval or data migration is introduced. See
+[UI compatibility](migrations.md#reused-clarification-ui-outcome-attribution-2026-10-28).
+
+Verification for this UI correction: `npm test` passed (337 pretests + 667 main
+tests), type check, UI build and 11 queue-activity tests passed. The Specification
+browser check reproducing no-call reuse after an unrelated planner failure passed.
+The full browser command again passed layout/model selection, then stopped at the
+known obsolete **Project map** selector in `browser-check.ts:706`; later full-suite
+checks were not reached. Existing bundle-size and React list-key warnings remain.
+
+**Older frozen rationale:** new instructions to keep workflow commentary out of
+rationale apply to newly written drafts, not retroactively to saved wording that
+checks cannot rewrite. The original prose remains dated AI explanation; it does
+not become human authority or a product rule. Factual and authorization checks
+still apply. **Process saved responses only** can recheck an affected older v1
+rejection once under compatible instructions, retaining the unchanged draft,
+completed clarification/reads and spent attempts. It neither cleans up the rationale
+silently nor approves the product rule. See
+[authoring compatibility](migrations.md#non-retroactive-saved-draft-authoring-guidance-2026-10-28).
+
+**Verification scope:** checking another evidence batch no longer presents its local
+target list as the complete staged permission list. Original structural eligibility
+is kept distinct from detailed evidence and human intent. Corrective checks receive
+the original rejection as dated AI context; future drafts are told to keep workflow
+arguments out of product rationale. An affected older failed check can be rechecked
+once on **Process saved responses only**, without rewriting its frozen draft,
+repeating clarification/reads or resetting spent attempts. A renewed semantic
+rejection still stops; recovery is not approval. See
+[verification compatibility](migrations.md#staged-verification-scope-and-dated-rejection-context-2026-10-28).
+
+**Evidence-loading continuation:** successful requests for additional exact records
+no longer consume the finite failed-attempt allowance. A step can keep loading new
+linked evidence and then finish its draft/verdict, rather than stopping after four
+useful reads. Duplicate/unknown evidence requests and malformed/failed calls still
+spend the original finite allowance; context, receipt and cancellation bounds remain.
+After updating the backend, **Continue clarification** reuses an older stopped
+ledger's exact reads and completed steps. It does not restart question generation
+or reset failure history. See [evidence-progress compatibility](migrations.md#clarification-evidence-progress-accounting-2026-10-28).
+
+Staged follow-up distinguishes **evidence pins** from **current-input authority**.
+A later answer added to resolve a saved-response blocker stays available for exact
+comparison, but its own queued follow-up owns changes requiring that answer. The
+original response's prompt/schema now advertise only its actual authorized input,
+matching publication validation. Existing reads and spent attempts survive retry;
+this correction does not grant more requests or repeat completed clarification.
+See [authority compatibility](migrations.md#separate-staged-evidence-pins-from-input-authorization-2026-10-28).
+
+**Completed-draft citation recovery:** an older fully checked draft can accidentally
+mix the current answer and historical confirmation in its update-authorization
+citations. **Process saved responses only** now reuses the checked draft without
+model calls when the only extra citations are confirmations already retained on
+the target and reviewed as evidence. Checked wording and original receipts remain
+unchanged; only the current concrete input authorizes publication. Other invalid
+citations still fail closed. New drafts reject this mistake before batch checks.
+See [citation compatibility](migrations.md#checked-saved-response-authorization-citation-projection-2026-10-28).
+
+**No-question recovery:** completed question preparation can conclude that no new
+human choice is established while the saved response still has a rejected draft.
+That outcome now permits one bounded corrective draft review, rather than replaying
+the old rejection forever. It reuses the completed clarification and original reads,
+checks the exact human evidence behind the rejection, and independently verifies the
+corrected frozen draft against every original batch. A no-question summary is not
+treated as human authority or approval. A genuinely unresolved conflict remains
+blocked; unchanged correction cannot restart endlessly or silently gain allowance.
+Newly completed clarification can continue the original response in the same manual
+action. An older completed no-question result is reused on **Process saved responses
+only**, without repeating question generation. Original input, rejected receipts,
+history and the paused coordinator settings remain intact. See
+[correction compatibility](migrations.md#no-question-clarification-to-bounded-corrective-draft-review-2026-10-28).
+
+Verification: `npm test` passed (326 pretests + 666 main tests), type check and UI
+build passed, and the focused 36-test saved-response/diagnostics suite passed after
+the final provenance checks. The Specification browser check now exercises both
+question-needed and no-question → correction → verified completion with the
+coordinator enabled/paused, and passed on a separate rerun. The full browser suite
+again passed layout/model selection, then stopped at the obsolete **Project map**
+selector in `browser-check.ts:706`. An earlier focused run during a concurrent build
+missed its Specification tab; the serial rerun passed. Read-only local preflight
+of the reported state confirms the completed clarification is reusable, retains all
+12 original reads and fits a 51,854-character corrective request under 96,000. It
+plans one correction plus 12 independent checks, not another 46-request question
+sweep. This is preflight only: no live calls or user-project writes were performed.
+
+Follow-up correction: a coordinator that is **enabled but stopped** no longer
+suppresses automatic question preparation after explicit manual processing or
+definition refresh. The previous guard incorrectly treated the saved opt-in setting
+as a running coordinator. Live-worker exclusion and coordinator-owned allowances
+remain separate; manual processing does not resume or alter coordinator settings.
+No data reset or previous-answer changes are needed. See
+[compatibility](migrations.md#manual-clarification-with-a-stopped-enabled-coordinator-2026-10-28).
+
+Correction verification: the enabled-but-blocked regression failed before the guard
+fix and passes afterward. `npm run check`, `npm test` (323 pretests + 666 main tests),
+the 46-test focused saved-response/assessment/coordinator run, focused Specification
+browser check and diff check passed. The browser fixtures now preserve enabled/paused
+coordinator settings through explicit manual recovery. Read-only local validation of
+the reported saved state confirms a valid retained blocker, no other related input
+gate, no previous format-3 attempt and a ready 23-batch/46-step exact clarification
+plan. No user data, workflow grant/settings or provider allowance was changed; this
+does not establish live question-generation success. Broader browser-suite selector
+blockers documented below remain unresolved.
 
 A retained exact saved-response `submissionBlocked` or rejected frozen-draft check
 now triggers automatic questions-only triage, not repeated zero-request failures.

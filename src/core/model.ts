@@ -307,6 +307,9 @@ export type Job = {
     submissionStage?: { policy: "exact-submission-batches-v1"; planKey: string; step: number; phase: "read" | "check" };
     reviewSourceIDs?: string[];
     scopedAnswerSourceIDs?: string[];
+    submissionAuthorizationSourceIDs?: string[];
+    submissionPriorRejection?: string;
+    submissionDraftPolicy?: "legacy" | "product-rationale-v1";
     reviewChangeSourceIDs?: string[];
     losslessCompaction?: { originalCharacters: number; sharedTexts: number; references: number };
     identifierCompaction?: { originalCharacters: number; identifiers: number; references: number };

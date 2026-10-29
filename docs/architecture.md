@@ -6,6 +6,14 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- Workflow planning has a questions-only `staged-records-v4` fallback for otherwise
+  unsplittable evidence chains. The mandatory exact record union is distributed
+  across durable discovery/check batches, with target/original-input pins repeated.
+  Every batch is checked before question publication; requirements and extra loads
+  are forbidden. The 96,000-character envelope, 8,000-character draft reserve and
+  sixteen-batch limit remain. Old model protocols and attempts are not relabelled.
+  See [compatibility and verification](migrations.md#questions-only-exact-record-workflow-fallback-2026-10-28).
+
 - Workflow planning uses material-bound CPU receipts and separate successful-context/
   failed-probe caches. Candidate-policy failures checkpoint expensive partition work
   within unfinished groups; bookkeeping-only revisions can retain local progress,
@@ -77,6 +85,11 @@ implemented under `src/`. See [decisions.md](decisions.md),
   published question permits a new submission plan with explicit reconciliation
   provenance; rejected ledgers remain immutable. See
   [saved-response recovery](migrations.md#saved-response-conflict-questions-and-explicit-answer-recovery-2026-10-28).
+  A versioned `submissionWork.draftRepair` boundary additionally allows a completed
+  no-question result to trigger one corrective draft review: replay retains all old
+  reads/rejections, checks the old failure evidence and then re-verifies every batch.
+  Dispatch/publication validate source provenance independently; no AI finding becomes
+  a human decision. See [corrective review](migrations.md#no-question-clarification-to-bounded-corrective-draft-review-2026-10-28).
 
 - `src/core/maintenance.ts`, `src/storage/maintenance.ts`, `src/service/queue.ts`:
   opt-in decision-triggered area scheduling with durable CAS dispatch receipts,

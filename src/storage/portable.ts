@@ -47,6 +47,9 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (job.submissionWork?.reconciliation) {
       linked.add(job.submissionWork.reconciliation.sourceJobID); linked.add(job.submissionWork.reconciliation.clarificationJobID);
     }
+    if (job.submissionWork?.draftRepair) {
+      linked.add(job.submissionWork.draftRepair.sourceJobID); linked.add(job.submissionWork.draftRepair.clarificationJobID);
+    }
   }
   const definitionIdentity = (job: Job) => job.definitionWork && JSON.stringify([job.definitionWork.policy, job.definitionWork.epicID, job.definitionWork.inputKey, job.definitionWork.planKey]);
   const completedDefinitions = new Set(jobs.filter((j) => j.status === "completed" && j.result && j.definitionWork).map(definitionIdentity));

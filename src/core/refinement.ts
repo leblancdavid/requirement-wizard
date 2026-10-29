@@ -79,7 +79,8 @@ export function reviewRefinement(project: Project, id: string, accept: boolean, 
       delete related.authority;
     }
     proposal.status = "accepted";
-    project.assessments = project.assessments.filter((a) => !a.checks.some((c) => c.evidenceIDs.some((id) => [target.id, related.id].includes(id))));
+    // Keep dated findings intact. Coverage freshness checks the changed requirements
+    // and supporting decisions, including dependent areas, without erasing evidence.
     project.roundChanges = [`Approved requirement resolution: ${target.id} and ${related.id}. ${proposal.reason}`];
     return;
   }
@@ -92,8 +93,7 @@ export function reviewRefinement(project: Project, id: string, accept: boolean, 
   delete target.authority;
   target.sourceIDs.push(sourceID);
   proposal.status = "accepted";
-  // Previously resolved coverage no longer establishes the revised wording.
-  project.assessments = project.assessments.filter((a) => !a.checks.some((c) => c.evidenceIDs.includes(target.id)));
+  // Revised wording invalidates freshness, not the original assessment record.
   project.roundChanges = [`Approved requirement cleanup: ${target.statement}`];
 }
 
@@ -112,6 +112,6 @@ export function removeRequirementAsDuplicate(project: Project, removeID: string,
   removed.reviewNote = reason;
   removed.sourceIDs.push(sourceID);
   for (const proposal of project.refinements) if (proposal.status === "pending" && (proposal.requirementID === removeID || proposal.resolution?.relatedRequirementID === removeID)) proposal.status = "dismissed";
-  project.assessments = project.assessments.filter((a) => !a.checks.some((c) => c.evidenceIDs.includes(removeID)));
+  // Rejected evidence makes affected coverage outdated; retain its dated findings.
   project.roundChanges = [`${reason} The surviving requirement was not rewritten; no AI call was made.`];
 }

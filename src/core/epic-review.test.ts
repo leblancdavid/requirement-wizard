@@ -52,6 +52,41 @@ function seed(store: ProjectStore, count = 8) {
 }
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+test("record-staged fallback preserves exact mandatory human records, bounds every batch and rejects partial requirement authority", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = sharedHeavy(store);
+    const target = p.requirements[0]!;
+    p.sources.push({ id: "exact-confirmation", kind: "confirmation", epicID: "orders", requirementID: target.id, text: "Keep exactly this rule\r\nNo wider approval" },
+      { id: "exact-answer", kind: "answer", epicID: "project", questionID: "answered-human-question", text: "Retain the original answer\r\nincluding this constraint" });
+    target.status = "accepted"; target.sourceIDs.push("exact-confirmation", "exact-answer");
+    p.questions.push({ id: "answered-human-question", epicID: "project", text: "Which original scope applies?", whyItMatters: "Retain question meaning",
+      status: "answered", sourceID: "exact-answer", options: [] });
+    const before = structuredClone(p);
+    const review: EpicReview = { format: 1, kind: "workflow", epicID: "orders", epicIDs: ["orders"],
+      recordIDs: [p.requirements[0]!.id], packageID: "exact-records", inputKey: "a".repeat(64), contextPolicy: "staged-records-v4", guardrailBatches: [[]] };
+    const staged = stagedEpicReview(p, review), union = new Set(staged.contexts.flatMap((c) => c.manifest.includedIDs));
+    assert.ok(staged.contexts.length > 1 && staged.contexts.length <= 16);
+    for (const source of p.sources) {
+      assert.ok(union.has(source.id), `Required source ${source.id} must not disappear`);
+      assert.ok(staged.contexts.some((c) => JSON.stringify(c.data).includes(JSON.stringify(source.text))), "Exact human text survives encoding, not a summary");
+    }
+    for (const context of staged.contexts) {
+      assert.ok(context.manifest.includedIDs.includes(p.requirements[0]!.id));
+      assert.ok(context.manifest.includedIDs.includes(p.sources[0]!.id));
+      assert.ok(context.manifest.omittedIDs.every((id) => union.has(id)), "Omissions here are assigned to other exact batches");
+      assert.ok(context.manifest.characters < 88000);
+    }
+    assert.deepEqual(epicReviewBatches(p, staged.review), staged.contexts);
+    assert.throws(() => mergeEpicDraft(p, staged.contexts[0]!, emptyEpicDraft(), { ...empty(), requirements: [{ statement: "Invent a rule",
+      rationale: "Partial record", acceptance: ["Not authorized"], sourceIDs: [p.sources[0]!.id], epicID: "orders" }] }, 0), /questions only/);
+    assert.throws(() => epicReviewContext(p, staged.review, [p.sources[0]!.id]), /does not authorize extra loads/);
+    const missing = structuredClone(p); missing.requirements[0]!.sourceIDs.push("missing-human-record");
+    assert.throws(() => stagedEpicReview(missing, review), /missing|no longer exists/i);
+    assert.deepEqual(p, before);
+  } finally { store.close(); }
+});
 function sharedHeavy(store: ProjectStore) {
   let p = seed(store, 1);
   for (let i = 0; i < 30; i++) p = store.note(p.id, p.revision,
@@ -1077,11 +1112,11 @@ test("all size-blocked packages stop without inference and show an actionable fa
   const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
   try {
     let p = seed(store, 2);
-    for (let i = 0; i < 10; i++) p = store.note(p.id, p.revision,
-      Array.from({ length: 1400 }, (_, n) => `Guardrail-${i}-${n.toString(36)}-${(n * 17 + i).toString(36)}`).join(" ").slice(0, 11000), "project");
+    p = store.note(p.id, p.revision, "Retain the exact rule", "project");
     const linked = store.beginJob(p.id, p.revision).job; store.claimJob(linked.id, Date.now() + 60000);
-    store.finishJob(linked.id, { ...empty(), requirements: [{ statement: "This indivisible rule requires all linked decisions together", rationale: "Exact provenance chain",
-      epicID: "project", sourceIDs: p.sources.filter((s) => s.kind === "note").map((s) => s.id), acceptance: ["All linked evidence remains indivisible"] }] });
+    const exact = (key: string) => Array.from({ length: 188 }, (_, n) => digest(`${key}-${n}`)).join("").slice(0, 12000);
+    store.finishJob(linked.id, { ...empty(), requirements: [{ statement: exact("statement"), rationale: exact("rationale"),
+      epicID: "project", sourceIDs: p.sources.filter((s) => s.kind === "note").map((s) => s.id), acceptance: Array.from({ length: 8 }, (_, i) => exact(`acceptance-${i}`)) }] });
     p = store.get(p.id); const rule = p.requirements.find((r) => r.epicID === "project")!;
     p = store.review(p.id, p.revision, rule.id, "accepted", "");
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("Locally blocked evidence must not call the model"); } }));

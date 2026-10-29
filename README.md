@@ -42,6 +42,9 @@ stopped or blocked, without a 32-request/fifteen-minute action cutoff. Design of
 Conflicting saved-response checks now also prepare targeted Design questions instead
 of repeatedly stopping at the same rejected draft. Explicit answers allow a new
 draft review while keeping the original input and failed ledger in history.
+If clarification establishes no new question, one bounded corrective draft pass can
+continue the original response, reusing saved reads and checking the revised draft
+before publishing anything. It never treats an AI summary as a human decision.
 
 Oversized targeted review follow-ups and requirement-scoped answers also use saved
 evidence batches when needed. Resume processing the retained response; no duplicate

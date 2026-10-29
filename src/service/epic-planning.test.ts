@@ -78,7 +78,7 @@ test("failed candidate probes resume inside an unfinished group after SQLite reo
   const directory = mkdtempSync(join(parent, "planning-probes-")), path = join(directory, "state.sqlite");
   let store = new ProjectStore(path);
   try {
-    const p = seed(store, 6, 10); let coldPreparations = 0;
+    const p = seed(store, 6, 10, true); let coldPreparations = 0;
     const expected = planEpicReview(p, [], "orders", [], undefined, { firstPending: true, onPrepare: () => coldPreparations++ });
     const controller = new AbortController();
     await assert.rejects(prepareEpicReview(p, [], "orders", [], { signal: controller.signal, readRevision: () => p, onProgress() {},
@@ -244,7 +244,7 @@ test("timeout guidance distinguishes examined size blockers from an unexamined w
   assert.match(error.message, /not a whole-project result/); assert.match(error.message, /No model request/);
 });
 
-function seed(store: ProjectStore, count = 24, linkedNotes = 0) {
+function seed(store: ProjectStore, count = 24, linkedNotes = 0, oversized = false) {
   let p = store.create("Bounded local planning", "Retain exact original decisions", { providerID: "openai", modelID: "fixture" });
   p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Recover failed orders", dependencies: [] }]);
   for (let note = 0; note < linkedNotes; note++) p = store.note(p.id, p.revision,
@@ -252,11 +252,14 @@ function seed(store: ProjectStore, count = 24, linkedNotes = 0) {
   for (let at = 0; at < count; at += 8) {
     const j = store.beginJob(p.id, p.revision).job; store.claimJob(j.id, Date.now() + 60000);
     store.finishJob(j.id, { ...empty(), requirements: Array.from({ length: Math.min(8, count - at) }, (_, n) => ({ epicID: "orders",
-      statement: `Order behavior ${at + n}`, rationale: "Original idea", acceptance: [`Behavior ${at + n} is observable`], sourceIDs: p.sources.filter((s) => s.kind === "initial" || s.kind === "note").map((s) => s.id) })) });
+      statement: oversized ? exact(`statement-${at + n}`) : `Order behavior ${at + n}`, rationale: oversized ? exact(`rationale-${at + n}`) : "Original idea",
+      acceptance: oversized ? Array.from({ length: 8 }, (_, i) => exact(`acceptance-${at + n}-${i}`)) : [`Behavior ${at + n} is observable`],
+      sourceIDs: p.sources.filter((s) => s.kind === "initial" || s.kind === "note").map((s) => s.id) })) });
     p = store.get(p.id);
   }
   return p;
 }
+const exact = (key: string) => Array.from({ length: 188 }, (_, n) => createHash("sha256").update(`${key}-${n}`).digest("hex")).join("").slice(0, 12000);
 
 test("incremental worker selects the identical first package, preserves exact identity and explicitly reports only its examined prefix", async () => {
   const store = new ProjectStore(":memory:");
@@ -482,7 +485,7 @@ test("intermediate contexts and resolved siblings survive interruption inside a 
   const directory = mkdtempSync(join(parent, "planning-subtree-")), path = join(directory, "state.sqlite");
   let store = new ProjectStore(path);
   try {
-    const p = seed(store, 6, 10), before = structuredClone(p);
+    const p = seed(store, 6, 10, true), before = structuredClone(p);
     let coldPreparations = 0;
     const cold = planEpicReview(p, [], "orders", [], undefined, { firstPending: true, onPrepare: () => coldPreparations++ });
     assert.equal(cold.report.blocked, 6); assert.equal(cold.task, undefined);
@@ -527,7 +530,7 @@ test("context memo preserves wire bytes, restores the live review identity alias
     const warm = epicReviewContext(p, review, [], false, undefined, undefined, () => assert.fail("Cached context must not rebuild"), undefined, { contexts });
     assert.equal(JSON.stringify(warm.data), wire); assert.equal(warm.manifest.epicReview, review);
     assert.equal(contexts.get(key)!.outcome, "context");
-    const tooBig = seed(store, 1, 10), failed = new Map<string, EpicContextCheckpoint>();
+    const tooBig = seed(store, 1, 10, true), failed = new Map<string, EpicContextCheckpoint>();
     const blockedReview = planEpicReview(tooBig, [], "orders").tasks[0]!.review;
     let first: ContextBudgetError | undefined;
     try { epicReviewContext(tooBig, blockedReview, [], false, undefined, undefined, undefined, undefined, { contexts: failed }); }
@@ -696,7 +699,7 @@ test("equivalent staged seed closures render once while preserving exact seed fa
 test("blocker summaries remain available after interruption, distinguish size causes, and keep legacy causes unknown", async () => {
   const store = new ProjectStore(":memory:");
   try {
-    const p = seed(store, 6, 10), controller = new AbortController();
+    const p = seed(store, 6, 10, true), controller = new AbortController();
     const progress: PlanningProgress[] = [], receipts = new Map<string, EpicPlanningCheckpoint>();
     await assert.rejects(prepareEpicReview(p, [], "orders", [], { signal: controller.signal, readRevision: () => p,
       onProgress: (value) => progress.push(value),
@@ -763,23 +766,28 @@ test("v2 measures the complete maximum-draft stage envelope, permits explicit re
   } finally { store.close(); }
 });
 
-test("v2 resumes above-target stages after SQLite reopen without replaying completed calls or resetting a spent validation attempt", async () => {
+for (const linkedNotes of [8, 10]) test(`${linkedNotes === 8 ? "v2" : "v4"} resumes stages after SQLite reopen without replaying completed calls or resetting a spent validation attempt`, async () => {
   const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
   const directory = mkdtempSync(join(parent, "staged-v2-reopen-")), path = join(directory, "state.sqlite");
   let store = new ProjectStore(path);
   try {
-    const p = seed(store, 1, 8), before = structuredClone(p); let calls = 0;
+    const p = seed(store, 1, linkedNotes), before = structuredClone(p); let calls = 0;
+    const policy = linkedNotes === 8 ? "staged-headroom-v2" : "staged-records-v4";
+    const task = planEpicReview(p, [], "orders").task!, batches = task.batches!.length;
     const paused = await new DiscoveryService(store, { async analyze(_project, { context }) {
       calls++;
-      assert.equal(context.manifest.epicReview!.contextPolicy, "staged-headroom-v2");
-      assert.ok(context.manifest.characters > 72000 && context.manifest.characters <= 96000);
-      assert.equal(context.manifest.epicContextBudget!.aboveTarget, true);
-      for (const source of p.sources) assert.ok(context.manifest.includedIDs.includes(source.id), "Every exact human source remains loaded");
-      if (calls === 2) throw new Error("Fixture validation interrupted");
+      assert.equal(context.manifest.epicReview!.contextPolicy, policy);
+      assert.ok(context.manifest.characters <= 96000);
+      if (linkedNotes === 8) {
+        assert.ok(context.manifest.characters > 72000);
+        assert.equal(context.manifest.epicContextBudget!.aboveTarget, true);
+        for (const source of p.sources) assert.ok(context.manifest.includedIDs.includes(source.id), "Every exact human source remains loaded");
+      }
+      if (calls === batches + 1) throw new Error("Fixture validation interrupted");
       return empty();
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
-    assert.equal(paused.status, "failed"); assert.equal(calls, 2);
-    assert.equal(paused.retrievalWork!.epicStages!.receipts.length, 1);
+    assert.equal(paused.status, "failed"); assert.equal(calls, batches + 1);
+    assert.equal(paused.retrievalWork!.epicStages!.receipts.length, batches);
     assert.equal(paused.retrievalWork!.epicStages!.phase, "validate"); assert.equal(paused.retrievalWork!.attempts, 1);
     const projection = continuationState(p, [paused], [], (revision) => store.get(p.id, revision));
     const portable = decodePortable(renderWorkspace(p, emptyExecution(), projection), p.model);
@@ -794,11 +802,12 @@ test("v2 resumes above-target stages after SQLite reopen without replaying compl
       assert.ok(context.manifest.characters <= 96000);
       return { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
-    assert.equal(finished.status, "completed", finished.diagnostic); assert.equal(resumedCalls, 1);
-    assert.equal(finished.retrievalWork!.epicStages!.receipts[1]!.attempts, 2);
+    assert.equal(finished.status, "completed", finished.diagnostic); assert.equal(resumedCalls, batches);
+    assert.equal(finished.retrievalWork!.epicStages!.receipts[batches]!.attempts, 2);
+    assert.deepEqual(finished.retrievalWork!.epicStages!.receipts.slice(0, batches), paused.retrievalWork!.epicStages!.receipts);
     assert.deepEqual(store.getJob(paused.id), paused);
     assert.deepEqual(store.get(p.id).sources, before.sources); assert.deepEqual(store.get(p.id).requirements, before.requirements);
-    assert.equal(store.discoveryDiagnostics(p.id, [finished.id]).runs[0]!.policy, "staged-headroom-v2");
+    assert.equal(store.discoveryDiagnostics(p.id, [finished.id]).runs[0]!.policy, policy);
     store.close(); store = new ProjectStore(path);
     const current = store.get(p.id);
     const reused = await new DiscoveryService(store, { async analyze() { assert.fail("Completed v2 review must not replay"); } })
@@ -808,7 +817,38 @@ test("v2 resumes above-target stages after SQLite reopen without replaying compl
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("old CPU size blockers are reconsidered without resetting data, and newly unfit receipts upgrade once", async () => {
+test("record-staged questions publish only after every exact check; unsafe comparison blocks without publishing", async () => {
+  for (const unsafe of [false, true]) {
+    const store = new ProjectStore(":memory:");
+    try {
+      const p = seed(store, 1, 10), before = structuredClone(p);
+      const task = planEpicReview(p, [], "orders").task!, count = task.batches!.length;
+      assert.equal(task.review.contextPolicy, "staged-records-v4");
+      let discoveries = 0, checks = 0;
+      const job = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+        assert.equal(store.get(p.id).questions.length, 0, "Drafts must remain unpublished during all model requests");
+        const phase = (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview.phase;
+        if (phase === "discover") {
+          discoveries++;
+          return discoveries === 1 ? { ...empty(), questions: [{ text: "What should happen when an order expires?", whyItMatters: "Expiry outcome is undecided",
+            epicID: "orders", evidenceIDs: [p.requirements[0]!.id], options: [{ label: "Cancel the order", consequence: "Remove pending work" }, { label: "Keep it pending", consequence: "Wait for a later decision" }] }] } : empty();
+        }
+        checks++;
+        if (unsafe) return { reviewBlocked: { reason: "This comparison requires an unavailable simultaneous record scope" } };
+        return { guardrailVerdict: { keepQuestions: [0], keepRequirements: [] } };
+      } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
+      assert.equal(job.status, "completed", job.diagnostic);
+      assert.equal(discoveries, count);
+      assert.equal(checks, unsafe ? 1 : count);
+      assert.equal(store.get(p.id).questions.length, unsafe ? 0 : 1);
+      assert.deepEqual(store.get(p.id).sources, before.sources);
+      assert.deepEqual(store.get(p.id).requirements, before.requirements);
+      if (!unsafe) assert.equal(job.retrievalWork!.epicStages!.receipts.length, count * 2);
+    } finally { store.close(); }
+  }
+});
+
+test("old CPU size blockers are reconsidered without resetting data, and recoverable linked chains use record batches", async () => {
   const store = new ProjectStore(":memory:");
   try {
     for (const linkedNotes of [8, 10]) {
@@ -827,11 +867,9 @@ test("old CPU size blockers are reconsidered without resetting data, and newly u
         assert.equal(first.task!.review.contextPolicy, "staged-headroom-v2");
         assert.deepEqual(store.epicPlanningReceipts(p.id, input).get(group), legacy, "A pending package cannot become a resolved receipt");
       } else {
-        assert.equal(first.task, undefined); assert.equal(first.report.blocked, 1);
-        assert.equal(store.epicPlanningReceipts(p.id, input).get(group)!.planningPolicy, "staged-current-spec-v3");
-        let last: PlanningProgress | undefined;
-        await prepareEpicReview(p, [], "orders", [], { ...options, onProgress: (value) => { last = value; } });
-        assert.equal(last!.contextPreparations, 0); assert.equal(last!.reusedGroups, 1);
+        assert.equal(first.report.blocked, 0);
+        assert.equal(first.task!.review.contextPolicy, "staged-records-v4");
+        assert.deepEqual(store.epicPlanningReceipts(p.id, input).get(group), legacy, "Pending record batches cannot become a resolved receipt");
       }
       assert.deepEqual(store.get(p.id), before); assert.equal(store.jobs(p.id).length, 1);
     }

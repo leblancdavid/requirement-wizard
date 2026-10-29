@@ -1,6 +1,6 @@
 import { StaleRevisionError, type Job, type Project } from "../core/model.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
-import { acceptReadinessStage, planReadinessStages, readinessMaterials, readinessProgress, readinessStageContext, readinessStep, replayReadinessStages, upgradeReadinessRead } from "../core/readiness-stages.js";
+import { acceptReadinessStage, planReadinessStages, readinessMaterials, readinessProgress, readinessStageContext, readinessStep, replayReadinessStages, upgradeReadinessRead, readinessRequestAllowance } from "../core/readiness-stages.js";
 import type { ReadinessQuestionTask } from "../core/readiness-questions.js";
 import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
@@ -25,6 +25,8 @@ export async function runReadinessStages(store: ProjectStore, adapter: Discovery
   const work = previous?.readinessWork ? structuredClone(previous.readinessWork) : planReadinessStages(materials);
   let { draft, blocked } = replayReadinessStages(project, materials, work);
   upgradeReadinessRead(work);
+  // Explicit continuation only; never rewrite old receipts or reset spent calls.
+  if (readinessStep(work) < work.batches.length * 2) work.evidenceProgress ??= { format: 1 };
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = options.continuous ? Infinity : Date.now() + limits.durationMs;
   let calls = 0;
   const current = () => {
@@ -32,7 +34,7 @@ export async function runReadinessStages(store: ProjectStore, adapter: Discovery
     if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
   };
   const contextForCompletion = (): ContextPack => {
-    const prefix = { ...work, receipts: work.receipts.slice(0, -1), attempts: 3 };
+    const prefix = { ...work, receipts: work.receipts.slice(0, -1), attempts: work.receipts.at(-1)!.attempt };
     const before = replayReadinessStages(project, materials, prefix).draft;
     const context = readinessStageContext(project, materials, prefix, before);
     context.manifest.includedIDs = materials.evidenceIDs;
@@ -53,7 +55,8 @@ export async function runReadinessStages(store: ProjectStore, adapter: Discovery
     if (blocked) throw new Error(`Clarification needs specific evidence: ${blocked} Saved steps remain; unchanged retry does not repeat this response.`);
     if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline)) return store.pauseReadiness(job.id,
       `Clarification paused after ${calls} request(s) in this action; ${readinessStep(work)} / ${work.batches.length * 2} steps saved. Use Continue clarification in Design; completed requests will not repeat.`);
-    if (work.attempts >= (work.indexedRead ? 4 : 3)) throw new Error("This clarification step exhausted its finite request allowance (four with indexed question retention). Exact responses and spent attempts are saved; unchanged retry cannot grant another request.");
+    if (work.receipts.length >= 256) throw new Error("Clarification reached its 256-receipt safety bound. Exact evidence and spent attempts remain saved; no further request was dispatched.");
+    if (work.attempts >= readinessRequestAllowance(work)) throw new Error("This clarification step exhausted its finite failed-attempt allowance (four with indexed question retention). Successful new-evidence reads are counted separately; exact responses and spent attempts remain saved. Unchanged retry cannot grant another failed attempt.");
     work.attempts++; calls++;
     store.checkpointReadiness(job.id, work, context.manifest); // Durable before dispatch.
     const progress = readinessProgress(work);

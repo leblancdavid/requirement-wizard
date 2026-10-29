@@ -38,10 +38,12 @@ async function idle(queue: DiscoveryQueue, id: string) {
   assert.equal(queue.isActive(id), false, queue.progress(id).join("\n"));
 }
 
-test("explicit refresh assesses all areas without specification edits; unrelated revisions and discovery do not invalidate it", async () => {
+for (const workflowEnabled of [false, true]) test(`explicit refresh assesses and clarifies all areas with workflow ${workflowEnabled ? "enabled but paused" : "disabled"}, without specification edits or false invalidation`, async () => {
   const store = new ProjectStore(":memory:"); let queue: DiscoveryQueue | undefined;
   try {
     let p = seed(store); const before = structuredClone(p); let calls = 0, clarifications = 0;
+    if (workflowEnabled) store.saveWorkflow(p.id, { ...store.workflow(p.id), enabled: true, paused: true, phase: "paused", message: "Coordinator paused." });
+    const workflow = store.workflow(p.id);
     queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze(snapshot, { context, research }) {
       if (context.manifest.readinessQuestions) { clarifications++; return empty(); }
       calls++; assert.equal(research, false); assert.equal(context.manifest.epicReview, undefined);
@@ -64,6 +66,7 @@ test("explicit refresh assesses all areas without specification edits; unrelated
     assert.equal(noOp.status, "completed"); assert.equal(coverage(store.get(p.id)).stale, false);
     p = store.note(p.id, store.get(p.id).revision, "Shared human constraint", "project");
     assert.ok(coverage(p).epics.every((e) => e.stale));
+    assert.deepEqual(store.workflow(p.id), workflow, "Manual refresh must not resume or alter coordinator settings/allowance");
   } finally { await queue?.close(); store.close(); }
 });
 
