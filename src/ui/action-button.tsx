@@ -25,7 +25,10 @@ export function ActionScope({ reason, children }: { reason?: string; children: R
     const child = typeof props.children === "function"
       ? (...args: unknown[]) => prepare((props.children as (...args: unknown[]) => React.ReactNode)(...args), inheritedDisabled || fieldset)
       : prepare(props.children as React.ReactNode, inheritedDisabled || fieldset);
-    if (node.type === "button" && disabled) return <ActionButton key={node.key} {...props} disabled reason={typeof props.title === "string" ? props.title : reason}>{child as React.ReactNode}</ActionButton>;
+    // React coerces an explicitly supplied null key to the string "null".
+    // Unkeyed sibling buttons must stay unkeyed when switching wrappers, or
+    // repeated busy/ready updates can leave duplicate, stale disabled controls.
+    if (node.type === "button" && disabled) return <ActionButton key={node.key ?? undefined} {...props} disabled reason={typeof props.title === "string" ? props.title : reason}>{child as React.ReactNode}</ActionButton>;
     if (!fieldset && !(inheritedDisabled && (["input", "textarea", "select"].includes(String(node.type)) || node.type === ActionButton)) && child === props.children) return node;
     return React.cloneElement(node, {
       ...(fieldset ? { disabled: false, "aria-disabled": true } : {}),

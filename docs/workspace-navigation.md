@@ -110,6 +110,38 @@ scenarios and supporting decisions are evidence, not debug logs.
 
 ## Compatibility and verification
 
+### Default aggregate qualified (2026-10-29)
+
+The obsolete Project map/queue-history assertions in the main browser runner have
+been migrated to the implemented destinations, rather than restoring hidden duplicate
+UI. Requirement review/recovery stays in Specification; manual code claims stay in
+Implement and do not earn verified delivery credit; delivery freshness is checked in
+Overall progress. Rescans use Settings. Diagnostics, command output and context details
+use Logs. Logs metadata is not mistaken for a full model-receipt archive: tests check
+retained original receipts separately in storage. Saved-response retries exercise the
+now-supported exact evidence stages rather than assuming every older size blocker is
+permanent. Plain approvals are tested as local operations, without invented AI calls.
+
+Two actual UI regressions were fixed while migrating the checks:
+
+- Editing the automatically selected review or opening Request changes now keeps that
+  card selected if polling changes its readiness. Drafts remain editable and current
+  evidence comparisons remain visible; this does not submit or approve anything.
+- `ActionScope` no longer assigns the same `"null"` React key to unkeyed disabled
+  sibling buttons. Repeated checkpoint save/ready cycles no longer leave orphan disabled
+  controls beside the enabled ones. Existing explicit keys and disabled explanations
+  are preserved. No saved format, permission or freshness semantics change.
+
+Type check, all 1,044 tests (358 pretests + 686 main), UI build, the default
+`npm run test:browser` and focused reliability/workflow/planning browsers passed on
+Node 22.23.4. The default aggregate includes seven runners: workspace layout, model
+selection, main workflow, portable continuation, Specification, review drafts and
+assessment-history recovery. It now reaches and passes the previously blocked later
+runners. The separate `test:browser:all` command and other specialized scripts were
+not all run in this slice. Existing bundle warnings remain. No live inference,
+personal-project writes or desktop packaging were performed. Earlier blockers below
+are historical results, superseded for the default aggregate by this check.
+
 See the [migration ledger](migrations.md#workspace-consolidation-and-logs-2026-10-24).
 No saved data is rewritten and no assessment/model calls are required to upgrade.
 
@@ -119,10 +151,9 @@ a project, live-message separation/Stop routing and mobile layout without live i
 `.reqwizit-state/browser-workspace-logs-mobile.png`. Log unit tests cover old jobs,
 unknown timestamps, bounds, repeated projection and immutable original evidence.
 
-Legacy browser runners containing Project map or queue-history assertions still
-need migration to these responsibilities; those selectors are not kept as hidden
-duplicate UI. Aggregate browser qualification must not be inferred from the focused
-layout runner.
+The main runner's legacy Project map and queue-history assumptions were migrated on
+2026-10-29; see the current default aggregate qualification above. Other specialized
+scripts are not automatically qualified by the layout runner or default aggregate.
 
 Verification on 2026-10-24 (Node 22.23.4): type check, UI build, full `npm test`
 (169 pretests + 652 main tests, 821 passing), and a final 58-test targeted UI run

@@ -1,5 +1,17 @@
 # Browser workspace, epics, and estimated completeness
 
+## Consolidated-flow regression checks (2026-10-29)
+
+The default `npm run test:browser` now passes beyond its former Project map blocker,
+covering the current Specification/Implement/progress/Settings/Logs destinations.
+It includes explicit missing-assessment recovery and review-draft regression runners.
+`npm run test:browser:review-drafts` isolates notes, change-request drafts and newly
+opened forms remaining visible when polling updates their supporting evidence. Editing
+or opening Request changes pins the current card without queuing a decision or model
+call. Portable browser checks repeat checkpoint busy/ready cycles to ensure stale
+disabled controls do not accumulate. Saved evidence, authority and budgets are unchanged.
+See [qualification details](workspace-navigation.md#default-aggregate-qualified-2026-10-29).
+
 Missing definition reviews from older versions can be previewed and explicitly
 restored under **Overall progress → Recover missing saved assessments**. Opening the
 controls makes no history request or model call. Existing results are never replaced;

@@ -7,6 +7,24 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Consolidated browser path qualified:** the default `npm run test:browser` now
+  passes its layout, model selection, main workflow, portable continuation,
+  Specification, review-draft and historical-recovery runners. Removed Project map,
+  duplicate queue-history and inline-diagnostic assertions have moved to their current
+  destinations: Specification, Implement, Overall progress, Settings and Logs. Full
+  saved receipts are checked in storage separately from bounded displayed metadata.
+- This uncovered and fixed two UI defects: editing an implicitly selected review
+  card (or opening its change-request form) now pins that card through polling updates;
+  disabled-button wrappers preserve absent React keys instead of giving siblings the
+  same literal `"null"` key, which left duplicate stale disabled controls after saving.
+  Neither fix changes saved decisions, permissions or freshness identities.
+- Checks on Node 22.23.4: type check, all 1,044 deterministic tests, UI build, the
+  seven-runner default aggregate, focused reliability/workflow/planning browsers and
+  diff check passed. This supersedes the earlier Project map blocker for the default
+  aggregate, not a qualification of every separately available browser script.
+  Existing chunk-size warning remains. No live inference, personal-project writes,
+  commits, pushes or desktop packaging were performed.
+
 - **Historical recovery implemented for missing definition results:** Overall progress
   offers explicit bounded local-history preview and a separate revision-checked restore.
   Original evidence/freshness is retained; existing results are never replaced. No
@@ -95,8 +113,9 @@ and [implementation workspace](implementation-workspace.md).
   Reliability initially stopped at an obsolete raw-alert diagnostic assertion; after
   verifying the plain alert plus original Logs detail, its controlled-response and
   keyboard/touch checks passed. The aggregate runner still hits Project map at line 707.
-- **Next:** safe historical assessment recovery and any separately versioned unified
-  consent policy, then incremental rechecks. Broader operation-wide receipts and
+- **Next:** qualify preservation of revision-bound implementation reuse before allowing
+  historical recovery in protected projects; separately version any unified consent
+  policy before introducing it. Incremental rechecks, broader operation-wide receipts and
   code/delivery impact summaries remain future work; the presentation consolidation
   is not a new shared persisted queue, permission grant or live coding qualification.
 

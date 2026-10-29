@@ -1,5 +1,42 @@
 # Data migrations and upgrade compatibility
 
+## Preserve active review drafts and disabled-control identity (2026-10-29)
+
+**UI-only fixes; no forward data conversion.** Source and target SQLite/JSON/portable
+formats, optimistic revisions, semantic assessment/checkpoint identities and saved
+permissions remain unchanged. The review view now makes its implicitly selected card
+explicit when someone edits its note/change request or opens Request changes. Polling
+can still display updated evidence and stale-review warnings but no longer hides the
+edited card by automatically choosing a different ready item. Explicit navigation and
+successful submission retain their normal advance behavior. Drafts stay browser-local;
+this change introduces no persistence, startup rewrite or reset requirement.
+
+The shared disabled-button wrapper now preserves a missing React key as `undefined`
+instead of explicitly passing `null` (which React stringifies to `"null"`). Sibling
+controls no longer collide during busy/ready reconciliation or leave stale disabled
+DOM controls alongside enabled ones. Original explicit keys, focusable disabled
+explanations and action guards remain. No requests, saved evidence, completed work or
+leases are reinterpreted. Reopening the application needs no reassessment/model calls.
+
+The browser test migration follows existing responsibilities rather than adding a
+second editor or diagnostics view. Removed reports are checked at their current UI
+destination; original receipt preservation is verified separately in storage when Logs
+intentionally exposes only bounded metadata. The explicit saved-response size-block
+retry now exercises the existing exact-batch continuation instead of asserting that
+supported legacy blockers can never be retried. No retry budget is reset.
+
+Verification on Node 22.23.4: type check, all 1,044 deterministic tests (358 pretests +
+686 main), UI build, default seven-runner aggregate `npm run test:browser`, focused
+reliability/workflow/planning browsers and diff check passed. The new focused draft
+runner checks notes, change-request-only drafts and newly opened forms through actual
+poll updates, mobile editing, unchanged decisions and zero inference. Portable checks
+hold each of three checkpoint responses to verify one disabled control per action,
+then exactly one enabled control after completion, retaining the project unchanged.
+The former Project map aggregate blocker is resolved for this command. The separate
+broader `test:browser:all` command was not run; no live inference, personal-project
+writes, desktop packaging, commits or pushes were performed. Existing bundle-size
+warning remains. Protected implementation-state history recovery is still unqualified.
+
 ## Explicit missing-assessment history recovery (2026-10-29)
 
 **Opt-in additive recovery, not a startup migration.** Source: existing saved revision

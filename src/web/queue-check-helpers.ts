@@ -13,7 +13,9 @@ export async function advancedQueue(page: Page) {
 export async function runQueueAction(page: Page, name: string) {
   const dialog = await advancedQueue(page);
   await dialog.getByRole("button", { name, exact: true }).click();
-  await dialog.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  // Retained-input actions close the drawer themselves; older resume controls
+  // keep it open. Do not wait for a close control removed by the action.
+  if (await dialog.isVisible()) await dialog.getByRole("button", { name: "Close processing queue", exact: true }).click();
 }
 
 export async function specificationActions(panel: Locator) {

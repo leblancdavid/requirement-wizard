@@ -336,6 +336,9 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
            {!(r.status === "accepted" && r.authority) && <ReviewNote key={latest?.conflict ? latest.id : r.id} initialValue={draft?.note ?? (latest?.conflict && latest.input.type === "review" && latest.input.action !== "changes-requested" ? latest.input.note : "")} change={(note) => {
             const current = drafts.current[r.id];
             drafts.current[r.id] = { ...(current ?? reviewDraft(project, r, note)), note, edited: true };
+            // The initial ready card can be selected implicitly. Once someone
+            // edits it, keep that card open even if a poll changes its readiness.
+            setExpanded(item.id);
            }} />}
           {availability.state !== "ready" && <p className="save-notice" role="status">{availability.questionIDs?.length ? <>Approval: {availability.reason} You can still reject this requirement and use your note to request different behavior; rejection does not answer or retire these questions.</> : availability.jobIDs.length ? <><strong>Project processing—decisions temporarily paused.</strong> Discovery or a folder scan is running; this does not necessarily mean this requirement is changing. You can keep reading and writing notes. Use Processing & queue to view or stop the work.</> : availability.submissionIDs.length ? <><strong>{submissions.some((s) => availability.submissionIDs.includes(s.id) && s.status === "needs-attention") ? "Related processing needs attention." : "Waiting for related input to finish processing."}</strong> {availability.reason} Your notes stay here; review the result before deciding.</> : availability.reason}</p>}
           <ClarificationLinks availability={availability} openQuestion={openQuestion} />
@@ -345,10 +348,11 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
           {changed && <p className="save-notice" role="alert"><strong>Updated since you started reviewing.</strong> This requirement or its supporting information changed. Your note is retained. Check the changes above before choosing a decision below.</p>}
            <div className="button-row">{!(r.status === "accepted" && r.authority) && <ActionButton className="primary" disabled={blocked || decisionPaused || approvalNeedsDecision} reason={decisionPaused ? pauseReason : approvalNeedsDecision ? "Answer the linked clarification here or in Design, process its follow-up, then review this requirement again." : "This review is being saved or is already waiting for processing."} onClick={() => void save("accepted")}>Approve</ActionButton>}<ActionButton className="secondary" disabled={blocked || decisionPaused} reason={decisionPaused ? pauseReason : "This review is being saved or is already waiting for processing."} onClick={() => void save("rejected")}>Reject</ActionButton>
           {r.status !== "rejected" && saveDuplicate && <DuplicateRemoval project={project} submissions={submissions} jobs={jobs} removeID={r.id} disabled={disabled || blocked} save={saveDuplicate} />}
-           {r.status !== "rejected" && <ActionButton className="secondary" disabled={blocked || decisionPaused} reason={pauseReason} onClick={() => setChangeTarget(r.id)}>Request changes</ActionButton>}
+           {r.status !== "rejected" && <ActionButton className="secondary" disabled={blocked || decisionPaused} reason={pauseReason} onClick={() => { setExpanded(item.id); setChangeTarget(r.id); }}>Request changes</ActionButton>}
             </div>
           {changeTarget === r.id && r.status !== "rejected" && <ChangeRequestForm initialText={draft?.changeNote ?? (latest?.conflict && latest.input.type === "review" && latest.input.action === "changes-requested" ? latest.input.note : "")} disabled={blocked || decisionPaused} reason={pauseReason || "This requirement already has a response being saved or processed."} change={(text) => {
             drafts.current[r.id] = { ...(drafts.current[r.id] ?? reviewDraft(project, r, "")), changeNote: text };
+            setExpanded(item.id);
           }} send={(text) => save("changes-requested", text)} close={() => setChangeTarget(undefined)} />}
         </div>}
       </article>;
