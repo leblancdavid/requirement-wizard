@@ -48,8 +48,9 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
     : !approvedInScope.length ? "No approved requirements in this feature. Approve requirements in Review or choose another feature before assessing."
     : "";
   const deliveryReason = assessmentReason || (repositoryChanged ? `The workspace origin differs from the saved repository. Save implementation settings to use ${repository.repository}.` : "");
+  const currentPlanning = planningCurrent(project, state, workspaceID);
   const planningReason = state.planning && state.planning.status !== "dismissed" && (!state.run || state.run.status === "completed")
-    && (state.planning.status !== "approved" || !planningCurrent(project, state, workspaceID)) ? "Review and approve a current implementation plan before coding, or dismiss the proposal to retain manual planning." : "";
+    && (state.planning.status !== "approved" || !currentPlanning) ? "Review and approve a current implementation plan before coding, or dismiss the proposal to retain manual planning." : "";
   const run = state.run, canAssess = !assessmentReason, ready = !deliveryReason && !error && !planningReason;
   const assessmentRun = state.assessmentRuns?.at(-1);
   const assessedIDs = useMemo(() => new Set(eligibleRequirements(project).filter((r) => assessmentCurrent(project, evaluation, r.id, evaluation.assessments[r.id], executionIndex)).map((r) => r.id)), [project, evaluation, executionIndex]);
@@ -61,9 +62,15 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
   const nextStep = deliveryReason || error || (active ? "Implementation work is running. Progress appears below." : planningReason
     || (run?.status === "awaiting-merge" ? "Merge the delivery branch or PR into main, then verify delivery."
       : resumable ? "Resume the saved implementation run to continue its remaining work."
-      : state.planning?.status === "approved" && planningCurrent(project, state, workspaceID) ? "Your plan is approved. Start implementation when ready."
+      : state.planning?.status === "approved" && currentPlanning ? "Your plan is approved. Start implementation when ready."
       : !currentAssessments.length ? "Check progress to find existing code, then prepare and review a plan before building."
       : "Progress is available below. Prepare a plan to review the remaining work before building."));
+  const preparationNext = assessmentReason || (resumable ? "Check progress can inspect the current code. Archive the saved implementation run before preparing a replacement plan; its frozen scope and evidence are retained."
+    : state.planning?.status === "approved" && currentPlanning ? "A current approved plan is saved. You can inspect it below without preparing it again. Starting coding remains separate."
+      : state.planning?.status === "proposed" && currentPlanning ? "Review the saved plan below and resolve its questions before approval. Preparing another plan uses AI allowance."
+        : state.planning && state.planning.status !== "dismissed" && !currentPlanning ? "The saved plan is outdated. Review setup and use Prepare plan explicitly; earlier planning evidence is retained."
+          : state.planning && ["failed", "interrupted", "generating"].includes(state.planning.status) ? "Use Prepare plan explicitly to continue compatible saved planning work. Completed packages and spent attempts are retained."
+            : "If code already exists, use Check progress first. For a new repository, you can prepare a plan directly after saving implementation settings.");
   const start = async (operation: string, scope: Record<string, string | boolean> = {}) => {
     setStarting(true);
     try { await action("execution-start", { operation, ...scope }); } finally { setStarting(false); }
@@ -86,29 +93,39 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
     return { epic, members, visible, order };
   }).filter((group) => group.visible.length);
   const controls = <>
-    <section className="requirement-card implementation-actions" aria-label="Implementation actions">
-      <h3>Check, plan and build</h3><p>Check what is already built, review a build plan, then build approved requirements in the order they need each other. Work counts as delivered only when it has been checked and added to the main project—the main branch in Git.</p>
+    <section className="requirement-card implementation-actions implementation-preparation" aria-label="Implementation preparation">
+      <h3>Prepare implementation</h3><p>Review existing code when applicable and prepare a build plan when needed. Saved plan proposals still need approval before coding. Definition coverage checks how clearly the specification is defined; Check progress assesses code and separately verifies main delivery.</p>
+      <p>These are separate explicit tasks, not a combined automatic run. Check progress can fetch main and run verification commands. Prepare plan uses AI allowance but does not capture code, run those commands, start coding or approve the plan. Opening Implement only inspects repository metadata.</p>
       <div className="button-row">
         <ActionButton className="secondary" disabled={!canAssess || starting} reason={assessmentReason || "Starting assessment…"} title="Assess new or outdated requirements; reuse compatible results and run verification on main" onClick={() => void start("check", epicID === "all" ? {} : { epicID })}>Check progress</ActionButton>
         <ActionButton className="secondary" disabled={!canAssess || starting || resumable} reason={assessmentReason || (resumable ? "Archive the current run before preparing a new plan." : "Starting planning…")} title="Propose work packages for all approved requirements. Larger evidence sets need multiple AI requests; completed work is saved." onClick={() => void start("plan")}>Prepare plan</ActionButton>
-        <ActionButton className="primary" disabled={!ready || starting} reason={deliveryReason || error || planningReason || "Starting implementation…"} onClick={() => void start("continue")}>{codingLabel}</ActionButton>
-        {active && <ActionButton className="secondary" disabled={disabled} reason="Another workspace request is being saved. Wait for it to finish." onClick={() => void action("execution-stop", {})}>Stop implementation</ActionButton>}
       </div>
-      <small>Check scope: {epicID === "all" ? "all approved requirements" : project.epics.find((epic) => epic.id === epicID)?.title ?? "selected feature"}. Plan scope: all approved requirements.{resumable && " Coding resumes the saved run’s scope."}</small>
-      <p role="status" aria-label="Implementation next step">{nextStep}</p>
+      <small>Check scope: {epicID === "all" ? "all approved requirements" : project.epics.find((epic) => epic.id === epicID)?.title ?? "selected feature"}. Plan scope: all approved requirements. Search and status filters do not narrow the plan.</small>
+      <p role="status" aria-label="Implementation preparation next step">{preparationNext}</p>
       <details className="implementation-check-options"><summary>Check options</summary>
         <p>Normal checks reuse compatible results, including partial, missing and unknown. They assess local code, then fetch main and run your verification commands. Local results are retained if main verification fails.</p>
         <div className="button-row"><ActionButton className="secondary" disabled={!canAssess || starting} reason={assessmentReason || "Starting assessment…"} onClick={() => void start("assess", { ...(epicID === "all" ? {} : { epicID }), preview: true })}>Preview changes</ActionButton><small>Show pending and reusable assessments using a local capture. No AI calls, fetching main or verification commands.</small></div>
         <div className="button-row"><ActionButton className="secondary" disabled={!canAssess || starting} reason={assessmentReason || "Starting assessment…"} onClick={() => void start("check", { ...(epicID === "all" ? {} : { epicID }), force: true })}>{epicID === "all" ? "Recheck everything" : "Recheck feature"}</ActionButton><small>Ignore saved assessments and request fresh AI assessments for every approved requirement in the check scope.</small></div>
         <p>Code freshness reflects the latest check or preview, not live filesystem monitoring. Reviewed code scopes in Implementation settings narrow change impact; commit-only changes can reuse compatible evidence. Answers and reviews saved during assessment wait in the queue until it finishes.</p>
       </details>
-    </section>
-    <section className="requirement-card" aria-label="Implementation planning"><h3>Implementation plan</h3><p>Review what will be built, in what order, and how it will be checked before approving. Use Check progress first so the plan is based on a recent review of the code. Preparing a plan uses your AI allowance: usually one request per approved requirement, but larger evidence sets need multiple reading and checking requests. At most 32 staged requests run per action; choose Prepare plan again after a budget pause. Stop retains saved work. Completed packages and checks are reused when your decisions and settings haven’t changed.</p>
+    <section aria-label="Implementation planning"><h4>Implementation plan</h4><p>Review what will be built, in what order, and how it will be checked before approving. If code already exists, use Check progress first for a recent code review; Prepare plan does not inspect new code itself. Preparing a plan uses your AI allowance: usually one request per approved requirement, but larger evidence sets need multiple reading and checking requests. At most 32 staged requests run per action; choose Prepare plan again after a budget pause. Stop retains saved work. Completed packages and checks are reused when your decisions and settings haven’t changed.</p>
       {active && state.planning?.status === "generating" && <ActivityFeedback label="Preparing dependency proposals and work packages…" />}
       {Object.values(state.planning?.stageWork ?? {}).filter((work) => work.receipts.length < work.batches.length * 2).map((work) => <p key={work.requirementID} role="status">{project.requirements.find((r) => r.id === work.requirementID)?.statement ?? "Requirement"}: {work.receipts.length < work.batches.length ? "Reading project evidence" : "Checking the proposed package"} · {work.receipts.length} / {work.batches.length * 2} exact steps saved. No package is published until all steps finish.</p>)}
       {planningReason && <p role="status">{planningReason}</p>}
-      {state.planning && <PlanningReview key={`${state.planning.id}:${state.planning.status}`} project={project} state={state} current={planningCurrent(project, state, workspaceID)} disabled={active || disabled || resumable} action={action} />}
+      {state.planning && <PlanningReview key={`${state.planning.id}:${state.planning.status}`} project={project} state={state} current={currentPlanning} disabled={active || disabled || resumable} action={action} />}
       {!!state.planningHistory?.length && <LazyDetails summary={<>Previous implementation plans · {state.planningHistory.length}</>}>{() => <PagedList items={state.planningHistory!} itemID={(p) => p.id} label="Previous implementation plans">{(p) => <LazyDetails summary={<>Specification r{p.revision} · {p.status} · {p.createdAt}</>}>{() => <><p>{p.output?.summary ?? p.diagnostic}</p>{p.output && <PagedList items={p.output.packages} itemID={(item) => item.requirementID} label="Historical work packages">{(item) => <p>{item.title} — {item.reason}</p>}</PagedList>}</>}</LazyDetails>}</PagedList>}</LazyDetails>}
+    </section>
+    <ExecutionSettings key={`${project.id}:${workspaceID}:${JSON.stringify(state.config)}`} project={project} config={state.config} detected={repository} detecting={detecting} detect={() => void detectRepository()} disabled={active || disabled || resumable} save={(config) => action("execution-config", { config, version: state.version })} />
+    </section>
+    <section className="requirement-card implementation-actions" aria-label="Implementation actions">
+      <h3>Build and verify</h3><p>Preparation never starts coding automatically. Use the explicit action below to build approved requirements, resume a frozen run or verify delivery. Work counts as delivered only after verification on the main branch.</p>
+      <div className="button-row">
+        <ActionButton className="primary" disabled={!ready || starting} reason={deliveryReason || error || planningReason || "Starting implementation…"} onClick={() => void start("continue")}>{codingLabel}</ActionButton>
+        {active && <ActionButton className="secondary" disabled={disabled} reason="Another workspace request is being saved. Wait for it to finish." onClick={() => void action("execution-stop", {})}>Stop implementation</ActionButton>}
+      </div>
+      <p role="status" aria-label="Implementation next step">{nextStep}</p>
+      <small>{resumable ? "Coding resumes the saved run’s scope, not the current search or feature filter." : "A new whole-project run covers remaining approved work; individual and feature actions retain their explicit scopes."}</small>
+      {(!state.planning || state.planning.status === "dismissed") && <p>Your existing manual planning path is unchanged. This grouping adds no new approval requirement.</p>}
     </section>
     {error && <DiagnosticNotice detail={error} summary="The build task needs attention." next="Check the setup and current task below before trying again." alert />}
     {assessmentReason && <p id="implementation-action-reason" role="status" aria-label="Implementation availability">{assessmentReason}</p>}
@@ -127,7 +144,6 @@ function ImplementationView({ project, state, evaluation, executionIndex, active
       {active && run.status === "running" && assessmentRun?.status !== "running" && <ActivityFeedback label="Requirements verified in this coding run" completed={run.units.flatMap((unit) => unit.items).filter((item) => item.status === "verified").length} total={run.requirementIDs.length} />}
       {!active && <ActionButton className="quiet" disabled={disabled} reason={discoveryActive ? discoveryBlockReason : "Wait for the current workspace request to finish."} onClick={() => void action("execution-archive", { version: state.version })}>Archive run &amp; replan</ActionButton>}
        <LazyDetails summary="Delivery results">{() => <>{run.units.map((unit) => <div key={unit.id}><p><strong>{unit.branch}</strong> · {unit.delivery.replaceAll("-", " ")}</p>{unit.pr && <a href={unit.pr} target="_blank" rel="noreferrer">Open GitHub PR ↗</a>}{unit.items.map((item) => <p key={item.requirementID}>{project.requirements.find((r) => r.id === item.requirementID)?.statement ?? "Earlier requirement"} · {statusLabel(item.status)}</p>)}</div>)}</>}</LazyDetails></section>}
-    <ExecutionSettings key={`${project.id}:${workspaceID}:${JSON.stringify(state.config)}`} project={project} config={state.config} detected={repository} detecting={detecting} detect={() => void detectRepository()} disabled={active || disabled || resumable} save={(config) => action("execution-config", { config, version: state.version })} />
     </>;
   return <ActionScope reason={assessmentReason || (resumable ? "Archive the current run to change its frozen settings. Saved sessions and delivery evidence are retained." : "Wait for the current implementation request to finish.")}><div className="implementation-tab">
     {starting && <ActivityFeedback label="Starting implementation task…" />}

@@ -261,7 +261,9 @@ test("Review uses Refine as the single duplicate/conflict workflow without runni
   let calls = 0;
   const html = renderToStaticMarkup(createElement(ReviewQueue, { project: p, submissions: [], epicID: "all", sending: [], disabled: false,
     refine: () => { calls++; }, submit: async () => true, reviewRefinement: async () => true }));
-  assert.match(html, /Refine requirements/);
+  assert.match(html, /Improve requirements/);
+  assert.match(html, /More specification actions/);
+  assert.match(html, /opening this section starts no requests/);
   assert.match(html, /duplicates and conflicting choices/);
   assert.ok(!html.includes("Check approved requirements for duplicates and conflicts"));
   assert.ok(!html.includes("Approved requirement audit"));

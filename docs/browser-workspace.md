@@ -1,5 +1,69 @@
 # Browser workspace, epics, and estimated completeness
 
+Missing definition reviews from older versions can be previewed and explicitly
+restored under **Overall progress → Recover missing saved assessments**. Opening the
+controls makes no history request or model call. Existing results are never replaced;
+projects with saved implementation evidence are protected from revision invalidation.
+See [recovery guidance and current limits](assessment-history-recovery.md).
+
+## Prepare implementation, then build explicitly (2026-10-29)
+
+Implement separates **Prepare implementation** (Check progress, Prepare plan, Check
+options, plan review and settings) from **Build and verify** (Start/Resume implementation
+or Verify delivery). Opening the view performs metadata inspection, not code assessment,
+verification commands, plan generation or coding. Already authorized work can continue.
+
+Use Check progress when code already exists; it follows the selected feature and can
+verify main with configured commands. Prepare plan remains explicit and project-wide
+over approved requirements. A new repository can proceed directly to planning after
+setup. Current approved plans need not be regenerated; older proposals/paused work
+retain their existing review and continuation rules. Frozen runs keep their saved
+scope. This grouping changes neither permissions nor valid saved evidence. See
+[implementation guidance](implementation-workspace.md#preparation-versus-building-2026-10-29)
+and [compatibility](migrations.md#separate-implementation-preparation-from-builddelivery-2026-10-29).
+
+## Specification actions and processing permissions (2026-10-29)
+
+**Continue specification** is the renamed coordinated action, not permission to plan
+or code. Opening its explanation while coordination is off still makes no requests;
+explicit continuation retains the eight-request/five-active-minute grant. Existing
+scoped saved-response, clarification and refinement recovery shortcuts remain.
+
+Use **Design → More actions → Discover missing decisions** for scoped exploration and
+its Questions ready target. Use **Specification → More actions → Improve requirements**
+for wording/overlap cleanup (formerly Refine requirements). Both disclosures open
+without inference; explicit tasks keep their own scope and usage limits. The queue's
+Advanced actions disclosure is also now called More actions. Keyboard targets and
+44px disclosure/task controls are retained on mobile.
+
+**Settings → Project settings → Processing permissions** groups the existing controls:
+coordinated specification work, automatically processing saved inputs, and automatic
+definition updates. The saved-input preference applies across projects in this browser;
+workflow/definition settings are project-local on this machine. Coordination makes
+the separate preferences inactive without changing them. **Use separate task settings**
+restores their applicability, not an all-manual mode; existing pauses/restart gates
+still apply. Original input flags, opt-outs, limits and separate research/coding
+permissions are unchanged. Earlier names in dated descriptions/logs below refer to
+these same operations. See [compatibility](migrations.md#specification-controls-and-processing-permission-grouping-2026-10-29).
+
+## Saved outcome and next step (2026-10-29)
+
+**Processing & queue → Project workflow → Saved outcome and next step** combines
+the latest locally recorded specification-change counts with current remaining work.
+The change receipt and current status each show their own revision. Expand the receipt
+for added/updated/removed record counts; proposals are not counted as approvals and
+this is not an entire-run report. Activity retains the available detailed history.
+Without local change history, the receipt remains explicitly unavailable.
+
+The summary shows saved definition reviews still current, reviews needing updates or
+an initial baseline, unfinished input, pending decisions and affected refinements/plans.
+Definition counts cover active requirement/dependency areas and project-wide decisions.
+Current reviews are available for reuse, not proof that a specific number of model
+calls was saved or that every finding is resolved. The next-step explanation distinguishes
+running work, saved-input issues, review blockers and explicit specification/planning/
+coding actions. Reading it grants no allowance and starts no requests. Saved evidence
+reconstructs the summary after restart. See [compatibility](migrations.md#revision-labelled-saved-outcome-summaries-2026-10-29).
+
 ## Organization changes and related saved work (2026-10-29)
 
 Merging, splitting, restoring organization or explicitly retiring an area no longer

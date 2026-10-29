@@ -215,6 +215,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (req.method === "GET" && action === "definition-history") {
         json(res, 200, options.store.definitionReviewHistory(id, Object.fromEntries(url.searchParams))); return;
       }
+      if (req.method === "GET" && action === "assessment-recovery") {
+        const input = z.object({ epicID: z.string().min(1).max(500), beforeRevision: z.coerce.number().int().positive().optional() }).strict().parse(Object.fromEntries(url.searchParams));
+        json(res, 200, options.store.previewAssessmentRecovery(id, input.epicID, input.beforeRevision)); return;
+      }
       if (req.method === "GET" && action === "log-history") {
         json(res, 200, options.store.logHistory(id, Object.fromEntries(url.searchParams))); return;
       }
@@ -230,6 +234,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
       const raw = await body(req);
+      if (action === "restore-assessment") {
+        const input = z.object({ revision, epicID: z.string().min(1).max(500), sourceRevision: z.number().int().positive(), token: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(raw);
+        json(res, 200, options.store.restoreAssessmentHistory(id, input.revision, input)); return;
+      }
       if (action === "discovery-diagnostics") {
         const input = z.object({ jobIDs: z.array(z.string().uuid()).min(1).max(20) }).strict().parse(raw);
         json(res, 200, options.store.discoveryDiagnostics(id, input.jobIDs)); return;

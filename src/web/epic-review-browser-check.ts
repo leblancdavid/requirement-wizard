@@ -1,5 +1,5 @@
 import { workspaceMenu } from "./menu-check-helpers.js";
-import { advancedQueue, runQueueAction } from "./queue-check-helpers.js";
+import { advancedQueue, runQueueAction, discoveryActions } from "./queue-check-helpers.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
@@ -112,7 +112,7 @@ try {
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
   const review = page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions", exact: true });
-  const headerDiscovery = page.locator(".queue-header").getByRole("button", { name: "Continue project", exact: true });
+  const headerDiscovery = page.locator(".queue-header").getByRole("button", { name: "Continue specification", exact: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(headerDiscovery).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -126,12 +126,14 @@ try {
     await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveCount(0);
   }
   await page.getByRole("tab", { name: /^Design/ }).click();
+  await discoveryActions(page);
   await expect(review).toBeVisible();
   await expect(page.locator(".discovery-hint")).toContainText("Find missing decisions");
   await page.getByRole("tab", { name: /^Specification/ }).click();
   await runQueueAction(page, "Discover missing decisions");
   await expect.poll(() => calls).toBe(2);
   await page.getByRole("tab", { name: /^Design/ }).click();
+  await discoveryActions(page);
   await expect(review).toBeEnabled();
   await expect.poll(() => calls).toBe(2);
   const blocked = structuredClone(store.jobs(project.id).find((job) => job.context?.epicReview && !job.result && job.epicReviewReport?.blocked === 1)!);
@@ -149,7 +151,7 @@ try {
   await page.getByRole("button", { name: "Close processing queue" }).click();
   assert.equal(calls, 2, "One click continues independent packages after a valid evidence blocker");
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
-  await page.getByLabel("Filter by feature").selectOption("orders"); await review.click();
+  await page.getByLabel("Filter by feature").selectOption("orders"); await discoveryActions(page); await review.click();
   await expect.poll(() => store.jobs(project.id).at(-1)!.epicReviewReport?.modelCalls).toBe(0);
   assert.equal(calls, 2, "Neither checked nor blocked packages replay after reload");
   await page.locator(".topbar .queue-trigger").click();
@@ -222,6 +224,7 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Epic question target browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
+  await discoveryActions(page);
   await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("10");
   await review.click();
   await expect.poll(() => store.get(targetProject.id).questions.length).toBe(12);
@@ -240,6 +243,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: resolve(".reqwizit-state/browser-design-controls-mobile.png"), fullPage: true });
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
+  await discoveryActions(page);
   await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("10");
   assert.equal(targetCalls, 4, "Reload retains the target without starting inference");
   let sizeProject = store.create("Oversized human evidence browser", "Keep shared constraints exact", { providerID: "openai", modelID: "fixture" });
@@ -252,7 +256,7 @@ try {
   await page.reload();
   await (await workspaceMenu(page)).getByRole("button", { name: /Oversized human evidence browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
-  await review.click();
+  await discoveryActions(page); await review.click();
   // This no-inference fixture intentionally compacts/splits many exact human
   // constraints. Wait for its terminal state, not Playwright's 5s UI default.
   await expect(review).toBeEnabled({ timeout: 30_000 });
@@ -276,7 +280,7 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Staged decision browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
-  await review.click();
+  await discoveryActions(page); await review.click();
   await expect.poll(() => stagedCalls).toBe(7);
   const runningStageJob = structuredClone(store.jobs(stagedProject.id).at(-1)!);
   assert.equal(runningStageJob.status, "running");
@@ -328,7 +332,7 @@ try {
   await (await workspaceMenu(page)).getByRole("button", { name: /Headroom fallback browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByLabel("Filter by feature").selectOption("orders");
-  await review.click(); await expect(review).toBeEnabled({ timeout: 30_000 });
+  await discoveryActions(page); await review.click(); await expect(review).toBeEnabled({ timeout: 30_000 });
   assert.equal(headroomCalls, 2);
   await page.locator(".topbar .queue-trigger").click();
   await expect(status).toContainText("above target");
@@ -341,7 +345,7 @@ try {
   await page.reload();
   await (await workspaceMenu(page)).getByRole("button", { name: /Failed gap outcome browser/ }).click();
   await page.getByRole("tab", { name: /^Design/ }).click();
-  await review.click(); await expect(review).toBeEnabled();
+  await discoveryActions(page); await review.click(); await expect(review).toBeEnabled();
   await page.locator(".topbar .queue-trigger").click();
   const diagnostic = store.jobs(failedProject.id).at(-1)!.diagnostic!;
   assert.ok(diagnostic);

@@ -3,6 +3,8 @@
 .implementation-check-options .button-row { align-items: start; }
 .implementation-check-options .button-row small { flex: 1 1 16rem; }
 .implementation-actions { min-width: 0; overflow-wrap: anywhere; }
+.implementation-preparation > section { margin-top: 18px; }
+.implementation-actions button { min-height: 44px; }
 .implementation-search { margin: 0 0 14px; }
 .implementation-status { align-items: start; overflow-wrap: anywhere; }
 .implementation-status > div { flex: 1 1 20rem; min-width: 0; }

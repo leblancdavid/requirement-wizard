@@ -46,11 +46,48 @@ try {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Staged planning fixture", exact: true }).click();
+  const beforeOpening = structuredClone(store.execution(project.id));
   await page.getByRole("tab", { name: /Implement/ }).click();
+  const preparation = page.getByRole("region", { name: "Implementation preparation", exact: true });
+  const building = page.getByRole("region", { name: "Implementation actions", exact: true });
+  await expect(preparation.getByRole("heading", { name: "Prepare implementation", exact: true })).toBeVisible();
+  await expect(building.getByRole("heading", { name: "Build and verify", exact: true })).toBeVisible();
+  await expect(preparation).toContainText("Definition coverage checks how clearly the specification is defined");
+  await expect(preparation).toContainText("not a combined automatic run");
+  await expect(preparation.getByRole("button", { name: "Start implementation", exact: true })).toHaveCount(0);
+  await expect(building.getByRole("button", { name: "Prepare plan", exact: true })).toHaveCount(0);
+  await expect(preparation.getByRole("button", { name: "Prepare plan", exact: true })).toBeEnabled();
+  assert.equal(calls, 0, "Viewing preparation must not call a model or start checks");
+  assert.deepEqual(store.execution(project.id), beforeOpening, "Repository metadata inspection does not save setup, assessments or runs");
+  await page.getByLabel("Filter by feature", { exact: true }).selectOption("runtime");
+  await expect(preparation).toContainText("Check scope: Runtime. Plan scope: all approved requirements");
+  const requests: Record<string, unknown>[] = [];
+  page.on("request", (request) => { if (request.url().endsWith("/execution-start")) requests.push(request.postDataJSON() as Record<string, unknown>); });
+  // Check routing without executing code capture, verification commands or a model.
+  // Actual planning below still exercises the real fixture service and checkpoints.
+  await page.route("**/api/projects/*/execution-start", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  }, { times: 3 });
+  await preparation.getByRole("button", { name: "Check progress", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  assert.deepEqual(requests[0], { revision: project.revision, operation: "check", epicID: "runtime" });
+  await expect(preparation.getByRole("button", { name: "Preview changes", exact: true })).toBeHidden();
+  await preparation.getByText("Check options", { exact: true }).click();
+  assert.equal(calls, 0, "Opening check options is not another authorization");
+  await preparation.getByRole("button", { name: "Preview changes", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  assert.deepEqual(requests[1], { revision: project.revision, operation: "assess", epicID: "runtime", preview: true });
+  await preparation.getByRole("button", { name: "Recheck feature", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(3);
+  assert.deepEqual(requests[2], { revision: project.revision, operation: "check", epicID: "runtime", force: true });
+  assert.equal(calls, 0); assert.deepEqual(store.execution(project.id), beforeOpening);
+  await preparation.getByText("Check options", { exact: true }).click();
   const planning = page.getByRole("region", { name: "Implementation planning", exact: true });
   await expect(planning).toContainText("32 staged requests");
   await page.getByRole("button", { name: "Prepare plan", exact: true }).click();
   await expect.poll(() => waiting).toBe(true);
+  assert.deepEqual(requests[3], { revision: project.revision, operation: "plan" }, "Planning still covers all approved requirements, not the feature filter");
+  await expect(building.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
   await expect(planning).toContainText("1 /"); await expect(planning).toContainText("exact steps saved");
   assert.equal(store.execution(project.id).planning!.output, undefined);
   await page.getByRole("button", { name: "Stop implementation", exact: true }).click();
@@ -63,9 +100,38 @@ try {
   assert.equal(hashes.filter((hash) => hash === hashes[0]).length, 1);
   assert.deepEqual(store.execution(project.id).planningHistory!.find((plan) => plan.id === paused.id), paused);
   await expect(planning).toContainText("cross-batch uncertainty");
+  await expect(building.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
+  await expect(preparation.getByRole("status", { name: "Implementation preparation next step", exact: true })).toContainText("Review the saved plan");
+  assert.equal(store.execution(project.id).run, undefined, "Preparation never starts coding or approves the plan");
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-planning-stages-mobile.png", fullPage: true });
+  await expect.poll(() => store.executionActive(project.id)).toBe(false);
+  const prepared = structuredClone(store.execution(project.id)), retainedPlan = structuredClone(prepared.planning);
+  prepared.run = { id: "preparation-routing-fixture", revision: project.revision, bindingID: store.workspace(project.id)!.bindingID!, repositoryRoot: root,
+    config: prepared.config!, scope: {}, requirementIDs: [target], units: [], status: "interrupted", progress: [], createdAt: "2026-10-29" };
+  store.saveExecution(project.id, prepared);
+  const callsBeforeResume = calls;
+  await expect(building.getByRole("button", { name: "Resume implementation", exact: true })).toBeEnabled();
+  await expect(preparation.getByRole("button", { name: "Prepare plan", exact: true })).toBeDisabled();
+  await expect(preparation.getByRole("status", { name: "Implementation preparation next step", exact: true })).toContainText("Archive the saved implementation run");
+  await page.route("**/api/projects/*/execution-start", async (route) => {
+    assert.equal(route.request().postDataJSON().operation, "continue");
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  }, { times: 2 });
+  const priorRequests = requests.length;
+  await building.getByRole("button", { name: "Resume implementation", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(priorRequests + 1);
+  assert.deepEqual(requests.at(-1), { revision: project.revision, operation: "continue" }, "Resume keeps the frozen run scope, not the selected feature");
+  const awaitingMerge = store.execution(project.id); awaitingMerge.run!.status = "awaiting-merge"; store.saveExecution(project.id, awaitingMerge);
+  await expect(building.getByRole("button", { name: "Verify delivery", exact: true })).toBeEnabled();
+  await building.getByRole("button", { name: "Verify delivery", exact: true }).click();
+  await expect.poll(() => requests.length).toBe(priorRequests + 2);
+  assert.deepEqual(requests.at(-1), { revision: project.revision, operation: "continue" });
+  assert.equal(calls, callsBeforeResume, "Build/delivery routing checks were intercepted, not executed");
+  assert.deepEqual(store.execution(project.id).planning, retainedPlan, "Resuming a frozen run does not rewrite its planning evidence");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-implementation-preparation-mobile.png", fullPage: true });
   assert.deepEqual(errors, []);
-  console.log("Staged planning browser passed: usage warning, saved-step progress, Stop/reload without inference, exact-stage continuation, retained history, review questions and mobile. Fixture model only; local Git init, no live model or GitHub calls.");
+  console.log("Implementation preparation browser passed: separate preparation/build controls, inspection without dispatch, scoped check/preview/force routing, all-requirement planning, usage warning, saved-step progress, Stop/reload, exact-stage continuation, retained history, review gates and mobile. Check routes were intercepted; planning used the fixture service. No live model or GitHub calls.");
 } finally { await browser.close(); await app.close(); store.close(); await rm(root, { recursive: true, force: true }); }

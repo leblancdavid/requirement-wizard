@@ -1,5 +1,5 @@
 import { applicationMenu, workspaceMenu } from "./menu-check-helpers.js";
-import { advancedQueue, runQueueAction } from "./queue-check-helpers.js";
+import { advancedQueue, runQueueAction, specificationActions, discoveryActions } from "./queue-check-helpers.js";
 import { exploreLegacyGaps } from "./legacy-gap-check-helpers.js";
 import assert from "node:assert/strict";
 import { browserDiagnostics } from "./browser-diagnostics.js";
@@ -548,8 +548,9 @@ try {
   await page.getByRole("button", { name: "Back to workspace" }).click();
   await expect(page.locator(".topbar")).toContainText("Active connection: OpenCode");
   await expect(page.getByText(/Connection changes are not saved/)).toContainText("OpenCode");
+  await discoveryActions(page);
   await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toBeDisabled();
-   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue project" })).toBeDisabled();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue specification" })).toBeDisabled();
   assert.equal(rounds, 1, "An unsaved connection must not start another inference round");
   await page.getByRole("button", { name: "Review connection settings", exact: true }).click();
   await page.getByRole("button", { name: "Save model", exact: true }).click();
@@ -833,10 +834,12 @@ try {
    await implementationPanel.getByRole("button", { name: "Save implementation settings", exact: true }).click();
    await expect(implementationPanel.getByRole("button", { name: "Start implementation", exact: true })).toBeEnabled();
     await expect(implementationPanel.getByRole("button", { name: "Check progress", exact: true })).toBeEnabled();
-    const implementationActions = implementationPanel.getByRole("region", { name: "Implementation actions", exact: true });
-    await expect(implementationActions.getByRole("button")).toHaveCount(3);
+     const implementationActions = implementationPanel.getByRole("region", { name: "Implementation actions", exact: true });
+     const preparation = implementationPanel.getByRole("region", { name: "Implementation preparation", exact: true });
+     await expect(preparation.locator(":scope > .button-row").getByRole("button")).toHaveCount(2);
+     await expect(implementationActions.getByRole("button")).toHaveCount(1);
     await expect(implementationActions.getByRole("status", { name: "Implementation next step" })).toContainText("Check progress");
-    await expect(implementationActions).toContainText("Plan scope: all approved requirements");
+     await expect(preparation).toContainText("Plan scope: all approved requirements");
     await expect(implementationPanel.getByRole("button", { name: "Preview changes", exact: true })).toBeHidden();
     await implementationPanel.getByText("Check options", { exact: true }).click();
    const featureFilter = page.getByRole("combobox", { name: "Filter by feature", exact: true });
@@ -1125,18 +1128,18 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await headerControls.getByRole("button", { name: "Stop discovery", exact: true }).focus();
   await page.keyboard.press("Enter");
-  await expect(headerControls.getByRole("button", { name: "Continue project", exact: true })).toBeVisible();
+  await expect(headerControls.getByRole("button", { name: "Continue specification", exact: true })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
   assert.equal(store.jobs(store.list()[0]!.id).at(-1)!.status, "cancelled", "Header Stop cancels discovery without opening the drawer");
   await page.reload();
-  await expect(headerControls.getByRole("button", { name: "Continue project", exact: true })).toBeInViewport();
+  await expect(headerControls.getByRole("button", { name: "Continue specification", exact: true })).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Header resume fits mobile width");
   const callsBeforeResume = releases.length;
   await runQueueAction(page, "Process saved responses only");
   await expect.poll(() => releases.length).toBe(callsBeforeResume + 1);
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
   await headerControls.getByRole("button", { name: "Stop discovery", exact: true }).click();
-  await expect(headerControls.getByRole("button", { name: "Continue project", exact: true })).toBeVisible();
+  await expect(headerControls.getByRole("button", { name: "Continue specification", exact: true })).toBeVisible();
    await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
@@ -1169,9 +1172,10 @@ try {
   await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("hasn’t finished reading this project’s files");
   await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toHaveCount(0);
   await page.getByRole("tab", { name: /^Design/ }).click();
+  await discoveryActions(page);
   await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toBeDisabled();
   await expect(page.locator(".queue-header").getByRole("button", { name: "Discover missing decisions" })).toHaveCount(0);
-   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue project", exact: true })).toBeDisabled();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue specification", exact: true })).toBeDisabled();
   await page.getByRole("tab", { name: "Project map", exact: true }).click();
   await expect(page.getByRole("button", { name: "Start new scan", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("batches saved");
@@ -1409,7 +1413,7 @@ try {
         await expect(reviewPanel.getByRole("region", { name: "Approved requirement audit", exact: true })).toHaveCount(0);
         await expect(reviewPanel.getByRole("button", { name: "Check approved requirements for duplicates and conflicts", exact: true })).toHaveCount(0);
         await page.getByLabel("Filter by feature").selectOption("all");
-        await reviewPanel.getByRole("button", { name: "Refine requirements", exact: true }).click();
+         await (await specificationActions(reviewPanel)).getByRole("button", { name: "Improve requirements", exact: true }).click();
         await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
         if (ambiguous) {
           await expect.poll(() => store.get(resolutionProject.id).questions.length).toBe(1);
@@ -1453,7 +1457,7 @@ try {
           const dismissedProject = store.get(resolutionProject.id);
           store.note(dismissedProject.id, dismissedProject.revision, "Please consolidate these duplicate access rules while retaining both scenarios");
           await page.reload(); await page.getByRole("tab", { name: /Specification/ }).click();
-          await reviewPanel.getByRole("button", { name: "Refine requirements", exact: true }).click();
+           await (await specificationActions(reviewPanel)).getByRole("button", { name: "Improve requirements", exact: true }).click();
           await reviewPanel.getByRole("button", { name: /^Refinements/ }).click();
           await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).toBeVisible();
           await expect(reviewPanel.getByRole("button", { name: "Approve resolution", exact: true })).not.toHaveAttribute("aria-disabled", "true");
@@ -1597,7 +1601,7 @@ try {
      await page.reload();
      await (await workspaceMenu(page)).getByRole("button", { name: /Cleanup fixture/ }).click();
      await page.getByRole("tab", { name: /Specification/ }).click();
-     await reviewPanel.getByRole("button", { name: "Refine requirements", exact: true }).click();
+      await (await specificationActions(reviewPanel)).getByRole("button", { name: "Improve requirements", exact: true }).click();
      await expect(page.locator(".queue-trigger")).toContainText("0 of 3 checks completed");
      await expect(page.locator(".queue-trigger [role=progressbar]")).toHaveAttribute("aria-valuenow", "0");
      await page.locator(".queue-trigger").click();
@@ -2052,7 +2056,7 @@ try {
            assert.ok(await page.locator(".epic-overview *").count() < 500, "Collapsed epic overview must keep 500-requirement details unmounted");
            await page.getByRole("tab", { name: /Specification/ }).click();
            await expect(page.getByRole("region", { name: "Approved requirement audit", exact: true })).toHaveCount(0);
-            await expect(reviewPanel.getByRole("button", { name: "Refine requirements", exact: true })).toBeVisible();
+             await expect((await specificationActions(reviewPanel)).getByRole("button", { name: "Improve requirements", exact: true })).toBeVisible();
             // Paging is presentation-only; drafts and global navigation survive.
             largeActive = false;
             largeState.planning = { format: 1, id: "paging-plan", revision: largeProject.revision, bindingID: "paging-binding", createdAt: "2026-10-20", status: "proposed", configFingerprint: planningConfigFingerprint(largeState), model: largeProject.model,
@@ -2510,7 +2514,8 @@ try {
    const gapOriginal = structuredClone(gapProject);
    await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Gap backlog fixture/ }).click();
    await page.getByRole("tab", { name: /^Design/ }).click();
-   await page.getByLabel("Filter by feature").selectOption(gapProject.requirements[0]!.epicID);
+    await page.getByLabel("Filter by feature").selectOption(gapProject.requirements[0]!.epicID);
+    await discoveryActions(page);
      await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("5");
      await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("7");
     for (let i = 0; i < 2; i++) {
@@ -2534,7 +2539,8 @@ try {
    await page.setViewportSize({ width: 390, height: 844 });
    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Gap backlog status fits mobile width");
    await page.screenshot({ path: ".reqwizit-state/browser-gap-backlog.png", fullPage: true });
-    await page.getByRole("button", { name: "Close processing queue" }).click(); await page.reload();
+     await page.getByRole("button", { name: "Close processing queue" }).click(); await page.reload();
+     await discoveryActions(page);
      await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("7");
    await page.locator(".topbar .queue-trigger").click();
    await expect(gapStatus).toContainText("3 checked"); await expect(gapStatus).toContainText("No model request made");
@@ -2549,7 +2555,8 @@ try {
     const retrievalOriginal = structuredClone(retrievalProject);
     await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: /Staged retrieval fixture/ }).click();
     await page.getByRole("tab", { name: /^Design/ }).click();
-     await page.getByLabel("Filter by feature").selectOption(retrievalProject.requirements[0]!.epicID);
+      await page.getByLabel("Filter by feature").selectOption(retrievalProject.requirements[0]!.epicID);
+      await discoveryActions(page);
       await expect(page.getByRole("spinbutton", { name: "Questions ready", exact: true })).toHaveValue("5");
       await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).fill("1");
      await exploreLegacyGaps(page, store.get(retrievalProject.id));

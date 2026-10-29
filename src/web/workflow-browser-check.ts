@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { workspaceMenu } from "./menu-check-helpers.js";
-import { advancedQueue } from "./queue-check-helpers.js";
+import { workspaceMenu, applicationMenu } from "./menu-check-helpers.js";
+import { advancedQueue, specificationActions } from "./queue-check-helpers.js";
 import { startApp } from "./server.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { ProjectStore } from "../storage/store.js";
@@ -59,39 +59,65 @@ try {
   await page.addInitScript(() => { localStorage.setItem("reqwizit-auto", "false"); localStorage.setItem("reqwizit-research", "false"); });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: /Coordinated workflow browser/ }).click();
   async function continueProject() {
-    const action = page.locator(".queue-header").getByRole("button", { name: "Continue project", exact: true });
+    const action = page.locator(".queue-header").getByRole("button", { name: "Continue specification", exact: true });
     // A retained-response shortcut can occupy the header after a bounded pause.
     // Resume the coordinator through its existing drawer, not that manual action.
     if (store.workflow(p.id).enabled && store.workflow(p.id).paused) {
       await page.locator(".topbar .queue-trigger").click();
       const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
-      await drawer.getByRole("region", { name: "Project workflow", exact: true }).getByRole("button", { name: "Continue project", exact: true }).click();
+      await drawer.getByRole("region", { name: "Project workflow", exact: true }).getByRole("button", { name: "Continue specification", exact: true }).click();
       await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
       return;
     }
     await expect(action).toHaveCount(1); await expect(action).toBeEnabled(); await action.click();
     if (!store.workflow(p.id).enabled) {
       const consent = page.getByRole("dialog", { name: "Processing & queue", exact: true });
-      await expect(consent).toContainText("Continue project lets the app guide your next steps");
+      await expect(consent).toContainText("Continue specification lets the app guide your next steps");
       await expect(consent).toContainText("8 AI requests");
       assert.equal(calls.length, 0, "Opening the coordinator explanation does not grant model calls");
-      await consent.getByRole("button", { name: "Continue project", exact: true }).click();
+      await consent.getByRole("button", { name: "Continue specification", exact: true }).click();
       await consent.getByRole("button", { name: "Close processing queue", exact: true }).click();
     }
   }
   const initialQueue = await advancedQueue(page);
+  await expect(initialQueue.getByRole("region", { name: "Saved outcome and next step", exact: true })).toContainText("No local specification-change receipt is available");
   await expect(initialQueue.getByRole("button", { name: "Discover missing decisions", exact: true })).toBeVisible();
   assert.equal(store.workflow(p.id).enabled, false, "Inspecting narrow operations does not enable coordinated mode");
   assert.equal(calls.length, 0);
   await initialQueue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  const discoveryExtras = page.locator('details[aria-label="More discovery actions"]');
+  await expect(discoveryExtras.getByRole("button", { name: "Discover missing decisions", exact: true })).toBeHidden();
+  await discoveryExtras.locator(":scope > summary").focus(); await page.keyboard.press("Enter");
+  await expect(discoveryExtras.getByRole("button", { name: "Discover missing decisions", exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-discovery-more-actions-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 960 });
+  assert.equal(calls.length, 0, "Opening scoped discovery with the keyboard must not start a call");
+  const originalMaintenance = structuredClone(store.maintenance(p.id));
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
+  const permissions = page.getByRole("region", { name: "Processing permissions", exact: true });
+  await expect(permissions.getByLabel("Automatically process saved inputs", { exact: true })).not.toBeChecked();
+  await expect(permissions).toContainText("applies across projects using this browser");
+  await expect(permissions).toContainText("does not rewrite the permission already saved");
+  assert.equal(store.workflow(p.id).enabled, false); assert.deepEqual(store.maintenance(p.id), originalMaintenance);
+  assert.equal(calls.length, 0, "Inspecting processing permissions must not opt in or infer");
+  await page.getByRole("button", { name: /Back to workspace/ }).click();
   await continueProject();
   await expect.poll(() => store.workflow(p.id).phase).toBe("needs-decision"); assert.deepEqual(calls, ["idea"]);
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
+  await permissions.getByText("Retained separate-task preferences (inactive)", { exact: true }).click();
+  await expect(permissions).toContainText("Automatic saved-input processing: off");
+  await expect(permissions.getByLabel("Automatically process saved inputs", { exact: true })).toHaveCount(0);
+  assert.equal(await page.evaluate(() => localStorage.getItem("reqwizit-auto")), "false");
+  assert.equal(calls.length, 1, "Showing inactive preferences cannot renew or spend the grant");
+  await page.getByRole("button", { name: /Back to workspace/ }).click();
   await page.locator(".topbar .queue-trigger").click();
   const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true }), flow = drawer.getByRole("region", { name: "Project workflow", exact: true });
   await expect(flow).toContainText("Needs your decision");
   await expect(flow).toContainText("Should reports work offline?");
-  await expect(drawer.getByRole("button", { name: /Resume processing|Process saved responses|Resume this assessment|Resume discovery only|Continue project/ })).toHaveCount(0);
-  await expect(drawer.getByText("Advanced actions", { exact: true })).toHaveCount(0);
+  await expect(drawer.getByRole("button", { name: /Resume processing|Process saved responses|Resume this assessment|Resume discovery only|Continue specification/ })).toHaveCount(0);
+  await expect(drawer.getByText("More actions", { exact: true })).toHaveCount(0);
   await flow.getByRole("button", { name: "Review and decide", exact: true }).click();
   await expect(drawer).toHaveCount(0);
   await page.getByRole("button", { name: /Choose Offline\./ }).click();
@@ -140,9 +166,16 @@ try {
   assert.equal(store.get(p.id).requirements[0]!.statement, "Save encrypted reports offline"); assert.equal(store.execution(p.id).run, undefined);
   await page.locator(".topbar .queue-trigger").click();
   await expect(flow.getByRole("region", { name: "Definition review follow-through", exact: true })).toContainText("2 current");
-  await flow.getByRole("button", { name: "Pause project workflow", exact: true }).click();
+  await flow.getByRole("button", { name: "Pause specification workflow", exact: true }).click();
   const saved = store.get(p.id), priorFindings = structuredClone(saved.assessments), beforeChange = calls.length;
-  store.note(p.id, saved.revision, "Keep saved encrypted reports available after restart", "inbox");
+  const changedProject = store.note(p.id, saved.revision, "Keep saved encrypted reports available after restart", "inbox");
+  const outcome = flow.getByRole("region", { name: "Saved outcome and next step", exact: true });
+  await expect(outcome).toContainText(`Current follow-through · revision ${changedProject.revision}`);
+  await expect(outcome).toContainText(`Latest recorded specification change · revision ${changedProject.revision}`);
+  await expect(outcome).toContainText("Definition reviews: 1 need updating");
+  await outcome.getByText(`Latest recorded specification change · revision ${changedProject.revision}`, { exact: true }).click();
+  await expect(outcome).toContainText("decision: 1 added");
+  await expect(outcome).toContainText("not a count of AI requests saved");
   const pendingReviews = flow.getByRole("region", { name: "Definition review follow-through", exact: true });
   await expect(pendingReviews).toContainText("1 need updating");
   await expect(pendingReviews).toContainText("Previous findings are saved");
@@ -157,15 +190,16 @@ try {
   await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
   const before = calls.length; await app.close(); app = await startApp({ store, adapter, connections, port: 0 });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: /Coordinated workflow browser/ }).click();
-  await expect(page.locator(".queue-header").getByRole("button", { name: "Continue project", exact: true })).toBeVisible();
+  await expect(page.locator(".queue-header").getByRole("button", { name: "Continue specification", exact: true })).toBeVisible();
   assert.equal(calls.length, before, "Restart cannot repeat inference");
   await page.locator(".topbar .queue-trigger").click();
   await expect(flow.getByRole("region", { name: "Definition review follow-through", exact: true })).toContainText("1 need updating");
+  await expect(flow.getByRole("region", { name: "Saved outcome and next step", exact: true })).toContainText(`Latest recorded specification change · revision ${changedProject.revision}`);
   await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
   await continueProject(); await finishBurst();
   assert.equal(calls[before], "definition:inbox", "Explicit continuation updates saved reviews before new gap exploration");
   await page.locator(".topbar .queue-trigger").click();
-  await flow.getByRole("button", { name: "Pause project workflow", exact: true }).click();
+  await flow.getByRole("button", { name: "Pause specification workflow", exact: true }).click();
   await expect.poll(() => store.workflowBusy(p.id)).toBe(false);
   const execution = store.execution(p.id);
   execution.planning = { format: 1, id: "dated-plan", revision: store.projectRevision(p.id) - 1,
@@ -177,11 +211,34 @@ try {
   await expect(related).toContainText("Implementation plan · Needs updating");
   await expect(related).toContainText("The specification revision changed since this plan");
   await expect(related).toContainText("Review implementation settings and connect the workspace");
+  await expect(flow.getByRole("region", { name: "Saved outcome and next step", exact: true })).toContainText("Plans needing updates: 1");
   await related.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-workflow-artifacts-mobile.png", fullPage: true });
   assert.equal(calls.length, artifactCalls, "Showing plan impact neither replans nor starts coding");
   assert.deepEqual(store.execution(p.id).planning, savedPlan);
+  await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
+  await permissions.getByText("Retained separate-task preferences (inactive)", { exact: true }).click();
+  await expect(permissions).toContainText("Automatic saved-input processing: off");
+  await page.screenshot({ path: ".reqwizit-state/browser-processing-permissions-mobile.png", fullPage: true });
+  await permissions.getByRole("button", { name: "Use separate task settings", exact: true }).click();
+  await expect(permissions.getByLabel("Automatically process saved inputs", { exact: true })).not.toBeChecked();
+  assert.deepEqual(store.maintenance(p.id), originalMaintenance, "Returning to separate settings preserves earlier maintenance opt-outs");
+  assert.equal(calls.length, artifactCalls);
+  await page.getByRole("button", { name: /Back to workspace/ }).click();
+  await page.getByRole("tab", { name: /^Specification/ }).click();
+  const beforeImprove = calls.length, requirementsBeforeImprove = structuredClone(store.get(p.id).requirements);
+  const improvement = await specificationActions(specification);
+  await expect(improvement.getByRole("button", { name: "Improve requirements", exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-specification-more-actions-mobile.png", fullPage: true });
+  assert.equal(calls.length, beforeImprove, "Opening More actions is not a refinement grant");
+  await improvement.getByRole("button", { name: "Improve requirements", exact: true }).click();
+  await expect.poll(() => calls.length).toBe(beforeImprove + 1);
+  await expect.poll(() => store.discoveryActive(p.id)).toBe(false);
+  assert.equal(calls[beforeImprove], "refine", "Improve requirements retains the scoped refinement operation, not general discovery");
+  assert.deepEqual(store.get(p.id).requirements, requirementsBeforeImprove);
   await expect(page.getByRole("region", { name: "What's next?", exact: true })).toHaveCount(0);
   console.log("Coordinated workflow browser passed: decision inbox, faithful answer/update, targeted readiness question and answer-triggered assessment, bounded continuation, planning boundary, no coding, restart and mobile. No live calls.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-workflow-failure"); throw error; }

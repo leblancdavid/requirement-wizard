@@ -1,5 +1,161 @@
 # Data migrations and upgrade compatibility
 
+## Explicit missing-assessment history recovery (2026-10-29)
+
+**Opt-in additive recovery, not a startup migration.** Source: existing saved revision
+assessment arrays (including legacy records without `inputBasis`). Target: the same
+assessment format in a new ordinary project revision. SQLite/schema versions,
+portable formats, semantic fingerprints and concurrency rules are unchanged. No reset
+or repeated model calls are required. Original assessment IDs/area, checks, revision,
+answer versions, staged provenance and modern evidence keys remain intact; history is
+not rewritten. Legacy keys are derived only from matching original snapshots; absent
+original provenance remains stale rather than manufactured.
+
+The explicit authenticated preview/apply flow restores only missing results in their
+original active area. It never overwrites existing stale/current results. Preview is
+bounded and paged manually; unsupported, oversized or ambiguous candidates block rather
+than fall back. Apply revalidates revision, selected content and worker/input gates
+transactionally. Failure rolls back; explicit retry is safe. Activity distinguishes
+restoration from new product decisions. No model calls or permissions are granted.
+
+**Compatibility limitation:** saved plans, runs, code assessment/delivery evidence or
+their histories block restoration because a new revision could invalidate their reuse.
+Users must not discard that work or repeat assessment calls to bypass the gate.
+Configuration alone is preserved and allowed. Active/pending jobs, workflow/execution
+leases, unresolved input and unpaused authorized coordination/maintenance also block
+apply without changing leases, pauses or budgets. See
+[recovery controls and bounds](assessment-history-recovery.md).
+
+Verification uses curated older-state SQLite fixtures, not personal projects: modern,
+legacy, changed-input and missing-origin recovery, repeated reopen, immutable history,
+portable round trip, stale revision/content rejection, invalid/oversized candidates,
+explicit paging, transactional rollback/retry, worker/lease preservation, authorization
+gates, and strict authenticated API validation. Focused browser coverage exercises no
+history request on opening, explicit preview/apply, workflow blockers, original-result
+preservation, reload and mobile with zero inference. General restoration into protected
+implementation projects is not qualified; no live provider or desktop claims are made.
+
+Checks actually run on Node 22.23.4: type check, all 1,044 deterministic tests (358
+pretests + 686 main), UI build, focused assessment-history/workflow/Specification
+browser runners and diff whitespace check passed. The UI build retains its existing
+chunk-size warning. The aggregate browser runner was not rerun in this slice; its
+previously observed obsolete Project map selector blocker remains unresolved. No live
+inference, personal-project writes, commits, pushes or desktop packaging were performed.
+
+## Separate implementation preparation from build/delivery (2026-10-29)
+
+**Presentation-only grouping; no schema, fingerprint, permission or saved-format
+migration.** Implement now groups Check progress, Prepare plan, Check options, plan
+review and implementation settings under **Prepare implementation**. **Build and verify**
+separately holds Start/Resume implementation, Verify delivery and active Stop controls.
+Guidance distinguishes new repositories, applicable existing-code checks, current
+approved-plan reuse, proposed/stale/interrupted plans and frozen coding runs.
+
+The groups are not a new composite operation. Existing endpoints/action values,
+revision/settings gates, verification commands, model selection, task scopes and
+staged-planning checkpoints are unchanged. Check progress retains feature scope;
+planning covers all approved requirements. Resume and Verify retain the saved run's
+scope, not the current feature/search filter. Planning never gains code-capture,
+verification-command or coding authority. Existing manual planning/dismissed-plan
+paths remain available; this upgrade imposes no extra approval or model call.
+
+Project/SQLite/portable schemas and semantic identities remain unchanged. Moving the
+settings/review views does not rewrite plans, approvals, attempts, sessions, assessments
+or delivery evidence. Existing exact-stage continuation and optimistic-version rules
+still apply. Opening Implement performs its existing metadata inspection only; it
+does not start a new check, plan or coding run (already authorized work may continue).
+No startup rewrite, reset or forward-data conversion is needed.
+
+Verification on Node 22.23.4: type check, all 1,031 tests (345 pretests + 686 main), UI
+build and focused preparation/staged-planning, workflow, Specification and reliability
+browser checks passed. Check/preview/force and resume/verify routes were intercepted
+to validate exact bodies and separate permissions without executing them. Real fixture
+planning verified read/check continuation, Stop/reload, retained history and review
+gates; initial inspection left execution state unchanged. Mobile layout
+and disabled-control keyboard/touch checks passed. Reliability first stopped at an
+obsolete raw-error-in-alert assertion; it now checks the plain alert and original
+detail in Logs before exercising controls. Aggregate browser checks passed layout/
+model selection, then stopped at the known Project map selector in
+`src/web/browser-check.ts:707`; later aggregate runners were not reached. Existing
+bundle warning remains. No live inference, GitHub delivery, personal-project writes
+or desktop packaging were performed. This is not new live execution qualification.
+
+## Specification controls and processing-permission grouping (2026-10-29)
+
+**Presentation-only authority clarification; no saved-format or semantic migration.**
+Continue project is now **Continue specification**; Advanced actions becomes **More
+actions**; Refine requirements becomes **Improve requirements**, under Specification's
+More actions. Design's scoped discovery/question-target controls also live under More
+actions. Native disclosures retain keyboard access and do not dispatch on opening.
+Handlers, selected scope, endpoints and action values are unchanged. Existing narrow
+response/clarification/refinement continuations keep their dedicated routing.
+
+Settings groups existing controls under **Processing permissions** rather than adding
+a combined automatic mode. `reqwizit-auto` keeps its existing browser-wide key, default
+and on/off values. Each saved input retains its original `auto` flag. Workflow and
+maintenance retain their project-local machine-local settings, distinct grants,
+debounce, pause/restart and failed-attempt rules. In coordinated mode, retained
+separate-task preferences are shown as inactive; returning to separate settings does
+not mean they were turned off or that suspended work was rearmed. Existing opt-outs
+are not upgraded into opt-ins. Research and execution/planning permissions remain
+separate. No new task starts from rendering Settings or opening a disclosure, though
+already authorized background work may continue.
+
+No SQLite/payload/browser-key migration, fingerprint change, schema bump, model replay
+or data reset is needed. Original messages/history can retain the old labels; only new
+guidance uses the new names. Saved checkpoints, assessment evidence, plans, grants,
+optimistic versions and portable state keep their existing identities and continuation.
+Underlying browser/SQLite settings must not be consolidated by rewriting saved flags.
+
+Verification on Node 22.23.4: type check, 1,031 tests (345 pretests + 686 main), UI build,
+focused workflow/maintenance/Specification browser checks and diff check passed. Static
+checks cover both old on/off browser and maintenance preferences without mutation or
+dispatch. Browser checks cover keyboard and mobile More actions, inactive preferences,
+restored opt-outs after leaving coordination, restart consent and explicit scoped
+refinement. Aggregate browser checks passed layout/model selection, then stopped at
+the known obsolete Project map selector (`src/web/browser-check.ts:707`). Later aggregate
+runners were not reached; Specification passed separately. Existing bundle warning
+remains. No live inference, personal-project writes or desktop packaging was performed.
+Full merged-consent policy, implementation-preparation grouping and historical recovery
+remain in the [consolidation plan](workflow-consolidation.md).
+
+## Revision-labelled saved outcome summaries (2026-10-29)
+
+**Read-only additive API/UI projection; no persisted-data migration.** The workflow
+view adds an outcome combining latest locally recorded specification-change counts
+with current pending input, decisions, reusable/outdated/missing definition reviews,
+and refinement/plan follow-through. The UI tolerates a missing outcome during a
+mixed-version refresh. Existing project/activity/workflow schemas, fingerprints,
+receipt identities, optimistic versions, permissions and usage ledgers are unchanged.
+
+`latestSpecificationChange` counts one existing indexed decision/discovery revision
+entry, bounded at the viewed project revision. It returns labels and added/updated/
+removed counts, not original prose, new timestamps or reconstructed human authority.
+An assessment-only revision does not become the origin of earlier requirement changes.
+The receipt's revision and the current follow-through revision are displayed separately.
+No local change receipt remains explicitly unknown; imported projects do not gain a
+manufactured activity archive. Older backfilled bookkeeping-only activity also yields
+no change receipt. Neither activity payloads nor historical snapshots are rewritten.
+
+Current definition-review counts mean saved evidence matches the existing freshness
+rules and is available for reuse, not that particular requests were actually skipped,
+the findings are resolved, or a whole operation is complete. Next-step text grants
+no authority: saved-only input, Stop/restart, blockers, failed ledgers, planning approval
+and coding/delivery remain governed by their existing explicit controls. Summaries
+reconstruct from durable evidence without startup model calls or a new summary format.
+
+Verification on Node 22.23.4: type check, all 1,031 tests (345 pretests + 686 main), UI
+build, focused workflow/maintenance browser runners and diff check passed. Tests cover
+receipt origin/counts without prose exposure, assessment-only changes, concurrent
+revision bounds, existing legacy backfill/retry, repeated reopen, pending work and
+projection purity. Browser checks verify distinct revision labels, expandable counts,
+restart, mobile and plan updates without new calls. Aggregate browser checks passed
+layout/model selection, then stopped at the known obsolete Project map selector in
+`src/web/browser-check.ts:706`; later aggregate runners were not reached. Existing
+bundle-size warning remains. No live calls, personal-data recovery or desktop packaging
+were performed. Historical assessment recovery and full operation-wide receipts remain
+in the [consolidation plan](workflow-consolidation.md).
+
 ## Organization assessment retention and related-artifact explanations (2026-10-29)
 
 **Compatible mutation-policy correction and additive view fields; no schema or

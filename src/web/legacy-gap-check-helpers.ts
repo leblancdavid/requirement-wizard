@@ -1,8 +1,10 @@
 import type { Page } from "@playwright/test";
+import { discoveryActions } from "./queue-check-helpers.js";
 
 /** Exercise retained individual-check API/recovery explicitly, not the new workflow button. */
 export async function exploreLegacyGaps(page: Page, project: { id: string; revision: number }, experimental = false, targeted = false) {
   const focusEpicID = await page.getByLabel("Filter by feature").inputValue();
+  await discoveryActions(page);
   const questionTarget = Number(await page.getByRole("spinbutton", { name: "Questions ready", exact: true }).inputValue());
   await page.evaluate(async ({ project, focusEpicID, questionTarget, experimental, targeted }) => {
     const token = document.querySelector<HTMLMetaElement>('meta[name="reqwizit-token"]')!.content;
@@ -16,5 +18,6 @@ export async function exploreLegacyGaps(page: Page, project: { id: string; revis
   // Refresh before operating on continuation controls so they cannot target an older job.
   await page.reload();
   await page.getByRole("tab", { name: /^Design/ }).click();
+  await discoveryActions(page);
   await page.getByLabel("Filter by feature").selectOption(focusEpicID);
 }

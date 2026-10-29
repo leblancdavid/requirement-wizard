@@ -10,6 +10,7 @@ export type ProjectActivity = {
 };
 export type ActivityPage = { entries: ProjectActivity[]; total: number; page: number; pageSize: number; anchor: number; latest: number };
 export type ActivityQuery = { view?: "highlights" | "all"; type?: ActivityType; feature?: string; search?: string; page?: number; anchor?: number };
+export type SpecificationChangeSummary = { revision: number; counts: { label: string; added: number; updated: number; removed: number }[] };
 
 /** Derive only observable changes from adjacent saved snapshots. No inferred intent or dates. */
 export function revisionActivity(project: Project, previous: Project | undefined, reason: string): ProjectActivity {
@@ -36,6 +37,13 @@ export function revisionActivity(project: Project, previous: Project | undefined
     compare(project.epics, previous.epics, "feature", (e) => `${e.title}${e.archived ? " (archived)" : ""}: ${e.purpose}\nDependencies: ${e.dependencies.join(", ") || "None"}`);
     compare(project.research, previous.research, "research source", (r) => `${r.title}: ${r.finding}\n${r.url}`);
     compare(project.refinements.map((r) => ({ ...r, epicID: project.requirements.find((item) => item.id === r.requirementID)?.epicID })), previous.refinements.map((r) => ({ ...r, epicID: previous.requirements.find((item) => item.id === r.requirementID)?.epicID })), "refinement", (r) => `${r.status}: ${r.statement}`);
+    if (reason.startsWith("Human restored saved definition assessment from revision ")) {
+      for (const assessment of project.assessments) if (!previous.assessments.some((a) => a.epicID === assessment.epicID)) {
+        featureIDs.add(assessment.epicID);
+        changes.push({ id: assessment.epicID, label: "restored definition review", after: `Original assessment revision ${assessment.atRevision}. ${reason}. Freshness remains independently evidence-gated; recovery is not approval.` });
+        counts.push("Saved definition review restored");
+      }
+    }
     const previousUpdates = new Map((previous.reviewUpdates?.items ?? []).map((u) => [`${u.recordType}:${u.recordID}`, u]));
     for (const update of project.reviewUpdates?.items ?? []) if (JSON.stringify(update) !== JSON.stringify(previousUpdates.get(`${update.recordType}:${update.recordID}`))) {
       const targetID = update.recordType === "refinement" ? project.refinements.find((p) => p.id === update.recordID)?.requirementID : update.recordID;

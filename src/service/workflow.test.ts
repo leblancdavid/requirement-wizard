@@ -13,7 +13,7 @@ import { emptyExecution, executionConfigSchema } from "../core/execution.js";
 import { planningConfigFingerprint } from "../core/implementation-planning.js";
 import { workflowInputKey, workflowReadiness, workflowLimits, emptyWorkflow } from "../core/workflow.js";
 import type { Analysis, Project } from "../core/model.js";
-import { artifactFollowThrough, definitionFollowThrough } from "../core/follow-through.js";
+import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } from "../core/follow-through.js";
 import { coverage } from "../core/coverage.js";
 import { proposeRefinements } from "../core/refinement.js";
 
@@ -39,6 +39,46 @@ function checks(calls: string[], defined = true): DiscoveryAdapter {
 }
 function grant(workflow: ProjectWorkflow, store: ProjectStore, id: string) { workflow.configure(id, store.projectRevision(id), workflow.view(id).version, "continue"); }
 
+test("outcome summary separates local change provenance, reusable evidence and pending work without granting authority", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), execution = emptyExecution();
+    const inputs = [{ id: "saved", projectID: p.id, status: "saved", applied: true, auto: false, research: false,
+      submittedAt: "2026-10-29", input: { type: "note", text: "Retain input", epicID: "reports" } }] satisfies import("../core/model.js").Submission[];
+    const initial = { project: p, submissions: inputs, definitions: definitionFollowThrough(coverage(p).epics), artifacts: artifactFollowThrough(p, execution),
+      change: store.latestSpecificationChange(p.id), active: false, blocked: false, specificationChecked: false, readyToImplement: false };
+    const before = structuredClone({ p, inputs, execution });
+    const summary = followThroughOutcome(initial);
+    assert.equal(summary.asOfRevision, p.revision); assert.equal(summary.change!.revision, p.revision);
+    assert.equal(summary.pending.inputs, 1); assert.equal(summary.pending.definitionBaselines, initial.definitions.length);
+    assert.equal(summary.next.kind, "input"); assert.match(summary.next.text, /explicitly Continue specification/);
+    assert.equal(followThroughOutcome({ ...initial, active: true }).next.kind, "working");
+    assert.equal(followThroughOutcome({ ...initial, submissions: [], blocked: true }).next.kind, "blocker");
+    assert.equal(followThroughOutcome({ ...initial, submissions: [] }).next.kind, "specification");
+    assert.equal(followThroughOutcome({ ...initial, submissions: [], specificationChecked: true }).next.kind, "planning");
+    assert.equal(followThroughOutcome({ ...initial, submissions: [], specificationChecked: true, readyToImplement: true }).next.kind, "implementation");
+    const failed = { ...inputs[0]!, status: "needs-attention" as const, diagnostic: "Input retained after failure" };
+    const attention = followThroughOutcome({ ...initial, submissions: [failed] });
+    assert.equal(attention.pending.inputIssues, 1); assert.equal(attention.pending.decisions, 1);
+    assert.equal(attention.pending.inputs, 0); assert.match(attention.next.text, /Do not enter the same answer again/);
+    const mixed = followThroughOutcome({ ...initial, definitions: [
+      { epicID: "a", state: "current", reason: "Matches evidence" }, { epicID: "b", state: "outdated", reason: "Changed evidence" },
+      { epicID: "c", state: "not-assessed", reason: "No review" },
+    ], artifacts: [
+      { id: "old", kind: "refinement", title: "Old suggestion", state: "outdated", reason: "Changed evidence", next: "Review" },
+      { id: "plan", kind: "implementation-plan", title: "Plan", state: "outdated", reason: "Changed revision", next: "Prepare explicitly" },
+    ] });
+    assert.equal(mixed.currentDefinitionReviews, 1);
+    assert.equal(mixed.pending.definitionUpdates, 1); assert.equal(mixed.pending.definitionBaselines, 1);
+    assert.equal(mixed.pending.refinementUpdates, 1); assert.equal(mixed.pending.planUpdates, 1);
+    const planReview = followThroughOutcome({ ...initial, submissions: [], specificationChecked: true, artifacts: [
+      { id: "plan", kind: "implementation-plan", title: "Plan", state: "needs-review", reason: "Not approved", next: "Review explicitly" },
+    ] });
+    assert.equal(planReview.next.kind, "plan-review"); assert.equal(planReview.pending.planReviews, 1);
+    assert.deepEqual({ p, inputs, execution }, before);
+  } finally { store.close(); }
+});
+
 test("artifact follow-through explains refinement and plan gates without rewriting evidence or approval", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -61,7 +101,7 @@ test("artifact follow-through explains refinement and plan gates without rewriti
     assert.equal(items.find((item) => item.kind === "refinement")!.state, "outdated");
     assert.match(items.find((item) => item.kind === "refinement")!.reason, /wording, status or supporting evidence changed/);
     assert.match(items.find((item) => item.kind === "implementation-plan")!.reason, /specification revision changed/);
-    assert.match(items.find((item) => item.kind === "implementation-plan")!.next, /Continue project does not prepare or approve plans/);
+    assert.match(items.find((item) => item.kind === "implementation-plan")!.next, /Continue specification does not prepare or approve plans/);
     assert.deepEqual({ p, execution }, before);
     assert.match(artifactFollowThrough(p, execution, "other-binding").find((item) => item.kind === "implementation-plan")!.reason, /workspace no longer matches/);
     const settings = structuredClone(execution); settings.config!.checks = ["npm run check"];
@@ -162,11 +202,12 @@ test("pending definition follow-through coalesces from saved evidence across res
     const baseline = store.get(p.id);
     let changed = store.note(p.id, baseline.revision, "Keep reports offline", "reports");
     changed = store.note(p.id, changed.revision, "Retain saved reports after restart", "reports");
-    const pending = workflow.view(p.id).definitionReviews, jobs = store.jobs(p.id), offset = calls.length;
+    const pending = workflow.view(p.id).definitionReviews, outcome = workflow.view(p.id).outcome, jobs = store.jobs(p.id), offset = calls.length;
     assert.equal(pending.filter((area) => area.state === "outdated").length, 1, "Repeated changes yield one area, not duplicate tasks");
     assert.deepEqual(changed.assessments, baseline.assessments);
     await workflow.close(); store.close(); store = new ProjectStore(path); workflow = new ProjectWorkflow(store, checks(calls));
     assert.deepEqual(workflow.view(p.id).definitionReviews, pending);
+    assert.deepEqual(workflow.view(p.id).outcome, outcome, "The revision-labelled outcome reconstructs after restart without a new call or saved summary format");
     workflow.tick(p.id); await workflow.wait(p.id);
     assert.equal(calls.length, offset); assert.deepEqual(store.jobs(p.id), jobs);
     assert.equal(workflow.view(p.id).suspended, true);

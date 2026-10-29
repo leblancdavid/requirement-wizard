@@ -1,8 +1,31 @@
 # Coordinated workflow preview (DEC-032)
 
+## Current controls (2026-10-29)
+
+The primary action is now **Continue specification** (formerly Continue project).
+Design/Specification and the queue use **More actions** for scoped operations;
+Specification's **Improve requirements** is the former Refine requirements operation.
+Earlier names in this dated guide and saved messages refer to the same existing
+endpoints, grants and checkpoints—not different workflows.
+
+**Settings → Project settings → Processing permissions** groups existing controls
+without merging their authority. Browser-wide saved-input preferences and project-local
+maintenance are retained but inactive during coordination. **Use separate task settings**
+returns to those saved settings, including any opt-ins; it is not an all-automatic-off
+switch. Pauses, saved-input flags, explicit restart consent and separate execution/
+research controls remain unchanged. See [compatibility](migrations.md#specification-controls-and-processing-permission-grouping-2026-10-29).
+
 ## Implemented first slice
 
 ### Definition follow-through (2026-10-29)
+
+**Saved outcome and next step** combines a revision-labelled latest local
+specification-change receipt with current saved/reusable evidence and pending
+input/decision/definition/refinement/plan work. Receipt counts include proposals,
+not approvals; current evidence is not a measured count of calls saved. Missing
+local receipts remain unknown and the view does not claim whole-run completion.
+Next-step guidance and opening the view grant no extra authority. See
+[summary compatibility](migrations.md#revision-labelled-saved-outcome-summaries-2026-10-29).
 
 The workflow drawer now lists current, outdated and never-assessed definition
 reviews for the coordinator's requirement/dependency scope. These are evidence

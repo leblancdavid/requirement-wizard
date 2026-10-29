@@ -8,6 +8,34 @@ assessment and real GitHub delivery/installer integration remain unqualified.
 
 ## Browser workflow
 
+### Preparation versus building (2026-10-29)
+
+**Prepare implementation** groups existing code checks, plan preparation/review and
+implementation settings. **Build and verify** separately holds Start implementation,
+Resume implementation or Verify delivery, with Stop while a worker is active.
+These are groups of explicit operations, not a new automatic chain.
+
+- For an existing codebase, Check progress can establish current local findings and
+  separately verify main. It follows the selected feature and can execute configured
+  verification commands. Local findings alone do not establish main delivery.
+- For a new repository, Prepare plan can be used after setup without an unnecessary
+  code check. It covers all approved requirements regardless of search/feature filters
+  and does not capture fresh code or run verification commands itself.
+- Review a current saved proposal rather than regenerating it routinely. A current
+  approved plan can be inspected without another request. Stale/interrupted plans keep
+  existing evidence, attempts and explicit continuation rules.
+- Frozen coding runs keep their own scope. Archive before replacement planning;
+  checking progress does not require silently archiving a run. Existing manual planning
+  paths remain; this grouping adds no approval requirement or coding authorization.
+- Viewing Implement retains its existing metadata-only repository inspection. It
+  does not initiate new code checks/model calls or run verification commands. Already
+  authorized work can continue. Saved settings and earlier evidence are unchanged.
+
+The focused planning browser check verifies distinct groups, scope-preserving check/
+preview/force request routing, real fixture staged-plan continuation and intercepted
+resume/verify routing, including mobile. These routing checks do not qualify live
+code assessment, coding or delivery. See [compatibility](migrations.md#separate-implementation-preparation-from-builddelivery-2026-10-29).
+
 ### Assessment responsiveness
 
 Implementation checkpoint saves now check versions and active discovery leases in
@@ -44,7 +72,8 @@ copy to avoid changing the repository's Node 20 native dependencies. An initial
 long-path copy hit Windows Git-worktree failures; the shorter-path run passed.
 The existing Vite chunk-size warning remains. No live model calls were made.
 
-The main action group is **Check progress → Prepare plan → Start implementation**.
+Preparation groups **Check progress → Prepare plan**; **Build and verify** separately
+offers **Start implementation**.
 The coding action becomes **Resume implementation** for an unfinished run and
 **Verify delivery** while awaiting a merge. A next-step message explains setup,
 planning review or continuation. **Check options** is collapsed by default and holds

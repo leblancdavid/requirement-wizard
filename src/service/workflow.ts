@@ -15,7 +15,7 @@ import { DiscoveryQueue } from "./queue.js";
 import { definitionAbortReason } from "../core/definition-interruption.js";
 import { readinessQuestionTask } from "../core/readiness-questions.js";
 import { dimensionLabels } from "../core/epics.js";
-import { artifactFollowThrough, definitionFollowThrough } from "../core/follow-through.js";
+import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } from "../core/follow-through.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Run = { controller: AbortController; promise: Promise<void> };
@@ -56,6 +56,10 @@ export class ProjectWorkflow {
     const areas = workflowAreas(project);
     const execution = this.store.execution(id), bindingID = this.store.workspace(id)?.bindingID;
     const readiness = workflowReadiness(project, submissions, state, execution, bindingID, areas);
+    const definitions = definitionFollowThrough(areas), artifacts = artifactFollowThrough(project, execution, bindingID), active = this.active(id);
+    const decisions = workflowDecisions(project, submissions);
+    const outcome = followThroughOutcome({ project, submissions, definitions, artifacts, active, decisions, blocked: state.phase === "blocked",
+      change: this.store.latestSpecificationChange(id, project.revision), specificationChecked: readiness.specificationChecked, readyToImplement: readiness.readyToImplement });
     const suspended = state.enabled && !this.armed.has(id);
     const changed = state.phase === "ready-to-plan" && !readiness.specificationChecked;
     const remainingMs = state.grant && Math.max(0, state.grant.remainingMs - (state.owner && state.leaseUntil
@@ -65,10 +69,10 @@ export class ProjectWorkflow {
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
       current: state.current && { kind: state.current.kind, target: state.current.target },
       grant: state.grant && { used: state.grant.used, remainingMs: remainingMs! }, limits: workflowLimits,
-      decisions: state.enabled ? workflowDecisions(project, submissions) : [], readiness, active: this.active(id),
-      definitionReviews: definitionFollowThrough(areas).map((area) => ({ ...area,
+      decisions: state.enabled ? decisions : [], readiness, active, outcome,
+      definitionReviews: definitions.map((area) => ({ ...area,
         title: project.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID })),
-      artifacts: artifactFollowThrough(project, execution, bindingID) };
+      artifacts };
   }
   configure(id: string, revision: number, version: number, action: "continue" | "pause" | "disable") {
     let state = this.store.workflow(id);
@@ -110,7 +114,7 @@ export class ProjectWorkflow {
       const project = this.project(id), wake = workflowWakeKey(project, this.store.submissions(id));
       if (state.waitKey === wake) return;
       if (state.grant.used >= workflowLimits.requests || state.grant.remainingMs <= 0) {
-        state.paused = true; state.phase = "paused"; state.message = "Workflow allowance reached. Continue project explicitly for another bounded burst.";
+        state.paused = true; state.phase = "paused"; state.message = "Workflow allowance reached. Continue specification explicitly for another bounded burst.";
         this.store.saveWorkflow(id, state); return;
       }
       const claimed = this.store.claimWorkflow(id), owner = claimed.owner!, controller = new AbortController();
@@ -150,7 +154,7 @@ export class ProjectWorkflow {
         controller.signal.throwIfAborted(); const state = owned(), remaining = workflowLimits.requests - state.grant!.used;
         // Ordinary retrieval can require three calls. Reserve its upper bound;
         // staging uses the actual remaining allowance. Unused slots are visible.
-        if (state.paused || !state.enabled || remaining < 3 || Date.now() >= deadline) throw new WorkflowBudgetPause("Workflow burst limit reached. Continue project for another bounded allowance; completed calls are retained.");
+        if (state.paused || !state.enabled || remaining < 3 || Date.now() >= deadline) throw new WorkflowBudgetPause("Workflow burst limit reached. Continue specification for another bounded allowance; completed calls are retained.");
         return { requests: remaining, durationMs: Math.max(1, deadline - Date.now()) };
       },
       beforeRequest: (jobID) => {
@@ -187,7 +191,7 @@ export class ProjectWorkflow {
         const pending = submissions.filter((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing"].includes(s.status));
         if (pending.length) {
           const permitted = pending.filter((s) => s.auto || state.grant!.submissionIDs.includes(s.id));
-          if (!permitted.length) { stop("paused", "Saved-only input is waiting for processing permission. Continue project to authorize its processing.", true); return; }
+          if (!permitted.length) { stop("paused", "Saved-only input is waiting for processing permission. Continue specification to authorize its processing.", true); return; }
           record("input", project, permitted.map((s) => s.id).sort().join(","));
           queue.resume(id, { processOnly: true, research: false, submissionIDs: permitted.map((s) => s.id) }); await queue.wait(id);
           if (owned().grant!.used > workflowLimits.requests - 3) throw new WorkflowBudgetPause("Workflow burst allowance reached; saved input and follow-up checkpoints are retained.");
@@ -268,7 +272,7 @@ export class ProjectWorkflow {
         }
         const latest = owned(); if (latest.current) latest.current.completed = true; this.store.saveWorkflow(id, latest);
       }
-      stop("paused", "Workflow step limit reached. Completed checks are saved; Continue project grants another bounded burst.", true);
+      stop("paused", "Workflow step limit reached. Completed checks are saved; Continue specification grants another bounded burst.", true);
     } catch (error) {
       stop(error instanceof WorkflowBudgetPause || controller.signal.aborted ? "paused" : "blocked", safeMessage(error instanceof Error ? error.message : error), true);
     } finally {

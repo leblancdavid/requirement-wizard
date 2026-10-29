@@ -1,7 +1,9 @@
 import Database from "better-sqlite3";
 import { definitionReviewHistory } from "./definition-review-history.js";
 import { logHistory } from "./log-history.js";
-import { activityPage, activitySnapshot, saveActivity } from "./activity.js";
+import { activityPage, activitySnapshot, latestSpecificationChange, saveActivity } from "./activity.js";
+import { previewAssessmentHistory, selectedHistoricalAssessment } from "./assessment-history.js";
+import type { AssessmentHistorySelection } from "../core/assessment-history.js";
 import { readMaintenance, saveMaintenance } from "./maintenance.js";
 import type { MaintenanceState } from "../core/maintenance.js";
 import { readWorkflow, saveWorkflow, claimWorkflow, workflowBusy, workflowReadinessHistory } from "./workflow.js";
@@ -414,7 +416,7 @@ export class ProjectStore {
       const workflow = readWorkflow(this.db, id);
       if (workflow.enabled) {
         workflow.paused = true; workflow.phase = "paused"; workflow.settingsVersion++;
-        workflow.message = "Shared checkpoint adopted. Continue project explicitly before running coordinated model calls.";
+        workflow.message = "Shared checkpoint adopted. Continue specification explicitly before running coordinated model calls.";
         delete workflow.owner; delete workflow.leaseUntil; saveWorkflow(this.db, id, workflow);
       }
     }).immediate();
@@ -811,6 +813,44 @@ export class ProjectStore {
 
   activityHead(id: string) {
     return { latest: (this.db.prepare("SELECT COALESCE(MAX(sequence), 0) AS latest FROM project_activity WHERE project_id = ?").get(id) as { latest: number }).latest };
+  }
+
+  latestSpecificationChange(id: string, revision = this.projectRevision(id)) {
+    return latestSpecificationChange(this.db, id, revision);
+  }
+
+  private assessmentRecoveryBlocker(id: string): string | null {
+    if (this.executionActive(id) || this.executionExpired(id) || this.workflowBusy(id)
+      || this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ? AND json_extract(payload, '$.helpRequest') IS NULL
+        AND json_extract(payload, '$.status') IN ('pending', 'running') LIMIT 1`).get(id)) return "Wait for active work to finish or stop it before restoring assessment history. Saved workers and leases were not changed.";
+    const workflow = this.workflow(id);
+    if (workflow.enabled && !workflow.paused) return "Pause the specification workflow before restoring. Recovery does not grant or spend its remaining AI allowance.";
+    const maintenance = this.maintenance(id);
+    if (maintenance.enabled && !maintenance.paused) return "Pause automatic definition updates before restoring. Recovery never enables or resumes maintenance.";
+    const project = this.get(id), submissions = this.submissions(id), resolved = resolvedReviewAttempts(project, submissions);
+    if (submissions.some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status))) return "Process or resolve unfinished saved input before restoring assessment history. Do not resubmit the same answers.";
+    const execution = this.execution(id);
+    if (execution.planning || execution.planningHistory?.length || execution.run || execution.history.length || execution.assessmentRuns?.length
+      || execution.assessmentStatus || execution.deliveryHistory?.length
+      || [execution.assessments, execution.workspaceAssessments, execution.mainAssessments, execution.delivered, execution.assessmentRequests].some((records) => records && Object.keys(records).length)) {
+      return "This project has saved implementation or planning work. Recovery is blocked until preserving its revision-based reuse is qualified. Do not discard that work or repeat model calls to clear this gate.";
+    }
+    return null;
+  }
+
+  previewAssessmentRecovery(id: string, epicID: string, beforeRevision?: number) {
+    const project = this.get(id);
+    return previewAssessmentHistory(this.db, project, epicID, beforeRevision, this.assessmentRecoveryBlocker(id));
+  }
+
+  restoreAssessmentHistory(id: string, revision: number, selection: AssessmentHistorySelection) {
+    return this.mutate(id, revision, `Human restored saved definition assessment from revision ${selection.sourceRevision}`, (project) => {
+      const blocker = this.assessmentRecoveryBlocker(id);
+      if (blocker) throw new OperationConflictError(blocker);
+      const { assessment, candidate } = selectedHistoricalAssessment(this.db, project, selection);
+      project.assessments.push(assessment);
+      project.roundChanges = [`Restored original definition findings for ${selection.epicID} from saved revision ${selection.sourceRevision}. Original assessment revision: ${assessment.atRevision}. ${candidate.freshness === "current" ? "Original evidence matches current inputs; findings can still contain gaps." : "Dated findings remain outdated and need a current review."} No AI calls, approvals or coding were started.`];
+    });
   }
 
   note(id: string, revision: number, text: string, epicID = "project") {

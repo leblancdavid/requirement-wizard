@@ -763,7 +763,7 @@ export class DiscoveryQueue {
           report(`Checking requirement overlap ${++pairsChecked} (at most 20 pair checks per Refine action). Fixes require approval; unclear intent produces a Design question.`);
           const job = await this.service.analyze(id, current.revision, { ...tracking, signal: controller.signal, refinementOnly: true, refinementPair: pair, research: false, onProgress: report });
           if (job.status !== "completed") { refinement!.status = job.status === "cancelled" ? "stopped" : "failed"; this.service.store.pauseQueue(id, true); report(job.diagnostic ?? `Resolution ${job.status}.`); return; }
-          if (job.result?.resolutionCheck?.outcome === "blocked") { refinement!.status = "blocked"; report(`Resolution needs attention: ${job.result.resolutionCheck.explanation} Run Refine requirements again after addressing this blocker.`); return; }
+          if (job.result?.resolutionCheck?.outcome === "blocked") { refinement!.status = "blocked"; report(`Resolution needs attention: ${job.result.resolutionCheck.explanation} Run Improve requirements again after addressing this blocker.`); return; }
           refinement!.completed++; outcome(job);
         }
         if (controller.signal.aborted || this.closing) return;

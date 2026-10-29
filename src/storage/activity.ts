@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import { revisionActivity, jobActivity, submissionActivity, executionActivities, type ProjectActivity, type ActivityPage } from "../core/project-activity.js";
+import { revisionActivity, jobActivity, submissionActivity, executionActivities, type ProjectActivity, type ActivityPage, type SpecificationChangeSummary } from "../core/project-activity.js";
 import { projectSchema, type Job, type Project, type Submission } from "../core/model.js";
 import type { ExecutionState } from "../core/execution.js";
 
@@ -78,4 +78,22 @@ export function activityPage(db: Database.Database, projectID: string, raw: unkn
   const pageSize = 25, page = Math.min(query.page, Math.max(1, Math.ceil(total / pageSize)));
   const entries = (db.prepare(`SELECT payload FROM project_activity WHERE ${where} ORDER BY sequence DESC LIMIT ? OFFSET ?`).all(...args, pageSize, (page - 1) * pageSize) as { payload: string }[]).map((row) => JSON.parse(row.payload) as ProjectActivity);
   return { entries, total, page, pageSize, anchor, latest };
+}
+
+/** Count the latest indexed specification-change entry, not a whole operation's
+ * results. No snapshot decoding, prose export, inferred timestamps or history replay.
+ * The bound prevents a concurrent newer revision leaking into an older view. */
+export function latestSpecificationChange(db: Database.Database, projectID: string, revision: number): SpecificationChangeSummary | null {
+  const rows = db.prepare(`WITH latest AS (
+    SELECT payload FROM project_activity WHERE project_id = ? AND event_id LIKE 'revision:%'
+      AND highlight = 1 AND type IN ('decisions', 'discovery')
+      AND json_extract(payload, '$.revision') <= ? AND json_array_length(payload, '$.changes') > 0
+    ORDER BY sequence DESC LIMIT 1)
+    SELECT json_extract(latest.payload, '$.revision') AS revision, json_extract(c.value, '$.label') AS label,
+      SUM(CASE WHEN json_type(c.value, '$.before') IS NULL THEN 1 ELSE 0 END) AS added,
+      SUM(CASE WHEN json_type(c.value, '$.before') IS NOT NULL AND json_type(c.value, '$.after') IS NOT NULL THEN 1 ELSE 0 END) AS updated,
+      SUM(CASE WHEN json_type(c.value, '$.after') IS NULL THEN 1 ELSE 0 END) AS removed
+    FROM latest, json_each(latest.payload, '$.changes') c GROUP BY label ORDER BY label`).all(projectID, revision) as
+      { revision: number; label: string; added: number; updated: number; removed: number }[];
+  return rows.length ? { revision: rows[0]!.revision, counts: rows.map(({ revision: _, ...count }) => count) } : null;
 }

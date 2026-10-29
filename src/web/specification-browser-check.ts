@@ -351,7 +351,7 @@ try {
   const clarificationRecovery = page.getByRole("region", { name: "Saved clarification progress", exact: true });
   await expect(clarificationRecovery).toContainText("1 / 2 exact read/check steps saved");
   await expect(clarificationRecovery).toContainText("not general discovery");
-  await page.getByText("Advanced actions", { exact: true }).click();
+  await page.getByRole("dialog", { name: "Processing & queue", exact: true }).getByText("More actions", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Resume discovery only", exact: true })).toHaveCount(0);
   const continuationRequest = page.waitForRequest((request) => request.url().endsWith(`/api/projects/${staged.id}/clarify-definition`) && request.method() === "POST");
   await clarificationRecovery.getByRole("button", { name: "Continue clarification", exact: true }).click();

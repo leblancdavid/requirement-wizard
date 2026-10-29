@@ -106,7 +106,11 @@ try {
   // that no projects exist. This is an injected API failure, not a retried test.
   await context.route("**/api/projects", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Controlled project-list failure" }) }));
   await page.reload();
-  await expect(page.getByRole("alert")).toContainText("Controlled project-list failure");
+  await expect(page.getByRole("alert")).toContainText("The app couldn’t finish this step");
+  await page.locator(".error").getByRole("button", { name: "View logs", exact: true }).click();
+  const errorLogs = page.getByRole("dialog", { name: "Logs", exact: true });
+  await expect(errorLogs).toContainText("Controlled project-list failure");
+  await errorLogs.getByRole("button", { name: "Close logs", exact: true }).click();
   await expect(design).toBeVisible(); await expect(page.getByLabel("Project name", { exact: true })).toHaveCount(0);
   await context.unrouteAll({ behavior: "wait" });
 

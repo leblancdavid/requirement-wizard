@@ -9,6 +9,55 @@ import { emptyExecution } from "../core/execution.js";
 import { randomUUID } from "node:crypto";
 import { executionActivities } from "../core/project-activity.js";
 
+test("latest change counts use indexed local receipts, skip assessment-only revisions and survive reopen without writes", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "outcome-receipts-")), path = join(directory, "projects.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    let p = store.create("Outcome receipts", "Preserve exact input", { providerID: "openai", modelID: "fixture" });
+    assert.equal(store.latestSpecificationChange(p.id), null, "Creation is not an invented operation delta");
+    p = store.note(p.id, p.revision, "Private original prose must not enter metadata summaries", "project");
+    const noteRevision = p.revision;
+    assert.deepEqual(store.latestSpecificationChange(p.id), { revision: noteRevision, counts: [{ label: "decision", added: 1, updated: 0, removed: 0 }] });
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.finishJob(job.id, { summary: "Assessment-only bookkeeping", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
+      assessments: [{ epicID: "project", confidence: "medium", explanation: "Saved review", checks: [{ dimension: "purpose", status: "partial", importance: "important", explanation: "Needs a decision", evidenceIDs: [p.sources[0]!.id] }] }] });
+    p = store.get(p.id);
+    assert.ok(p.revision > noteRevision);
+    const receipt = store.latestSpecificationChange(p.id);
+    assert.equal(receipt!.revision, noteRevision, "Do not attribute the old note to the later assessment");
+    assert.ok(!JSON.stringify(receipt).includes("Private original prose"));
+    const latest = store.note(p.id, p.revision, "A newer local decision", "project");
+    assert.equal(store.latestSpecificationChange(p.id, p.revision)!.revision, noteRevision, "A concurrent later save cannot leak into an older projection");
+    const newer = store.latestSpecificationChange(p.id), saved = store.get(p.id), activity = store.activity(p.id, { view: "all" }), jobs = store.jobs(p.id);
+    assert.equal(newer!.revision, latest.revision);
+    for (let reopen = 0; reopen < 2; reopen++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.latestSpecificationChange(p.id), newer);
+      assert.deepEqual(store.get(p.id), saved);
+      assert.deepEqual(store.activity(p.id, { view: "all" }), activity);
+      assert.deepEqual(store.jobs(p.id), jobs);
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("change summary separates requirement proposals and human review record updates without inventing approval", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let p = store.create("Proposals", "Save files", { providerID: "openai", modelID: "fixture" });
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.finishJob(job.id, { summary: "Proposed behavior", goals: [], actors: [], assumptions: [], questions: [], retireQuestions: [],
+      requirements: [{ statement: "Save files", rationale: "Original idea", acceptance: ["A saved file can reopen"], sourceIDs: [p.sources[0]!.id] }] });
+    p = store.get(p.id);
+    assert.deepEqual(store.latestSpecificationChange(p.id)!.counts, [{ label: "requirement", added: 1, updated: 0, removed: 0 }]);
+    assert.equal(p.requirements[0]!.status, "proposed");
+    p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", "Keep saved files");
+    assert.deepEqual(store.latestSpecificationChange(p.id)!.counts, [
+      { label: "decision", added: 1, updated: 0, removed: 0 }, { label: "requirement", added: 0, updated: 1, removed: 0 },
+    ]);
+  } finally { store.close(); }
+});
+
 test("activity filters the full history, hides routine revisions and anchors pages during new work", () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -144,6 +193,7 @@ test("v2 upgrade backfills 1000 revisions without altering evidence, retries tra
       const page = upgraded.activity(p.id, { view: "all" });
       assert.equal(page.total, 1000); assert.equal(page.entries.length, 25); assert.equal(page.entries[0]!.revision, 1000);
       assert.equal(upgraded.activity(p.id).total, 1); assert.equal(upgraded.activity(p.id).entries[0]!.at, undefined);
+      assert.equal(upgraded.latestSpecificationChange(p.id, 1000), null, "Older backfilled bookkeeping history does not manufacture a specification-change receipt");
       assert.equal(upgraded.get(p.id).sources[0]!.text, p.sources[0]!.text); upgraded.close();
     }
     db = new Database(path);

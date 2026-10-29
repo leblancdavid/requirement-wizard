@@ -7,6 +7,22 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Historical recovery implemented for missing definition results:** Overall progress
+  offers explicit bounded local-history preview and a separate revision-checked restore.
+  Original evidence/freshness is retained; existing results are never replaced. No
+  model calls, worker resumes or new permissions occur. Curated older SQLite fixtures
+  cover reopen, immutable history, legacy/missing provenance, stale selection, limits,
+  rollback/retry and safety gates; focused browser recovery passes including mobile.
+  Projects with saved implementation/planning evidence remain protected until preserving
+  revision-bound reuse is qualified; do not discard their work to bypass the blocker.
+  See [recovery guide](assessment-history-recovery.md). Unified consent, operation-wide
+  receipts and incremental rechecks remain separate unfinished work.
+- Recovery checks: type check, all 1,044 tests (358 pretests + 686 main), UI build,
+  focused recovery/workflow/Specification browsers and diff check passed. Existing
+  bundle warning remains. Aggregate browser checks were not rerun; the previously
+  observed obsolete Project map selector remains unresolved. No live inference,
+  personal-project changes or desktop packaging were performed.
+
 - **Phase 1 implemented:** refinement/resolution approval and duplicate removal retain
   definition assessments. Seven new regression/older-data cases pass, including
   repeated reopen and exact-history/missing-history compatibility.
@@ -38,9 +54,51 @@ and [implementation workspace](implementation-workspace.md).
   reuse and intervening human decisions. The full browser runner again passed layout/
   model selection, then stopped at its known Project map selector. No live calls or
   personal-project writes were made; the existing bundle warning remains.
-- **Next:** safe historical recovery and completion summaries spanning affected
-  artifacts, then the phase 3 control/consent consolidation. This is not yet a shared
-  durable queue for every downstream artifact or a consent/UI overhaul.
+- **Phase 2 outcome-summary slice implemented:** the workflow drawer combines a
+  separately revision-labelled latest local specification-change receipt with current
+  reusable definition reviews, unfinished inputs, decisions, definition updates and
+  refinement/plan follow-through. Its next-step guidance distinguishes running work,
+  retained input, decisions, blockers, specification checks and explicit planning/coding.
+  It is not a whole-operation report or a claim about model calls actually saved.
+- Outcome checks: type check, 1,031 tests (345 pretests + 686 main), UI build, focused
+  workflow/maintenance browser checks and diff check passed on Node 22.23.4. Tests
+  cover local receipt provenance, assessment-only revisions, older backfilled activity,
+  concurrent revision bounds, restart, pending plans and read-only/no-inference behavior.
+  Aggregate browser checks passed layout/model selection before the known Project map
+  selector failure. No live calls, personal-data writes or desktop packaging ran.
+- **Phase 3 first control/permission slice implemented:** Continue specification is
+  the coordinated action; scoped discovery and Improve requirements are under native
+  More actions disclosures. Processing permissions groups the existing settings and
+  explains their different scopes. Browser-wide saved-input preferences and project-
+  local workflow/maintenance settings, pauses and usage grants remain unchanged.
+  Returning to separate settings exposes retained values, not an implied all-manual
+  mode. Existing narrow recovery shortcuts remain available.
+- Control-slice checks: type check, 1,031 tests (345 pretests + 686 main), UI build,
+  focused workflow/maintenance/Specification browser checks and diff check passed.
+  Browser checks cover keyboard/mobile disclosures, no calls on inspection, retained
+  off preferences when switching modes, restart and explicit refinement-only routing.
+  Static tests also preserve on/off input and maintenance preferences without dispatch.
+  Aggregate browser checks passed layout/model selection before the known Project map
+  failure (now `src/web/browser-check.ts:707`). No live calls or personal-data changes.
+- **Phase 3 implementation-preparation grouping implemented:** Implement separates
+  Prepare implementation (code checks, plan review and setup) from Build and verify
+  (Start/Resume implementation and Verify delivery). These are visible groups over
+  existing explicit operations, not an automatic check/plan/coding chain. Guidance
+  distinguishes existing-code checks, new-repository planning, saved plan reuse,
+  proposed/stale/interrupted plans and frozen runs. Manual planning remains available
+  under the existing rules; no new approval or reassessment requirement is imposed.
+- Preparation checks: type check, all 1,031 tests, UI build and focused preparation/
+  staged-planning, workflow, Specification and reliability browser checks passed.
+  Preparation tests intercept check/preview/force and coding/delivery requests to
+  verify exact scope/routing without executing them; real fixture planning exercises
+  durable stages, Stop/reload/continuation and retained evidence. Mobile checks pass.
+  Reliability initially stopped at an obsolete raw-alert diagnostic assertion; after
+  verifying the plain alert plus original Logs detail, its controlled-response and
+  keyboard/touch checks passed. The aggregate runner still hits Project map at line 707.
+- **Next:** safe historical assessment recovery and any separately versioned unified
+  consent policy, then incremental rechecks. Broader operation-wide receipts and
+  code/delivery impact summaries remain future work; the presentation consolidation
+  is not a new shared persisted queue, permission grant or live coding qualification.
 
 ## Intended experience
 
@@ -105,6 +163,17 @@ Dismissed/historical proposals do not become new tasks merely because of this vi
 Current refinement decisions shown in the inbox are not repeated in the related-work
 list; outdated suggestions remain explainable without inventing a human decision task.
 
+**Saved outcome and next step** adds a read-only combined projection. The latest
+locally indexed decision/discovery revision's change counts have their own revision
+label, separate from current follow-through. Assessment-only bookkeeping does not
+relabel earlier requirement changes as a new result. Counts describe record changes
+(including proposals), not approval or causation across the whole run. Missing local
+receipts, including imported work without activity archives, remain unknown.
+The storage query reads counts from one existing indexed receipt at or before the
+view's revision; it neither decodes historical project snapshots nor returns source
+prose. Current review counts describe evidence available for reuse, not proven model
+requests saved. Status is reconstructable after restart without a new saved format.
+
 The coordinator repairs **outdated existing reviews** before new gap discovery,
 after pending input, decisions, stale proposals and consistency checks. Missing
 initial baselines retain discovery-first ordering. Repair can itself pause/fail or
@@ -133,6 +202,34 @@ publication, Stop, exhausted usage, worker conflicts, repeated reopen, interrupt
 migration and explicit continuation without repeating completed calls.
 
 ## Phase 3 — Consolidated controls and consent
+
+Implemented presentation boundary: **Continue specification** uses the existing
+coordinator endpoints/actions/grants. **More actions** disclosures start no work and
+retain selected-feature/task-specific bounds. **Improve requirements** is the existing
+refinement operation, including independent explicit approval. Saved clarification,
+refinement and response recovery keep their narrow primary shortcuts when appropriate.
+
+Processing permissions documents, rather than silently merging, these scopes:
+
+| Existing permission | Storage / authority | Upgrade behavior |
+| --- | --- | --- |
+| Coordinated specification work | Project-local, machine-local workflow state; explicit continuation grants eight requests/five active minutes. Existing save-only input needs explicit authorization. | No endpoint, default, grant, pause, retry or restart change. New input is eligible only under existing live authority. |
+| Automatically process saved inputs | Existing browser-wide `reqwizit-auto` preference; each saved input retains its own `auto` flag. | Same key/default and saved values. Changing the preference never rewrites earlier submissions. Inactive while coordinated mode controls submission routing. |
+| Automatic definition updates | Existing project-local machine-local maintenance state; decision-triggered debounce and independent assessment/clarification allowances. | Same opt-in, queued tasks, attempts and pause/restart rules. Suspended during coordination; retained on/off values are not overwritten. |
+| Research, scans, planning, coding and delivery | Separate existing settings/actions and leases. | None are authorized by renaming controls, opening More actions/Settings, or viewing retained preferences. |
+
+No new manual/automatic policy is persisted in this slice. A real merged policy must
+first define migration/consent for these differing scopes; turning coordination off
+must not falsely imply that retained automatic settings have been disabled.
+
+Implementation preparation is now a separate visible group containing the existing
+Check progress, Prepare plan, Check options, plan review and execution settings.
+It does not automatically execute them. Check progress still follows the selected
+feature and can run main verification commands. Prepare plan still covers every
+approved requirement and does not inspect fresh code or run those commands. Existing
+approved current plans can be inspected without regeneration. Build and verify keeps
+explicit coding/delivery actions and frozen-run scope. Opening Implement retains only
+the pre-existing repository-metadata inspection, with no new worker or permission.
 
 - Evolve Continue project into Continue specification, building on the coordinator.
   Explain what it will do, what needs a decision and what work is saved.

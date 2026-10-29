@@ -25,11 +25,18 @@ User-facing guidance is being kept at product-owner level: plain explanations fi
 with internal processing details available separately. See the
 [language conventions](docs/user-facing-language.md) for scope and compatibility.
 
-**Coordinated workflow (preview)** adds **Continue project** to sequence saved input,
+**Specification workflow (preview)** offers **Continue specification** to sequence saved input,
 questions and specification checks with a shared bounded allowance and decision
 inbox in Processing & queue. Opt-in per project; saved work and advanced actions
 remain. Passed checks lead to planning, not automatic coding. See
 [coordinated workflow](docs/coordinated-workflow.md) for consent and limitations.
+Scoped discovery and **Improve requirements** (formerly Refine requirements) are
+under **More actions** in Design/Specification. **Settings → Project settings →
+Processing permissions** explains coordinated work versus the retained, separate
+saved-input and automatic-definition settings without changing their permissions.
+In Implement, **Prepare implementation** groups code checks, plan review and setup;
+**Build and verify** keeps Start/Resume implementation and Verify delivery separate.
+Viewing preparation does not run checks, call the model or start coding.
 Unresolved definition behavior can now produce targeted questions; answers trigger
 affected rechecks using the same allowance.
 Partial assessment categories are not individual human input tasks. Definition reviews

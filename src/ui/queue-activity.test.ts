@@ -10,17 +10,32 @@ import { workflowLimits } from "../core/workflow.js";
 import { pausedClarification, clarificationHasWaitingInput, currentReusedClarification, type ClarificationActionOutcome } from "./clarification-recovery.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { followThroughOutcome } from "../core/follow-through.js";
+import { ProcessingSettings } from "./processing-settings.js";
+import { emptyMaintenance, maintenanceLimits } from "../core/maintenance.js";
 
-test("Continue project consistently distinguishes consent, waiting decisions, active work and resumable allowances", () => {
+test("Continue specification consistently distinguishes consent, waiting decisions, active work and resumable allowances", () => {
   const workflow: WorkflowView = { version: 0, enabled: false, paused: true, suspended: false, phase: "idle", message: "Not started",
-    current: undefined, grant: undefined, limits: workflowLimits, active: false, decisions: [], definitionReviews: [], artifacts: [], readiness: {
+    current: undefined, grant: undefined, limits: workflowLimits, active: false, decisions: [], definitionReviews: [], artifacts: [],
+    outcome: followThroughOutcome({ project, submissions: [], definitions: [], artifacts: [], change: null, active: false, blocked: false, specificationChecked: false, readyToImplement: false }), readiness: {
       policy: "coordinated-checks-v1", revision: 1, requirementIDs: [], specificationChecked: false, readyToImplement: false,
       explanation: "Checks pending", limitation: "No coding authority" } };
   assert.equal(mayContinueProject(workflow), true);
   const consent = renderToStaticMarkup(createElement(WorkflowControls, { workflow, disabled: false, pending: false, configure() {} }));
-  assert.match(consent, /Continue project lets the app guide your next steps/);
-  assert.match(consent, /across all project areas/); assert.match(consent, /Advanced actions/);
+  assert.match(consent, /Continue specification lets the app guide your next steps/);
+  assert.match(consent, /across all project areas/); assert.match(consent, /More actions/);
   assert.doesNotMatch(consent, /Resume processing/);
+  const outcome = renderToStaticMarkup(createElement(WorkflowControls, { workflow: { ...workflow, outcome: {
+    ...workflow.outcome, asOfRevision: 9, change: { revision: 5, counts: [{ label: "requirement", added: 0, updated: 2, removed: 0 }] },
+    currentDefinitionReviews: 3,
+  } }, disabled: false, pending: false, configure() {} }));
+  assert.match(outcome, /Current follow-through · revision 9/);
+  assert.match(outcome, /Latest recorded specification change · revision 5/);
+  assert.match(outcome, /requirement: 0 added · 2 updated · 0 removed/);
+  assert.match(outcome, /Saved definition reviews still current: 3/);
+  assert.match(outcome, /not a count of AI requests saved/);
+  assert.match(outcome, /not approvals or a whole-run report/);
+  assert.match(outcome, /grants no allowance/);
   const followThrough = renderToStaticMarkup(createElement(WorkflowControls, { workflow: { ...workflow, definitionReviews: [
     { epicID: "saved", title: "Saved reports", state: "outdated", reason: "Previous findings are retained" },
     { epicID: "current", title: "Current area", state: "current", reason: "Matches evidence" },
@@ -33,10 +48,10 @@ test("Continue project consistently distinguishes consent, waiting decisions, ac
   assert.match(followThrough, /do not mean the specification is complete/);
   const artifacts = renderToStaticMarkup(createElement(WorkflowControls, { workflow: { ...workflow, artifacts: [
     { id: "implementation-plan:plan", kind: "implementation-plan", title: "Implementation plan", state: "outdated", reason: "The specification revision changed since this plan.",
-      next: "Use Prepare plan explicitly. Continue project does not prepare or approve plans." },
+      next: "Use Prepare plan explicitly. Continue specification does not prepare or approve plans." },
   ] }, disabled: false, pending: false, configure() {} }));
   assert.match(artifacts, /Related saved work/); assert.match(artifacts, /Implementation plan · Needs updating/);
-  assert.match(artifacts, /Continue project does not prepare or approve plans/);
+  assert.match(artifacts, /Continue specification does not prepare or approve plans/);
   assert.match(artifacts, /viewing them starts no AI requests or coding/);
   const decisionOnly = renderToStaticMarkup(createElement(WorkflowControls, { workflow: { ...workflow, enabled: true,
     decisions: [{ kind: "refinement", id: "suggestion", title: "Clarify saved report behavior" }], artifacts: [
@@ -49,12 +64,30 @@ test("Continue project consistently distinguishes consent, waiting decisions, ac
     const waiting = { ...workflow, enabled: true, paused: false, phase };
     assert.equal(mayContinueProject(waiting), false);
     const html = renderToStaticMarkup(createElement(WorkflowControls, { workflow: waiting, disabled: false, pending: false, configure() {} }));
-    assert.doesNotMatch(html, />Continue project<\/button>/);
+    assert.doesNotMatch(html, />Continue specification<\/button>/);
   }
   assert.equal(mayContinueProject({ ...workflow, enabled: true, phase: "paused" }), true);
   assert.equal(mayContinueProject({ ...workflow, enabled: true, paused: false, suspended: true }), true);
   assert.equal(mayContinueProject({ ...workflow, enabled: true, paused: false, phase: "blocked" }), true);
   assert.equal(mayContinueProject({ ...workflow, active: true }), false);
+  for (const auto of [false, true]) for (const enabled of [false, true]) {
+    const maintenance = { ...emptyMaintenance(), enabled, paused: true, settingsVersion: 3, suspended: true, limits: maintenanceLimits };
+    const before = structuredClone({ workflow, maintenance }); let dispatches = 0;
+    const props = { workflow, maintenance, auto, setAuto() { dispatches++; }, disabled: false, pending: false,
+      configureWorkflow() { dispatches++; }, configureMaintenance() { dispatches++; }, openQueue() { dispatches++; } };
+    const separate = renderToStaticMarkup(createElement(ProcessingSettings, props));
+    assert.match(separate, /Processing permissions/); assert.match(separate, /applies across projects using this browser/);
+    assert.match(separate, /does not rewrite the permission already saved/);
+    assert.equal(separate.includes('checked=""'), auto, "Retain both older on and off browser preferences");
+    const coordinated = renderToStaticMarkup(createElement(ProcessingSettings, { ...props, workflow: { ...workflow, enabled: true } }));
+    assert.match(coordinated, /Retained separate-task preferences \(inactive\)/);
+    assert.match(coordinated, new RegExp(`Automatic saved-input processing: ${auto ? "on" : "off"}`));
+    assert.match(coordinated, new RegExp(`Automatic definition updates for this project: ${enabled ? "on" : "off"}`));
+    assert.match(coordinated, /does not mean all automatic processing is turned off/);
+    assert.doesNotMatch(coordinated, /type="checkbox"/);
+    assert.equal(dispatches, 0, "Rendering either permission view cannot authorize or dispatch work");
+    assert.deepEqual({ workflow, maintenance }, before);
+  }
 });
 
 test("refinement labels distinguish stage progress, run scope and terminal outcomes", () => {

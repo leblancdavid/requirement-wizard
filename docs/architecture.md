@@ -6,6 +6,20 @@ implemented under `src/`. See [decisions.md](decisions.md),
 
 ## Implemented slice
 
+- `src/ui/implementation.tsx` separates the Prepare implementation group (existing
+  check/planning/review/settings operations) from Build and verify (explicit coding/
+  delivery). No composite worker, new permission, changed freshness gate or migration
+  is introduced. Current plans are inspected/reused under existing rules; frozen runs
+  retain their scope. Repository inspection on mount remains metadata-only. See
+  [compatibility and verification](migrations.md#separate-implementation-preparation-from-builddelivery-2026-10-29).
+
+- `src/ui/processing-settings.tsx` groups existing workflow, browser-wide saved-input
+  and project-local maintenance controls without merging storage or authority. Continue
+  specification uses existing workflow routes/grants; More actions and Improve
+  requirements retain their scoped handlers. Opening disclosures/Settings does not
+  dispatch. Inactive preferences stay intact, with existing pauses/leases honored on
+  returning to separate settings; see [compatibility](migrations.md#specification-controls-and-processing-permission-grouping-2026-10-29).
+
 - `src/core/follow-through.ts` projects definition review work from existing coverage
   freshness without another scheduler or persisted identity. The coordinator repairs
   outdated existing reviews before new gap discovery; initial baselines retain their
@@ -17,6 +31,10 @@ implemented under `src/`. See [decisions.md](decisions.md),
   planning-current gates. Organization changes retain original assessments under
   original area IDs; archived evidence stays out of current coverage and is never
   copied onto new split areas. No new persisted queue format or permission is added.
+  Its saved-outcome projection combines a separately revision-labelled local activity
+  count receipt with current pending work. `src/storage/activity.ts` extracts only
+  counts from one existing indexed revision entry, bounded by the viewed revision;
+  no historical snapshot decoding, source-prose export or new summary state is needed.
 
 - Workflow planning has a questions-only `staged-records-v4` fallback for otherwise
   unsplittable evidence chains. The mandatory exact record union is distributed
