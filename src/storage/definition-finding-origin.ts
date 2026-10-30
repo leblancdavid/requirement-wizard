@@ -5,6 +5,7 @@ import { definitionDependencyLimits, definitionDependencySnapshotKey, inspectDef
 import { definitionPublicationKey as digest } from "../core/definition-publication.js";
 import { describeDefinitionFindingOrigin, definitionFindingPreviewRequestSchema, type DefinitionFindingOriginPreview } from "../core/definition-finding-origin.js";
 import { readDefinitionPublication } from "./definition-publication.js";
+import type { DefinitionPublication } from "../core/definition-publication.js";
 
 export const definitionFindingPreviewLimits = { requestBytes: 16 * 1024, sources: 9 } as const;
 type UnavailableReason = "invalid-selection" | "read-limit" | "invalid-current" | "stale-view" | "area-unavailable";
@@ -12,7 +13,7 @@ type PreviewResult = { status: "recorded"; preview: DefinitionFindingOriginPrevi
 
 /** Explicit bounded read in the caller's read transaction. Never scans for a
  * substitute source, grants authority, publishes a mixed review or claims a lease. */
-export function previewDefinitionFindingOrigins(db: Database.Database, projectID: string, rawRequest: unknown): PreviewResult {
+export function previewDefinitionFindingOrigins(db: Database.Database, projectID: string, rawRequest: unknown, collect?: (source: DefinitionPublication) => void): PreviewResult {
   const unavailable = (reason: UnavailableReason): PreviewResult => ({ status: "unavailable", reason });
   let requestBytes: number;
   try { requestBytes = Buffer.byteLength(JSON.stringify(rawRequest), "utf8"); } catch { return unavailable("invalid-selection"); }
@@ -37,6 +38,7 @@ export function previewDefinitionFindingOrigins(db: Database.Database, projectID
   const sources = new Map<number, ReturnType<typeof readDefinitionPublication>>();
   for (const selection of request.selections) if (!sources.has(selection.assessmentRevision))
     sources.set(selection.assessmentRevision, readDefinitionPublication(db, projectID, request.epicID, selection.assessmentRevision));
+  for (const source of sources.values()) if (source.status === "recorded") collect?.(source.certificate);
   const expected = { projectID, epicID: request.epicID, revision: current.revision, snapshotKey };
   const guards = new Map<number, ReturnType<typeof inspectDefinitionFindingGuards>>();
   const findings: DefinitionFindingOriginPreview["findings"] = dimensions.map((dimension) => {

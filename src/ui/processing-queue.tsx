@@ -7,7 +7,7 @@ import type { WorkflowDecision } from "../core/workflow.js";
 import { Modal } from "./modal.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
-import type { QueueActivity } from "./queue-activity.js";
+import { discoveryResumeJob, type QueueActivity } from "./queue-activity.js";
 import { ActivityBar, ActivityFeedback, Spinner } from "./activity.js";
 import "./processing-queue.css";
 import { ActionScope } from "./action-button.js";
@@ -69,7 +69,8 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
    const processingFirst = processable.some((s) => clarificationTask?.format !== 3 || s.id !== clarificationTask.submissionID) && !!processSavedResponses;
   const exhausted = processable.map((item) => ({ item, job: jobs.find((job) => job.id === item.jobID) }))
     .find(({ job }) => job?.submissionAllowance?.canExtend);
-  const actionablePause = (paused || !!lastJob && ["failed", "cancelled", "interrupted", "stale"].includes(lastJob.status)) && (hasUnfinishedInput || !!lastJob && lastJob.status !== "completed");
+  const resumeJob = discoveryResumeJob(lastJob);
+  const actionablePause = (paused || !!resumeJob && ["failed", "cancelled", "interrupted", "stale"].includes(resumeJob.status)) && (hasUnfinishedInput || !!resumeJob && resumeJob.status !== "completed");
    const discoveryHeadline = active ? refinement?.headline ?? (processing.length ? `Processing ${processing.length} ${processing.length === 1 ? "response" : "responses"}` : lastJob?.kind === "scan" ? "Reading project files" : lastJob?.context?.definitionAssessment ? "Checking definition" : "Reviewing your project")
       : blocked.length ? "Some responses need attention" : actionablePause ? "Processing paused" : attention.length ? "Needs attention"
       : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting follow-up" : "Ready when you are";

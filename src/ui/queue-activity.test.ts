@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyExecution } from "../core/execution.js";
 import { projectSchema, type Job, type Submission } from "../core/model.js";
-import { queueActivities } from "./queue-activity.js";
+import { queueActivities, discoveryResumeJob } from "./queue-activity.js";
 import { refinementActivity, pausedRefinement } from "./refinement-progress.js";
 import { mayContinueProject, WorkflowControls } from "./workflow-controls.js";
 import type { WorkflowView } from "../service/workflow.js";
@@ -108,6 +108,15 @@ test("refinement labels distinguish stage progress, run scope and terminal outco
 const project = projectSchema.parse({ id: "project", name: "Queue", revision: 1, model: { providerID: "openai", modelID: "fixture" },
   sources: [{ id: "idea", kind: "initial", text: "Save responses" }], questions: [], summary: "Queue", goals: [], actors: [], assumptions: [],
   requirements: [{ id: "save", statement: "Save a response", rationale: "Persistence", sourceIDs: ["idea"], epicID: "inbox", acceptance: ["Survives restart"], status: "accepted" }] });
+
+test("joint validation failures cannot become generic discovery resume authority", () => {
+  for (const status of ["failed", "cancelled", "interrupted", "stale"] as const) {
+    const ordinary: Job = { id: "ordinary", projectID: project.id, expectedRevision: 1, model: project.model, leaseUntil: null, status };
+    assert.equal(discoveryResumeJob(ordinary), ordinary);
+    assert.equal(discoveryResumeJob({ ...ordinary, kind: "definition-joint-review" }), undefined);
+  }
+  assert.equal(discoveryResumeJob(undefined), undefined);
+});
 
 test("no-call clarification status belongs to its explicit view baseline, not the previous failed discovery job", () => {
   const failed: Job = { id: "planner-failure", projectID: project.id, expectedRevision: 1, model: project.model, leaseUntil: null, status: "failed",

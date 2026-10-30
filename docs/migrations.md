@@ -1,5 +1,50 @@
 # Data migrations and upgrade compatibility
 
+## Joint definition consistency review (2026-10-30)
+
+**Implemented forward migration:** SQLite **15 → 16**, named
+`definition-joint-review-runs-v1`, adds local `definition_joint_reviews` checkpoints,
+the `definition-joint-review` job kind and format-1 context/run/result contracts.
+Existing project/assessment/portable/context keys, execution schema 2, optimistic
+revisions, approvals, plans, receipts and grants are unchanged. No source row is rewritten,
+so the additive table needs no payload backup. Older apps reject SQLite 16 instead of
+stripping specialized task evidence. Existing jobs and live leases remain intact.
+
+Only an explicit service action can prepare one bounded joint review. All nine selected
+sources must still re-verify and match their whole-area guards. Exact current evidence
+and original findings are supplied together; oversized/incomplete candidates fall back
+before a job or inference is created. A dedicated adapter prompt/schema rejects altered
+origin keys, stale candidate/context, duplicate dimensions, unseen citations and retained
+conflict members. A model-supported result remains local review judgement with
+`canPublish: false`; it changes no specification, current assessment or readiness state.
+
+The one-request reservation is atomic and never renewed on that job. Valid returned
+responses checkpoint before completion, which rechecks sources/content and atomically
+saves result plus job status. Identical explicit calls reuse completed records; explicit
+recovery of saved responses can create a zero-request job while retaining original
+attempts, source job and response date. Live owners are not stolen; expired workers'
+saved replies are not repeated. Missing/changed witnesses block reuse without an implicit
+paid retry. If no valid reply exists, a later explicit action can authorize a fresh
+one-request attempt. Startup, Stop, timeout and mode changes never automatically retry
+or renew coordinator allowance. Coordinator-owned instances cannot start this task.
+
+Upgrade and validation are ordered/transactional. Failure rolls back table/index and
+schema/ledger advancement; reopen supports retry without regenerating old reviews.
+Unsupported future formats, row/job/marker mismatches and orphan specialized jobs reject
+startup unchanged. Existing source/finding identities are preserved, not rebased onto
+joint validation or recovery dates. Payload/source/context bounds reject instead of
+truncating. Shared portable formats are unchanged: local joint jobs are excluded and
+forged joint markers cannot be adopted as ordinary discovery authority. A failed joint
+task cannot become generic discovery-resume permission. See [scope, limits and recovery](definition-joint-review.md).
+
+Verification, 2026-10-30: `npm run check`, all **1,218** deterministic tests
+(`npm test`: 515 pretests + 703 main tests), `npm run test:browser` (including UI
+build), `npm run test:browser:workflow` and `git diff --check` passed. Upgrade tests
+cover preservation/repeated reopening, transactional failure/retry, future-format
+rejection and saved-response recovery without inference. Browser checks use fixture
+adapters; no live model calls were made. Live model quality, effective provider-side
+tool/cancellation enforcement and large-project replay performance remain unqualified.
+
 ## Per-finding origin preview (2026-10-30)
 
 **Read-only internal addition; no persisted conversion.** Source/target SQLite stays

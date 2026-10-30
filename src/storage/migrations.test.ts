@@ -27,7 +27,7 @@ test("13 to 14 preserves old completed and live receipts byte-for-byte without i
       const old = JSON.parse(row.payload); delete old.retentionStartKey; if (old.result) delete old.result.retainedDefinitions;
       db.prepare("UPDATE workflow_runs SET payload = ? WHERE run_id = ?").run(JSON.stringify(old), row.run_id);
     }
-    db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DELETE FROM migration_history WHERE version >= 14; PRAGMA user_version = 13;");
+    db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DELETE FROM migration_history WHERE version >= 14; PRAGMA user_version = 13;");
     const tables = ["workflow_runs", "projects", "revisions", "jobs", "workflow_state", "execution_state", "execution_leases"];
     const rows = tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()); db.close();
     for (let i = 0; i < 2; i++) {
@@ -57,7 +57,7 @@ test("13 to 14 rolls back and retries on unsupported retained-review evidence wi
     let db = new Database(path); const original = (db.prepare("SELECT payload FROM workflow_runs").get() as { payload: string }).payload;
     const invalid = JSON.parse(original); invalid.result.retainedDefinitions.format = 999;
     const payload = JSON.stringify(invalid); db.prepare("UPDATE workflow_runs SET payload = ?").run(payload);
-    db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DELETE FROM migration_history WHERE version >= 14; PRAGMA user_version = 13;"); db.close();
+    db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DELETE FROM migration_history WHERE version >= 14; PRAGMA user_version = 13;"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
     assert.equal(db.pragma("user_version", { simple: true }), 13);
     assert.equal(db.prepare("SELECT * FROM migration_history WHERE version = 14").get(), undefined);
@@ -101,7 +101,7 @@ test("11 to 12 Guided compatibility upgrade preserves policy rows, flags, grants
     store.saveExecution(manual.id, emptyExecution()); store.close();
     let db = new Database(path);
     db.prepare("INSERT INTO execution_leases VALUES (?, ?, ?, ?)").run("fixture-repository", legacy.id, "other-worker", Date.now() + 60000);
-    db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DELETE FROM migration_history WHERE version >= 12; PRAGMA user_version = 11;");
+    db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DELETE FROM migration_history WHERE version >= 12; PRAGMA user_version = 11;");
     const tables = ["projects", "revisions", "workflow_state", "maintenance_state", "processing_policy", "execution_state", "jobs", "submissions", "workflow_runs", "execution_leases"];
     const before = tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()); db.close();
     for (let i = 0; i < 2; i++) {
@@ -122,7 +122,7 @@ test("11 to 12 rejects future consent without changing it, rolls back the bounda
   const directory = mkdtempSync(resolve(".reqwizit-state/tests/guided-rollback-")), path = join(directory, "state.sqlite");
   const store = new ProjectStore(path), p = store.create("Future consent", "Keep original input", { providerID: "openai", modelID: "fixture" }); store.close();
   try {
-    let db = new Database(path); db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DELETE FROM migration_history WHERE version >= 12; PRAGMA user_version = 11;");
+    let db = new Database(path); db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DELETE FROM migration_history WHERE version >= 12; PRAGMA user_version = 11;");
     const future = JSON.stringify({ format: 999, version: 7, mode: "future-mode" });
     db.prepare("INSERT INTO processing_policy VALUES (?, ?)").run(p.id, future); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
@@ -167,7 +167,7 @@ test("run receipt upgrade preserves original workflow, grants and evidence witho
     const state = store.workflow(p.id); state.enabled = true; state.paused = true; state.phase = "blocked";
     state.grant = { id: "old-grant", used: 4, remainingMs: 3210, submissionIDs: [] }; store.saveWorkflow(p.id, state);
     const before = store.workflow(p.id), history = store.history(p.id); store.close();
-    let db = new Database(path); db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version >= 11; PRAGMA user_version = 10;"); db.close();
+    let db = new Database(path); db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version >= 11; PRAGMA user_version = 10;"); db.close();
     for (let i = 0; i < 2; i++) {
       store = new ProjectStore(path); assert.deepEqual(store.workflow(p.id), before); assert.deepEqual(store.history(p.id), history);
       assert.deepEqual(store.get(p.id), p); assert.equal(store.latestWorkflowRun(p.id), null); store.close();
@@ -221,7 +221,7 @@ test("future run formats stop startup unchanged; failed 10 to 11 conversion roll
     db.prepare("INSERT INTO workflow_runs VALUES (?, ?, ?)").run(p.id, runID, future); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
     assert.deepEqual(db.prepare("SELECT payload FROM workflow_runs").get(), { payload: future });
-    db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version >= 11; PRAGMA user_version = 10;");
+    db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version >= 11; PRAGMA user_version = 10;");
     const badPolicy = JSON.stringify({ format: 999, mode: "manual", version: 0 });
     db.prepare("INSERT INTO processing_policy VALUES (?, ?)").run(p.id, badPolicy); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
@@ -311,7 +311,7 @@ test("database 9 to 10 preserves original permissions and evidence across repeat
     const maintenance = store.maintenance(p.id); maintenance.enabled = true; store.saveMaintenance(p.id, maintenance);
     const before = { workflow: store.workflow(p.id), maintenance: store.maintenance(p.id), execution: store.execution(p.id), history: store.history(p.id) };
     store.close(); let db = new Database(path);
-    db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DELETE FROM migration_history WHERE version >= 10; PRAGMA user_version = 9;"); db.close();
+    db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DELETE FROM migration_history WHERE version >= 10; PRAGMA user_version = 9;"); db.close();
     for (let i = 0; i < 2; i++) {
       store = new ProjectStore(path);
       assert.deepEqual(store.processingPolicy(p.id), { format: 1, version: 0, mode: "legacy" });
@@ -339,7 +339,7 @@ test("failed 9 to 10 upgrade rolls back policy table and ledger and can reopen a
   try {
     let db = new Database(path);
     const original = (db.prepare("SELECT payload FROM execution_state WHERE project_id = ?").get(p.id) as { payload: string }).payload;
-    db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DELETE FROM migration_history WHERE version >= 10; PRAGMA user_version = 9;");
+    db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DELETE FROM migration_history WHERE version >= 10; PRAGMA user_version = 9;");
     const future = JSON.stringify({ ...JSON.parse(original), schemaVersion: 999 });
     db.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(future, p.id); db.close();
     assert.throws(() => new ProjectStore(path), /Unsupported execution/);
@@ -402,7 +402,7 @@ function fixture() {
   store.saveExecution(project.id, state);
   store.close();
   const db = new Database(path);
-   db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE project_activity; DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;");
+   db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE project_activity; DROP TABLE epic_planning_receipts; DROP TABLE epic_planning_contexts; DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;");
   const raw = JSON.parse(JSON.stringify(state)); delete raw.schemaVersion;
   const payload = JSON.stringify(raw);
   db.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(payload, project.id);

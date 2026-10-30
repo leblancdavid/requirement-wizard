@@ -34,6 +34,10 @@ import type { ContextPack } from "../core/context.js";
 import { definitionPublicationContext, type DefinitionPublicationContext } from "../core/definition-publication.js";
 import { beginDefinitionRequest, finishDefinitionRequest, saveDefinitionPublication, readDefinitionPublication } from "./definition-publication.js";
 import { previewDefinitionFindingOrigins } from "./definition-finding-origin.js";
+import { definitionFindingPreviewRequestSchema } from "../core/definition-finding-origin.js";
+import { prepareDefinitionJointReview, readDefinitionJointRun, writeDefinitionJointRun, reusableDefinitionJointRun } from "./definition-joint-review.js";
+import { definitionJointReviewMarkerSchema, validateDefinitionJointResponse } from "../core/definition-joint-review.js";
+import { definitionPublicationKey as jointKey } from "../core/definition-publication.js";
 import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
 import { applySpecificationUpdates } from "../core/specification.js";
@@ -68,6 +72,8 @@ import { questionReviewFingerprint, reviewFingerprint, validateRequirementEviden
 /** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
 function readStoredJob(payload: string): Job {
   const job = JSON.parse(payload) as Job;
+  if (job.kind !== undefined && !["scan", "definition-joint-review"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
+  if (job.context?.definitionJointReview) definitionJointReviewMarkerSchema.parse(job.context.definitionJointReview);
   if (job.portableReceipt !== undefined && job.portableReceipt !== 1) throw new Error("Unsupported portable checkpoint receipt. Upgrade the app; saved work was not overwritten.");
   if (job.discoveryMetrics !== undefined) discoveryMetricsSchema.parse(job.discoveryMetrics);
   if (job.refinementRequests !== undefined) z.number().int().nonnegative().parse(job.refinementRequests);
@@ -1442,6 +1448,66 @@ export class ProjectStore {
   previewDefinitionFindingOrigins(projectID: string, request: unknown) {
     return this.db.transaction(() => previewDefinitionFindingOrigins(this.db, projectID, request)).deferred();
   }
+  prepareDefinitionJointReview(projectID: string, request: unknown) {
+    return this.db.transaction(() => prepareDefinitionJointReview(this.db, projectID, request)).deferred();
+  }
+  beginDefinitionJointReview(projectID: string, request: unknown) {
+    return this.db.transaction(() => {
+      const prepared = prepareDefinitionJointReview(this.db, projectID, request); if (prepared.status !== "prepared") return prepared;
+      const prior = reusableDefinitionJointRun(this.db, prepared.task); if (prior?.status === "unavailable") return prior;
+      if (prior?.status === "recorded" && prior.run.completedAt && this.getJob(prior.run.jobID).status === "completed")
+        return { status: "recorded" as const, job: this.getJob(prior.run.jobID), run: prior.run, reused: true };
+      const { job } = this.beginJob(projectID, prepared.project.revision); job.kind = "definition-joint-review"; job.context = prepared.task.context.manifest; this.saveJob(job);
+      const run = { format: 1 as const, policy: "definition-joint-run-v1" as const, projectID, jobID: job.id, request: definitionFindingPreviewRequestSchema.parse(request),
+        candidateKey: prepared.task.candidateKey, contextKey: prepared.task.contextKey, reserved: false, createdAt: new Date().toISOString(),
+        ...(prior?.status === "recorded" ? { sourceJobID: prior.root.jobID, response: prior.root.response!, respondedAt: prior.root.respondedAt! } : {}) };
+      writeDefinitionJointRun(this.db, run);
+      return { status: "started" as const, job, run, reused: !!run.sourceJobID };
+    }).immediate();
+  }
+  reserveDefinitionJointReview(jobID: string) {
+    return this.db.transaction(() => {
+      const job = this.getJob(jobID), run = readDefinitionJointRun(this.db, jobID);
+      if (!run || job.kind !== "definition-joint-review" || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now() || run.reserved || run.sourceJobID)
+        throw new Error("Joint review request is not live or its one-request allowance is already reserved.");
+      const prepared = prepareDefinitionJointReview(this.db, job.projectID, run.request);
+      if (prepared.status !== "prepared" || prepared.task.candidateKey !== run.candidateKey || prepared.task.contextKey !== run.contextKey)
+        throw new StaleRevisionError();
+      run.reserved = true; writeDefinitionJointRun(this.db, run); return prepared;
+    }).immediate();
+  }
+  recordDefinitionJointResponse(jobID: string, response: unknown) {
+    this.db.transaction(() => {
+      const job = this.getJob(jobID), run = readDefinitionJointRun(this.db, jobID);
+      if (!run || job.kind !== "definition-joint-review" || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now() || !run.reserved || run.sourceJobID)
+        throw new Error("Joint response requires its live app-owned request witness.");
+      const prepared = prepareDefinitionJointReview(this.db, job.projectID, run.request);
+      if (prepared.status !== "prepared" || prepared.task.candidateKey !== run.candidateKey || prepared.task.contextKey !== run.contextKey) throw new StaleRevisionError();
+      const checked = validateDefinitionJointResponse(prepared.task, response);
+      if (run.response && jointKey(run.response) !== jointKey(checked.response)) throw new Error("Joint review response is immutable.");
+      run.response = checked.response; run.respondedAt ??= new Date().toISOString(); writeDefinitionJointRun(this.db, run);
+    }).immediate();
+  }
+  finishDefinitionJointReview(jobID: string, deadline = Number.POSITIVE_INFINITY) {
+    return this.db.transaction(() => {
+      const job = this.getJob(jobID), run = readDefinitionJointRun(this.db, jobID);
+      if (!run?.response || job.kind !== "definition-joint-review" || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Joint review has no live returned response to complete.");
+      const prepared = prepareDefinitionJointReview(this.db, job.projectID, run.request);
+      if (prepared.status !== "prepared" || prepared.task.candidateKey !== run.candidateKey || prepared.task.contextKey !== run.contextKey) throw new StaleRevisionError();
+      if (run.sourceJobID) {
+        const root = readDefinitionJointRun(this.db, run.sourceJobID);
+        if (!root?.reserved || root.sourceJobID || !root.response || root.candidateKey !== run.candidateKey || root.contextKey !== run.contextKey
+          || root.respondedAt !== run.respondedAt || jointKey(root.response) !== jointKey(run.response)) throw new Error("Original joint response witness cannot be proved.");
+      } else if (!run.reserved) throw new Error("Joint review has no app-owned dispatch witness.");
+      run.result = validateDefinitionJointResponse(prepared.task, run.response).result;
+      if (Date.now() >= deadline) throw new DOMException("Joint review time limit reached", "TimeoutError");
+      if ((job.leaseUntil ?? 0) <= Date.now()) throw new Error("Joint review worker lease expired; returned evidence was retained.");
+      run.completedAt = new Date().toISOString();
+      writeDefinitionJointRun(this.db, run); job.status = "completed"; job.finishedAt = run.completedAt; job.leaseUntil = null; this.saveJob(job);
+      return { status: "recorded" as const, job, run, reused: !!run.sourceJobID };
+    }).immediate();
+  }
+  definitionJointReview(jobID: string) { return readDefinitionJointRun(this.db, jobID); }
 
   attachResearch(id: string, evidence: unknown[]) {
     const parsed = evidence.map((item) => researchEvidenceSchema.parse(item));
@@ -1695,7 +1761,7 @@ export class ProjectStore {
       let { result, omittedConcepts } = job.definitionWork
         ? { result: stagedDefinitionAnalysisSchema.parse(raw), omittedConcepts: 0 }
         : parseDiscoveryAnalysis(raw);
-      if (job.helpRequest || job.kind === "scan") throw new Error("Question help and scans cannot apply ordinary discovery proposals.");
+      if (job.helpRequest || job.kind || job.context?.definitionJointReview) throw new Error("Specialized review, question help and scan jobs cannot apply ordinary discovery proposals.");
       if (job.status !== "running") throw new Error("Job is no longer running; result was not applied.");
       if ((job.leaseUntil ?? 0) <= Date.now()) {
         job.status = "interrupted";
@@ -2013,7 +2079,7 @@ export class ProjectStore {
     }).immediate();
   }
 
-  failJob(id: string, status: "failed" | "cancelled" | "stale", diagnostic: string) {
+  failJob(id: string, status: "failed" | "cancelled" | "stale" | "interrupted", diagnostic: string) {
     this.db.transaction(() => {
       const job = this.getJob(id);
       if (!["running", "pending"].includes(job.status)) return;

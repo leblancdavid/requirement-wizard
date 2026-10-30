@@ -1,0 +1,135 @@
+# Joint consistency review of selected definition findings
+
+Status, 2026-10-30: **implemented explicit engine/service task**, not mixed publication
+or automatic finding-level reuse. `DiscoveryService.reviewDefinitionCombination` can
+validate all nine selected original findings together, using the existing selected
+provider/model adapter. There is no new browser/HTTP button or automatic coordinator
+route. Fixture execution is verified; live model quality is not qualified.
+
+## Scope and admission
+
+The request uses the existing explicit per-dimension source selections and current
+revision/full content token. Preparation re-verifies publication certificates and
+original finding provenance in one SQLite transaction. All nine dimensions must have
+selected verified sources whose original **whole-area** guards still match. Missing,
+changed, ambiguous or uncertified sources return the existing whole-area fallback;
+the app never invents a replacement or asks a model to fill missing source provenance.
+
+The context contains exact current guarded records, active area definitions, global
+interpretation/origin, and all nine original findings with their distinct original
+identities/dates. Every manifest record is checked against current content before
+inclusion. No finding wording, original human text, date, status or evidence link is
+shortened or rewritten. If this combined payload exceeds **96,000 characters**, the
+task returns `whole-area-context-limit` before creating a job or asking the model.
+There is no sampled/partial joint-review path or automatic fallback inference.
+
+A candidate key binds the exact current snapshot and original source identities;
+a separate context key binds the exact context payload. The shared prompt builder
+selects a dedicated `jointReview` contract for both existing OpenCode/direct adapters,
+not the ordinary proposal/assessment schema. Research and tools are disabled under
+the existing adapter profile. No provider, account, model or output-format switch is
+performed after failure. This does not newly qualify live permission enforcement.
+
+## Explicit allowance and result
+
+One explicit service call authorizes **at most one** request, normally within two
+minutes (caller-selected bounds are capped at three minutes). It does not spend or
+renew the coordinator's shared grant, opt into automation or start independent workers.
+Coordinator-owned service instances reject this operation. Existing live discovery,
+workflow and execution guards prevent competing dispatch. Manual/Guided settings
+retain their existing scope; saving a mode never starts this task.
+
+The model must return one verdict per dimension, echoing its original origin key,
+plus cross-finding conflicts. Decisions are `retain`, `reassess` or `blocked`. Retain
+keeps the original partial/unknown/defined conclusion; it cannot upgrade it or establish
+a new human preference. Candidate/context mismatch, duplicate/missing dimensions,
+changed origins, unseen citations and unrelated proposals/approvals are rejected.
+Members of a reported conflict cannot be retained. A supported verdict requires all
+nine to be retained and no reported conflicts.
+
+The local result is `model-supported`, `conflicted`, `reassess` or `blocked`, with
+`authority: review-evidence-only`, `partition: whole-area` and **`canPublish: false`**.
+It is model judgement, not formal consistency, completeness, independent dependency
+proof, readiness, approval or permission to skip calls. A model may still miss a
+conflict; fixture checks do not prove semantic review quality. Project revisions,
+assessments, original findings, approvals, plans and readiness are never changed.
+
+## Durable requests and explicit recovery
+
+SQLite **15 → 16**, `definition-joint-review-runs-v1`, adds local
+`definition_joint_reviews` checkpoints and recognizes a dedicated
+`definition-joint-review` job kind/context marker. A request is reserved atomically
+once before dispatch and never renewed on that job. Reservation counts an app attempt,
+not provider delivery or billing. Returned valid responses are saved separately from
+completion; completion re-verifies current source/context/content and commits the
+result and completed job together.
+
+Repeating the same explicit action under exactly matching inputs re-verifies and
+returns the completed record without another request or new job. If a returned valid
+response was saved but completion failed, an explicit later call can create a zero-
+request recovery job linked to the original request. The original failed/cancelled/
+interrupted job, spent reservation and response observation date are preserved. A
+saved response from an expired worker can be recovered without repeating inference;
+live leases are not stolen. Expired-job handling preserves other workers' live leases.
+
+Missing or changed saved response witnesses block reuse without silently repeating
+the request. If no valid response was saved, another explicit action can authorize
+a fresh one-request attempt; it does not erase the earlier spent attempt. Stop,
+timeout, startup and mode changes never automatically retry. Cancellation/time limits
+also bound adapters that do not settle promptly, though provider-side cancellation
+still depends on the existing integration and is not newly qualified here.
+
+The raw checkpoint getter is dated local evidence, not a current compatibility proof.
+The explicit service re-verifies source guards and current tokens before reusing or
+completing it. Old supported verdicts are not projected onto changed project inputs.
+Original finding dates remain separate from request-observation and recovery-save dates.
+
+## Compatibility and client boundaries
+
+The additive migration rewrites no previous row and needs no payload backup. It changes
+no project/assessment/portable semantic key, execution schema 2, approval, grant, old
+job, existing receipt or optimistic project revision. Older apps reject SQLite 16.
+Old completed work is not backfilled or repeated to acquire joint validation. Upgrade
+alone starts no job or request and preserves live workers/leases. Ordered transactional
+failure rolls back the table/index and schema/ledger advancement; reopening can retry.
+
+Startup rejects unsupported future checkpoint formats, mismatched row/job/context
+identities and orphan joint jobs without overwriting them. Checkpoints are capped at
+**128 KiB**, responses at **64 KiB**, source selections at nine, and original snapshot/
+record/reference/certificate bounds remain enforced by existing origin readers. At
+most two historical snapshot objects are cached during preparation. No source evidence
+is truncated to create successful review evidence. Large-project replay/storage cost
+remains unqualified.
+
+Joint jobs and results are machine-local and are excluded from portable continuation,
+including interrupted in-flight jobs. Imports reject a joint marker masquerading as
+ordinary portable discovery. Ordinary discovery publication refuses specialized jobs;
+generic discovery-resume controls cannot treat a failed joint validation as authority
+to run ordinary discovery. Normal local job lifecycle may mark a workspace dirty; this
+does not export joint results as shared authority or alter specification revisions.
+
+Future UI exposure, automatic routing, narrower partitions and mixed-result publication
+need their own consent, provenance, stale-publication and forward-compatibility slices.
+Nothing here authorizes coding, commands, research, new questions or requirement changes.
+See [origin provenance](definition-finding-origins.md),
+[activation gates](definition-dependency-protocol.md#activation-gates--not-implemented)
+and [migration ledger](migrations.md#joint-definition-consistency-review-2026-10-30).
+
+## Checks
+
+`src/service/definition-joint-review.test.ts` uses deterministic adapters for exact
+context/prompt scope, unchanged source dates, conflicts, malformed/forged verdicts,
+one-request reservations, completed reuse, returned-response recovery, expired/live
+leases, cancellation/time limits, stale inputs, context bounds, portable exclusion,
+ordinary-publication rejection and SQLite upgrade/reopen/failure/future-format behavior.
+The queue-routing test separately prevents generic discovery resume for this task.
+
+Verification, 2026-10-30: type check, all **1,218** deterministic tests (515 pretests
+and 703 main tests), the default browser suite/UI build, workflow browser checks and
+diff whitespace checks passed. No live model calls were made. The build reports a
+non-blocking bundle-size warning; live quality/permission/cancellation behavior and
+large-project replay performance remain unqualified.
+
+```powershell
+npx tsx --test src/service/definition-joint-review.test.ts
+```

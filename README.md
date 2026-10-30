@@ -56,6 +56,9 @@ reviews stay valid without certificates; no new calls or automatic skips are aut
 An internal [per-finding origin preview](docs/definition-finding-origins.md) also preserves
 individual original dates/evidence across selected reviews; it cannot publish mixed
 findings and does not prove narrower independence or joint consistency.
+An explicit internal [joint validation task](docs/definition-joint-review.md) can now
+review those findings together with one bounded request and retain/recover its local
+verdict without rewriting originals. It has no UI/automatic route or publication authority.
 Definition reviews no longer become outdated merely because saving reordered object
 properties. SQLite 12→13 repairs older keys only with proof from their original raw
 snapshot, preserving evidence, history, revisions and spent attempts; real changes

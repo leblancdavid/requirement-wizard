@@ -1,5 +1,14 @@
 # Architecture outline
 
+`src/core/definition-joint-review.ts` defines exact candidate/context and verdict
+contracts; `src/storage/definition-joint-review.ts` verifies sources and local checkpoints.
+The explicit `DiscoveryService.reviewDefinitionCombination` task uses one reserved
+request with the selected adapter and a dedicated prompt, preserving original findings.
+SQLite 16 adds local run evidence and a specialized job kind; completion/recovery
+rechecks current content and never publishes mixed assessments. These jobs are not
+portable or automatic coordinator work, and cannot become generic discovery-resume
+authority. See [joint consistency review](definition-joint-review.md).
+
 `src/core/definition-finding-origin.ts` supplies content-bound original finding identities;
 `src/storage/definition-finding-origin.ts` previews explicit dimension/source selections
 inside a bounded SQLite read transaction. It re-verifies local publication certificates,

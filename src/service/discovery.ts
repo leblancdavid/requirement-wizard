@@ -34,6 +34,7 @@ import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, s
 import { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { prepareEpicReview } from "./epic-planning.js";
 import { stagedRunRequestLimit, stagedRunDurationMs, stagedRunLeaseMs } from "../core/epic-run.js";
+import { definitionJointReviewLimits } from "../core/definition-joint-review.js";
 
 export interface DiscoveryAdapter {
   clarify?(project: Project, request: QuestionHelpRequest, options: DiscoveryOptions): Promise<unknown>;
@@ -77,6 +78,45 @@ export class DiscoveryService {
   requiresInitialization(projectID: string) {
     const project = this.store.get(projectID);
     return !project.scans.length && (!!project.origin || this.store.jobs(projectID).some((job) => job.kind === "scan"));
+  }
+  /** Explicit one-request validation only. Never called by automatic coordination,
+   * never publishes findings, and completed/returned equivalent work is reused. */
+  async reviewDefinitionCombination(projectID: string, request: unknown, options: { signal?: AbortSignal; durationMs?: number } = {}) {
+    if (this.navigation.workflow) throw new Error("Joint validation requires a separate explicit action; coordinator continuation does not authorize it.");
+    options.signal?.throwIfAborted();
+    const duration = z.number().int().min(1).max(180000).parse(options.durationMs ?? definitionJointReviewLimits.durationMs);
+    const started = this.store.beginDefinitionJointReview(projectID, request);
+    if (started.status !== "started") return started;
+    const controller = new AbortController(), deadline = Date.now() + duration;
+    let timedOut = false;
+    const abort = () => controller.abort(options.signal?.reason ?? new DOMException("Joint review cancelled", "AbortError"));
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => { timedOut = true; controller.abort(new DOMException("Joint review time limit reached", "TimeoutError")); }, duration);
+    const check = () => { if (Date.now() >= deadline && !controller.signal.aborted) { timedOut = true; controller.abort(new DOMException("Joint review time limit reached", "TimeoutError")); } controller.signal.throwIfAborted(); };
+    try {
+      this.store.claimJob(started.job.id, Date.now() + duration + 30000); check();
+      if (!started.reused) {
+        const prepared = this.store.reserveDefinitionJointReview(started.job.id); check();
+        options.signal?.throwIfAborted();
+        let onAbort: () => void = () => {};
+        const interrupted = new Promise<never>((_, reject) => { onAbort = () => reject(controller.signal.reason); controller.signal.addEventListener("abort", onAbort, { once: true }); });
+        try {
+          const response = await Promise.race([this.adapter.analyze(prepared.project, { signal: controller.signal, context: prepared.task.context, research: false,
+            onSession: (id) => this.store.attachSession(started.job.id, id), onProgress: () => {}, onTelemetry: (value) => this.store.attachTelemetry(started.job.id, value),
+            onResearch: (evidence) => { if (evidence.length) throw new Error("Joint validation cannot authorize research."); } }), interrupted]);
+          controller.signal.throwIfAborted(); this.store.recordDefinitionJointResponse(started.job.id, response);
+        } finally { controller.signal.removeEventListener("abort", onAbort); }
+      }
+      check(); return this.store.finishDefinitionJointReview(started.job.id, deadline);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "TimeoutError") timedOut = true;
+      const job = this.store.getJob(started.job.id);
+      if (job.status === "running" || job.status === "pending") this.store.failJob(job.id, timedOut ? "interrupted" : controller.signal.aborted ? "cancelled" : error instanceof StaleRevisionError ? "stale" : "failed",
+        timedOut ? "Joint validation reached its time limit. Original findings and any saved response were retained. Continue explicitly."
+          : controller.signal.aborted ? "Joint validation stopped. Original findings and spent attempts were retained."
+            : error instanceof z.ZodError ? schemaDiagnostic(error) : "Joint validation could not complete. Original findings and any saved response were retained; no mixed review was published.");
+      return { status: "recorded" as const, job: this.store.getJob(started.job.id), run: this.store.definitionJointReview(started.job.id)!, reused: started.reused };
+    } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
   }
   assertCanDiscover(projectID: string) {
     if (this.requiresInitialization(projectID)) throw new Error("Initialization incomplete. Complete a folder scan and review its baseline before exploring missing requirements.");

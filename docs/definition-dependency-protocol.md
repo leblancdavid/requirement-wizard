@@ -113,8 +113,11 @@ and live provider quality are not qualified by these deterministic bounds.
    preview now retains each selected finding's verified original date, source job and
    evidence identities under shared whole-area guards. It always disables publication
    and leaves joint consistency unproved; it neither restores nor rewrites findings.
-   Saving a mixed result, sound narrower partitions and cross-finding consistency/stale
-   publication checks remain unfinished. Never rebase an old finding's date/evidence
+   A separate explicit [joint validation task](definition-joint-review.md) now saves
+   model judgement over all nine selected originals/current evidence, with bounded
+   requests, durable response recovery and stale-token checks. It does not grant
+   publication or narrower independence. Saving a mixed result, sound narrower
+   partitions and atomic stale-publication checks remain unfinished. Never rebase an old finding's date/evidence
    onto a new assessment revision. See [original finding provenance](definition-finding-origins.md).
 4. **Continuation and consent:** integrate only with the existing authorized coordinator
    and durable job/attempt ledgers. Stop, limits, restart and worker conflicts must retain

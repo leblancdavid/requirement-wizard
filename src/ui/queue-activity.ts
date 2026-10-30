@@ -7,6 +7,12 @@ export type QueueActivity = {
   stop?: { action: "execution-stop" | "cancel-help"; body: Record<string, unknown> };
 };
 
+/** Local joint validation has a separate explicit service entry point and must
+ * never turn into a generic discovery-resume permission after failure/timeout. */
+export function discoveryResumeJob(job?: Job) {
+  return job?.kind === "definition-joint-review" || job?.context?.definitionJointReview ? undefined : job;
+}
+
 export function queueActivities(project: Project, execution: ExecutionState, implementationActive: boolean, helpJobs: Job[], operation?: string): QueueActivity[] {
   const activities: QueueActivity[] = [];
   const assessment = execution.assessmentRuns?.at(-1), run = execution.run;

@@ -77,12 +77,17 @@ declaration do not establish narrower dependency partitions. Such partitions sti
 need sound positive/absence/global-scope guards and verified interaction boundaries.
 Mixed publication additionally needs cross-finding validation, per-finding immutable
 origins in the saved format, atomic stale-result checks and forward compatibility.
+An explicit internal [joint consistency task](definition-joint-review.md) now reviews
+all nine selected findings together against exact current evidence and saves bounded
+local model judgement. The origin preview itself remains inspection-only and unchanged;
+neither a supported joint verdict nor matching guards authorize mixed publication.
 See [activation gates](definition-dependency-protocol.md#activation-gates--not-implemented).
 
 ## Compatibility and limits
 
-SQLite stays **15**, execution stays schema 2, and no persisted project/job/assessment,
-certificate, workspace or portable format/key changes. There is no new saved origin
+This origin-preview slice kept SQLite at 15 and added no persisted project/job/assessment,
+certificate, workspace or portable format/key changes. The later joint-review slice adds
+local checkpoints through **15 → 16**; execution stays schema 2. There is no new saved origin
 array, schema migration, startup projection/backfill or inference requirement. Existing
 certificates are re-used as factual sources without rewriting them. Older work without
 certificates remains valid under its existing rules and is not repeated to create origins.

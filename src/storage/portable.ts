@@ -56,7 +56,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   const definitionIdentity = (job: Job) => job.definitionWork && JSON.stringify([job.definitionWork.policy, job.definitionWork.epicID, job.definitionWork.inputKey, job.definitionWork.planKey]);
   const completedDefinitions = new Set(jobs.filter((j) => j.status === "completed" && j.result && j.definitionWork).map(definitionIdentity));
   for (const job of jobs) {
-    if (job.helpRequest) continue;
+    if (job.helpRequest || job.kind === "definition-joint-review" || job.context?.definitionJointReview) continue;
     const context = job.context;
     if (job.definitionWork && !linked.has(job.id)) {
       const work = job.definitionWork;
@@ -328,6 +328,7 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
   } }
   const revisions = new Set([project.revision, ...Object.keys(continuation.snapshots).map(Number)]);
   for (const job of continuation.jobs) {
+    if (job.context?.definitionJointReview) throw new Error("Joint validation is local evidence and cannot be adopted as portable authority.");
     if (job.projectID !== project.id) throw new Error("Portable job belongs to another project.");
     if (job.expectedRevision > project.revision) throw new Error("Portable job references a future project revision.");
     if (needsOriginalRevision(job) && !revisions.has(job.expectedRevision)) throw new Error("Portable checkpoint is missing its original revision.");

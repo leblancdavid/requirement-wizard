@@ -11,8 +11,10 @@ import { processingPolicySchema } from "../core/processing-policy.js";
 import { workflowRunSchema } from "../core/workflow-run.js";
 import { migrateDefinitionStorageOrder } from "./definition-serialization.js";
 import { definitionPublicationSchema, definitionRequestWitnessSchema, definitionPublicationLimits } from "../core/definition-publication.js";
+import { definitionJointRunSchema, definitionJointPayloadBytes } from "./definition-joint-review.js";
+import { definitionJointReviewMarkerSchema } from "../core/definition-joint-review.js";
 
-export const databaseSchemaVersion = 15;
+export const databaseSchemaVersion = 16;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -157,6 +159,10 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
     CREATE TABLE definition_publications (project_id TEXT NOT NULL REFERENCES projects(id), epic_id TEXT NOT NULL,
     assessment_revision INTEGER NOT NULL, job_id TEXT NOT NULL REFERENCES jobs(id), payload TEXT NOT NULL,
     PRIMARY KEY(project_id, epic_id, assessment_revision));`);
+} }, { version: 16, name: "definition-joint-review-runs-v1", apply(db: Database.Database) {
+  db.exec(`CREATE TABLE definition_joint_reviews (project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT PRIMARY KEY REFERENCES jobs(id),
+    candidate_key TEXT NOT NULL, payload TEXT NOT NULL);
+    CREATE INDEX definition_joint_candidate ON definition_joint_reviews(project_id, candidate_key);`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -195,5 +201,20 @@ export function migrateDatabase(db: Database.Database) {
       if (c.projectID !== row.project_id || c.epicID !== row.epic_id || c.assessmentRevision !== row.assessment_revision || c.jobID !== row.job_id)
         throw new Error("Definition publication identity mismatch. Saved data was not overwritten.");
     }
+    for (const row of db.prepare("SELECT project_id, job_id, candidate_key, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM definition_joint_reviews")
+      .iterate(definitionJointPayloadBytes) as Iterable<{ project_id: string; job_id: string; candidate_key: string; payload: string | null }>) {
+      if (!row.payload) throw new Error("Joint review checkpoint exceeds its supported bound. Saved data was not overwritten.");
+      const run = definitionJointRunSchema.parse(JSON.parse(row.payload));
+      const job = db.prepare("SELECT project_id, json_extract(payload, '$.kind') AS kind, json_extract(payload, '$.context.definitionJointReview') AS marker FROM jobs WHERE id = ?")
+        .get(row.job_id) as { project_id: string; kind: string | null; marker: string | null } | undefined;
+      if (!job?.marker || job.project_id !== row.project_id || job.kind !== "definition-joint-review" || run.projectID !== row.project_id || run.jobID !== row.job_id
+        || run.candidateKey !== row.candidate_key) throw new Error("Joint review checkpoint identity mismatch. Saved data was not overwritten.");
+      const marker = definitionJointReviewMarkerSchema.parse(JSON.parse(job.marker));
+      if (marker.candidateKey !== run.candidateKey || marker.contextKey !== run.contextKey || marker.snapshotKey !== run.request.snapshotKey)
+        throw new Error("Joint review marker changed. Saved data was not overwritten.");
+    }
+    if (db.prepare(`SELECT 1 FROM jobs j LEFT JOIN definition_joint_reviews r ON r.job_id = j.id
+      WHERE json_extract(j.payload, '$.kind') = 'definition-joint-review' AND r.job_id IS NULL LIMIT 1`).get())
+      throw new Error("Joint review job is missing its local checkpoint. Saved data was not overwritten.");
   }).immediate();
 }

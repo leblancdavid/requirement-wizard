@@ -335,6 +335,16 @@ consent, and specification-to-planning-to-coding boundaries.
 
 ## Phase 4 — Safely reduce rechecking
 
+**Joint-consistency validation slice implemented (2026-10-30):** an explicit engine
+task reviews all nine selected original findings together against bounded exact current
+evidence, with one reserved request, durable returned-response recovery and stale-content
+checks. Completed equivalent checks are reused; valid saved replies from failed/expired
+workers need not repeat inference. Conflicts cannot retain their affected findings.
+SQLite 15→16 adds local checkpoints/specialized jobs without resetting older data or
+shared allowance. Results remain model judgement, never publication/skip permission;
+there is no UI/HTTP or automatic coordinator entry point. Sound narrower partitions,
+mixed-result saving and live quality qualification remain unfinished. See [joint review](definition-joint-review.md).
+
 **Per-finding origin preview foundation implemented (2026-10-30):** an explicit internal
 read re-verifies selected publication sources and retains each original finding's own
 revision/date/job/evidence identity. Sources can come from different reviews without
