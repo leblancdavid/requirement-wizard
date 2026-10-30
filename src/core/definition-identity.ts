@@ -38,12 +38,17 @@ export function definitionInputs(project: Project, epicID: string, evidenceIDs: 
   return { areas, included, records };
 }
 
-export function definitionInputKey(project: Project, epicID: string, evidenceIDs: string[] = []) {
+/** Frozen v1 digest document. Exposed for ordering-only compatibility proofs;
+ * callers must not omit fields or reinterpret arrays as unordered sets. */
+export function definitionInputDocument(project: Project, epicID: string, evidenceIDs: string[] = []) {
   const { areas, included, records } = definitionInputs(project, epicID, evidenceIDs);
-  // Synchronous SHA-256 works in both renderer and engine; never save another
-  // full copy of shared project evidence inside each area's freshness metadata.
-  return bytesToHex(sha256(JSON.stringify({ policy: "definition-inputs-v1", origin: project.origin ?? null,
+  return { policy: "definition-inputs-v1", origin: project.origin ?? null,
     ...(epicID === "project" ? { scope: project.epics.filter((e) => !e.archived).map((e) => ({ id: e.id, title: e.title, purpose: e.purpose, dependencies: e.dependencies })).sort((a, b) => a.id.localeCompare(b.id)) } : {}),
     epics: project.epics.filter((e) => areas.has(e.id)).sort((a, b) => a.id.localeCompare(b.id)),
-    records: records.filter((r) => included.has(r.id)).sort((a, b) => a.id.localeCompare(b.id)) })));
+    records: records.filter((r) => included.has(r.id)).sort((a, b) => a.id.localeCompare(b.id)) };
+}
+
+export function definitionInputKey(project: Project, epicID: string, evidenceIDs: string[] = []) {
+  // Keep the v1 wire digest unchanged for saved jobs/checkpoints and valid bases.
+  return bytesToHex(sha256(JSON.stringify(definitionInputDocument(project, epicID, evidenceIDs))));
 }

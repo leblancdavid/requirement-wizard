@@ -1,5 +1,13 @@
 # Workflow consolidation plan
 
+**Ordering-only review reuse:** new reviews stamp the schema-reader evidence order;
+SQLite 12→13 repairs older false-stale keys only from a reproducible raw original
+snapshot with identical fields, values and array order. It preserves revisions,
+history, approved plans, exact-stage receipts, attempts and consent. Genuine changes
+remain outdated; absent original portable witnesses stay unproved. This removes a
+representation bug, not the need for complete-area fallback or stronger finding-level
+dependency proofs. See [upgrade details](migrations.md#definition-storage-order-compatibility-2026-10-29).
+
 Agreed direction, 2026-10-29. This is an implementation plan, not a claim that the
 consolidated workflow is already available. Existing behavior is described in
 [coordinated workflow](coordinated-workflow.md), [definition coverage](definition-coverage.md)

@@ -31,6 +31,13 @@ and staged-review metadata. Retained input bases must match the original snapsho
 Matching old findings without a basis can be compared as snapshot facts, but no new
 basis is installed and existing legacy freshness behavior is unchanged.
 
+For older ordering-affected reviews, the selected raw original snapshot may prove an
+object-property-order-only key projection. Inspection uses that key in memory only;
+all fields, values and array order must match and the raw snapshot must reproduce the
+original hash. This preserves original findings/history and does not authorize
+finding-level skips. Missing raw witnesses remain unknown. See
+[storage-order compatibility](migrations.md#definition-storage-order-compatibility-2026-10-29).
+
 It reads only the selected original snapshot, not an archive or a substitute older
 review. Missing, invalid, mismatched or oversized originals stay unknown. The local
 limit is **16 MiB** for each current/original snapshot, **8,000 evidence records** and

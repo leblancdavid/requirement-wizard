@@ -97,6 +97,16 @@ are unchanged. Results are version/content bound, including equal-numbered adopt
 polling only dates retained results, never replays inspection. See [finding impact](definition-finding-impact.md)
 and `npm run test:browser:definition-impact` for bounds and focused verification.
 
+New reviews remain current after storage-only object-property reordering. SQLite
+12→13 repairs older keys only with a proved original raw snapshot, without a new
+revision, inference, lost attempts or rewritten history. Real input changes still
+date the review. `npm run test:browser:definition-order` constructs genuine v12-shaped
+saved data and checks upgrade preservation, explicit inspection, changed-input
+invalidation, reopen and mobile. Screenshot:
+`.reqwizit-state/browser-definition-order-upgrade-mobile.png`. See
+[upgrade limits](migrations.md#definition-storage-order-compatibility-2026-10-29), including
+the unrepaired older-portable case where the raw original witness is missing.
+
 **Processing & queue → Project workflow → Last specification run** now adds a durable
 summary across all steps of the latest bounded coordinator worker pass, not just the
 last mutation. It shows starting/ending revisions, reserved AI attempt count, outcomes

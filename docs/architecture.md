@@ -1,5 +1,14 @@
 # Architecture outline
 
+Definition persistence uses `src/core/definition-serialization.ts` to normalize
+evidence property order before stamping new reviews without changing the frozen v1
+digest. Its ordering-only proof compares exact original raw/parsed digest documents
+and reproduces the original key. `src/storage/definition-serialization.ts` applies
+SQLite 12→13 with byte-exact current-row backups and key-only repairs, preserving
+revisions, immutable history, jobs and execution evidence. Impact/history reads can
+project proved original keys without rewriting archives. No finding-level semantic
+reuse is implied. See [compatibility](migrations.md#definition-storage-order-compatibility-2026-10-29).
+
 Status: shared engine, browser API/UI, and the first epic/assessment/context loop
 implemented under `src/`. See [decisions.md](decisions.md),
 [browser-workspace.md](browser-workspace.md), and [terminal-discovery.md](terminal-discovery.md).

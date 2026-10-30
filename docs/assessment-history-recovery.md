@@ -14,8 +14,13 @@ Existing assessments, including outdated ones, are never replaced. Only the orig
 active area ID is eligible; findings are not transferred to new split/merged areas.
 
 Original findings and assessment revision are retained. Existing evidence keys remain
-unchanged. A legacy evidence key can be derived only from an available matching original
-snapshot, never from today's inputs. Missing provenance stays unkeyed and outdated.
+unchanged except for a proved object-property-order mismatch: the exact raw original
+snapshot must reproduce the old key and preserve all digest fields, values and array
+order under the storage reader. Preview labels this ordering-only projection **derived**;
+original history remains unchanged. A missing legacy evidence key can also be derived
+only from an available matching original snapshot, never from today's inputs. Missing
+provenance stays unkeyed and outdated. Older portable exports without their original raw
+witness cannot receive an ordering repair. See [storage-order compatibility](migrations.md#definition-storage-order-compatibility-2026-10-29).
 Matching inputs permit reuse, not a claim that the findings have no gaps.
 
 ## Preserve implementation reuse (2026-10-29)
@@ -65,7 +70,8 @@ explicit adoption/continuation restrictions. See the
 - Apply checks the expected project revision and re-reads the selected record with its
   content token inside the normal write transaction. A changed selection or project
   requires another preview. A failed transaction preserves data and supports explicit
-  retry; no background startup rewrite is performed.
+  retry; recovery itself performs no background startup rewrite. The separate SQLite
+  12→13 upgrade repairs only proved ordering-related key metadata, with original-row backups.
 
 Source and target definition-assessment formats are unchanged. See the historical
 [migration ledger](migrations.md#explicit-missing-assessment-history-recovery-2026-10-29).

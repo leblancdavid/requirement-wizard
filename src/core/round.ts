@@ -4,6 +4,7 @@ import { proposalSimilarityWarnings } from "./similarity.js";
 import { validConcepts, validateAnalysisReferences, type Project, type Analysis, type ResearchEvidence } from "./model.js";
 import { applyPendingChanges } from "./pending-changes.js";
 import { definitionInputKey } from "./definition-identity.js";
+import { normalizeDefinitionRecordOrder } from "./definition-serialization.js";
 
 /** Only identical epic declarations can be collapsed without guessing reference intent. */
 function prepareAliases(project: Project, result: Analysis): Analysis {
@@ -164,6 +165,7 @@ export function applyRound(project: Project, result: Analysis, newID: () => stri
   project.roundChanges.push(...proposalSimilarityWarnings(project, new Set([...questions, ...requirements].map((item) => item.id))));
   if (newFindings.length) project.roundChanges.push(`Saved ${newFindings.length} source-backed research findings.`);
   const evidence = new Set([...project.sources, ...project.questions, ...project.requirements, ...project.research].map((item) => item.id));
+  if (result.assessments?.length) normalizeDefinitionRecordOrder(project);
   const seen = new Set<string>();
   for (const input of result.assessments ?? []) {
     const epicID = ref(input.epicID);

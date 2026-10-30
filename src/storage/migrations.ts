@@ -9,8 +9,9 @@ import { implementationPlanningWorkSchema } from "../core/implementation-plannin
 import { recoveryRevisionSchema } from "../core/implementation-revisions.js";
 import { processingPolicySchema } from "../core/processing-policy.js";
 import { workflowRunSchema } from "../core/workflow-run.js";
+import { migrateDefinitionStorageOrder } from "./definition-serialization.js";
 
-export const databaseSchemaVersion = 12;
+export const databaseSchemaVersion = 13;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -143,7 +144,7 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // remain byte-for-byte unchanged; upgrade never selects or starts this mode.
   const previousPolicy = processingPolicySchema.extend({ mode: z.enum(["legacy", "manual"]) });
   for (const row of db.prepare("SELECT payload FROM processing_policy").all() as { payload: string }[]) previousPolicy.parse(JSON.parse(row.payload));
-} }];
+} }, { version: 13, name: "definition-persistence-order-v1", apply: migrateDefinitionStorageOrder }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
  * or filesystem publication. Original execution payloads are backed up in SQLite. */

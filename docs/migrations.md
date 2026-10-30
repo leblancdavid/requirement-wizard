@@ -1,5 +1,63 @@
 # Data migrations and upgrade compatibility
 
+## Definition storage-order compatibility (2026-10-29)
+
+**Implemented forward migration:** SQLite **12 → 13**, named
+`definition-persistence-order-v1`. Execution remains schema 2; project/portable,
+assessment and exact-stage formats are unchanged. The v1 definition digest algorithm
+is byte-compatible. Previously, new requirement/question/research object property
+ordering could produce a review key that disagreed with the schema reader immediately
+after saving, falsely dating a review at its own revision.
+
+New rounds normalize evidence property order before stamping assessments, rejecting
+any field, value or array-order conversion. Upgrade repairs only existing
+`inputBasis.key` values when the exact raw original revision reproduces the old hash,
+the original finding and identities match, and the raw/parsed digest documents differ
+only in object-property ordering. It does not hash today's decisions as old evidence.
+Real input changes remain outdated; this is not finding-level semantic reuse.
+
+Each changed current project payload is backed up byte-for-byte in
+`project_migration_backups` (migration 13). Only key metadata is changed in the decoded
+current row; immutable revision history stays byte-for-byte unchanged. Project revision
+counters, approvals, plans, jobs, exact-stage contexts/receipts, attempts, grants and
+execution leases/evidence are not rewritten or reset. Repaired workspace bindings are
+marked dirty for normal publication. Unknown fields/default/value conversions in a
+current row prevent its rewrite. Missing, ambiguous, mismatched or oversized original
+data remains unproved, with no truncation or substitute snapshot. Current/original
+snapshots are capped at **32 MiB** each; at most two prepared sources are cached per
+project. Large-project startup performance remains unqualified.
+
+Migration runs in the ordered upgrade transaction: failure rolls back payload changes,
+backups and schema/ledger advancement; reopening retries safely. Unsupported current
+formats reject instead of being overwritten. Live non-help discovery jobs and workflow
+owners block upgrade without stealing leases. Stop/finish them in the existing app or
+wait for lease expiry, then reopen; upgrade never repeats model calls. Execution leases
+remain untouched. Reopening after success does not repair again or duplicate backups.
+
+Impact inspection projects a proved original key only in memory, within its existing
+16 MiB bound. Explicit historical recovery labels that projection `derived`; restoration
+retains original findings and uses its normal revision/consent gates. Original history
+is never rewritten. Older portable exports whose raw original ordering witness was
+already lost remain unproved; current parsed inputs cannot manufacture that provenance.
+New exports from repaired projects retain compatible current evidence.
+
+Verification: type check, all **1,115 deterministic tests** (416 pretests + 699 main),
+UI build, default seven-runner browser aggregate, focused ordering-upgrade, finding-impact,
+definition-refresh allowance and coordinated-workflow browsers, and diff check passed.
+One repeat aggregate exceeded the 120-second command limit; its full retry with a
+300-second limit passed all seven browser runners.
+The 16 new ordering tests cover immediate/reopened freshness, frozen v1 hashing,
+ordering proof rejection, exact backups, genuine staleness, missing/unmodeled/ambiguous
+current data, oversized originals, rollback/retry, approved-plan and portable preservation,
+exact-stage replay with spent attempts, historical recovery and live-worker preflight.
+The ordering browser uses real v12-shaped data and verifies unchanged evidence/revision,
+explicit comparison, genuine-change invalidation, reopen/mobile and zero inference.
+Screenshot: `.reqwizit-state/browser-definition-order-upgrade-mobile.png`.
+No live model calls, personal-project migration, commits/pushes or desktop packaging
+were performed. `test:browser:all` was not run. The existing UI bundle-size warning,
+missing older-portable witnesses, fine-grained semantic reuse and live large-project
+upgrade performance remain unresolved or unqualified.
+
 ## Finding-level impact inspection (2026-10-29)
 
 **View-only addition; no forward data conversion.** Source/target SQLite remains

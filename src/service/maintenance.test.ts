@@ -263,7 +263,7 @@ test("schema-5 upgrade is additive, transactional, repeatable and defaults exist
   try {
     const p = seed(store), project = structuredClone(p), history = store.history(p.id); store.close();
     let db = new Database(path);
-    db.exec("DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DELETE FROM migration_history WHERE version >= 6; PRAGMA user_version = 5;");
+    db.exec("DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE maintenance_state; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DELETE FROM migration_history WHERE version >= 6; PRAGMA user_version = 5;");
     db.exec("CREATE TRIGGER fail_maintenance_upgrade BEFORE INSERT ON migration_history WHEN new.version = 6 BEGIN SELECT RAISE(ABORT, 'Simulated migration interruption'); END;");
     const bytes = (db.prepare("SELECT payload FROM projects WHERE id = ?").get(p.id) as { payload: string }).payload; db.close();
     assert.throws(() => new ProjectStore(path), /Simulated migration interruption/);

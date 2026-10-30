@@ -44,6 +44,10 @@ run's steps, separate from today's pending work and the latest individual change
 **Overall progress → Inspect changes since a definition review** compares saved inputs
 without AI calls. Unchanged citations do not justify skipping a whole-area review;
 see [finding impact](docs/definition-finding-impact.md).
+Definition reviews no longer become outdated merely because saving reordered object
+properties. SQLite 12→13 repairs older keys only with proof from their original raw
+snapshot, preserving evidence, history, revisions and spent attempts; real changes
+remain outdated. See [upgrade compatibility](docs/migrations.md#definition-storage-order-compatibility-2026-10-29).
 In Implement, **Prepare implementation** groups code checks, plan review and setup;
 **Build and verify** keeps Start/Resume implementation and Verify delivery separate.
 Viewing preparation does not run checks, call the model or start coding.

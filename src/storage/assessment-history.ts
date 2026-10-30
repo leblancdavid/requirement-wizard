@@ -6,6 +6,7 @@ import { canonicalJSON } from "../core/assessment-identity.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { coverage } from "../core/coverage.js";
 import { assessmentHistoryLimits as limits, type AssessmentHistoryPreview, type AssessmentHistorySelection } from "../core/assessment-history.js";
+import { definitionStorageOrderProof } from "../core/definition-serialization.js";
 
 type CandidateRow = { revision: number; bytes: number; payload: string | null };
 function decode(db: Database.Database, project: Project, epicID: string, row: CandidateRow) {
@@ -13,6 +14,14 @@ function decode(db: Database.Database, project: Project, epicID: string, row: Ca
   const assessment = assessmentSchema.parse(JSON.parse(row.payload));
   if (assessment.epicID !== epicID || assessment.atRevision > row.revision) throw new Error("The saved assessment has inconsistent area or revision provenance.");
   let basis: "retained" | "derived" | "unavailable" = assessment.inputBasis ? "retained" : "unavailable";
+  if (assessment.inputBasis) {
+    const origin = db.prepare(`SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload
+      FROM revisions WHERE project_id = ? AND revision = ?`).get(limits.windowBytes, project.id, assessment.atRevision) as { payload: string | null } | undefined;
+    let rawOriginal: unknown;
+    try { if (origin?.payload) rawOriginal = JSON.parse(origin.payload); } catch { /* Keep an existing retained basis; never substitute another snapshot. */ }
+    const proof = definitionStorageOrderProof(project.id, JSON.parse(row.payload), rawOriginal);
+    if (proof) { assessment.inputBasis.key = proof.key; basis = "derived"; }
+  }
   if (!assessment.inputBasis) {
     const origin = db.prepare(`SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload
       FROM revisions WHERE project_id = ? AND revision = ?`).get(limits.windowBytes, project.id, assessment.atRevision) as { payload: string | null } | undefined;
