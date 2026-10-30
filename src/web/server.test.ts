@@ -40,6 +40,37 @@ test("processing policy API is authenticated, revision checked, project local an
   } finally { await app.close(); store.close(); }
 });
 
+test("Guided API selection holds standalone workers, retains allowance and requires explicit coordinator continuation", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const p = store.create("Guided API", "Keep original decisions", { providerID: "openai", modelID: "fixture" });
+  const state = store.workflow(p.id); state.grant = { id: "retained-grant", used: 3, remainingMs: 12345, submissionIDs: [] }; store.saveWorkflow(p.id, state);
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; assert.fail("Selection/saving cannot infer"); } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const post = (route: string, body: unknown) => fetch(`${app.origin}/api/projects/${p.id}/${route}`, { method: "POST", headers, body: JSON.stringify(body) });
+  const input = { revision: p.revision, version: 0, workflowVersion: 0, maintenanceVersion: 0, mode: "guided" };
+  try {
+    assert.equal((await post("processing-policy", input)).status, 200);
+    const snapshot = await (await fetch(`${app.origin}/api/projects/${p.id}`, { headers })).json();
+    assert.equal(snapshot.processingPolicy.mode, "guided"); assert.equal(snapshot.workflow.enabled, true);
+    assert.equal(snapshot.workflow.paused, true); assert.equal(snapshot.workflow.suspended, true);
+    assert.equal(snapshot.workflow.grant.used, 3); assert.equal(snapshot.workflow.lastRun, null);
+    assert.equal(store.workflow(p.id).enabled, false, "Saving a mode does not rewrite the retained coordinator opt-in");
+    assert.equal((await post("workflow", { revision: p.revision, version: snapshot.workflow.version, action: "disable" })).status, 409);
+    assert.equal((await post("maintenance", { revision: p.revision, version: snapshot.maintenance.version, action: "enable" })).status, 409);
+    assert.equal((await post("submit", { id: randomUUID(), auto: true, research: false, input: { type: "note", epicID: "inbox", text: "Save until coordinated continuation" } })).status, 202);
+    assert.equal(store.submissions(p.id)[0]!.status, "queued"); assert.equal(calls, 0);
+    assert.deepEqual(store.workflow(p.id).grant, state.grant);
+    const pending = store.beginJob(p.id, p.revision).job;
+    const manual = { ...input, version: 1, workflowVersion: 1, maintenanceVersion: 1, mode: "manual" };
+    assert.equal((await post("processing-policy", manual)).status, 409); assert.equal(store.getJob(pending.id).status, "pending");
+    store.failJob(pending.id, "cancelled", "Explicit fixture stop");
+    assert.equal((await post("processing-policy", manual)).status, 200);
+    assert.equal((await post("processing-policy", { ...manual, version: 2, workflowVersion: 2, maintenanceVersion: 2, mode: "legacy" })).status, 200);
+    assert.equal(store.queuePaused(p.id), true); assert.equal(store.workflow(p.id).paused, true); assert.equal(store.maintenance(p.id).paused, true);
+    assert.deepEqual(store.workflow(p.id).grant, state.grant); assert.equal(calls, 0); assert.deepEqual(store.get(p.id), p);
+  } finally { await app.close(); store.close(); }
+});
+
 test("processing-only API validates local selected responses and never starts subsequent gap discovery", async () => {
   const store = new ProjectStore(":memory:");
   const p = store.create("Retained input", "Save reports", { providerID: "openai", modelID: "fixture" });

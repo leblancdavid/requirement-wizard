@@ -12,7 +12,7 @@ export const maintenanceSchema = z.object({ format: z.literal(1), version: z.num
     jobID: z.string().optional(), reason: z.string().max(1200).optional() }).strict()),
 }).strict();
 export type MaintenanceState = z.infer<typeof maintenanceSchema>;
-export type MaintenanceView = Pick<MaintenanceState, "version" | "enabled" | "paused" | "tasks"> & { suspended: boolean; manualHold?: boolean; limits: typeof maintenanceLimits };
+export type MaintenanceView = Pick<MaintenanceState, "version" | "enabled" | "paused" | "tasks"> & { suspended: boolean; manualHold?: boolean; guidedHold?: boolean; limits: typeof maintenanceLimits };
 export const emptyMaintenance = (): MaintenanceState => ({ format: 1, version: 0, settingsVersion: 0, enabled: false, paused: false,
   observedRevision: 0, basis: {}, tasks: {}, dueAt: 0 });
 

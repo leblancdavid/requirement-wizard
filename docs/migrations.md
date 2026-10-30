@@ -1,5 +1,117 @@
 # Data migrations and upgrade compatibility
 
+## Finding-level impact inspection (2026-10-29)
+
+**View-only addition; no forward data conversion.** Source/target SQLite remains
+**12**, project/portable formats remain unchanged, execution stays schema 2, policy
+stays format 1 and assessment/checkpoint fingerprints and CAS counters are unchanged.
+No existing row, original evidence, approval, history, grant or spent attempt is
+rewritten. The new format-1 `definition-finding-impact-v1` response is not persisted,
+exported as authority or used to determine freshness/readiness. Upgrade requires no
+reset, new assessment or repeated model call. Existing get() legacy basis projection
+is unchanged; the inspector intentionally reads raw bounded current/original snapshots
+without invoking that projection or persisting another representation.
+
+The explicit authenticated/revision-checked read compares one original review snapshot,
+not an unbounded archive. It verifies exact finding provenance and retained bases,
+enforces 16 MiB snapshot / 8,000 record / 64,000 reference bounds, and leaves unknown
+or ambiguous dependencies unknown. No earlier candidate substitutes for an invalid
+source, and no evidence is shortened. Unchanged cited links with changed full context
+do not become reusable independent findings. No workers, leases, model calls, settings
+or publication operations start during inspection. Missing imported history remains
+missing; original dated evidence and existing current/outdated statuses are preserved.
+
+The UI binds results to the inspected version and a view-only content digest, so
+equal-numbered adoption/replacement dates an earlier result too. Optional lazy legacy
+input-basis representation is handled separately; these tokens are not new review
+identities. The loopback snapshot cache now validates projected project content as
+well as revision before reusing coverage/project objects. This fixes stale browser
+evidence after equal-numbered replacement without changing the underlying saved
+assessment rule. Unchanged content still reuses encoded sections. Content validation
+adds a per-read fingerprint; live large-project performance is not qualified here.
+
+Automatic finding-level dependency certificates/reuse and delta-only reviews remain
+unfinished; the current fallback is the existing complete-area review. This is not a
+claim of calls saved, semantic equivalence or completeness. See [finding impact](definition-finding-impact.md).
+
+Verification on Node 22.23.4: type check, all **1,099 deterministic tests** (400
+pretests + 699 main), UI build, focused finding-impact, workflow and both Manual/
+Guided browser checks and diff check passed. New tests cover uncited area/dependency/
+project-wide additions, unrelated edits, changed answers/reviews, superseding cycles,
+missing/ambiguous findings, current/original byte and graph bounds, legacy raw-byte
+preservation/reopen, active-worker reads, authorization/stale requests and same-numbered
+snapshot/coverage invalidation with unchanged-section reuse. The finding browser covers
+explicit/keyboard inspection, no request on selection/open/poll/reload, changed links
+versus unchanged citations, same-version replacement, stale concurrent requests,
+unavailable origin and mobile (`.reqwizit-state/browser-definition-impact-mobile.png`).
+The default browser aggregate initially stopped at its old eight-panel progress count;
+the assertion now includes the ninth read-only inspector and checks it starts closed.
+The final default seven-runner aggregate passed. No live inference, personal-project writes, application-
+repository commits/pushes or desktop packaging were performed; `test:browser:all` was
+not run. Existing bundle warning remains, and automatic fine-grained reuse plus live
+large-project performance remain unqualified.
+
+## Guided processing consent (2026-10-29)
+
+**Implemented forward migration:** SQLite **11 → 12**, named
+`guided-processing-consent-v1`, establishes the compatibility boundary for the explicit
+`guided` value in the existing strict format-1 processing policy. Source rows must be
+supported format-1 `legacy`/`manual`; an unsupported source value cannot manufacture
+opt-in to a mode the older app never offered. No tables/columns/payloads are rewritten,
+no schema fields/defaults change, and absent policy remains legacy compatibility.
+Old policy/settings CAS values, grants, attempt ledgers, sessions, evidence/history,
+approvals, readiness, plans and freshness identities remain exactly as saved. Project,
+execution and portable formats are unchanged. No reset or repeated model call is needed.
+
+The boundary/ledger and validation run transactionally. Unsupported source/future
+formats reject without overwrite and roll back user_version/ledger changes; reopening
+retries after the specific incompatibility is resolved. Repeated success does nothing
+more. Upgrade is compatible with retained live execution leases because it converts
+no worker-owned state; owners, expiry and spend stay untouched. Older apps reject
+SQLite 12/new Guided values rather than silently stripping consent. Guided is selected
+only by the authenticated revision/policy/settings-CAS-checked settings action after
+upgrade, never inferred from old preferences or switched on during startup.
+
+Selecting Guided starts/arms no work and renews no allowance. Every actual mode switch
+now pauses input queue/coordinator/maintenance and advances their settings counters
+atomically, retaining original enabled flags, queued tasks, grants and spend. Active
+work/pending jobs and live or expired execution leases still block changes without
+being stopped/stolen. Merely selecting Guided does not rewrite the coordinator's
+saved enabled flag; the view projects effective coordination to expose its explicit
+Continue action. Continue remains the existing independent coordinator opt-in/grant.
+
+New browser responses in Guided are eligible for that coordinator even if the separate
+browser preference is off; original saved flags are never rewritten or reinterpreted.
+Eligible responses can resume only remaining live-session allowance. Saved-only input
+requires explicit continuation, and Stop/limits/failure/restart never renew authority.
+SQL wake selection, queue/maintenance guards and atomic automatic-job creation prevent
+independent workers from bypassing Guided, including in other processes. Separate
+maintenance resume or disabling only the coordinator rejects while Guided is selected.
+Explicit scoped tasks retain their own established permission and limits; narrow
+saved-response processing captures a finite selected-feature set under Manual/Guided.
+Research, scans, planning, coding, commands and delivery remain separately authorized.
+Policy remains machine-local/nonportable; original browser preferences and other
+projects are unchanged. See [mode guidance](processing-permissions.md).
+
+Verification on Node 22.23.4: type check, all **1,085 deterministic tests** (386
+pretests + 699 main), UI build, default seven-runner `npm run test:browser`, both
+Manual/Guided processing browsers, focused workflow/maintenance browsers and diff
+check passed. A final migration/workflow/API rerun passed after tightening rejection
+of pre-boundary Guided rows. Guided browser checks cover keyboard selection versus
+explicit save, no work before continuation, a live decision wake-up using the same
+grant, retained browser opt-out/spend, mode switches, restart and 44px mobile labels
+(`.reqwizit-state/browser-guided-processing-mobile.png`). Its settings switch waits
+for the displayed current revision; no stale-write check was weakened to bypass
+concurrent completion. Service tests allow active time spent checking saved-only
+permission to decrease remaining time, but never renew it or spend model requests.
+Upgrade tests compare original policy/settings/evidence/receipt/lease rows byte-for-
+byte across 11→12 and repeated startup, cover unsupported-source/future rejection and
+rollback/retry, and exercise stale cross-process settings/atomic dispatch. Exact
+finding-level reuse and broader cross-operation reports remain unfinished. Existing
+bundle warning remains. No live inference, personal-project writes, application-
+repository commits/pushes or desktop packaging were performed; `test:browser:all`
+was not run.
+
 ## Bounded specification run receipts (2026-10-29)
 
 **Implemented forward migration:** SQLite **10 → 11**, named

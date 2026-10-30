@@ -11,6 +11,7 @@ import { openLogs } from "./log-access.js";
 import { canRecoverDefinition } from "../core/definition-recovery.js";
 import type { DefinitionAdditionalRequest } from "../core/definition-budget.js";
 import { AssessmentHistory, type AssessmentHistoryActions } from "./assessment-history.js";
+import { DefinitionImpactInspector, type InspectDefinitionImpact } from "./definition-impact.js";
 
 function ProgressMeter({ value, label }: { value: number; label: string }) {
   return <div className="meter" role="meter" aria-label={label} aria-valuenow={value} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${value}%` }} /></div>;
@@ -25,7 +26,7 @@ function LocalCodeProgress({ counts, epic }: { counts: LocalAssessmentCounts; ep
 }
 
 export const ProjectProgress = React.memo(ProjectProgressView);
-function ProjectProgressView({ progress, definition, project, jobs = [], refreshDefinition, assessmentHistory, disabled, disabledReason }: { progress: ReturnType<typeof projectProgress>; definition: ReturnType<typeof coverage>; project: Project; jobs?: Job[]; refreshDefinition?: (epicID?: string, additionalRequests?: DefinitionAdditionalRequest[]) => void; assessmentHistory?: AssessmentHistoryActions; disabled?: boolean; disabledReason?: string }) {
+function ProjectProgressView({ progress, definition, project, jobs = [], refreshDefinition, assessmentHistory, inspectDefinitionImpact, disabled, disabledReason }: { progress: ReturnType<typeof projectProgress>; definition: ReturnType<typeof coverage>; project: Project; jobs?: Job[]; refreshDefinition?: (epicID?: string, additionalRequests?: DefinitionAdditionalRequest[]) => void; assessmentHistory?: AssessmentHistoryActions; inspectDefinitionImpact?: InspectDefinitionImpact; disabled?: boolean; disabledReason?: string }) {
   const [open, setOpen] = useState(false);
   const [refreshScope, setRefreshScope] = useState<{ epicID?: string } | null>(null);
   const latestAreas = new Map<string, Job>();
@@ -69,6 +70,7 @@ function ProjectProgressView({ progress, definition, project, jobs = [], refresh
       <section className="progress-stage" aria-label="Questions answered"><h3>Questions answered</h3><strong>{progress.questions.answered} / {progress.questions.total} ({progress.questions.percent}%)</strong><ProgressMeter value={progress.questions.percent} label="Questions answered" /><p>Saved answers in active areas, excluding retired questions. Deferred and delegated questions remain unanswered. More questions may emerge as scope develops.</p></section>
       {progress.stages[2]?.localAssessment && <section className="progress-stage" aria-label="Local implementation"><h3>Local implementation</h3><LocalCodeProgress counts={progress.stages[2].localAssessment} /><p>Current saved assessments of approved requirements. Unknown, not assessed, and outdated results do not mean code is missing. Local completeness does not establish verified delivery to main.</p></section>}
       {assessmentHistory && <AssessmentHistory key={project.id} project={project} actions={assessmentHistory} disabled={disabled} />}
+      {inspectDefinitionImpact && <DefinitionImpactInspector key={`impact:${project.id}`} project={project} inspect={inspectDefinitionImpact} />}
       {progress.stages.map((stage) => <details className="progress-stage" key={stage.id}>
         <summary><span><strong>{stage.title}</strong><small>{stage.status} · {stage.detail}</small></span><strong>{progressLabel(stage)}</strong></summary>
         {(!stage.assessmentState || stage.assessmentState === "current") && <ProgressMeter value={stage.percent} label={`${stage.title} progress`} />}<p>{stage.explanation}</p>

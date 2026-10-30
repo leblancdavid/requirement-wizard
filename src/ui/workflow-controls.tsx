@@ -11,9 +11,9 @@ export const workflowLabels: Record<WorkflowView["phase"], string> = {
 export type WorkflowAction = "continue" | "pause" | "disable";
 export const mayContinueProject = (workflow: WorkflowView) => !workflow.active
   && (!workflow.enabled || workflow.paused || workflow.suspended || ["blocked", "idle"].includes(workflow.phase));
-export function WorkflowControls({ workflow, disabled, pending, configure, openDecision, settings = false }: {
+export function WorkflowControls({ workflow, disabled, pending, configure, openDecision, settings = false, guided = false }: {
   workflow: WorkflowView; disabled: boolean; pending: boolean; configure: (action: WorkflowAction) => void;
-  openDecision?: (decision: WorkflowDecision) => void; settings?: boolean;
+  openDecision?: (decision: WorkflowDecision) => void; settings?: boolean; guided?: boolean;
 }) {
   const mayContinue = mayContinueProject(workflow);
   const relatedArtifacts = workflow.artifacts?.filter((item) => !workflow.decisions.some((decision) =>
@@ -22,7 +22,7 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
     <h3>{settings ? "Specification workflow (preview)" : `Specification workflow · ${workflowLabels[workflow.phase]}`}</h3>
     {settings ? <>
       <p>Let the app guide the next steps: review your saved answers, update requirements, check for conflicting choices and ask about missing details. It can record clear decisions from your answers; uncertain choices and existing proposals still need your decision.</p>
-      <p>This setting applies only to this project on this computer and starts turned off. You can still use the other tabs. Turning it on does not approve existing proposals, start coding, research the web, scan files or publish code changes.</p>
+      <p>{guided ? "Guided processing applies only to this project on this computer. Continue specification authorizes its bounded work; selecting the mode alone starts nothing." : "This setting applies only to this project on this computer and starts turned off."} You can still use the other tabs. Turning it on does not approve existing proposals, start coding, research the web, scan files or publish code changes.</p>
       <p>Each time you choose Continue specification, the app may ask your AI up to {workflow.limits.requests} times and work for up to {workflow.limits.durationMs / 60000} active minutes. This uses your AI plan’s usage. It may pause earlier if the next task needs more requests than remain. Answers and notes can continue work within the remaining limit; after restarting the app, choose Continue specification again.</p>
     </> : <>
       {!workflow.enabled && <p><strong>Continue specification lets the app guide your next steps.</strong> It reviews saved answers and checks requirements across all project areas. To run just one task instead, use More actions below.</p>}
@@ -34,7 +34,7 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
     </>}
     <div className="button-row">{mayContinue && <button className="primary" disabled={disabled} onClick={() => configure("continue")}>Continue specification</button>}
       {workflow.enabled && !workflow.paused && !workflow.suspended && <button className="secondary" disabled={pending} onClick={() => configure("pause")}>Pause specification workflow</button>}
-      {settings && workflow.enabled && <button className="quiet" disabled={pending} onClick={() => configure("disable")}>Use separate task settings</button>}
+      {settings && workflow.enabled && !guided && <button className="quiet" disabled={pending} onClick={() => configure("disable")}>Use separate task settings</button>}
     </div>
     {!settings && <>
       {workflow.lastRun && <section aria-label="Last specification run"><h4>Last specification run</h4>

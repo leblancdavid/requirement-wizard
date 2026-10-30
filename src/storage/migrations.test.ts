@@ -13,6 +13,77 @@ import { requirementFingerprint } from "../core/implementation.js";
 import type { Project } from "../core/model.js";
 import { randomUUID } from "node:crypto";
 
+test("11 to 12 Guided compatibility upgrade preserves policy rows, flags, grants, evidence and live leases byte-for-byte", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/guided-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const legacy = store.create("Old permissions", "Original decision", { providerID: "openai", modelID: "fixture" });
+    const manual = store.create("Manual remains manual", "Keep opt-outs", legacy.model);
+    const state = store.workflow(manual.id); state.enabled = true; state.grant = { id: "spent", used: 3, remainingMs: 12345, submissionIDs: [] };
+    store.saveWorkflow(manual.id, state); const maintenance = store.maintenance(manual.id); maintenance.enabled = true; store.saveMaintenance(manual.id, maintenance);
+    store.configureProcessingPolicy(manual.id, manual.revision, { version: 0, workflowVersion: 0, maintenanceVersion: 0, mode: "manual" });
+    store.enqueue(manual.id, { id: randomUUID(), auto: true, research: false, input: { type: "note", epicID: "inbox", text: "Preserve original automatic flag" } });
+    store.saveExecution(manual.id, emptyExecution()); store.close();
+    let db = new Database(path);
+    db.prepare("INSERT INTO execution_leases VALUES (?, ?, ?, ?)").run("fixture-repository", legacy.id, "other-worker", Date.now() + 60000);
+    db.exec("DELETE FROM migration_history WHERE version = 12; PRAGMA user_version = 11;");
+    const tables = ["projects", "revisions", "workflow_state", "maintenance_state", "processing_policy", "execution_state", "jobs", "submissions", "workflow_runs", "execution_leases"];
+    const before = tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()); db.close();
+    for (let i = 0; i < 2; i++) {
+      store = new ProjectStore(path);
+      assert.equal(store.processingPolicy(legacy.id).mode, "legacy"); assert.equal(store.processingPolicy(manual.id).mode, "manual");
+      assert.equal(store.workflow(manual.id).grant!.used, 3); assert.equal(store.queuePaused(manual.id), true);
+      store.close(); db = new Database(path);
+      assert.deepEqual(tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), before);
+      assert.equal(db.pragma("user_version", { simple: true }), 12);
+      assert.equal((db.prepare("SELECT COUNT(*) AS n FROM migration_history WHERE version = 12").get() as { n: number }).n, 1); db.close();
+    }
+    store = new ProjectStore(":memory:");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("11 to 12 rejects future consent without changing it, rolls back the boundary and retries safely", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/guided-rollback-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path), p = store.create("Future consent", "Keep original input", { providerID: "openai", modelID: "fixture" }); store.close();
+  try {
+    let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version = 12; PRAGMA user_version = 11;");
+    const future = JSON.stringify({ format: 999, version: 7, mode: "future-mode" });
+    db.prepare("INSERT INTO processing_policy VALUES (?, ?)").run(p.id, future); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path);
+    assert.equal(db.pragma("user_version", { simple: true }), 11);
+    assert.equal(db.prepare("SELECT * FROM migration_history WHERE version = 12").get(), undefined);
+    assert.deepEqual(db.prepare("SELECT payload FROM processing_policy").get(), { payload: future });
+    const unsupportedGuided = JSON.stringify({ format: 1, version: 7, mode: "guided" });
+    db.prepare("UPDATE processing_policy SET payload = ?").run(unsupportedGuided); db.close();
+    assert.throws(() => new ProjectStore(path), "A pre-boundary row cannot manufacture opt-in to a mode the old app never supported");
+    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 11);
+    assert.deepEqual(db.prepare("SELECT payload FROM processing_policy").get(), { payload: unsupportedGuided });
+    db.prepare("UPDATE processing_policy SET payload = ?").run(JSON.stringify({ format: 1, version: 7, mode: "manual" })); db.close();
+    const reopened = new ProjectStore(path); assert.deepEqual(reopened.get(p.id), p);
+    assert.equal(reopened.processingPolicy(p.id).mode, "manual"); assert.equal(reopened.processingPolicy(p.id).version, 7); reopened.close();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("Guided policy changes reject stale processes and block atomic standalone dispatch across store connections", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/guided-workers-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path); const other = new ProjectStore(path);
+  try {
+    const p = store.create("Guided cross-process", "Retain decisions", { providerID: "openai", modelID: "fixture" });
+    const input = { version: 0, workflowVersion: 0, maintenanceVersion: 0, mode: "guided" as const };
+    store.configureProcessingPolicy(p.id, p.revision, input);
+    assert.throws(() => other.configureProcessingPolicy(p.id, p.revision, { ...input, mode: "legacy" }), /permissions changed/);
+    assert.throws(() => other.beginJob(p.id, p.revision, undefined, false, undefined, true), /Guided processing/);
+    assert.equal(other.processingPolicy(p.id).mode, "guided"); assert.equal(other.jobs(p.id).length, 0);
+    store.close(); store = new ProjectStore(path);
+    assert.equal(store.processingPolicy(p.id).mode, "guided"); assert.equal(store.workflow(p.id).grant, undefined);
+    assert.equal(store.workflow(p.id).enabled, false); assert.equal(store.workflow(p.id).paused, true); assert.equal(store.queuePaused(p.id), true);
+    assert.deepEqual(store.get(p.id), p);
+  } finally { other.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("run receipt upgrade preserves original workflow, grants and evidence without inventing historical runs", () => {
   mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
   const directory = mkdtempSync(resolve(".reqwizit-state/tests/run-upgrade-")), path = join(directory, "state.sqlite");
@@ -22,12 +93,12 @@ test("run receipt upgrade preserves original workflow, grants and evidence witho
     const state = store.workflow(p.id); state.enabled = true; state.paused = true; state.phase = "blocked";
     state.grant = { id: "old-grant", used: 4, remainingMs: 3210, submissionIDs: [] }; store.saveWorkflow(p.id, state);
     const before = store.workflow(p.id), history = store.history(p.id); store.close();
-    let db = new Database(path); db.exec("DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version = 11; PRAGMA user_version = 10;"); db.close();
+    let db = new Database(path); db.exec("DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version >= 11; PRAGMA user_version = 10;"); db.close();
     for (let i = 0; i < 2; i++) {
       store = new ProjectStore(path); assert.deepEqual(store.workflow(p.id), before); assert.deepEqual(store.history(p.id), history);
       assert.deepEqual(store.get(p.id), p); assert.equal(store.latestWorkflowRun(p.id), null); store.close();
     }
-    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 11);
+    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.deepEqual(db.prepare("SELECT * FROM workflow_runs").all(), []); db.close(); store = new ProjectStore(":memory:");
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
@@ -76,7 +147,7 @@ test("future run formats stop startup unchanged; failed 10 to 11 conversion roll
     db.prepare("INSERT INTO workflow_runs VALUES (?, ?, ?)").run(p.id, runID, future); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
     assert.deepEqual(db.prepare("SELECT payload FROM workflow_runs").get(), { payload: future });
-    db.exec("DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version = 11; PRAGMA user_version = 10;");
+    db.exec("DROP TABLE workflow_runs; DELETE FROM migration_history WHERE version >= 11; PRAGMA user_version = 10;");
     const badPolicy = JSON.stringify({ format: 999, mode: "manual", version: 0 });
     db.prepare("INSERT INTO processing_policy VALUES (?, ?)").run(p.id, badPolicy); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);

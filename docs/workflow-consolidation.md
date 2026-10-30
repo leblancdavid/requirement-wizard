@@ -274,9 +274,23 @@ queue/workflow/maintenance without rewriting input flags, original opt-ins, gran
 spent attempts. Explicit saved-response processing captures a finite set; coordinated
 continuation includes only its starting responses and disarms at its next decision/pause.
 Mode changes validate revision and all settings versions and refuse active workers.
-Returning to legacy does not resume anything. No policy is exported. This is not the
-full merged automatic-consent policy; automatic modes and broader cross-operation
-receipts remain future work. See [migration ledger](migrations.md#project-local-manual-processing-2026-10-29).
+Returning to legacy does not resume anything. No policy is exported. See
+[migration ledger](migrations.md#project-local-manual-processing-2026-10-29).
+
+**Implemented Guided consent slice:** SQLite 11→12 recognizes the additional explicit
+`guided` mode in the compatible format-1 policy. It routes eligible new responses and
+automatic definition follow-up exclusively through the existing coordinator's explicit
+bounded allowance, never independent automatic workers. Selecting it grants/starts
+nothing and preserves the original coordinator enabled flag; the UI projects its
+effective coordinated state until Continue explicitly opts in. Existing save-only
+input still needs explicit permission, later eligible input can use only remaining
+live-session allowance, and Stop/restart/limits never renew it. All mode transitions
+pause queue/workflow/maintenance, retain original opt-ins/grants/spend and CAS-check
+settings. Upgrades preserve legacy/manual rows unchanged and never opt into Guided.
+Explicit scoped tasks, research/scans and implementation permissions stay separate.
+This completes the bounded Manual/Guided/compatibility choice, not unrestricted
+automation, finding-level incremental rechecks, explicit reused-check provenance or
+broader cross-operation receipts. See [processing permissions](processing-permissions.md).
 
 Implementation preparation is now a separate visible group containing the existing
 Check progress, Prepare plan, Check options, plan review and execution settings.
@@ -303,6 +317,18 @@ keyboard access, saved-work explanations, save-only/manual/automatic modes, rest
 consent, and specification-to-planning-to-coding boundaries.
 
 ## Phase 4 — Safely reduce rechecking
+
+**Implemented first foundation:** explicit **Overall progress → Inspect changes
+since a definition review** compares finding citation/link closures against one
+verified original snapshot and the full conservative area context. It distinguishes
+changed links, wider-context changes with unchanged links, identical full inputs and
+unknown provenance. A format-1 advisory response carries counts and version/content
+binding, not copied evidence or persisted dependency certificates. Bounds, stale
+requests, missing originals and same-numbered adoption are explicit. No coverage,
+assessment fingerprint, saved work or consent is rewritten, and no finding is skipped
+based on citations. Whole-area review remains the fallback. See [design/limits](definition-finding-impact.md).
+Automatic finding-level reuse, exhaustive dependency manifests, actual request reduction
+and live quality/performance qualification remain unfinished.
 
 Introduce versioned finding-level dependency tracking and incremental review only
 where reuse can be established. Fall back to whole-area evidence review when uncertain.

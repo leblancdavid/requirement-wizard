@@ -11,6 +11,8 @@ export function issueSummary(detail: string, fallback = "The app couldn’t fini
     "This project already has an active discovery job.": "A review is already running for this project. Wait for it to finish, or stop it in Processing & queue.",
     "Reqwizit is shutting down.": "Reqwizit is closing. Reopen the app to continue.",
     "Processing permissions changed. Refresh before choosing a mode.": "Processing permissions changed elsewhere. Review the current settings and choose your mode again; no permission was changed.",
+    "Guided processing is selected. Choose another processing mode before using separate task settings.": "Guided processing is selected. Choose Manual processing or Keep existing permissions before using separate task settings. No permission was changed.",
+    "Guided processing uses Continue specification for definition follow-up within its shared allowance. Separate automatic maintenance is held.": "Guided processing uses Continue specification for definition follow-up. Separate automatic updates are held; no additional allowance was granted.",
     "Stop or finish active work before changing processing mode. No permission was changed.": "Stop or finish the current task before changing processing mode. No permission was changed.",
     "Stop or finish active work before changing processing mode. Workers and leases were not changed.": "Stop or finish the current task before changing processing mode. No work or permission was changed.",
     "Project changed. Refresh it before retrying; no newer decisions were overwritten.": "The project changed before this action could finish. Review the latest information before trying again; newer decisions were not overwritten.",

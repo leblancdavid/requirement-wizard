@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve, sep, join } from "node:path";
 import { defaultDataDirectory } from "../storage/paths.js";
@@ -48,15 +48,17 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
   const workflow = new ProjectWorkflow(options.store, options.adapter);
   const implementation = new ImplementationService(options.store, options.executionAdapter);
   const snapshotEncoder = new SnapshotEncoder();
-  // Revision payloads are immutable. Bound this cache across projects/history reads.
-  const revisionSnapshots = new Map<string, { project: ReturnType<ProjectStore["get"]>; coverage: ReturnType<typeof coverage> }>();
+  // Portable adoption can replace equal-numbered local history. Reuse computed
+  // coverage only when the actual projected project payload still matches.
+  const revisionSnapshots = new Map<string, { project: ReturnType<ProjectStore["get"]>; coverage: ReturnType<typeof coverage>; fingerprint: string }>();
   function revisionSnapshot(project: ReturnType<ProjectStore["get"]>) {
     const key = `${project.id}:${project.revision}`;
+    const fingerprint = createHash("sha256").update(JSON.stringify(project)).digest("hex");
     let cached = revisionSnapshots.get(key);
-    if (!cached) cached = { project, coverage: coverage(project) };
+    if (!cached || cached.fingerprint !== fingerprint) cached = { project, coverage: coverage(project), fingerprint };
     revisionSnapshots.delete(key); revisionSnapshots.set(key, cached);
     if (revisionSnapshots.size > 16) revisionSnapshots.delete(revisionSnapshots.keys().next().value!);
-    return cached;
+    return { project: cached.project, coverage: cached.coverage };
   }
   const helpWork = new Map<string, { controller: AbortController; promise: Promise<unknown> }>();
   const root = resolve(options.staticDir ?? "dist/web");
@@ -183,8 +185,15 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       const route = /^\/api\/projects\/([^/]+)(?:\/([a-z-]+))?$/.exec(url.pathname);
       if (!route?.[1]) { json(res, 404, { error: "Route not found." }); return; }
       const id = decodeURIComponent(route[1]);
-      const project = options.store.get(id);
       const action = route[2];
+      // Explicit bounded inspection must not first trigger get's legacy history
+      // projection. The common token/host/origin/body guards still apply.
+      if (action === "definition-impact") {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        const input = z.object({ revision, epicID: z.string().min(1).max(500) }).strict().parse(await body(req));
+        json(res, 200, options.store.definitionImpact(id, input.revision, input.epicID)); return;
+      }
+      const project = options.store.get(id);
       if (req.method === "GET" && !action) {
         const rawTokens = req.headers["x-reqwizit-snapshot"];
         if (rawTokens !== undefined && typeof rawTokens !== "string") throw new Error("Invalid snapshot tokens.");

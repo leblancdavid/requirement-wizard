@@ -39,6 +39,16 @@ implemented under `src/`. See [decisions.md](decisions.md),
   and Manual coordination disarms at its next decision/pause. No portable or evidence
   identity changes. See [migration ledger](migrations.md#project-local-manual-processing-2026-10-29).
 
+  SQLite 12 additionally recognizes explicit `guided` consent in format-1 policy,
+  without rewriting compatible old rows or defaulting anyone into it. Guided projects
+  new response eligibility into the existing coordinator, holding both independent
+  automatic workers at SQL selection and atomic job creation. Selecting it arms no
+  worker and grants no allowance; Continue owns the existing bounded authority.
+  View-level coordinated enablement does not overwrite the original enabled flag.
+  Separate maintenance/disable actions cannot bypass Guided. All actual mode switches
+  pause the three workers and advance settings CAS without renewing grants. See
+  [processing permissions](processing-permissions.md) and [compatibility](migrations.md#guided-processing-consent-2026-10-29).
+
 - `src/core/workflow-run.ts` and `src/storage/workflow-runs.ts` provide format-1 local
   receipts for each coordinator worker pass. SQLite 11 adds `workflow_runs`, without
   rewriting workflow grants or historical evidence. Claim/start and request reservation/
@@ -50,6 +60,18 @@ implemented under `src/`. See [decisions.md](decisions.md),
   and the queue UI; current follow-through remains separately revision-labelled.
   These reports neither schedule calls nor define freshness/approval/readiness. See
   [compatibility](migrations.md#bounded-specification-run-receipts-2026-10-29).
+
+- `src/core/definition-impact.ts` and `src/storage/definition-impact.ts` implement
+  advisory finding-level input comparisons, not new assessment freshness/reuse gates.
+  An explicit bounded read verifies one original snapshot and compares citation link
+  closures alongside the conservative whole-area context. Unchanged links with
+  changed context stay unproven; invalid/missing/bounded provenance stays unknown.
+  The strict authenticated `definition-impact` POST runs before general get's lazy
+  basis projection to enforce read bounds. `src/ui/definition-impact.tsx` fetches only
+  on explicit Compare, binds reports to version/content and keeps dated results
+  separate. The browser snapshot coverage cache also checks projected content, not
+  just revision, to handle equal-numbered adoption. These view-only tokens never
+  change persisted assessment identities or permissions. See [finding impact](definition-finding-impact.md).
 
 - `src/core/follow-through.ts` projects definition review work from existing coverage
   freshness without another scheduler or persisted identity. The coordinator repairs

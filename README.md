@@ -36,8 +36,14 @@ Processing permissions** explains coordinated work versus the retained, separate
 saved-input and automatic-definition settings. Its project-local **Manual processing**
 mode holds automatic follow-up without erasing those permissions; explicit tasks remain
 available, and returning to existing permissions leaves work paused.
+**Guided processing** routes new responses and definition follow-up through the shared
+bounded allowance from **Continue specification**, holding separate automatic workers.
+Saving a mode starts no work. See [processing permissions](docs/processing-permissions.md).
 Processing & queue also shows a dated **Last specification run** receipt across the
 run's steps, separate from today's pending work and the latest individual change.
+**Overall progress → Inspect changes since a definition review** compares saved inputs
+without AI calls. Unchanged citations do not justify skipping a whole-area review;
+see [finding impact](docs/definition-finding-impact.md).
 In Implement, **Prepare implementation** groups code checks, plan review and setup;
 **Build and verify** keeps Start/Resume implementation and Verify delivery separate.
 Viewing preparation does not run checks, call the model or start coding.

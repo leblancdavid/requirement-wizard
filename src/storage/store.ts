@@ -6,6 +6,8 @@ import { previewAssessmentHistory, selectedHistoricalAssessment } from "./assess
 import type { AssessmentHistorySelection } from "../core/assessment-history.js";
 import { readMaintenance, saveMaintenance } from "./maintenance.js";
 import { readProcessingPolicy } from "./processing-policy.js";
+import { inspectDefinitionImpact } from "./definition-impact.js";
+import { definitionImpactLimits } from "../core/definition-impact.js";
 import { processingPolicyChangeSchema, type ProcessingPolicyChange } from "../core/processing-policy.js";
 import type { MaintenanceState } from "../core/maintenance.js";
 import { readWorkflow, saveWorkflow, claimWorkflow, releaseWorkflow, workflowBusy, workflowReadinessHistory } from "./workflow.js";
@@ -216,6 +218,20 @@ export class ProjectStore {
   latestWorkflowRun(id: string) { this.projectRevision(id); return latestWorkflowRun(this.db, id, this.workflow(id)); }
   releaseWorkflow(id: string, owner: string) { this.projectRevision(id); return releaseWorkflow(this.db, id, owner); }
   processingPolicy(id: string) { this.projectRevision(id); return readProcessingPolicy(this.db, id); }
+  definitionImpact(id: string, revision: number, epicID: string) {
+    return this.db.transaction(() => {
+      // Do not use get's legacy-basis projection here: it may follow historical
+      // snapshots before this explicit inspector can enforce its read bounds.
+      const row = this.db.prepare(`SELECT revision, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload
+        FROM projects WHERE id = ?`).get(definitionImpactLimits.snapshotBytes, id) as { revision: number; payload: string | null } | undefined;
+      if (!row) throw new Error("Project or revision not found.");
+      if (row.revision !== revision) throw new StaleRevisionError();
+      if (!row.payload) throw new Error("The current project exceeds local impact inspection limits. Saved work was not changed.");
+      const project = projectSchema.parse(JSON.parse(row.payload));
+      if (project.id !== id || project.revision !== revision) throw new Error("Project snapshot identity is inconsistent. Saved work was not changed.");
+      return inspectDefinitionImpact(this.db, project, epicID);
+    })();
+  }
   configureProcessingPolicy(id: string, revision: number, raw: ProcessingPolicyChange) {
     const input = processingPolicyChangeSchema.parse(raw);
     return this.db.transaction(() => {
@@ -231,12 +247,12 @@ export class ProjectStore {
       // A mode switch never resumes retained automatic input permissions, even
       // after an explicit Manual task temporarily opened the queue.
       this.pauseQueue(id, true);
-      if (input.mode === "manual") {
-        workflow.paused = true; workflow.phase = "paused";
-        workflow.message = "Manual processing is on. Use an explicit task or Continue specification; no allowance was renewed.";
-        workflow.settingsVersion++; this.saveWorkflow(id, workflow);
-        maintenance.paused = true; maintenance.settingsVersion++; this.saveMaintenance(id, maintenance);
-      }
+      workflow.paused = true; workflow.phase = "paused";
+      workflow.message = input.mode === "manual" ? "Manual processing is on. Use an explicit task or Continue specification; no allowance was renewed."
+        : input.mode === "guided" ? "Guided processing is selected. Continue specification explicitly to authorize a bounded allowance. No work was started or allowance renewed."
+          : "Existing processing permissions are selected. Work remains paused; resume the intended task explicitly. No allowance was renewed.";
+      workflow.settingsVersion++; this.saveWorkflow(id, workflow);
+      maintenance.paused = true; maintenance.settingsVersion++; this.saveMaintenance(id, maintenance);
       const next = { ...current, version: current.version + 1, mode: input.mode };
       this.db.prepare("INSERT INTO processing_policy VALUES (?, ?) ON CONFLICT(project_id) DO UPDATE SET payload = excluded.payload").run(id, JSON.stringify(next));
       return next;
@@ -563,7 +579,7 @@ export class ProjectStore {
     return (this.db.prepare(`SELECT DISTINCT s.project_id FROM submissions s
       LEFT JOIN queue_state q ON q.project_id = s.project_id
       LEFT JOIN processing_policy p ON p.project_id = s.project_id
-      WHERE COALESCE(q.paused, 0) = 0 AND COALESCE(json_extract(p.payload, '$.mode'), 'legacy') != 'manual' AND json_extract(s.payload, '$.auto') = 1
+      WHERE COALESCE(q.paused, 0) = 0 AND COALESCE(json_extract(p.payload, '$.mode'), 'legacy') = 'legacy' AND json_extract(s.payload, '$.auto') = 1
         AND json_extract(s.payload, '$.status') IN ('queued', 'saved')`).all() as { project_id: string }[])
       .map((row) => row.project_id);
   }
@@ -1030,7 +1046,11 @@ export class ProjectStore {
 
   beginJob(id: string, revision: number, helpRequest?: QuestionHelpRequest, scan = false, workflowOwner?: string, automatic = false): { project: Project; job: Job } {
     return this.db.transaction(() => {
-      if (automatic && this.processingPolicy(id).mode === "manual") throw new OperationConflictError("Manual processing is on. Start this task explicitly; no automatic model request was authorized.");
+      if (automatic) {
+        const mode = this.processingPolicy(id).mode;
+        if (mode === "manual") throw new OperationConflictError("Manual processing is on. Start this task explicitly; no automatic model request was authorized.");
+        if (mode === "guided") throw new OperationConflictError("Guided processing is selected. Continue specification for a bounded coordinated run; no standalone automatic model request was authorized.");
+      }
       this.recoverExpiredJobs();
       const project = this.get(id);
       if (project.revision !== revision) throw new StaleRevisionError();

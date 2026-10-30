@@ -60,16 +60,17 @@ export class ProjectWorkflow {
     const decisions = workflowDecisions(project, submissions);
     const outcome = followThroughOutcome({ project, submissions, definitions, artifacts, active, decisions, blocked: state.phase === "blocked",
       change: this.store.latestSpecificationChange(id, project.revision), specificationChecked: readiness.specificationChecked, readyToImplement: readiness.readyToImplement });
-    const suspended = state.enabled && !this.armed.has(id);
+    const guided = this.store.processingPolicy(id).mode === "guided", enabled = state.enabled || guided;
+    const suspended = enabled && !this.armed.has(id);
     const changed = state.phase === "ready-to-plan" && !readiness.specificationChecked;
     const remainingMs = state.grant && Math.max(0, state.grant.remainingMs - (state.owner && state.leaseUntil
       ? Math.max(0, Date.now() - (state.leaseUntil - 360000)) : 0));
-    return { version: state.settingsVersion, enabled: state.enabled, paused: state.paused, suspended,
+    return { version: state.settingsVersion, enabled, paused: state.paused, suspended,
       phase: !state.enabled && state.phase === "idle" ? "idle" : suspended ? "paused" : state.phase === "blocked" ? "blocked" : state.paused ? "paused" : readiness.readyToImplement ? "ready-to-implement" : changed ? "working" : state.phase,
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
       current: state.current && { kind: state.current.kind, target: state.current.target },
       grant: state.grant && { used: state.grant.used, remainingMs: remainingMs! }, limits: workflowLimits,
-      decisions: state.enabled ? decisions : [], readiness, active, outcome,
+      decisions: enabled ? decisions : [], readiness, active, outcome,
       definitionReviews: definitions.map((area) => ({ ...area,
         title: project.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID })),
       artifacts, lastRun: this.store.latestWorkflowRun(id) };
@@ -77,6 +78,7 @@ export class ProjectWorkflow {
   configure(id: string, revision: number, version: number, action: "continue" | "pause" | "disable") {
     let state = this.store.workflow(id);
     if (state.settingsVersion !== version) throw new OperationConflictError("Project workflow settings changed. Refresh before continuing.");
+    if (action === "disable" && this.store.processingPolicy(id).mode === "guided") throw new OperationConflictError("Guided processing is selected. Choose another processing mode before using separate task settings.");
     if (action === "continue") {
       if (this.closing || this.active(id) || this.store.discoveryActive(id)) throw new OperationConflictError("Wait for the active task before continuing the project.");
       this.store.assertNoExecution(id);

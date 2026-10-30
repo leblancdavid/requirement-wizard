@@ -32,12 +32,12 @@ export function MaintenanceQueue({ project, maintenance, disabled, pending, conf
   const paused = maintenance.paused || maintenance.suspended;
   return <section className="maintenance-queue" aria-label="Automatic maintenance work">
     <h3>Automatic definition updates</h3>
-    <p role="status">{maintenance.manualHold ? "Manual processing holds automatic definition updates for this project. Saved checks and opt-ins are retained." : !maintenance.enabled ? "Automatic updates are off." : paused ? "Automatic updates are paused. Saved checks are retained." : tasks.length ? "Definition updates are queued or running." : "No definition updates are queued."}</p>
-    {maintenance.enabled && !maintenance.manualHold && <div className="button-row">{paused
+    <p role="status">{maintenance.guidedHold ? "Guided processing holds separate automatic definition updates. Continue specification for follow-up within its shared allowance." : maintenance.manualHold ? "Manual processing holds automatic definition updates for this project. Saved checks and opt-ins are retained." : !maintenance.enabled ? "Automatic updates are off." : paused ? "Automatic updates are paused. Saved checks are retained." : tasks.length ? "Definition updates are queued or running." : "No definition updates are queued."}</p>
+    {maintenance.enabled && !maintenance.manualHold && !maintenance.guidedHold && <div className="button-row">{paused
       ? <button className="secondary" disabled={disabled} onClick={() => configure("resume")}>Resume automatic maintenance</button>
       : <button className="secondary" disabled={pending} onClick={() => configure("pause")}>Pause automatic updates</button>}</div>}
     {maintenance.enabled && <p>Pause prevents the next check from starting; the current task can finish. Use Stop on that task to stop it now. Resume allows another limited round of checks but does not fix problems that still need attention.</p>}
-    {maintenance.manualHold ? <p>Use Refresh definition coverage explicitly, or review Processing permissions before enabling automatic work.</p> : maintenance.enabled && maintenance.suspended && <p>Choose Resume automatic maintenance to allow AI checks after restarting the app.</p>}
+    {maintenance.manualHold || maintenance.guidedHold ? <p>Use Refresh definition coverage explicitly, or review Processing permissions before enabling separate automatic work.</p> : maintenance.enabled && maintenance.suspended && <p>Choose Resume automatic maintenance to allow AI checks after restarting the app.</p>}
     <p>Each round can use up to {maintenance.limits.requests} AI requests, {maintenance.limits.durationMs / 60000} minutes and {maintenance.limits.areas} areas. Saved answers are reviewed first.</p>
     <p>Completed rounds automatically prepare Design questions for unresolved choices using additional AI requests. Use Stop to pause question preparation; completed steps are saved.</p>
     {tasks.length > 0 && <ul>{tasks.map(([id, task]) => <li key={id}><strong>{project.epics.find((e) => e.id === id)?.title ?? id}</strong> · {task.state === "queued" ? "Definition update queued" : task.state}

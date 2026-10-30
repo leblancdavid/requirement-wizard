@@ -74,7 +74,28 @@ The machine-local policy is not exported. See [upgrade compatibility](migrations
 Focused deterministic browser check: `npm run test:browser:processing` (including
 stale settings, reload, save-only input, retained preference and mobile layout).
 
+**Guided processing** additionally offers a unified bounded specification mode.
+New responses are eligible for coordination even when the separate browser preference
+is off; older saved-only flags stay unchanged. Saving the mode starts no requests or
+new allowance. **Continue specification** explicitly authorizes its shared eight-request/
+five-active-minute limit. Later eligible responses can resume only the remainder in
+that app session. Separate automatic response/maintenance workers stay held; Stop,
+limits and restart require continuation. Mode switches pause all three workers without
+erasing grants or original opt-ins. Explicit scoped tasks keep their own scope/limits,
+and research/scans/planning/coding/delivery remain separate. The processing browser
+command now runs both Manual and Guided checks. See [mode guidance](processing-permissions.md).
+
 ## Saved outcome and next step (2026-10-29)
+
+**Overall progress → Inspect changes since a definition review** adds an explicit
+read-only finding comparison. Choose an area and **Compare saved inputs**; opening or
+selecting starts no request. It separates changed linked records from wider-context
+changes with unchanged citations. The latter never establishes independence: any
+needed recheck still follows existing whole-area rules. Missing/mismatched/oversized
+history stays unknown, not current. Original scores, findings, evidence and allowance
+are unchanged. Results are version/content bound, including equal-numbered adoption;
+polling only dates retained results, never replays inspection. See [finding impact](definition-finding-impact.md)
+and `npm run test:browser:definition-impact` for bounds and focused verification.
 
 **Processing & queue → Project workflow → Last specification run** now adds a durable
 summary across all steps of the latest bounded coordinator worker pass, not just the

@@ -10,7 +10,7 @@ import { recoveryRevisionSchema } from "../core/implementation-revisions.js";
 import { processingPolicySchema } from "../core/processing-policy.js";
 import { workflowRunSchema } from "../core/workflow-run.js";
 
-export const databaseSchemaVersion = 11;
+export const databaseSchemaVersion = 12;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -137,6 +137,12 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 11, name: "bounded-specification-run-receipts-v1", apply(db: Database.Database) {
   db.exec(`CREATE TABLE workflow_runs (project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT NOT NULL, payload TEXT NOT NULL,
     PRIMARY KEY(project_id, run_id)); CREATE INDEX workflow_runs_project ON workflow_runs(project_id);`);
+} }, { version: 12, name: "guided-processing-consent-v1", apply(db: Database.Database) {
+  // Compatibility boundary for the additional opt-in Guided mode. Existing
+  // format-1 legacy/manual rows, grants and receipts are already compatible and
+  // remain byte-for-byte unchanged; upgrade never selects or starts this mode.
+  const previousPolicy = processingPolicySchema.extend({ mode: z.enum(["legacy", "manual"]) });
+  for (const row of db.prepare("SELECT payload FROM processing_policy").all() as { payload: string }[]) previousPolicy.parse(JSON.parse(row.payload));
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

@@ -20,7 +20,7 @@ import { workflowRunChanges, workflowRunSchema } from "../core/workflow-run.js";
 import { proposeRefinements } from "../core/refinement.js";
 
 const empty = (): Analysis => ({ summary: "Checked existing decisions", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
-function mode(store: ProjectStore, id: string, next: "manual" | "legacy") {
+function mode(store: ProjectStore, id: string, next: "manual" | "legacy" | "guided") {
   return store.configureProcessingPolicy(id, store.projectRevision(id), { mode: next, version: store.processingPolicy(id).version,
     workflowVersion: store.workflow(id).settingsVersion, maintenanceVersion: store.maintenance(id).settingsVersion });
 }
@@ -29,6 +29,7 @@ test("Manual policy strictly narrows automatic input routing without changing co
   for (const browser of [true, false]) for (const workflow of [true, false]) {
     assert.equal(automaticInputPermission(undefined, browser, workflow), browser || workflow);
     assert.equal(automaticInputPermission({ format: 1, version: 0, mode: "manual" }, browser, workflow), false);
+    assert.equal(automaticInputPermission({ format: 1, version: 0, mode: "guided" }, browser, workflow), true);
   }
   assert.throws(() => processingPolicySchema.parse({ format: 2, version: 0, mode: "manual" }));
   assert.throws(() => processingPolicySchema.parse({ format: 1, version: 0, mode: "automatic" }));
@@ -85,6 +86,51 @@ test("policy does not stop pending workers", () => {
   } finally { store.close(); }
 });
 
+test("Guided mode preserves original settings, grant and evidence while holding both independent workers", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const service = new DiscoveryService(store, { async analyze() { calls++; return empty(); } }), queue = new DiscoveryQueue(service);
+  const workflow = new ProjectWorkflow(store, { async analyze() { calls++; return empty(); } });
+  try {
+    const p = seed(store), other = seed(store);
+    queue.configureMaintenance(p.id, 0, "enable");
+    const state = store.workflow(p.id); state.grant = { id: "old-spend", used: 3, remainingMs: 12345, submissionIDs: [] };
+    store.saveWorkflow(p.id, state);
+    const original = { project: store.get(p.id), jobs: store.jobs(p.id), execution: store.execution(p.id), grant: store.workflow(p.id).grant,
+      maintenance: store.maintenance(p.id), workflowEnabled: store.workflow(p.id).enabled };
+    mode(store, p.id, "guided");
+    assert.equal(calls, 0); assert.equal(store.workflow(p.id).enabled, original.workflowEnabled);
+    assert.deepEqual(store.workflow(p.id).grant, original.grant); assert.equal(workflow.view(p.id).enabled, true);
+    assert.equal(workflow.view(p.id).suspended, true); assert.equal(workflow.view(p.id).paused, true);
+    assert.equal(store.maintenance(p.id).enabled, original.maintenance.enabled); assert.deepEqual(store.maintenance(p.id).tasks, original.maintenance.tasks);
+    const input = queue.submit(p.id, { id: randomUUID(), auto: true, research: false, input: { type: "note", epicID: "reports", text: "Eligible only within coordinator authority" } });
+    assert.equal(queue.isActive(p.id), false); assert.equal(input.auto, true);
+    store.pauseQueue(p.id, false); assert.ok(!store.automaticQueueProjects().includes(p.id));
+    queue.maintain(p.id, Date.now() + 60000); workflow.tick(p.id); await workflow.wait(p.id);
+    assert.equal(calls, 0); assert.equal(queue.maintenanceView(p.id).guidedHold, true);
+    assert.throws(() => queue.configureMaintenance(p.id, store.maintenance(p.id).settingsVersion, "resume"), /Guided processing/);
+    assert.throws(() => workflow.configure(p.id, p.revision, workflow.view(p.id).version, "disable"), /Choose another processing mode/);
+    assert.throws(() => store.beginJob(p.id, p.revision, undefined, false, undefined, true), /Guided processing/);
+    await assert.rejects(service.analyze(p.id, p.revision, { automatic: true, research: false }), /Guided processing/);
+    assert.deepEqual(store.get(p.id), original.project); assert.deepEqual(store.jobs(p.id), original.jobs);
+    assert.deepEqual(store.execution(p.id), original.execution); assert.equal(store.processingPolicy(other.id).mode, "legacy");
+    assert.deepEqual(store.workflow(p.id).grant, original.grant); assert.equal(calls, 0);
+    mode(store, p.id, "legacy"); assert.equal(store.workflow(p.id).enabled, original.workflowEnabled);
+    assert.equal(store.queuePaused(p.id), true); assert.equal(store.workflow(p.id).paused, true); assert.equal(store.maintenance(p.id).paused, true);
+    assert.deepEqual(store.workflow(p.id).grant, original.grant);
+  } finally { await workflow.close(); await queue.close(); store.close(); }
+});
+
+test("Guided mode still permits explicit scoped work without starting independent automatic follow-up", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  try {
+    const p = seed(store); mode(store, p.id, "guided");
+    const service = new DiscoveryService(store, { async analyze() { calls++; return empty(); } });
+    assert.equal((await service.analyze(p.id, p.revision, { research: false })).status, "completed");
+    assert.equal(calls, 1); assert.equal(store.workflow(p.id).grant, undefined);
+    assert.equal(store.queuePaused(p.id), true); assert.equal(store.workflow(p.id).paused, true);
+  } finally { store.close(); }
+});
+
 test("Manual policy blocks automatic service and atomic job entry but permits explicit discovery", async () => {
   const store = new ProjectStore(":memory:"); let calls = 0;
   try {
@@ -97,9 +143,9 @@ test("Manual policy blocks automatic service and atomic job entry but permits ex
   } finally { store.close(); }
 });
 
-test("Manual explicit processing captures a finite input set and restores pause after completion", async () => {
+for (const selected of ["manual", "guided"] as const) test(`${selected} explicit processing captures a finite input set and restores pause after completion`, async () => {
   const store = new ProjectStore(":memory:"); let calls = 0, lateID = "";
-  const p = seed(store); mode(store, p.id, "manual");
+  const p = seed(store); mode(store, p.id, selected);
   const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() {
     calls++; lateID = queue.submit(p.id, { id: randomUUID(), input: { type: "note", text: "Arrived after explicit start", epicID: "reports" }, auto: true, research: false }).id;
     return empty();
@@ -108,7 +154,7 @@ test("Manual explicit processing captures a finite input set and restores pause 
     const outside = queue.submit(p.id, { id: randomUUID(), input: { type: "note", text: "Outside selected feature", epicID: "inbox" }, auto: true, research: false });
     const first = queue.submit(p.id, { id: randomUUID(), input: { type: "note", text: "Explicit saved response", epicID: "reports" }, auto: true, research: false });
     assert.equal(calls, 0); assert.equal(queue.isActive(p.id), false);
-    assert.throws(() => queue.configureMaintenance(p.id, store.maintenance(p.id).settingsVersion, "enable"), /Manual processing/);
+    assert.throws(() => queue.configureMaintenance(p.id, store.maintenance(p.id).settingsVersion, "enable"), /processing/);
     queue.resume(p.id, { processOnly: true, focusEpicID: "reports", research: false });
     for (let i = 0; i < 200 && queue.isActive(p.id); i++) await new Promise((r) => setTimeout(r, 10));
     assert.equal(queue.isActive(p.id), false); assert.equal(calls, 1);
@@ -465,6 +511,76 @@ test("idea questions and explicit answers flow through existing faithful specifi
     const requirement = store.get(p.id).requirements[0]!; assert.equal(requirement.status, "accepted"); assert.equal(requirement.authority!.kind, "answer-derived");
     assert.equal(store.get(p.id).sources.some((s) => s.kind === "confirmation"), false, "No manufactured human approval");
     assert.equal(store.execution(p.id).run, undefined);
+  } finally { await workflow.close(); await queue.close(); store.close(); }
+});
+
+for (const automatic of [true, false]) test(`Guided responses with auto=${automatic} respect the live shared allowance and explicit saved-only consent`, async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const adapter: DiscoveryAdapter = { async analyze(p, options) {
+    calls++;
+    if (!p.questions.length) return { ...empty(), questions: [{ epicID: "inbox", text: "Should reports work offline?", whyItMatters: "Connectivity is a product decision",
+      options: [{ label: "Offline", consequence: "Save without connectivity" }, { label: "Online", consequence: "Require connectivity" }] }] };
+    if (options.context.manifest.submissionIDs?.length) {
+      const source = p.sources.at(-1)!;
+      return { ...empty(), requirements: [{ localID: "new:offline", epicID: "inbox", statement: "Save reports offline", rationale: "Explicit answer", acceptance: ["A report saves without a connection"], sourceIDs: [source.id] }],
+        specificationUpdates: { format: 1, changes: [{ type: "activate", requirementID: "new:offline", sourceIDs: [source.id], reason: "Faithfully records the offline answer" }] } };
+    }
+    return checks([]).analyze(p, options);
+  } };
+  const workflow = new ProjectWorkflow(store, adapter), queue = new DiscoveryQueue(new DiscoveryService(store, adapter));
+  try {
+    const p = store.create("Guided shared authority", "Save reports", { providerID: "openai", modelID: "fixture" }); mode(store, p.id, "guided");
+    assert.equal(store.workflow(p.id).grant, undefined); assert.equal(calls, 0);
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.equal(calls, 1); assert.equal(store.workflow(p.id).phase, "needs-decision"); assert.equal(store.workflow(p.id).paused, false);
+    const firstGrant = store.workflow(p.id).grant!, question = store.get(p.id).questions[0]!;
+    const item = queue.submit(p.id, { id: randomUUID(), auto: automatic, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: null,
+      answer: { kind: "answer", text: "Reports must save offline" } } });
+    assert.equal(calls, 1, "Saving cannot launch an independent worker");
+    workflow.tick(p.id); await workflow.wait(p.id);
+    if (!automatic) {
+      assert.equal(calls, 1); assert.equal(store.workflow(p.id).paused, true);
+      assert.equal(store.submissions(p.id).find((s) => s.id === item.id)!.status, "queued");
+      assert.equal(store.workflow(p.id).grant!.id, firstGrant.id); assert.equal(store.workflow(p.id).grant!.used, firstGrant.used);
+      assert.deepEqual(store.workflow(p.id).grant!.submissionIDs, firstGrant.submissionIDs);
+      assert.ok(store.workflow(p.id).grant!.remainingMs <= firstGrant.remainingMs, "Checking saved-only permission may spend active time but cannot renew it");
+      grant(workflow, store, p.id); await workflow.wait(p.id);
+    } else assert.equal(store.workflow(p.id).grant!.id, firstGrant.id, "A decision wake-up cannot renew its allowance");
+    assert.equal(store.submissions(p.id).find((s) => s.id === item.id)!.status, "completed");
+    assert.equal(store.submissions(p.id).find((s) => s.id === item.id)!.auto, automatic, "Original input permission is never rewritten");
+    assert.equal(store.get(p.id).requirements[0]!.status, "accepted");
+    assert.ok(store.workflow(p.id).grant!.used <= workflowLimits.requests);
+    assert.equal(store.latestWorkflowRun(p.id)!.requests + store.latestWorkflowRun(p.id)!.initialUsed, store.workflow(p.id).grant!.used);
+    assert.equal(store.execution(p.id).run, undefined); assert.equal(store.execution(p.id).planning, undefined);
+    workflow.stop(p.id); const stoppedGrant = store.workflow(p.id).grant!, before = calls;
+    queue.submit(p.id, { id: randomUUID(), auto: true, research: false, input: { type: "note", epicID: "inbox", text: "Retain after Stop" } });
+    workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls, before); assert.deepEqual(store.workflow(p.id).grant, stoppedGrant);
+    mode(store, p.id, "legacy"); workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls, before);
+    assert.equal(store.queuePaused(p.id), true); assert.equal(store.maintenance(p.id).paused, true);
+  } finally { await workflow.close(); await queue.close(); store.close(); }
+});
+
+test("Guided selection and queued automatic responses do not renew or restart work after process restart", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const adapter: DiscoveryAdapter = { async analyze(p) {
+    calls++; return p.questions.length ? empty() : { ...empty(), questions: [{ epicID: "inbox", text: "Should reports work offline?", whyItMatters: "Connectivity is a choice",
+      options: [{ label: "Offline", consequence: "Save without connectivity" }, { label: "Online", consequence: "Require connectivity" }] }] };
+  } };
+  let workflow = new ProjectWorkflow(store, adapter), queue = new DiscoveryQueue(new DiscoveryService(store, adapter));
+  try {
+    const p = store.create("Guided restart", "Save reports", { providerID: "openai", modelID: "fixture" }); mode(store, p.id, "guided");
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    const before = store.workflow(p.id).grant!, receipt = store.latestWorkflowRun(p.id), question = store.get(p.id).questions[0]!;
+    await workflow.close(); await queue.close(); workflow = new ProjectWorkflow(store, adapter); queue = new DiscoveryQueue(new DiscoveryService(store, adapter));
+    const item = queue.submit(p.id, { id: randomUUID(), auto: true, research: false, input: { type: "answer", questionID: question.id, questionText: question.text, sourceID: null,
+      answer: { kind: "answer", text: "Reports must save offline" } } });
+    workflow.tick(p.id); await workflow.wait(p.id);
+    assert.equal(calls, 1); assert.equal(queue.isActive(p.id), false); assert.deepEqual(store.workflow(p.id).grant, before);
+    assert.deepEqual(store.latestWorkflowRun(p.id), receipt); assert.equal(workflow.view(p.id).suspended, true);
+    assert.equal(store.submissions(p.id).find((s) => s.id === item.id)!.status, "queued");
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.notEqual(store.workflow(p.id).grant!.id, before.id); assert.ok(calls > 1);
+    assert.equal(store.submissions(p.id).find((s) => s.id === item.id)!.status, "completed");
   } finally { await workflow.close(); await queue.close(); store.close(); }
 });
 

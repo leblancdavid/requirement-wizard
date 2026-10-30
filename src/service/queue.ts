@@ -93,12 +93,12 @@ export class DiscoveryQueue {
 
   maintenanceView(id: string): MaintenanceView {
     const { settingsVersion: version, enabled, paused, tasks } = this.service.store.maintenance(id);
-    const manualHold = this.service.store.processingPolicy(id).mode === "manual";
-    const suspended = enabled && (!this.maintenanceArmed.has(id) || manualHold);
+    const mode = this.service.store.processingPolicy(id).mode, manualHold = mode === "manual", guidedHold = mode === "guided";
+    const suspended = enabled && (!this.maintenanceArmed.has(id) || manualHold || guidedHold);
     if (suspended && !this.service.store.discoveryActive(id)) for (const task of Object.values(tasks)) if (task.state === "running") {
       task.state = "paused"; task.reason ??= "This saved task has no live worker. Resume explicitly; completed evidence and spent attempts are retained.";
     }
-    return { version, enabled, paused, tasks, suspended, manualHold, limits: maintenanceLimits };
+    return { version, enabled, paused, tasks, suspended, manualHold, guidedHold, limits: maintenanceLimits };
   }
 
   configureMaintenance(id: string, version: number, action: "enable" | "disable" | "pause" | "resume") {
@@ -106,6 +106,7 @@ export class DiscoveryQueue {
     if (state.settingsVersion !== version) throw new OperationConflictError("Automatic maintenance settings changed. Refresh before continuing.");
     if (action === "enable" || action === "resume") {
       if (this.service.store.processingPolicy(id).mode === "manual") throw new OperationConflictError("Manual processing is on. Use an explicit definition refresh, or review processing permissions before enabling automatic updates.");
+      if (this.service.store.processingPolicy(id).mode === "guided") throw new OperationConflictError("Guided processing uses Continue specification for definition follow-up within its shared allowance. Separate automatic maintenance is held.");
       if (this.closing || this.isActive(id)) throw new OperationConflictError("Wait for the current task before enabling or resuming maintenance.");
       this.service.store.assertNoExecution(id);
       this.service.assertCanDiscover(id);
@@ -132,7 +133,7 @@ export class DiscoveryQueue {
    * process. One bounded burst follows settled relevant changes, not a timer sweep. */
   maintain(id: string, now = Date.now()) {
     if (this.closing || !this.maintenanceArmed.has(id)) return;
-    if (this.service.store.processingPolicy(id).mode === "manual") return;
+    if (this.service.store.processingPolicy(id).mode !== "legacy") return;
     if (this.service.store.workflow(id).enabled) return;
     const report = (message: string) => { const messages = this.messages.get(id) ?? []; messages.push(message); if (messages.length > 20) messages.shift(); this.messages.set(id, messages); };
     try {
@@ -487,7 +488,7 @@ export class DiscoveryQueue {
     const item = this.service.store.enqueue(id, raw);
     const initializing = this.service.requiresInitialization(id);
     if (initializing) this.service.store.pauseQueue(id, true);
-    if (!initializing && item.auto && this.maintenanceArmed.has(id) && this.service.store.processingPolicy(id).mode !== "manual") {
+    if (!initializing && item.auto && this.maintenanceArmed.has(id) && this.service.store.processingPolicy(id).mode === "legacy") {
       const maintenance = this.service.store.maintenance(id);
       const unresolved = resolvedReviewAttempts(this.service.store.get(id), this.service.store.submissions(id));
       const blocked = this.service.store.submissions(id).some((s) => !s.archivedAt && s.status === "needs-attention" && !unresolved.has(s.id));
@@ -531,7 +532,7 @@ export class DiscoveryQueue {
       && ["queued", "saved", "processing", "needs-attention"].includes(s.status));
     const last = this.service.store.jobs(id).at(-1);
     const maintenance = this.service.store.maintenance(id);
-    if (!unfinished && maintenance.enabled && this.service.store.processingPolicy(id).mode !== "manual" && Object.values(maintenance.tasks).some((task) => !!task.jobID && task.jobID === last?.id)
+    if (!unfinished && maintenance.enabled && this.service.store.processingPolicy(id).mode === "legacy" && Object.values(maintenance.tasks).some((task) => !!task.jobID && task.jobID === last?.id)
       && (!options.focusEpicID || options.focusEpicID === last?.context?.definitionAssessment?.epicID)) {
       this.configureMaintenance(id, maintenance.settingsVersion, "resume"); return;
     }
@@ -549,7 +550,7 @@ export class DiscoveryQueue {
     this.service.assertCanDiscover(id);
     if (this.isActive(id)) throw new Error("This project already has an active discovery job.");
     const project = this.service.store.get(id);
-    if (options.processOnly && !options.submissionIDs && this.service.store.processingPolicy(id).mode === "manual") {
+    if (options.processOnly && !options.submissionIDs && this.service.store.processingPolicy(id).mode !== "legacy") {
       options = { ...options, submissionIDs: this.service.store.submissions(id).filter((s) => !s.archivedAt && ["queued", "saved", "needs-attention"].includes(s.status)
         && (!options.focusEpicID || submissionEpic(project, s) === options.focusEpicID)).map((s) => s.id) };
     }
@@ -709,7 +710,7 @@ export class DiscoveryQueue {
 
   private start(id: string, manual?: { research?: boolean; focusEpicID?: string; refinementOnly?: boolean; refreshProposalID?: string; continueRefinementJobID?: string; savedEvidencePolicy?: SavedEvidencePolicy; questionTarget?: number; processOnly?: boolean; submissionIDs?: string[] }) {
     if (this.closing || this.isActive(id) || this.service.store.executionActive(id)) return;
-    if (!manual && this.service.store.processingPolicy(id).mode === "manual") return;
+    if (!manual && this.service.store.processingPolicy(id).mode !== "legacy") return;
     if (!manual && this.service.store.workflow(id).enabled) return;
     if (!manual && this.service.store.executionExpired(id)) {
       this.service.store.pauseQueue(id, true);
@@ -798,7 +799,7 @@ export class DiscoveryQueue {
       let repairSubmissionID: string | undefined;
       let continuing = false;
       while (!this.closing && !controller.signal.aborted && !this.service.store.queuePaused(id)) {
-        if (!manual && this.service.store.processingPolicy(id).mode === "manual") break;
+        if (!manual && this.service.store.processingPolicy(id).mode !== "legacy") break;
         if (this.service.store.executionActive(id)) break;
         const scope = manual?.focusEpicID;
         const before = this.service.store.get(id);
@@ -996,7 +997,7 @@ export class DiscoveryQueue {
       this.service.store.pauseQueue(id, true);
     }).finally(() => {
       if (refinement?.status === "running") refinement.status = controller.signal.aborted || this.closing ? "stopped" : "completed";
-      if (this.service.store.processingPolicy(id).mode === "manual") this.service.store.pauseQueue(id, true);
+      if (this.service.store.processingPolicy(id).mode !== "legacy") this.service.store.pauseQueue(id, true);
       this.active.delete(id);
     });
     this.active.set(id, { controller, promise });

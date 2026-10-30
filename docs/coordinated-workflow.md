@@ -23,6 +23,16 @@ arrives. Continue explicitly afterward. Original grants/spend and opt-ins are re
 switching back keeps existing pauses and grants no new allowance. This narrowing
 policy does not merge all automatic consent scopes; see [migration](migrations.md#project-local-manual-processing-2026-10-29).
 
+**Guided processing** is now the unified bounded automatic specification choice.
+Saving it starts nothing. Continue explicitly for the existing shared allowance;
+eligible new answers can resume only its remaining allowance in this app session.
+Separate automatic input/maintenance workers remain held, including before the first
+Continue. Old save-only flags and browser preferences remain unchanged. Stop/restart/
+limits require continuation, and every mode switch leaves work paused without renewing
+allowance. Under Guided, switch the project processing mode before using separate task
+settings; the old coordinator-disable shortcut cannot bypass the hold. See
+[processing permissions](processing-permissions.md). Other permissions remain separate.
+
 ## Implemented first slice
 
 ### Definition follow-through (2026-10-29)

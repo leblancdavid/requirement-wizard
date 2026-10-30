@@ -508,7 +508,10 @@ try {
   await headerProgress.click();
   const progressDialog = page.getByRole("dialog", { name: "Project progress", exact: true });
   await expect(progressDialog).toBeVisible();
-  await expect(progressDialog.locator(".progress-stage")).toHaveCount(8);
+  await expect(progressDialog.locator(".progress-stage")).toHaveCount(9);
+  const impactInspection = progressDialog.getByRole("region", { name: "Definition finding impact", exact: true });
+  await expect(impactInspection.getByText("Inspect changes since a definition review", { exact: true })).toBeVisible();
+  await expect(impactInspection.getByRole("button", { name: "Compare saved inputs", exact: true })).toBeHidden();
   await expect(progressDialog.getByText("Recover missing saved assessments", { exact: true })).toBeVisible();
   await expect(progressDialog.getByRole("region", { name: "Definition assessment refresh", exact: true })).toBeVisible();
   await expect(progressDialog.getByRole("region", { name: "Discovery review status", exact: true })).toBeVisible();
