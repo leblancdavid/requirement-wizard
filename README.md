@@ -65,6 +65,12 @@ and saved results; there is no automatic route or publication authority.
 Its [bounded usage report](docs/definition-joint-usage.md) separates measured attempts,
 saved-reply recovery and unknown older data, without claiming provider billing or
 inventing requests saved. Inspection/export starts no model calls.
+Completed supported checks also offer an [exact combined-finding preview](docs/definition-combination-preview.md),
+preserving original text/dates and showing current differences without saving an assessment
+or making another model request. Combined publication remains disabled.
+After separate acknowledgement, **Save reviewed combination** retains those exact
+contents in [local review history](docs/definition-combination-reviews.md), not as a
+replacement assessment, product approval or shared/portable authority.
 Definition reviews no longer become outdated merely because saving reordered object
 properties. SQLite 12→13 repairs older keys only with proof from their original raw
 snapshot, preserving evidence, history, revisions and spent attempts; real changes

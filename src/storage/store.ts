@@ -40,6 +40,10 @@ import { prepareDefinitionJointReview, readDefinitionJointRun, writeDefinitionJo
 import { definitionJointReviewMarkerSchema, validateDefinitionJointResponse } from "../core/definition-joint-review.js";
 import type { DefinitionJointView } from "../core/definition-joint-view.js";
 import { definitionJointUsageQuerySchema, definitionJointUsageReport, type DefinitionJointUsageSource } from "../core/definition-joint-usage.js";
+import { previewDefinitionCombination } from "./definition-combination-preview.js";
+import { definitionCombinationReviewSchema, definitionCombinationReviewBytes } from "../core/definition-combination-review.js";
+import { definitionCombinationSaveSchema, type DefinitionCombinationReviewResult } from "../core/definition-combination-review-view.js";
+import { readDefinitionCombinationReview, definitionCombinationHistory } from "./definition-combination-review.js";
 import { definitionPublicationKey as jointKey } from "../core/definition-publication.js";
 import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
@@ -1514,6 +1518,35 @@ export class ProjectStore {
     }).immediate();
   }
   definitionJointReview(jobID: string) { return readDefinitionJointRun(this.db, jobID); }
+  previewDefinitionCombination(projectID: string, input: unknown) {
+    return this.db.transaction(() => previewDefinitionCombination(this.db, projectID, input)).deferred();
+  }
+  saveDefinitionCombinationReview(projectID: string, input: unknown): DefinitionCombinationReviewResult {
+    const query = definitionCombinationSaveSchema.parse(input);
+    return this.db.transaction((): DefinitionCombinationReviewResult => {
+      this.assertNoExecution(projectID);
+      if (this.workflowBusy(projectID) || this.discoveryActive(projectID)) throw new OperationConflictError("Stop active work before saving a reviewed combination. No review was saved.");
+      const { previewKey, confirmReviewed: _, ...selection } = query;
+      const prepared = previewDefinitionCombination(this.db, projectID, selection);
+      if (prepared.status !== "recorded") return prepared;
+      if (prepared.preview.previewKey !== previewKey) return { status: "unavailable", reason: "preview-changed" };
+      const existing = this.db.prepare("SELECT review_id FROM definition_combination_reviews WHERE project_id = ? AND preview_key = ?").get(projectID, previewKey) as { review_id: string } | undefined;
+      if (existing) { const saved = readDefinitionCombinationReview(this.db, projectID, existing.review_id); return saved.status === "recorded" ? { ...saved, reused: true } : saved; }
+      const fields = { format: 1 as const, policy: "definition-combination-review-v1" as const, authority: "review-evidence-only" as const, canPublish: false as const,
+        id: randomUUID(), projectID, epicID: query.epicID, savedAt: new Date().toISOString(), acknowledgement: "reviewed-content-only" as const, preview: prepared.preview };
+      const review = definitionCombinationReviewSchema.parse({ ...fields, reviewKey: jointKey(fields) }), payload = JSON.stringify(review);
+      if (Buffer.byteLength(payload, "utf8") > definitionCombinationReviewBytes) return { status: "unavailable", reason: "read-limit" };
+      this.db.prepare("INSERT INTO definition_combination_reviews VALUES (?, ?, ?, ?, ?)").run(projectID, review.id, query.epicID, previewKey, payload);
+      const area = this.db.prepare("SELECT json_extract(e.value, '$.title') AS title FROM projects p, json_each(p.payload, '$.epics') e WHERE p.id = ? AND json_extract(e.value, '$.id') = ? LIMIT 1").get(projectID, query.epicID) as { title: string } | undefined;
+      saveActivity(this.db, projectID, { id: `combination-review:${review.id}`, type: "discovery", title: "Combined finding review saved",
+        summary: "Reviewed original finding contents saved locally. No assessment, score, requirement or approval changed.",
+        reason: "Explicit content-review acknowledgement only; not publication, readiness or permission to skip reviews.", highlight: true,
+        features: [{ id: query.epicID, title: area?.title ?? query.epicID }], changes: [], at: review.savedAt, atLabel: "Recorded" });
+      return { status: "recorded", review, reused: false };
+    }).immediate();
+  }
+  definitionCombinationHistory(projectID: string, input: unknown) { return definitionCombinationHistory(this.db, projectID, input); }
+  readDefinitionCombinationReview(projectID: string, id: string) { return readDefinitionCombinationReview(this.db, projectID, id); }
   definitionJointUsage(projectID: string, input: unknown = {}) {
     const query = definitionJointUsageQuerySchema.parse(input);
     const rows = this.db.prepare(`SELECT j.id, json_extract(j.payload, '$.status') AS status,

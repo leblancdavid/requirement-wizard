@@ -15,6 +15,24 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Durable local combined-content review implemented (2026-10-30):** separate acknowledgement
+  and Save reviewed combination atomically retain an immutable exact packet plus one
+  Activity entry. Retries reuse the original record/date; missing/stale/unproved sources
+  or live workers block without paid calls. Explicit bounded history preserves dated
+  contents across reopen/edits. SQLite 16→17 adds only a local table; existing assessments,
+  original dates, project counters, grants, plans and portable state remain unchanged.
+  This is reviewed-content evidence, not current-assessment mixed publication or product
+  approval. Those publication/portable/narrowing gates remain unfinished. See [local save](definition-combination-reviews.md).
+
+- **Exact combined-content review preview implemented (2026-10-30):** an explicit local
+  read behind a completed supported joint check re-verifies original/root witnesses,
+  whole-area guards and current content, then shows complete originals alongside current
+  saved finding content. Dates/IDs/text stay exact; missing current findings stay missing,
+  ambiguity/unsupported/oversized data blocks, and changed views are dated. No inference,
+  assessment/confidence update or publication authority is added. SQLite stays 16. Atomic
+  mixed save with forward-compatible persisted provenance, sound narrower partitions
+  and automatic skips remain unfinished. See [review scope](definition-combination-preview.md).
+
 - **Bounded joint usage evidence implemented (2026-10-30):** accepted actions distinguish
   new attempts, completed reuse and saved-response recovery. New joint jobs record
   optional adapter-attempt/timing metadata; explicit bounded inspection/export preserves

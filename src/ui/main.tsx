@@ -541,7 +541,11 @@ function App() {
           definitionJoint={{ start: (request) => api(`projects/${project.id}/definition-joint-start`, { request, confirmAIUsage: true }),
             inspect: (epicID, jobID) => api(`projects/${project.id}/definition-joint-status`, { epicID, ...(jobID ? { jobID } : {}) }),
             stop: (jobID) => api(`projects/${project.id}/definition-joint-stop`, { jobID }),
-            usage: (epicID) => api(`projects/${project.id}/definition-joint-usage`, { epicID }) }}
+            usage: (epicID) => api(`projects/${project.id}/definition-joint-usage`, { epicID }),
+            combinationPreview: (query) => api(`projects/${project.id}/definition-combination-preview`, query),
+            combinationReviews: { save: (query) => api(`projects/${project.id}/definition-combination-save`, query),
+              history: (query) => api(`projects/${project.id}/definition-combination-history`, query),
+              read: (reviewID) => api(`projects/${project.id}/definition-combination-read`, { reviewID }) } }}
           assessmentHistory={{ preview: (epicID, beforeRevision) => api(`projects/${project.id}/assessment-recovery?${new URLSearchParams({ epicID, ...(beforeRevision === undefined ? {} : { beforeRevision: String(beforeRevision) }) })}`), restore: async (revision, selection) => { await api(`projects/${project.id}/restore-assessment`, { revision, ...selection }); await load(); } }}
           refreshDefinition={(focusEpicID, additionalRequests) => void act(async () => { await api(`projects/${project.id}/refresh-definition`, { revision: project.revision, ...(focusEpicID ? { focusEpicID } : {}), ...(additionalRequests?.length ? { additionalRequests, confirmAdditionalRequests: true } : {}) }); }, "Refreshing definition coverage…")} />}
         {!showSettings && project && summary && data && !creating && <div className="tabs main-tabs" role="tablist" aria-label="Workspace">{([ ["discover", "Design"], ["review", "Specification"], ["implementation", "Implement"], ["history", "Activity"] ] as const).map(([key, label]) => <button key={key} role="tab" aria-selected={tab === key || key === "history" && tab === "research"} className={tab === key || key === "history" && tab === "research" ? "active" : ""} onClick={() => setTab(key)}>{label}{key === "discover" && <span>{openQuestions.length}</span>}{key === "review" && <span title="Requirements needing a decision">{pendingReviewCount}</span>}{key === "implementation" && <span>{implementationRemaining}</span>}</button>)}</div>}

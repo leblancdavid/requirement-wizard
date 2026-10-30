@@ -795,7 +795,7 @@ test("schema-6 upgrade adds only workflow metadata and is rollback-safe with no 
   let store = new ProjectStore(path);
   try {
     const p = seed(store), original = store.get(p.id), jobs = store.jobs(p.id), maintenance = store.maintenance(p.id); store.close();
-    let db = new Database(path); db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version >= 7; PRAGMA user_version = 6;");
+    let db = new Database(path); db.exec("DROP TABLE definition_combination_reviews;"); db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version >= 7; PRAGMA user_version = 6;");
     const bytes = (db.prepare("SELECT payload FROM projects WHERE id = ?").get(p.id) as { payload: string }).payload;
     db.exec("CREATE TRIGGER fail_workflow BEFORE INSERT ON migration_history WHEN new.version = 7 BEGIN SELECT RAISE(ABORT, 'Simulated workflow migration interruption'); END;"); db.close();
     assert.throws(() => new ProjectStore(path), /Simulated workflow migration interruption/);

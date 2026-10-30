@@ -40,6 +40,8 @@ import { resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-
 import { definitionSourceQuerySchema } from "../core/definition-source-inspection.js";
 import { definitionFindingPreviewRequestSchema } from "../core/definition-finding-origin.js";
 import { definitionJointUsageQuerySchema } from "../core/definition-joint-usage.js";
+import { definitionCombinationPreviewQuerySchema } from "../core/definition-combination-preview.js";
+import { definitionCombinationSaveSchema, definitionCombinationHistorySchema } from "../core/definition-combination-review-view.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -221,6 +223,22 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       if (action === "definition-joint-usage") {
         if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
         json(res, 200, options.store.definitionJointUsage(id, definitionJointUsageQuerySchema.parse(await body(req)))); return;
+      }
+      if (action === "definition-combination-preview") {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        json(res, 200, options.store.previewDefinitionCombination(id, definitionCombinationPreviewQuerySchema.parse(await body(req)))); return;
+      }
+      if (action === "definition-combination-save" || action === "definition-combination-history" || action === "definition-combination-read") {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        const raw = await body(req);
+        if (action === "definition-combination-save") {
+          const input = definitionCombinationSaveSchema.parse(raw);
+          if (queue.isActive(id) || implementation.isActive(id) || workflow.active(id)) throw new OperationConflictError("Stop active work before saving a reviewed combination. No review was saved.");
+          json(res, 200, options.store.saveDefinitionCombinationReview(id, input)); return;
+        }
+        if (action === "definition-combination-history") { json(res, 200, options.store.definitionCombinationHistory(id, definitionCombinationHistorySchema.parse(raw))); return; }
+        const input = z.object({ reviewID: z.string().uuid() }).strict().parse(raw);
+        json(res, 200, options.store.readDefinitionCombinationReview(id, input.reviewID)); return;
       }
       const project = options.store.get(id);
       if (req.method === "GET" && !action) {

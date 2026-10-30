@@ -9,6 +9,13 @@ is verified; live model quality is not qualified.
 
 ## Browser consent and saved results
 
+A saved completed model-supported check now offers **Preview combined original findings**:
+a separate local read re-verifies the exact joint/root/source witnesses and shows complete
+original findings beside current saved content, with original dates/identities. It saves
+nothing and leaves publication disabled. See [exact-content preview](definition-combination-preview.md).
+After separate acknowledgement, its exact contents can also be [saved as a local review](definition-combination-reviews.md),
+with original dates and immutable history. This still changes no assessment or publication authority.
+
 Accepted actions now distinguish a new attempt, completed-result reuse and saved-reply
 recovery. **Inspect joint-check request usage** explicitly loads/downloads metadata for
 at most 20 saved tasks. New tasks retain optional measured adapter attempts/timings;

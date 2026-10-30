@@ -117,7 +117,12 @@ and live provider quality are not qualified by these deterministic bounds.
    A separate explicit [joint validation task](definition-joint-review.md) now saves
    model judgement over all nine selected originals/current evidence, with bounded
    requests, durable response recovery and stale-token checks. It does not grant
-   publication or narrower independence. Saving a mixed result, sound narrower
+   publication or narrower independence. A separate [exact-content preview](definition-combination-preview.md)
+   now re-verifies that supported joint/root/source chain and compares complete originals
+   with current saved findings without writes or AI. A separately acknowledged
+   [local review record](definition-combination-reviews.md) can now retain those exact
+   contents durably without changing assessments/approvals or granting skip authority.
+   Publishing a mixed current assessment, sound narrower
    partitions and atomic stale-publication checks remain unfinished. Never rebase an old finding's date/evidence
    onto a new assessment revision. See [original finding provenance](definition-finding-origins.md).
 4. **Continuation and consent:** integrate only with the existing authorized coordinator

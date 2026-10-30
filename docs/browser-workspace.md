@@ -1,5 +1,29 @@
 # Browser workspace, epics, and estimated completeness
 
+## Save reviewed combined contents locally (2026-10-30)
+
+After an exact combined-finding preview, separately acknowledge **I reviewed these exact
+contents; save local review evidence only**, then **Save reviewed combination**. SQLite
+16→17 retains an immutable machine-local record and one Activity entry, atomically and
+idempotently. Save re-verifies tokens/source witnesses, blocks live workers and makes no
+AI call. It changes no current assessment, score, original date, project revision, plan,
+approval, grant or portable specification. **Saved reviewed combinations** explicitly
+loads bounded history and reopens dated contents after reload/edits; no automatic replay.
+The baseline comparison is labelled at review time, never presented as current proof.
+See [boundaries, upgrade and recovery](definition-combination-reviews.md).
+
+## Exact combined finding preview (2026-10-30)
+
+After explicitly loading a completed model-supported joint check in **Overall progress →
+Inspect original finding sources**, **Preview combined original findings** re-verifies
+that exact check/root/source provenance and shows all nine complete originals beside
+current saved finding content. It is a separate no-AI local read, not a Save operation.
+Original text/status/evidence IDs/dates remain exact; missing current findings stay
+missing, ambiguity/unproved sources block and current changes date the preview. No
+automatic read/retry occurs on polling/reload, and no score/confidence/assessment/grant
+changes. See [scope and limits](definition-combination-preview.md).
+Focused browser: `npm run test:browser:definition-combination` (also in the default suite).
+
 ## Explicit joint finding check (2026-10-30)
 
 Accepted actions identify new attempts versus completed-result reuse or saved-reply

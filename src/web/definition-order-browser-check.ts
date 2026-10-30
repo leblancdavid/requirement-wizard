@@ -29,6 +29,7 @@ const legacy = legacyDefinitionOrder(p); assert.equal(coverage(projectSchema.par
 store.close(); let db = new Database(path);
 db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(legacy), p.id);
 db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(legacy), p.id, p.revision);
+db.exec("DROP TABLE definition_combination_reviews;");
 db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DELETE FROM migration_history WHERE version >= 13; PRAGMA user_version = 12;"); db.close();
 store = new ProjectStore(path); assert.deepEqual(store.get(p.id), saved);
 let calls = 0;

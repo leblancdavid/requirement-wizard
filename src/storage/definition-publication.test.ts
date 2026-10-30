@@ -154,7 +154,7 @@ test("14 to 15 is additive, preserves live workers/evidence and never backfills 
   try {
     const p = seed(store), old = single(store, p, false); store.finishJob(old.job.id, old.output);
     const current = store.get(p.id), live = single(store, current, false); store.close();
-    let db = new Database(path); db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DELETE FROM migration_history WHERE version >= 15; PRAGMA user_version = 14;");
+    let db = new Database(path); db.exec("DROP TABLE definition_combination_reviews;"); db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DELETE FROM migration_history WHERE version >= 15; PRAGMA user_version = 14;");
     const tables = ["projects", "revisions", "jobs", "workflow_state", "workflow_runs", "execution_state", "execution_leases", "project_migration_backups"];
     const rows = tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()); db.close();
     for (let i = 0; i < 2; i++) {
@@ -173,7 +173,7 @@ test("14 to 15 rolls back tables and ledger on unsupported old data, then safely
   const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
   const p = seed(store), task = single(store, p, false); store.finishJob(task.job.id, task.output); const saved = store.get(p.id); store.close();
   try {
-    let db = new Database(path); db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DELETE FROM migration_history WHERE version >= 15; PRAGMA user_version = 14;");
+    let db = new Database(path); db.exec("DROP TABLE definition_combination_reviews;"); db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DELETE FROM migration_history WHERE version >= 15; PRAGMA user_version = 14;");
     const future = JSON.stringify({ format: 999, version: 4, mode: "future" }); db.prepare("INSERT INTO processing_policy VALUES (?, ?)").run(p.id, future); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
     assert.equal(db.pragma("user_version", { simple: true }), 14);

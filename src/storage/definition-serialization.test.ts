@@ -40,7 +40,7 @@ function installLegacy(db: Database.Database, p: Project, current = p) {
   db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(original), p.id, p.revision);
   return { original, rawCurrent, payload: JSON.stringify(rawCurrent) };
 }
-function rewind(db: Database.Database) { db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DELETE FROM migration_history WHERE version >= 13; PRAGMA user_version = 12;"); }
+function rewind(db: Database.Database) { db.exec("DROP TABLE definition_combination_reviews;"); db.exec("DROP TABLE definition_joint_reviews; DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DELETE FROM migration_history WHERE version >= 13; PRAGMA user_version = 12;"); }
 
 test("reviews born with new requirements/questions match the persisted representation immediately and after reopen", () => {
   const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);

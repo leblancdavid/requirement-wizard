@@ -1,5 +1,81 @@
 # Data migrations and upgrade compatibility
 
+## Saved local combination reviews (2026-10-30)
+
+**Implemented forward migration:** SQLite **16 → 17**, named
+`saved-definition-combination-reviews-v1`, adds `definition_combination_reviews`, an
+area index and unique project/preview identity. Format-1 local review records retain the
+complete exact preview, original finding identities/dates, joint/root response provenance
+and a separate explicit content-review acknowledgement/save date. They always retain
+`canPublish: false`; they are not published current assessments or product approvals.
+
+This additive migration rewrites no old row and needs no payload backup. Project/job/
+assessment/certificate/joint-run/result/portable formats, semantic/freshness keys,
+optimistic project revisions, execution schema 2, approved plans, grants and preferences
+are unchanged. Upgrade starts no model call or backfill. Existing completed checks and
+older valid work remain reusable without repeats solely to gain a local review record.
+Older apps reject database 17; source/target versions remain separate from concurrency.
+
+Save requires separate explicit acknowledgement and re-verifies the expected revision,
+full content/preview tokens and exact original joint/source witnesses within one
+immediate transaction, with live worker guards. Record and one local Activity event
+commit atomically; duplicate retries return the first immutable record/date. Failure
+rolls both back and permits explicit retry without inference. Reads remain dated local
+evidence, even after later edits or missing optional witnesses; no source is made current.
+The table is machine-local and never exported/adopted as portable approval or skip authority.
+
+Startup strictly validates future formats, record/packet hashes, original identity
+consistency, row identity and 132 KiB bounds without overwriting incompatible evidence.
+Migration table/index/ledger/version advancement rolls back on validation failure;
+reopening supports retry without reset or regeneration. Tests preserve raw old rows,
+completed provenance and live discovery/execution leases across 16→17 and repeated
+startup, and cover transaction rollback/retry, future/tampered records, stale/concurrent
+saves, project/area isolation, bounded history, portable equivalence and no additional
+model calls/assessment changes. See [scope and recovery](definition-combination-reviews.md).
+
+Verification: type check, all **1,246** deterministic tests (542 pretests + 704 main),
+focused joint/save/migration/Activity checks, focused combination browser, storage-order
+upgrade browser, full ten-runner default browser aggregate/UI build and diff check passed.
+The save/history browser uses an adapter that rejects every new model call. Upgrade
+tests preserve raw rows and live discovery/execution leases, and verify failed-startup
+rollback/retry plus unsupported future records without overwrite. Existing bundle-size
+warning remains. No live model calls, commits/pushes or packaging were performed; actual
+current-assessment mixed publication, portability of these local records, narrower
+independence and live/performance qualification remain unfinished.
+
+## Exact combined finding preview (2026-10-30)
+
+**Transient read-only addition; no persisted conversion.** SQLite remains **16**,
+execution stays schema 2, and all project/assessment/certificate/joint run/result/job/
+portable payload formats, semantic keys, grants, receipts and optimistic counters are
+unchanged. Format-1 `definition-combination-preview-v1` packets are in-memory contents,
+not a newly saved assessment or publication authority. No startup projection/backfill,
+stored preview, original-date rebasing or model call is introduced.
+
+An exact completed supported joint check, its original reserved response owner and all
+source publications/guards are re-verified in one bounded read transaction. Original
+findings/dates remain exact and distinct; current saved content is compared separately.
+Duplicate current identities are rejected; missing current findings stay missing. The
+preview key binds current content, source/joint identities and response evidence, not
+permission to write. Any future mixed save must re-verify under its own explicit
+authorization and versioned forward-compatible representation.
+
+Missing, stale, changed, conflicted, incomplete, unsupported or oversized sources produce
+no successful preview or implicit paid retry. Existing valid reviews remain valid under
+their old rules, including older work without optional provenance. Tests preserve raw
+projects/revisions/jobs/certificates/checkpoints through repeated reopen/preview and
+exercise exact original dates, zero-request recovery roots, tampered job/context/result
+identities, same-revision replacement, ambiguity, missing current assessments, bounds
+and strict/no-inference API/browser reads. See [scope and limits](definition-combination-preview.md).
+
+Verification: type check, all **1,239** deterministic tests (535 pretests + 704 main),
+focused joint/preview tests, focused combination browser, the full ten-runner default
+browser aggregate/UI build and diff check passed. Tests retain raw older projects,
+history, jobs, publications and joint checkpoints across repeated reopen/preview.
+The existing bundle-size warning remains. No live model calls, commits/pushes or
+packaging were performed; live quality/permission/cancellation, large-project replay,
+safe narrower partitions and atomic mixed publication remain unqualified/unfinished.
+
 ## Joint-check usage measurements (2026-10-30)
 
 **No persisted conversion:** SQLite remains **16**, execution stays schema 2, and new

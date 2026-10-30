@@ -19,6 +19,8 @@ import { databaseSchemaVersion } from "../storage/migrations.js";
 import { startApp } from "../web/server.js";
 import { DiscoveryQueue } from "./queue.js";
 import { definitionJointUsageReport } from "../core/definition-joint-usage.js";
+import { coverage } from "../core/coverage.js";
+import { definitionCombinationReviewSchema } from "../core/definition-combination-review.js";
 
 const empty = { summary: "Fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] };
 async function seed(store: ProjectStore) {
@@ -41,6 +43,296 @@ function supported(context: ContextPack): DefinitionJointResponse {
     originKey: c.origin.originKey, decision: "retain", explanation: "The original uncertainty remains compatible with the other findings.", evidenceIDs: [context.manifest.includedIDs[0]!] })) } };
 }
 function folder() { mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true }); return mkdtempSync(resolve(".reqwizit-state/tests/joint-review-")); }
+async function combinationFixture(store: ProjectStore) {
+  const fixture = await seed(store), { p, request } = fixture;
+  const result = await new DiscoveryService(store, { async analyze(_p, { context }) { return supported(context); } }).reviewDefinitionCombination(p.id, request);
+  if (result.status !== "recorded") assert.fail(); assert.equal(result.job.status, "completed");
+  const query = { revision: p.revision, epicID: "orders", snapshotKey: request.snapshotKey, jobID: result.job.id };
+  const prepared = store.previewDefinitionCombination(p.id, query); if (prepared.status !== "recorded") assert.fail(prepared.reason);
+  return { ...fixture, result, preview: prepared.preview, save: { ...query, previewKey: prepared.preview.previewKey, confirmReviewed: true as const } };
+}
+
+test("explicit local combination save is atomic, idempotent and separate from assessments, approval, portable state and allowance", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, result, preview, save } = await combinationFixture(store);
+    const before = { p: store.get(p.id), jobs: store.jobs(p.id), history: store.history(p.id), workflow: store.workflow(p.id), maintenance: store.maintenance(p.id), coverage: coverage(p) };
+    const portable = () => renderWorkspace(store.get(p.id), emptyExecution(), continuationState(store.get(p.id), store.jobs(p.id), [], (r) => store.get(p.id, r)));
+    const files = portable(); const saved = store.saveDefinitionCombinationReview(p.id, save); if (saved.status !== "recorded") assert.fail(saved.reason);
+    assert.equal(saved.reused, false); assert.equal(saved.review.canPublish, false); assert.equal(saved.review.acknowledgement, "reviewed-content-only");
+    assert.equal(saved.review.authority, "review-evidence-only"); assert.deepEqual(saved.review.preview, preview);
+    assert.equal(saved.review.preview.respondedAt, result.run.respondedAt); assert.equal(saved.review.preview.completedAt, result.run.completedAt);
+    assert.doesNotThrow(() => definitionCombinationReviewSchema.parse(saved.review));
+    assert.equal(definitionCombinationReviewSchema.safeParse({ ...saved.review, canPublish: true }).success, false);
+    assert.equal(definitionCombinationReviewSchema.safeParse({ ...saved.review, preview: { ...saved.review.preview, format: 999 } }).success, false);
+    const repeat = store.saveDefinitionCombinationReview(p.id, save); if (repeat.status !== "recorded") assert.fail();
+    assert.equal(repeat.reused, true); assert.deepEqual(repeat.review, saved.review);
+    assert.deepEqual({ p: store.get(p.id), jobs: store.jobs(p.id), history: store.history(p.id), workflow: store.workflow(p.id), maintenance: store.maintenance(p.id), coverage: coverage(store.get(p.id)) }, before);
+    assert.deepEqual(portable(), files, "Machine-local review acknowledgement must not become portable authority");
+    const activities = store.activity(p.id, { view: "all" }).entries.filter((e) => e.id.startsWith("combination-review:"));
+    assert.equal(activities.length, 1); assert.equal(activities[0]!.type, "discovery"); assert.deepEqual(activities[0]!.changes, []);
+    assert.deepEqual(store.readDefinitionCombinationReview(p.id, saved.review.id), { status: "recorded", review: saved.review });
+    const foreign = store.create("Other", "Independent review", p.model);
+    assert.equal(store.readDefinitionCombinationReview(foreign.id, saved.review.id).status, "unavailable");
+    assert.deepEqual(store.definitionCombinationHistory(foreign.id, { epicID: "orders" }).entries, []);
+  } finally { store.close(); }
+});
+
+test("combination save rejects missing confirmation, changed preview/current tokens and active workers without changing leases or records", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, save } = await combinationFixture(store);
+    for (const input of [{ ...save, confirmReviewed: false }, { ...save, confirmReviewed: undefined }, { ...save, canPublish: true }]) assert.throws(() => store.saveDefinitionCombinationReview(p.id, input));
+    assert.deepEqual(store.saveDefinitionCombinationReview(p.id, { ...save, previewKey: "f".repeat(64) }), { status: "unavailable", reason: "preview-changed" });
+    const live = store.beginJob(p.id, p.revision).job; store.claimJob(live.id, Date.now() + 60000); const owned = store.getJob(live.id);
+    assert.throws(() => store.saveDefinitionCombinationReview(p.id, save), /active work/); assert.deepEqual(store.getJob(live.id), owned);
+    assert.deepEqual(store.definitionCombinationHistory(p.id, { epicID: "orders" }).entries, []);
+    store.failJob(live.id, "cancelled", "Fixture stop");
+    store.claimExecution(p.id, "fixture-review-save", "fixture-owner");
+    assert.throws(() => store.saveDefinitionCombinationReview(p.id, save)); assert.equal(store.executionActive(p.id), true);
+    store.releaseExecution(p.id, "fixture-owner");
+    const changed = store.note(p.id, p.revision, "A concurrent decision", "orders");
+    assert.deepEqual(store.saveDefinitionCombinationReview(p.id, save), { status: "unavailable", reason: "stale-view" });
+    assert.deepEqual(store.get(p.id), changed); assert.deepEqual(store.definitionCombinationHistory(p.id, { epicID: "orders" }).entries, []);
+  } finally { store.close(); }
+});
+
+test("local combination save rolls back both record and activity on failure and retries without inference or duplicate acknowledgements", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
+  try {
+    const { p, save } = await combinationFixture(store), db = new Database(path);
+    db.exec("CREATE TRIGGER reject_combination_activity BEFORE INSERT ON project_activity WHEN NEW.event_id LIKE 'combination-review:%' BEGIN SELECT RAISE(ABORT, 'fixture activity failure'); END;");
+    const before = store.activity(p.id, { view: "all" });
+    assert.throws(() => store.saveDefinitionCombinationReview(p.id, save), /fixture activity failure/);
+    assert.deepEqual(store.definitionCombinationHistory(p.id, { epicID: "orders" }).entries, []); assert.deepEqual(store.activity(p.id, { view: "all" }), before);
+    db.exec("DROP TRIGGER reject_combination_activity;"); const saved = store.saveDefinitionCombinationReview(p.id, save); if (saved.status !== "recorded") assert.fail();
+    assert.equal(store.definitionCombinationHistory(p.id, { epicID: "orders" }).entries.length, 1); assert.deepEqual(store.get(p.id), p); db.close();
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("saved combination contents survive reopen, later edits and missing optional source witnesses without being made current", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const { p, save, cs } = await combinationFixture(store), result = store.saveDefinitionCombinationReview(p.id, save); if (result.status !== "recorded") assert.fail();
+    let db = new Database(path); const original = db.prepare("SELECT payload FROM definition_combination_reviews").get(); db.close(); store.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.readDefinitionCombinationReview(p.id, result.review.id), { status: "recorded", review: result.review });
+      assert.deepEqual(store.get(p.id), p); store.close(); db = new Database(path); assert.deepEqual(db.prepare("SELECT payload FROM definition_combination_reviews").get(), original); db.close(); }
+    store = new ProjectStore(path); db = new Database(path); db.prepare("DELETE FROM definition_request_witnesses WHERE job_id = ?").run(cs[0]!.jobID); db.close();
+    assert.equal(store.saveDefinitionCombinationReview(p.id, save).status, "unavailable", "Saving again must re-verify sources even if a dated review already exists");
+    const changed = store.note(p.id, p.revision, "A later product decision", "orders");
+    assert.deepEqual(store.readDefinitionCombinationReview(p.id, result.review.id), { status: "recorded", review: result.review });
+    assert.deepEqual(store.get(p.id), changed); assert.notEqual(result.review.preview.snapshotKey, definitionDependencySnapshotKey(changed));
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("saved combination history is bounded and project/area scoped, with immutable original review identities", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const fixture = await seed(store); let p = fixture.p; const ids: string[] = [];
+    const service = new DiscoveryService(store, { async analyze(_p, { context }) { return supported(context); } });
+    for (let i = 0; i < 12; i++) {
+      const request = { ...fixture.request, revision: p.revision, snapshotKey: definitionDependencySnapshotKey(p) };
+      const joint = await service.reviewDefinitionCombination(p.id, request); if (joint.status !== "recorded") assert.fail();
+      const query = { revision: p.revision, epicID: "orders", snapshotKey: request.snapshotKey, jobID: joint.job.id };
+      const preview = store.previewDefinitionCombination(p.id, query); if (preview.status !== "recorded") assert.fail(preview.reason);
+      const saved = store.saveDefinitionCombinationReview(p.id, { ...query, previewKey: preview.preview.previewKey, confirmReviewed: true }); if (saved.status !== "recorded") assert.fail(); ids.push(saved.review.id);
+      if (i < 11) p = store.note(p.id, p.revision, `Unrelated inbox note ${i}`, "inbox");
+    }
+    const page = store.definitionCombinationHistory(p.id, { epicID: "orders" }); assert.equal(page.entries.length, 10); assert.ok(page.nextBefore);
+    assert.deepEqual(page.entries.map((e) => e.id), ids.slice(2).reverse());
+    const older = store.definitionCombinationHistory(p.id, { epicID: "orders", before: page.nextBefore! });
+    assert.deepEqual(older.entries.map((e) => e.id), ids.slice(0, 2).reverse()); assert.equal(older.nextBefore, null);
+    assert.deepEqual(store.definitionCombinationHistory(p.id, { epicID: "inbox" }).entries, []);
+    assert.deepEqual(store.get(p.id).assessments, fixture.p.assessments);
+  } finally { store.close(); }
+});
+
+test("16 to 17 adds only an empty local review table and preserves saved work and live leases through repeated startup", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const { p } = await combinationFixture(store), other = store.create("Other live worker", "Retain its execution reservation", p.model);
+    store.claimExecution(other.id, "fixture-review-upgrade", "other-owner");
+    const live = store.beginJob(p.id, p.revision).job; store.claimJob(live.id, Date.now() + 60000); store.close();
+    let db = new Database(path); db.exec("DROP TABLE definition_combination_reviews; DELETE FROM migration_history WHERE version >= 17; PRAGMA user_version = 16;");
+    const tables = ["projects", "revisions", "jobs", "definition_joint_reviews", "definition_publications", "definition_request_witnesses", "workflow_state", "workflow_runs", "execution_leases"];
+    const before = tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.get(p.id), p); assert.equal(store.executionActive(other.id), true); store.close(); db = new Database(path);
+      assert.equal(db.pragma("user_version", { simple: true }), 17); assert.deepEqual(db.prepare("SELECT * FROM definition_combination_reviews").all(), []);
+      assert.deepEqual(tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()), before); db.close(); }
+    store = new ProjectStore(":memory:");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("17 review format rejects future/corrupt evidence unchanged; failed 16 to 17 startup rolls back and retries", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const { p, save } = await combinationFixture(store), result = store.saveDefinitionCombinationReview(p.id, save); if (result.status !== "recorded") assert.fail();
+    store.close(); let db = new Database(path); const raw = JSON.stringify(result.review), future = JSON.stringify({ ...result.review, format: 999 });
+    db.prepare("UPDATE definition_combination_reviews SET payload = ?").run(future); db.close(); assert.throws(() => new ProjectStore(path));
+    db = new Database(path); assert.deepEqual(db.prepare("SELECT payload FROM definition_combination_reviews").get(), { payload: future });
+    db.prepare("UPDATE definition_combination_reviews SET payload = ?").run(raw); db.close(); store = new ProjectStore(path);
+    const tampered = structuredClone(result.review); tampered.preview.findings[0]!.originalFinding.explanation += " rewritten";
+    assert.equal(definitionCombinationReviewSchema.safeParse(tampered).success, false); store.close();
+    db = new Database(path); db.exec("DROP TABLE definition_combination_reviews; DELETE FROM project_activity WHERE event_id LIKE 'combination-review:%'; DELETE FROM migration_history WHERE version >= 17; PRAGMA user_version = 16;");
+    db.prepare("INSERT INTO processing_policy VALUES (?, ?)").run(p.id, JSON.stringify({ format: 999, version: 0, mode: "future" })); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 16);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'definition_combination_reviews'").get(), undefined);
+    assert.equal(db.prepare("SELECT * FROM migration_history WHERE version = 17").get(), undefined); db.prepare("DELETE FROM processing_policy").run(); db.close();
+    store = new ProjectStore(path); assert.deepEqual(store.get(p.id), p);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("combined preview re-verifies an exact supported job and retains exact originals alongside current findings without writes", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, request, cs } = await seed(store); let calls = 0;
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) { calls++; return supported(context); } }).reviewDefinitionCombination(p.id, request);
+    if (result.status !== "recorded") assert.fail();
+    const query = { revision: p.revision, epicID: "orders", snapshotKey: definitionDependencySnapshotKey(p), jobID: result.job.id };
+    const before = JSON.stringify({ p: store.get(p.id), jobs: store.jobs(p.id), history: store.history(p.id), run: store.definitionJointReview(result.job.id), workflow: store.workflow(p.id), maintenance: store.maintenance(p.id) });
+    const previewed = store.previewDefinitionCombination(p.id, query); if (previewed.status !== "recorded") assert.fail(previewed.reason);
+    const preview = previewed.preview, { previewKey, ...packet } = preview;
+    assert.equal(previewKey, digest(packet)); assert.equal(preview.canPublish, false); assert.equal(preview.authority, "inspection-only");
+    assert.equal(preview.partition, "whole-area"); assert.equal(preview.jointJobID, result.job.id); assert.equal(preview.requestJobID, result.job.id);
+    assert.equal(preview.respondedAt, result.run.respondedAt); assert.equal(preview.completedAt, result.run.completedAt);
+    assert.equal(preview.currentAssessmentKey, digest(p.assessments.find((a) => a.epicID === "orders")));
+    assert.equal(preview.findings.length, 9);
+    for (const [i, finding] of preview.findings.entries()) {
+      const original = store.get(p.id, cs[i % 2]!.assessmentRevision).assessments.find((a) => a.epicID === "orders")!;
+      const check = original.checks.find((c) => c.dimension === finding.origin.dimension)!;
+      assert.deepEqual(finding.originalFinding, check); assert.equal(digest(check), finding.origin.findingKey);
+      assert.equal(finding.origin.publishedAt, cs[i % 2]!.publishedAt); assert.equal(finding.origin.assessmentRevision, cs[i % 2]!.assessmentRevision);
+      assert.equal(finding.comparison, i % 2 ? "same-finding" : "different-finding");
+    }
+    assert.deepEqual(store.previewDefinitionCombination(p.id, query), previewed); assert.equal(calls, 1);
+    preview.findings[0]!.originalFinding.explanation = "Caller mutation cannot rewrite saved evidence";
+    const again = store.previewDefinitionCombination(p.id, query); if (again.status !== "recorded") assert.fail(); assert.equal(again.preview.previewKey, previewKey);
+    assert.equal(JSON.stringify({ p: store.get(p.id), jobs: store.jobs(p.id), history: store.history(p.id), run: store.definitionJointReview(result.job.id), workflow: store.workflow(p.id), maintenance: store.maintenance(p.id) }), before);
+    assert.equal(store.previewDefinitionCombination(p.id, { ...query, confirmAIUsage: true }).status, "unavailable");
+    const foreign = store.create("Other project", "Other original context", p.model);
+    assert.equal(store.previewDefinitionCombination(foreign.id, { ...query, revision: foreign.revision, snapshotKey: definitionDependencySnapshotKey(foreign) }).status, "unavailable");
+  } finally { store.close(); }
+});
+
+for (const outcome of ["conflicted", "reassess", "blocked"] as const) test(`${outcome} joint verdict cannot produce a combined publication preview`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, request } = await seed(store);
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) { const raw = supported(context);
+      raw.jointReview.verdicts[0]!.decision = outcome === "blocked" ? "blocked" : "reassess";
+      if (outcome === "conflicted") { raw.jointReview.verdicts[1]!.decision = "reassess";
+        raw.jointReview.conflicts.push({ dimensions: [dimensions[0], dimensions[1]], explanation: "Incompatible originals", evidenceIDs: [] }); }
+      return raw;
+    } }).reviewDefinitionCombination(p.id, request);
+    if (result.status !== "recorded") assert.fail();
+    assert.deepEqual(store.previewDefinitionCombination(p.id, { revision: p.revision, epicID: "orders", snapshotKey: request.snapshotKey, jobID: result.job.id }),
+      { status: "unavailable", reason: "joint-check-not-supported" });
+    assert.deepEqual(store.get(p.id), p);
+  } finally { store.close(); }
+});
+
+test("combined preview verifies the original failed response owner behind recovery and blocks forged identity/context/result or missing sources", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
+  try {
+    const { p, request, cs } = await seed(store), source = store.beginDefinitionJointReview(p.id, request); if (source.status !== "started") assert.fail();
+    store.claimJob(source.job.id, Date.now() + 60000); const prepared = store.reserveDefinitionJointReview(source.job.id);
+    store.recordDefinitionJointResponse(source.job.id, supported(prepared.task.context)); store.failJob(source.job.id, "failed", "Fixture failure after saved reply");
+    const result = await new DiscoveryService(store, { async analyze() { assert.fail("Saved reply cannot repeat inference"); } }).reviewDefinitionCombination(p.id, request);
+    if (result.status !== "recorded") assert.fail();
+    const query = { revision: p.revision, epicID: "orders", snapshotKey: request.snapshotKey, jobID: result.job.id };
+    const preview = store.previewDefinitionCombination(p.id, query); if (preview.status !== "recorded") assert.fail(preview.reason);
+    assert.equal(preview.preview.requestJobID, source.job.id); assert.equal(preview.preview.respondedAt, source.run.respondedAt ?? result.run.respondedAt);
+    const db = new Database(path), original = store.getJob(source.job.id);
+    for (const patch of [{ id: result.job.id }, { kind: undefined }, { expectedRevision: 1 }, { model: { providerID: "foreign", modelID: "unknown" } },
+      { context: { ...original.context!, includedIDs: [] } }, { status: "running", leaseUntil: Date.now() + 60000 }]) {
+      db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify({ ...original, ...patch }), source.job.id);
+      assert.equal(store.previewDefinitionCombination(p.id, query).status, "unavailable");
+    }
+    db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(original), source.job.id);
+    const savedRun = store.definitionJointReview(result.job.id)!;
+    db.prepare("UPDATE definition_joint_reviews SET payload = ? WHERE job_id = ?").run(JSON.stringify({ ...savedRun, jobID: source.job.id }), result.job.id);
+    assert.equal(store.previewDefinitionCombination(p.id, query).status, "unavailable", "Exact-job selection cannot silently substitute its original root");
+    db.prepare("UPDATE definition_joint_reviews SET payload = ? WHERE job_id = ?").run(JSON.stringify({ ...savedRun, result: { ...savedRun.result!, outcome: "blocked" } }), result.job.id);
+    assert.equal(store.previewDefinitionCombination(p.id, query).status, "unavailable");
+    db.prepare("UPDATE definition_joint_reviews SET payload = ? WHERE job_id = ?").run(JSON.stringify(savedRun), result.job.id);
+    db.prepare("DELETE FROM definition_request_witnesses WHERE job_id = ?").run(cs[0]!.jobID);
+    assert.equal(store.previewDefinitionCombination(p.id, query).status, "unavailable");
+    assert.deepEqual(store.get(p.id), p); assert.deepEqual(store.definitionJointReview(result.job.id), savedRun); db.close();
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("combined previews detect equal-numbered replacement, preserve old data across reopen and never restore missing current findings", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const { p, request } = await seed(store), missing = { ...p, assessments: [] };
+    let db = new Database(path); db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(missing), p.id); db.close();
+    const nextRequest = { ...request, snapshotKey: definitionDependencySnapshotKey(missing) };
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) { return supported(context); } }).reviewDefinitionCombination(p.id, nextRequest);
+    if (result.status !== "recorded") assert.fail(); assert.equal(result.job.status, "completed");
+    const query = { revision: p.revision, epicID: "orders", snapshotKey: nextRequest.snapshotKey, jobID: result.job.id };
+    const preview = store.previewDefinitionCombination(p.id, query); if (preview.status !== "recorded") assert.fail(preview.reason);
+    assert.ok(preview.preview.findings.every((f) => f.comparison === "not-recorded" && f.currentFinding === null));
+    assert.equal(coverage(store.get(p.id)).epics.find((e) => e.epicID === "orders")!.assessed, false);
+    db = new Database(path); const tables = ["projects", "revisions", "jobs", "definition_joint_reviews", "definition_publications", "definition_request_witnesses"];
+    const before = tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()); db.close(); store.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.previewDefinitionCombination(p.id, query), preview); store.close();
+      db = new Database(path); assert.deepEqual(tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()), before); db.close(); }
+    store = new ProjectStore(path); db = new Database(path); const replacement = structuredClone(missing); replacement.sources[0]!.text += " A replacement at the same revision";
+    db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(replacement), p.id); db.close();
+    assert.deepEqual(store.previewDefinitionCombination(p.id, query), { status: "unavailable", reason: "stale-view" });
+    assert.equal(store.projectRevision(p.id), p.revision); assert.deepEqual(store.get(p.id).assessments, []);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("combined preview size limits reject without shortening exact current or original findings", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
+  try {
+    const { p, request } = await seed(store), large = structuredClone(p);
+    large.assessments.find((a) => a.epicID === "orders")!.checks.forEach((c) => { c.explanation = "Exact current finding ".repeat(4000).trim(); });
+    const db = new Database(path); db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(large), p.id); db.close();
+    const nextRequest = { ...request, snapshotKey: definitionDependencySnapshotKey(large) };
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) { return supported(context); } }).reviewDefinitionCombination(p.id, nextRequest);
+    if (result.status !== "recorded") assert.fail(); assert.equal(result.job.status, "completed");
+    const before = store.get(p.id), jobs = store.jobs(p.id);
+    assert.deepEqual(store.previewDefinitionCombination(p.id, { revision: p.revision, epicID: "orders", snapshotKey: nextRequest.snapshotKey, jobID: result.job.id }),
+      { status: "unavailable", reason: "read-limit" });
+    assert.deepEqual(store.get(p.id), before); assert.deepEqual(store.jobs(p.id), jobs);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("pending and running joint checks cannot preview a combined finding set or consume another request", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, request } = await seed(store), started = store.beginDefinitionJointReview(p.id, request); if (started.status !== "started") assert.fail();
+    const query = { revision: p.revision, epicID: "orders", snapshotKey: request.snapshotKey, jobID: started.job.id };
+    assert.deepEqual(store.previewDefinitionCombination(p.id, query), { status: "unavailable", reason: "joint-check-incomplete" });
+    store.claimJob(started.job.id, Date.now() + 60000); const before = store.getJob(started.job.id);
+    assert.deepEqual(store.previewDefinitionCombination(p.id, query), { status: "unavailable", reason: "joint-check-incomplete" });
+    assert.deepEqual(store.getJob(started.job.id), before); assert.equal(store.definitionJointReview(started.job.id)!.reserved, false);
+  } finally { store.close(); }
+});
+
+test("combined preview refuses ambiguous current assessment/finding identities instead of choosing the first", async () => {
+  for (const duplicate of ["assessment", "dimension"]) {
+    const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
+    try {
+      const { p, request } = await seed(store), ambiguous = structuredClone(p), a = ambiguous.assessments.find((item) => item.epicID === "orders")!;
+      if (duplicate === "assessment") ambiguous.assessments.push(structuredClone(a)); else a.checks[1] = structuredClone(a.checks[0]!);
+      const db = new Database(path); db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(ambiguous), p.id); db.close();
+      const changedRequest = { ...request, snapshotKey: definitionDependencySnapshotKey(ambiguous) };
+      let calls = 0;
+      const result = await new DiscoveryService(store, { async analyze(_p, { context }) { calls++; return supported(context); } }).reviewDefinitionCombination(p.id, changedRequest);
+      if (result.status === "unavailable") {
+        assert.equal(result.reason, "whole-area-review-required"); assert.equal(calls, 0, "Existing guard admission may reject ambiguity before any joint call");
+      } else {
+        assert.equal(result.job.status, "completed");
+        assert.deepEqual(store.previewDefinitionCombination(p.id, { revision: p.revision, epicID: "orders", snapshotKey: changedRequest.snapshotKey, jobID: result.job.id }),
+          { status: "unavailable", reason: "ambiguous-current" });
+      }
+      assert.deepEqual(store.get(p.id), ambiguous);
+    } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+  }
+});
 
 test("joint browser APIs require exact explicit consent, isolate status and stop ownership, and never publish or retry on reads", async () => {
   const store = new ProjectStore(":memory:"), { p, request } = await seed(store); let calls = 0;
@@ -52,7 +344,7 @@ test("joint browser APIs require exact explicit consent, isolate status and stop
   const post = (action: string, input: unknown, auth = headers, projectID = p.id) => fetch(`${app.origin}/api/projects/${projectID}/${action}`, { method: "POST", headers: auth, body: JSON.stringify(input) });
   try {
     const input = { request, confirmAIUsage: true };
-    for (const action of ["definition-joint-start", "definition-joint-status", "definition-joint-stop", "definition-joint-usage"]) {
+    for (const action of ["definition-joint-start", "definition-joint-status", "definition-joint-stop", "definition-joint-usage", "definition-combination-preview", "definition-combination-save", "definition-combination-history", "definition-combination-read"]) {
       assert.equal((await post(action, input, { ...headers, "X-Reqwizit-Token": "wrong" })).status, 403);
       assert.equal((await post(action, input, { ...headers, Origin: "https://foreign.invalid" })).status, 403);
       assert.equal((await fetch(`${app.origin}/api/projects/${p.id}/${action}`, { headers })).status, 405);
@@ -94,6 +386,17 @@ test("joint browser start reuses completed checks and dated status survives rest
     const first = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
     const result = await (await post("definition-joint-status", { epicID: "orders", jobID: first.jobID })).json();
     assert.equal(result.jobStatus, "completed"); assert.equal(result.result.outcome, "model-supported"); assert.equal(calls, 1);
+    const previewQuery = { revision: p.revision, epicID: "orders", snapshotKey: request.snapshotKey, jobID: first.jobID };
+    const combination = await (await post("definition-combination-preview", previewQuery)).json(); assert.equal(combination.status, "recorded");
+    assert.equal(combination.preview.findings.length, 9); assert.equal(combination.preview.canPublish, false); assert.equal(calls, 1);
+    assert.equal((await post("definition-combination-preview", { ...previewQuery, confirmPublication: true })).status, 400);
+    const saveQuery = { ...previewQuery, previewKey: combination.preview.previewKey, confirmReviewed: true };
+    assert.equal((await post("definition-combination-save", { ...saveQuery, confirmReviewed: false })).status, 400);
+    assert.equal((await post("definition-combination-save", { ...saveQuery, preview: combination.preview })).status, 400);
+    const saved = await (await post("definition-combination-save", saveQuery)).json(); assert.equal(saved.status, "recorded"); assert.equal(saved.reused, false);
+    const savedAgain = await (await post("definition-combination-save", saveQuery)).json(); assert.equal(savedAgain.reused, true); assert.deepEqual(savedAgain.review, saved.review);
+    const history = await (await post("definition-combination-history", { epicID: "orders" })).json(); assert.equal(history.entries.length, 1);
+    assert.deepEqual(await (await post("definition-combination-read", { reviewID: saved.review.id })).json(), { status: "recorded", review: saved.review });
     assert.equal((await snapshot()).previousCoverage, previousCoverage, "Local joint judgement must not become the previous ordinary discovery round");
     const jobs = store.jobs(p.id); const repeated = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
     assert.equal(first.action, "new-attempt"); assert.equal(repeated.action, "completed-reuse");
@@ -101,9 +404,11 @@ test("joint browser start reuses completed checks and dated status survives rest
     await app.close(); store.close(); store = new ProjectStore(path);
     app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; assert.fail("Restart/status cannot authorize inference"); } } });
     assert.deepEqual(await (await post("definition-joint-status", { epicID: "orders" })).json(), result);
+    assert.deepEqual(await (await post("definition-combination-read", { reviewID: saved.review.id })).json(), { status: "recorded", review: saved.review });
     const changed = store.note(p.id, p.revision, "A later decision", "orders");
     assert.deepEqual(await (await post("definition-joint-status", { epicID: "orders" })).json(), result, "Dated result retains original dates and tokens");
     const stale = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json(); assert.equal(stale.status, "unavailable");
+    assert.equal((await (await post("definition-combination-save", saveQuery)).json()).status, "unavailable");
     assert.equal(calls, 1); assert.deepEqual(store.get(p.id).assessments, changed.assessments);
   } finally { await app.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
@@ -371,6 +676,7 @@ test("16 checkpoint formats reject future data unchanged; failed 15 to 16 migrat
     assert.deepEqual(db.prepare("SELECT payload FROM definition_joint_reviews").get(), { payload: future });
     db.prepare("UPDATE definition_joint_reviews SET payload = ?").run(JSON.stringify(original));
     // Reconstruct a true old database with no new-kind jobs or local joint table.
+    db.exec("DROP TABLE definition_combination_reviews;");
     db.exec("DROP TABLE definition_joint_reviews; DELETE FROM jobs WHERE json_extract(payload, '$.kind') = 'definition-joint-review'; DELETE FROM migration_history WHERE version >= 16; PRAGMA user_version = 15;");
     db.prepare("INSERT INTO processing_policy VALUES (?, ?)").run(p.id, JSON.stringify({ format: 999, version: 0, mode: "future" })); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 15);
@@ -442,7 +748,7 @@ test("15 to 16 adds no runs or permissions, preserves existing data/live leases 
   const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
   try {
     const { p } = await seed(store); const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000); store.close();
-    let db = new Database(path); db.exec("DROP TABLE definition_joint_reviews; DELETE FROM migration_history WHERE version >= 16; PRAGMA user_version = 15;");
+    let db = new Database(path); db.exec("DROP TABLE definition_combination_reviews;"); db.exec("DROP TABLE definition_joint_reviews; DELETE FROM migration_history WHERE version >= 16; PRAGMA user_version = 15;");
     const tables = ["projects", "revisions", "jobs", "definition_publications", "definition_request_witnesses", "workflow_state", "workflow_runs", "execution_leases"];
     const before = tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()); db.close();
     for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.get(p.id), p); store.close(); db = new Database(path);

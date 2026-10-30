@@ -13,8 +13,9 @@ import { migrateDefinitionStorageOrder } from "./definition-serialization.js";
 import { definitionPublicationSchema, definitionRequestWitnessSchema, definitionPublicationLimits } from "../core/definition-publication.js";
 import { definitionJointRunSchema, definitionJointPayloadBytes } from "./definition-joint-review.js";
 import { definitionJointReviewMarkerSchema } from "../core/definition-joint-review.js";
+import { definitionCombinationReviewSchema, definitionCombinationReviewBytes } from "../core/definition-combination-review.js";
 
-export const databaseSchemaVersion = 16;
+export const databaseSchemaVersion = 17;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -163,6 +164,10 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   db.exec(`CREATE TABLE definition_joint_reviews (project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT PRIMARY KEY REFERENCES jobs(id),
     candidate_key TEXT NOT NULL, payload TEXT NOT NULL);
     CREATE INDEX definition_joint_candidate ON definition_joint_reviews(project_id, candidate_key);`);
+} }, { version: 17, name: "saved-definition-combination-reviews-v1", apply(db: Database.Database) {
+  db.exec(`CREATE TABLE definition_combination_reviews (project_id TEXT NOT NULL REFERENCES projects(id), review_id TEXT PRIMARY KEY,
+    epic_id TEXT NOT NULL, preview_key TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(project_id, preview_key));
+    CREATE INDEX definition_combination_area ON definition_combination_reviews(project_id, epic_id);`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -178,6 +183,13 @@ export function migrateDatabase(db: Database.Database) {
       version = migration.version;
     }
     // Refuse future/corrupt payloads even when the database schema is supported.
+    for (const row of db.prepare("SELECT project_id, review_id, epic_id, preview_key, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM definition_combination_reviews")
+      .iterate(definitionCombinationReviewBytes) as Iterable<{ project_id: string; review_id: string; epic_id: string; preview_key: string; payload: string | null }>) {
+      if (!row.payload) throw new Error("Saved combination review exceeds its supported bound. Saved data was not overwritten.");
+      const review = definitionCombinationReviewSchema.parse(JSON.parse(row.payload));
+      if (review.id !== row.review_id || review.projectID !== row.project_id || review.epicID !== row.epic_id || review.preview.previewKey !== row.preview_key)
+        throw new Error("Saved combination review identity mismatch. Saved data was not overwritten.");
+    }
     for (const row of db.prepare("SELECT payload FROM execution_state").all() as { payload: string }[]) {
       const state = executionEnvelope.parse(JSON.parse(row.payload));
       if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution data format. Saved data was not overwritten.");

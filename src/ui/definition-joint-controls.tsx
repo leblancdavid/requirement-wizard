@@ -6,6 +6,8 @@ import { definitionDependencySnapshotKey } from "../core/definition-dependencies
 import { dimensionLabels } from "../core/epics.js";
 import { LogLink } from "./log-access.js";
 import { DefinitionJointUsage } from "./definition-joint-usage.js";
+import { DefinitionCombinationInspector } from "./definition-combination-preview.js";
+import { DefinitionCombinationHistory } from "./definition-combination-history.js";
 
 type View = Extract<DefinitionJointView, { status: "recorded" }>;
 const active = (view: View) => ["pending", "running"].includes(view.jobStatus);
@@ -110,7 +112,10 @@ export function DefinitionJointControls({ project, epicID, request, actions, dis
       </> : !live && <p>No completed joint verdict. Original findings and spent attempts remain saved. Continue only with a separate explicit action; a saved valid reply is reused when provable.</p>}
       <p>Local model judgement only—not formal consistency, completeness, readiness, approval or narrower independence. Publication stays disabled; existing whole-area review rules remain.</p>
       <LogLink target={view.jobID} />
+      {actions.combinationPreview && view.jobStatus === "completed" && view.result?.outcome === "model-supported" && <DefinitionCombinationInspector key={view.jobID}
+        project={project} epicID={epicID} jobID={view.jobID} enabled={savedMatches} inspect={actions.combinationPreview} reviews={actions.combinationReviews} saveDisabled={disabled} />}
     </section>}
     {actions.usage && <DefinitionJointUsage key={`${project.id}:${epicID}`} load={() => actions.usage!(epicID)} />}
+    {actions.combinationReviews && <DefinitionCombinationHistory key={`reviews:${project.id}:${epicID}`} project={project} epicID={epicID} actions={actions.combinationReviews} />}
   </section>;
 }

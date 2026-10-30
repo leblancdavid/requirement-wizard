@@ -1,5 +1,23 @@
 # Architecture outline
 
+`src/core/definition-combination-review.ts` defines strict immutable local review evidence;
+SQLite 17 adds `definition_combination_reviews` without changing project/assessment or
+portable formats. `ProjectStore.saveDefinitionCombinationReview` re-verifies the exact
+preview under worker/token guards in an immediate transaction and commits one record plus
+Activity entry, with idempotent reuse of the first save date. Bounded history/detail
+reads in `src/storage/definition-combination-review.ts` and explicit browser ack/save/history
+controls retain dated contents without current-assessment, approval or skip authority.
+The records are machine-local, not workspace/portable state. See [local reviews](definition-combination-reviews.md).
+
+`src/core/definition-combination-preview.ts` defines a transient exact-content packet;
+`src/storage/definition-combination-preview.ts` re-verifies one exact supported joint
+job, its original reserved reply owner and selected source publications in a read
+transaction. It compares original/current findings under full content/assessment tokens,
+never creates an assessment or publication permission. The explicit authenticated
+`definition-combination-preview` route and `src/ui/definition-combination-preview.tsx`
+expose the complete contents without AI, truncation or automatic reads. SQLite stays 16;
+persisted mixed publication remains a separate gate. See [combined preview](definition-combination-preview.md).
+
 Joint checks reuse the existing optional `DiscoveryMeasurement` job metadata, with
 request checkpoints before dispatch and zero-request recovery measured separately.
 `src/core/definition-joint-usage.ts` validates metadata-only, anonymized bounded reports;
