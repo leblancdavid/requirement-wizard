@@ -53,9 +53,11 @@ designed and tested in the core; it is not wired to automatic finding-level skip
 New validated definition-only reviews can also retain [local publication certificates](docs/definition-publication.md)
 binding original snapshots and verified app-owned request/response coverage. Older
 reviews stay valid without certificates; no new calls or automatic skips are authorized.
-An internal [per-finding origin preview](docs/definition-finding-origins.md) also preserves
+The [per-finding origin preview](docs/definition-finding-origins.md) also preserves
 individual original dates/evidence across selected reviews; it cannot publish mixed
 findings and does not prove narrower independence or joint consistency.
+Inspect it through **Overall progress → Inspect original finding sources**: explicitly
+load local sources and compare chosen origins without AI or assessment changes.
 An explicit internal [joint validation task](docs/definition-joint-review.md) can now
 review those findings together with one bounded request and retain/recover its local
 verdict without rewriting originals. It has no UI/automatic route or publication authority.

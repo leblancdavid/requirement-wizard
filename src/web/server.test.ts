@@ -14,6 +14,45 @@ import { randomUUID } from "node:crypto";
 import type { ActivityPage } from "../core/project-activity.js";
 import { snapshotHeader } from "./snapshot.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionDependencySnapshotKey } from "../core/definition-dependencies.js";
+import { DiscoveryService } from "../service/discovery.js";
+import { dimensions } from "../core/epics.js";
+
+test("original-finding inspection APIs require local auth and exact inputs, never create jobs or authorize model work", async () => {
+  const store = new ProjectStore(":memory:");
+  let p = store.create("Finding sources API", "Keep exact original evidence", { providerID: "openai", modelID: "fixture" });
+  const source = new DiscoveryService(store, { async analyze(input) { return { summary: "Original", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
+    assessments: [{ epicID: "inbox", confidence: "medium", explanation: "Unresolved", checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "partial", explanation: "Original gap", evidenceIDs: [input.sources[0]!.id] })) }] }; } });
+  assert.equal((await source.analyze(p.id, p.revision, { definitionEpicID: "inbox" })).status, "completed"); p = store.get(p.id);
+  const original = JSON.stringify({ p, jobs: store.jobs(p.id), history: store.history(p.id), workflow: store.workflow(p.id) }); let calls = 0;
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; assert.fail("Inspection cannot infer"); } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const query = { revision: p.revision, epicID: "inbox", snapshotKey: definitionDependencySnapshotKey(p) };
+  const post = (action: string, body: unknown, auth = headers) => fetch(`${app.origin}/api/projects/${p.id}/${action}`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+  try {
+    for (const action of ["definition-sources", "definition-origins"]) {
+      assert.equal((await post(action, query, { ...headers, "X-Reqwizit-Token": "wrong" })).status, 403);
+      assert.equal((await post(action, query, { ...headers, Origin: "https://foreign.invalid" })).status, 403);
+      assert.equal((await fetch(`${app.origin}/api/projects/${p.id}/${action}`, { headers })).status, 405);
+      assert.equal((await post(action, { ...query, confirmAIUsage: true })).status, 400);
+    }
+    assert.equal((await post("definition-sources", { ...query, beforeRevision: "2" })).status, 400);
+    const response = await post("definition-sources", query); assert.equal(response.status, 200); const page = await response.json();
+    assert.equal(page.status, "recorded"); assert.equal(page.entries.length, 1); assert.equal(page.entries[0].status, "verified");
+    const selections = dimensions.map((dimension) => ({ dimension, assessmentRevision: p.revision, certificateKey: page.entries[0].certificateKey }));
+    const preview = await (await post("definition-origins", { ...query, selections })).json();
+    assert.equal(preview.status, "recorded"); assert.equal(preview.preview.canPublish, false); assert.equal(preview.preview.consistency, "not-established");
+    assert.ok(preview.preview.findings.every((f: { state: string }) => f.state === "guard-match"));
+    assert.equal((await post("definition-origins", { ...query, selections: [...selections, selections[0]] })).status, 400);
+    const changed = store.note(p.id, p.revision, "New uncited decision", "inbox");
+    for (const action of ["definition-sources", "definition-origins"]) {
+      const stale = await (await post(action, action === "definition-origins" ? { ...query, selections } : query)).json();
+      assert.deepEqual(stale, { status: "unavailable", reason: "stale-view" });
+    }
+    assert.equal(calls, 0); assert.deepEqual(store.jobs(p.id), JSON.parse(original).jobs); assert.deepEqual(store.workflow(p.id), JSON.parse(original).workflow);
+    assert.deepEqual(changed.assessments, p.assessments);
+  } finally { await app.close(); store.close(); }
+});
 
 test("processing policy API is authenticated, revision checked, project local and never grants model calls", async () => {
   const store = new ProjectStore(":memory:"); let calls = 0;

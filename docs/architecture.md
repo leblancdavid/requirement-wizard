@@ -1,5 +1,13 @@
 # Architecture outline
 
+`src/storage/definition-source-inspection.ts` pages at most six locally re-verified
+publication certificates inside a read transaction, returning only original identity
+metadata. Authenticated `definition-sources`/`definition-origins` inspection routes run
+before generic project history projection. `src/ui/definition-source-inspection.tsx`
+offers explicit loading/selection/comparison in Overall progress, bound to full content
+and revision. There is no inference, automatic fetch, state write, publication or
+freshness change; SQLite stays 16. See [source inspection](definition-finding-origins.md#browser-inspection).
+
 `src/core/definition-joint-review.ts` defines exact candidate/context and verdict
 contracts; `src/storage/definition-joint-review.ts` verifies sources and local checkpoints.
 The explicit `DiscoveryService.reviewDefinitionCombination` task uses one reserved
@@ -14,7 +22,8 @@ authority. See [joint consistency review](definition-joint-review.md).
 inside a bounded SQLite read transaction. It re-verifies local publication certificates,
 retains each original date/job/evidence key and compares shared whole-area guards under
 a distinct inspection-only policy. It neither saves mixed assessments nor claims joint
-consistency/narrower independence; coverage, scheduling and SQLite 15 remain unchanged.
+consistency/narrower independence; coverage and scheduling remain unchanged. This
+original slice kept SQLite at 15; subsequent joint checkpoints advance it to 16.
 See [per-finding provenance](definition-finding-origins.md).
 
 `src/core/definition-dependencies.ts` compares original finding identities plus shared
@@ -24,7 +33,8 @@ add optional local publication evidence at validated definition-only saves. SQLi
 adds dispatch/response witnesses and atomically saved certificates; bounded reads
 re-verify original snapshots, actual context/result witnesses and complete single/staged
 coverage. Older work is never backfilled or repeated solely for certification. No
-scheduler/UI consumer, v1 freshness change or skip authority is added. See
+scheduler, v1 freshness change or skip authority is added. The later read-only browser
+inspector exposes certificate metadata without publication authority. See
 [publication evidence](definition-publication.md) and [activation gates](definition-dependency-protocol.md).
 
 `src/core/definition-retention.ts` compares complete original review identities and

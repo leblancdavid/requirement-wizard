@@ -12,6 +12,7 @@ import { describeDefinitionFindingOrigin, definitionFindingOriginSchema, type De
 import { definitionFindingPreviewLimits } from "./definition-finding-origin.js";
 import { coverage } from "../core/coverage.js";
 import type { Project, Analysis } from "../core/model.js";
+import { definitionSourcePageSize } from "./definition-source-inspection.js";
 
 const empty = { summary: "Fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] };
 async function seed(store: ProjectStore, twice = true) {
@@ -42,6 +43,76 @@ function preview(store: ProjectStore, p: Project, r: DefinitionFindingPreviewReq
   const result = store.previewDefinitionFindingOrigins(p.id, r); if (result.status !== "recorded") assert.fail(result.reason); return result.preview;
 }
 function folder() { mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true }); return mkdtempSync(resolve(".reqwizit-state/tests/finding-origins-")); }
+
+test("source catalogue pages are explicit bounded verified provenance, not compatibility or substitute archive searches", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { project: start } = await seed(store);
+    const service = new DiscoveryService(store, { async analyze(input) { return { ...empty, assessments: [{ epicID: "orders", confidence: "medium",
+      explanation: "Original source", checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "partial", explanation: "Unresolved", evidenceIDs: [input.sources[0]!.id] })) }] }; } });
+    for (let i = 0; i < 6; i++) { const p = store.get(start.id); assert.equal((await service.analyze(p.id, p.revision, { definitionEpicID: "orders" })).status, "completed"); }
+    const p = store.get(start.id), before = JSON.stringify({ p, jobs: store.jobs(p.id), history: store.history(p.id), workflow: store.workflow(p.id), maintenance: store.maintenance(p.id) });
+    const query = { revision: p.revision, epicID: "orders", snapshotKey: definitionDependencySnapshotKey(p) };
+    const page = store.inspectDefinitionSources(p.id, query); if (page.status !== "recorded") assert.fail(page.reason);
+    assert.equal(page.entries.length, definitionSourcePageSize); assert.equal(page.canPublish, false); assert.equal(page.authority, "inspection-only");
+    assert.equal(page.entries[0]!.assessmentRevision, p.revision); assert.equal(page.nextBeforeRevision, p.revision - 5);
+    const revisions: number[] = [];
+    for (const entry of page.entries) {
+      assert.equal(entry.status, "verified"); if (entry.status !== "verified") assert.fail();
+      assert.equal(entry.origins.length, 9); revisions.push(entry.assessmentRevision);
+      const verified = store.definitionPublication(p.id, "orders", entry.assessmentRevision); if (verified.status !== "recorded") assert.fail();
+      assert.equal(entry.certificateKey, digest(verified.certificate));
+      assert.ok(entry.origins.every((o) => o.assessmentRevision === entry.assessmentRevision && o.publishedAt === verified.certificate.publishedAt));
+    }
+    const older = store.inspectDefinitionSources(p.id, { ...query, beforeRevision: page.nextBeforeRevision! }); if (older.status !== "recorded") assert.fail();
+    assert.equal(older.entries.length, 2); assert.equal(older.nextBeforeRevision, null);
+    assert.ok(older.entries.every((e) => !revisions.includes(e.assessmentRevision)));
+    assert.equal(JSON.stringify(page).includes("Original source"), false); assert.equal(JSON.stringify(page).includes(p.sources[0]!.text), false);
+    assert.equal(JSON.stringify({ p: store.get(p.id), jobs: store.jobs(p.id), history: store.history(p.id), workflow: store.workflow(p.id), maintenance: store.maintenance(p.id) }), before);
+    assert.equal(store.inspectDefinitionSources(p.id, { ...query, snapshotKey: "f".repeat(64) }).status, "unavailable");
+    assert.equal(store.inspectDefinitionSources(p.id, { ...query, revision: p.revision - 1 }).status, "unavailable");
+    assert.equal(store.inspectDefinitionSources(p.id, { ...query, beforeRevision: 0 }).status, "unavailable");
+    const absent = store.inspectDefinitionSources(p.id, { ...query, epicID: "other" }); if (absent.status !== "recorded") assert.fail(); assert.deepEqual(absent.entries, []);
+  } finally { store.close(); }
+});
+
+test("source catalogue retains missing legacy provenance, unavailable witnesses and equal-revision replacement without writes across reopen", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const { project: p, certificates } = await seed(store), query = { revision: p.revision, epicID: "orders", snapshotKey: definitionDependencySnapshotKey(p) };
+    const db = new Database(path);
+    db.prepare("DELETE FROM definition_request_witnesses WHERE job_id = ?").run(certificates[0]!.jobID);
+    const before = db.prepare("SELECT payload FROM projects WHERE id = ?").get(p.id);
+    const page = store.inspectDefinitionSources(p.id, query); if (page.status !== "recorded") assert.fail();
+    assert.equal(page.entries[0]!.status, "verified"); assert.equal(page.entries[1]!.status, "unavailable");
+    // A same-numbered replacement must invalidate the view token even without a new revision.
+    const replaced = structuredClone(p); replaced.sources[0]!.text += " changed";
+    db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(replaced), p.id);
+    const stale = store.inspectDefinitionSources(p.id, query); assert.deepEqual(stale, { status: "unavailable", reason: "stale-view" });
+    db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run((before as { payload: string }).payload, p.id);
+    db.prepare("DELETE FROM definition_publications WHERE project_id = ?").run(p.id);
+    const legacy = store.inspectDefinitionSources(p.id, query); if (legacy.status !== "recorded") assert.fail(); assert.deepEqual(legacy.entries, []);
+    assert.deepEqual(db.prepare("SELECT payload FROM projects WHERE id = ?").get(p.id), before); db.close(); store.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.get(p.id), p);
+      assert.deepEqual(store.inspectDefinitionSources(p.id, query), legacy); store.close(); }
+    store = new ProjectStore(":memory:");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("source catalogue rejects unread oversized/future certificates without returning prose or changing saved work", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
+  try {
+    const { project: p, certificates } = await seed(store), query = { revision: p.revision, epicID: "orders", snapshotKey: definitionDependencySnapshotKey(p) };
+    const before = store.get(p.id), db = new Database(path);
+    db.prepare("UPDATE definition_publications SET payload = ? WHERE assessment_revision = ?").run("x".repeat(2 * 1024 * 1024 + 1), certificates[0]!.assessmentRevision);
+    db.prepare("UPDATE definition_publications SET payload = ? WHERE assessment_revision = ?").run(JSON.stringify({ ...certificates[1], format: 999 }), certificates[1]!.assessmentRevision);
+    const saved = db.prepare("SELECT payload FROM definition_publications ORDER BY assessment_revision").all();
+    const page = store.inspectDefinitionSources(p.id, query); if (page.status !== "recorded") assert.fail();
+    assert.deepEqual(page.entries.map((e) => e.status === "unavailable" ? e.reason : "verified"), ["invalid-certificate", "read-limit"]);
+    assert.ok(JSON.stringify(page).length < 1500); assert.deepEqual(store.get(p.id), before);
+    assert.deepEqual(db.prepare("SELECT payload FROM definition_publications ORDER BY assessment_revision").all(), saved); db.close();
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("mixed-source previews retain each finding's actual original date, job and evidence without claiming joint consistency", async () => {
   const store = new ProjectStore(":memory:");

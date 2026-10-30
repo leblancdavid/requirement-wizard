@@ -1,5 +1,36 @@
 # Data migrations and upgrade compatibility
 
+## Browser inspection of original finding sources (2026-10-30)
+
+**Read-only UI/API addition; no persisted conversion.** Source/target SQLite remains
+**16**, execution remains schema 2, and all project/job/assessment/certificate/portable
+formats, semantic/freshness keys and optimistic counters are unchanged. The new
+format-1 `definition-source-inspection-v1` response is transient metadata, not saved
+assessment authority. No new table, startup backfill, origin rebasing or model call is
+required. Existing uncertified/portable reviews remain valid under their old rules;
+missing provenance never forces repeat inference.
+
+Explicit bounded source pages re-verify at most six local certificates in one read
+transaction. Existing source-reader bounds apply; future/oversized/missing evidence
+stays unavailable without overwriting it. Explicit per-dimension comparisons reuse
+the existing guarded original-provenance preview. APIs run before generic project
+history projection and make no writes. Revision/full-content tokens detect stale and
+equal-revision replacement. Selection, polling, reload and failures never repeat reads
+or consume model allowance automatically. The browser keeps only one page and clears
+selection on page changes; there is no new persisted browser setting or continuation.
+
+Tests cover preservation/repeated reopening with legacy missing certificates, missing
+witnesses, malformed/future/oversized sources, bounded pagination, strict API guards,
+partial/mixed selection, stale/concurrent changes and no inference or assessment writes.
+See [browser behavior and limits](definition-finding-origins.md#browser-inspection).
+
+Verification: type check, all **1,222** deterministic tests (518 pretests + 704 main),
+the focused source-inspection browser, the full eight-runner default browser aggregate
+(including UI build), and diff check passed. The aggregate's old nine-section assertion
+was updated for the added inspector and now checks its collapsed/no-read controls.
+Existing bundle-size warning remains. No live inference, commits/pushes or desktop
+packaging were performed; large-project source-replay performance remains unqualified.
+
 ## Joint definition consistency review (2026-10-30)
 
 **Implemented forward migration:** SQLite **15 → 16**, named

@@ -34,6 +34,7 @@ import type { ContextPack } from "../core/context.js";
 import { definitionPublicationContext, type DefinitionPublicationContext } from "../core/definition-publication.js";
 import { beginDefinitionRequest, finishDefinitionRequest, saveDefinitionPublication, readDefinitionPublication } from "./definition-publication.js";
 import { previewDefinitionFindingOrigins } from "./definition-finding-origin.js";
+import { inspectDefinitionSources } from "./definition-source-inspection.js";
 import { definitionFindingPreviewRequestSchema } from "../core/definition-finding-origin.js";
 import { prepareDefinitionJointReview, readDefinitionJointRun, writeDefinitionJointRun, reusableDefinitionJointRun } from "./definition-joint-review.js";
 import { definitionJointReviewMarkerSchema, validateDefinitionJointResponse } from "../core/definition-joint-review.js";
@@ -1447,6 +1448,9 @@ export class ProjectStore {
   }
   previewDefinitionFindingOrigins(projectID: string, request: unknown) {
     return this.db.transaction(() => previewDefinitionFindingOrigins(this.db, projectID, request)).deferred();
+  }
+  inspectDefinitionSources(projectID: string, query: unknown) {
+    return this.db.transaction(() => inspectDefinitionSources(this.db, projectID, query)).deferred();
   }
   prepareDefinitionJointReview(projectID: string, request: unknown) {
     return this.db.transaction(() => prepareDefinitionJointReview(this.db, projectID, request)).deferred();

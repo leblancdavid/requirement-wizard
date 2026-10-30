@@ -1,9 +1,44 @@
 # Original provenance for individual definition findings
 
-Status, 2026-10-30: **implemented internal read-only preview**, not mixed review
-publication or automatic finding-level reuse. There is no browser/HTTP endpoint or
-scheduler consumer. Continue specification, assessments and coverage retain their
-existing behavior and permissions.
+Status, 2026-10-30: **implemented read-only engine and browser inspection**, not mixed
+review publication or automatic finding-level reuse. Overall progress exposes explicit
+local source loading and comparison through authenticated inspection endpoints. There
+is no scheduler consumer. Continue specification, assessments and coverage retain
+their existing behavior and permissions.
+
+## Browser inspection
+
+Open **Overall progress → Inspect original finding sources**, choose an active area,
+then **Load saved sources**. Opening the drawer/disclosure or choosing an area performs
+no history read or model call. Loading explicitly requests at most six local publication
+certificate records, newest first; **Load older sources** advances by original revision.
+Every returned selectable source is independently re-verified against its original
+snapshots, jobs and request/response witnesses. The list is not a complete review archive:
+uncertified legacy/portable reviews are not scanned, invalidated or repeated to populate it.
+Unavailable certificate records remain labelled unavailable rather than being substituted.
+
+Choose an original review separately for each dimension, then **Compare selected
+origins**. Nothing is selected by default and selection itself performs no read or AI
+request. Partial selections explicitly leave other dimensions unselected. This initial
+UI supports combinations within one six-record page; loading another page clears
+selections/results rather than accumulating unbounded evidence. The comparison retains
+original publication dates, input/review revisions, source jobs and finding identities.
+It copies no historical evidence prose into the browser response. A matching full-area
+guard is not proof that a gap is resolved or that combined conclusions are consistent.
+
+Source lists and comparisons are bound to the requested project revision and full
+content token. Polling detects ordinary changes and equal-numbered replacement, dates
+old results and disables comparison until an explicit reload. Concurrent changes reject
+the read; there is no automatic retry. Reopening/reloading does not replay reads or
+persist selections. These controls remain local reads even while other workers are live;
+they do not claim leases, change grants or resume workers.
+
+`POST /api/projects/:id/definition-sources` accepts a strict current revision, area,
+snapshot token and optional exclusive `beforeRevision` cursor.
+`POST /api/projects/:id/definition-origins` accepts the strict existing preview request
+below. Both use the loopback API's token/host/origin/body guards, reject non-POST methods
+and dispatch before generic `get()` so inspection does not trigger legacy history
+projection. Neither endpoint exposes joint model validation or publication.
 
 ## Content-bound original identity
 
@@ -118,7 +153,24 @@ missing current assessments and archived targets. No model inference is used.
 npx tsx --test src/storage/definition-finding-origin.test.ts
 ```
 
-Verification: all **12 origin tests**, full **1,196-test** deterministic suite, type
+Initial internal-preview verification: all **12 origin tests**, full **1,196-test** deterministic suite, type
 check, production UI build and diff check passed. Browser runners were not rerun for
 this internal read-only change. The existing bundle-size warning remains. No live
 inference, personal-project writes, commits/pushes or desktop packaging were performed.
+
+The browser slice adds catalogue tests for six-record pagination, exact original
+identity, missing legacy provenance/witnesses, future/oversized certificates and
+equal-revision replacement with unchanged data across reopen. API checks cover strict
+inputs, auth/origin/method rejection and no inference/jobs. The browser runner covers
+explicit local reads, partial/mixed selections, original dates, concurrent edits,
+missing witnesses, dated results, keyboard/mobile layout and reload without replay:
+
+```powershell
+npm run test:browser:definition-sources
+```
+
+Browser-slice verification: type check, all **1,222** deterministic tests (518 pretests
+and 704 main), focused source-inspection browser, the full eight-runner default browser
+aggregate/UI build and diff check passed. This includes unavailable/concurrent reads,
+mobile layout and unchanged saved assessments. The existing bundle-size warning remains;
+large-project source-replay cost is not qualified. No live model calls were made.

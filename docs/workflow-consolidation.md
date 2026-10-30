@@ -15,6 +15,16 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Original-source inspection UI implemented (2026-10-30):** Overall progress offers
+  explicit bounded certificate loading and per-dimension original-source comparison.
+  Original dates/jobs/identities remain distinct; partial selections stay incomplete
+  and matching guards never imply joint consistency or narrower independence. Loading,
+  comparison and pagination are explicit local reads, not AI actions or publication.
+  No persisted format, freshness key, grant or saved review changes. Missing legacy
+  certificates remain unavailable without forcing reassessment. Joint model validation
+  remains engine-only; automatic skips and mixed publication remain unfinished. See
+  [browser scope and limits](definition-finding-origins.md#browser-inspection).
+
 - **Saved-review provenance slice implemented:** new specification-run receipts record
   original review identities that remain unchanged and current at both run boundaries.
   The drawer shows original revisions and finding counts separately from today's

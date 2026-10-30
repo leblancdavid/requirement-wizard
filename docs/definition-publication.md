@@ -3,10 +3,11 @@
 Status: **implemented local publication evidence**, not automatic finding-level reuse.
 New validated assessment-only definition refreshes may issue format-1
 `definition-publication-v1` certificates. General discovery assessments, older saved
-reviews and model-supplied declarations cannot self-issue them. No new UI/API action,
-inference permission or scheduler consumes these certificates yet. An explicit internal
-[per-finding origin preview](definition-finding-origins.md) now re-verifies them as dated
-sources without changing saved reviews or granting publication/skip authority.
+reviews and model-supplied declarations cannot self-issue them. No scheduler or skip
+permission consumes these certificates. The explicit read-only
+[per-finding origin preview](definition-finding-origins.md), now exposed in Overall
+progress, re-verifies them as dated sources without changing saved reviews or granting
+publication/skip authority. Joint model validation remains a separate engine-only action.
 
 ## What is witnessed
 

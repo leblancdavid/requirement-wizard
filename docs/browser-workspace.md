@@ -1,5 +1,19 @@
 # Browser workspace, epics, and estimated completeness
 
+## Original finding provenance inspection (2026-10-30)
+
+**Overall progress → Inspect original finding sources** exposes explicit local source
+loading and per-dimension original-review selection. Opening/selecting performs no
+history request; **Load saved sources** reads up to six verified local certificate
+records, and **Compare selected origins** separately compares the chosen original
+whole-area guards. Original dates/jobs/identities remain distinct. Missing older
+certificates do not invalidate saved reviews. Loading another page clears selections;
+there is no automatic replay after polling/reload or concurrent changes. Stale results
+are dated, including equal-numbered replacement. No AI, restoration, score refresh,
+joint-consistency proof, skip permission or mixed publication is provided. See
+[scope and limits](definition-finding-origins.md#browser-inspection).
+Focused check: `npm run test:browser:definition-sources`, also in `npm run test:browser`.
+
 ## Consolidated-flow regression checks (2026-10-29)
 
 The default `npm run test:browser` now passes beyond its former Project map blocker,

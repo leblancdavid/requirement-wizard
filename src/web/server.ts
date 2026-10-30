@@ -37,6 +37,8 @@ import { SnapshotEncoder, parseSnapshotTokens, snapshotHeader } from "./snapshot
 import { savedEvidencePolicySchema } from "../core/gap-navigation.js";
 import { canContinueGapExploration } from "../core/gap-retrieval.js";
 import { resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
+import { definitionSourceQuerySchema } from "../core/definition-source-inspection.js";
+import { definitionFindingPreviewRequestSchema } from "../core/definition-finding-origin.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -192,6 +194,13 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
         const input = z.object({ revision, epicID: z.string().min(1).max(500) }).strict().parse(await body(req));
         json(res, 200, options.store.definitionImpact(id, input.revision, input.epicID)); return;
+      }
+      if (action === "definition-sources" || action === "definition-origins") {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        const raw = await body(req);
+        json(res, 200, action === "definition-sources"
+          ? options.store.inspectDefinitionSources(id, definitionSourceQuerySchema.parse(raw))
+          : options.store.previewDefinitionFindingOrigins(id, definitionFindingPreviewRequestSchema.parse(raw))); return;
       }
       const project = options.store.get(id);
       if (req.method === "GET" && !action) {

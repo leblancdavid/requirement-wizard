@@ -109,8 +109,9 @@ and live provider quality are not qualified by these deterministic bounds.
    dependencies, population/absence guards, global interpretation, scope and negative
    assumptions. A partition must account for new/removed evidence and cross-area
    interactions. Without a sound partition, retain the v1 whole-area guard/fallback.
-3. **Mixed publication (origin preview foundation implemented):** an internal read-only
-   preview now retains each selected finding's verified original date, source job and
+3. **Mixed publication (origin preview foundation implemented):** a read-only
+   preview, with explicit source loading/selection in Overall progress, now retains
+   each selected finding's verified original date, source job and
    evidence identities under shared whole-area guards. It always disables publication
    and leaves joint consistency unproved; it neither restores nor rewrites findings.
    A separate explicit [joint validation task](definition-joint-review.md) now saves
