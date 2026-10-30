@@ -480,7 +480,8 @@ export function acceptDefinitionStage(project: Project, work: DefinitionWork, dr
 
 /** Reconstruct every stage from saved exact evidence and its prior draft. No
  * partial batch results or unverified summaries can certify whole-area coverage. */
-export function replayDefinitionStages(project: Project, work: DefinitionWork): Analysis | undefined {
+export type DefinitionStageVisitor = (context: ContextPack, receipt: DefinitionWork["receipts"][number], phase: "collect" | "verify") => void;
+export function replayDefinitionStages(project: Project, work: DefinitionWork, visit?: DefinitionStageVisitor): Analysis | undefined {
   validateDefinitionPlan(project, work);
   let draft: Analysis | undefined;
   for (let index = 0; index < work.receipts.length; index++) {
@@ -489,8 +490,10 @@ export function replayDefinitionStages(project: Project, work: DefinitionWork): 
     validateFollowupPolicy(project, prefix);
     validateEvidenceRequest(project, prefix, draft);
     validateEvidenceFollowups(project, prefix, draft);
-    if (receipt.contextKey !== digest(definitionStageContext(project, prefix, draft).data)) throw new Error("Saved definition stage does not match its exact evidence/draft. Original work retained; no completed call replayed.");
+    const context = definitionStageContext(project, prefix, draft), phase = definitionPhase(prefix);
+    if (phase === "complete" || receipt.contextKey !== digest(context.data)) throw new Error("Saved definition stage does not match its exact evidence/draft. Original work retained; no completed call replayed.");
     draft = advanceDraft(project, prefix, draft, receipt.response);
+    visit?.(context, receipt, phase);
   }
   if (definitionPhase(work) !== "complete") {
     validateFollowupPolicy(project, work);
@@ -540,8 +543,8 @@ function validateEvidenceFollowups(project: Project, work: DefinitionWork, draft
   }
 }
 
-export function completedDefinitionAssessment(project: Project, work: DefinitionWork): Analysis {
-  const output = replayDefinitionStages(project, work);
+export function completedDefinitionAssessment(project: Project, work: DefinitionWork, visit?: DefinitionStageVisitor): Analysis {
+  const output = replayDefinitionStages(project, work, visit);
   if (!output || definitionPhase(work) !== "complete" || work.blocked) throw new Error("Partial or blocked staged definition assessment cannot publish whole-area coverage.");
   // Independent batch checks cannot establish high confidence in every cross-batch
   // relationship. Preserve this explicit limitation in saved/UI method metadata.

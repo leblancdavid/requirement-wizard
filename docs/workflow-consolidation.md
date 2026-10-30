@@ -15,6 +15,14 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Saved-review provenance slice implemented:** new specification-run receipts record
+  original review identities that remain unchanged and current at both run boundaries.
+  The drawer shows original revisions and finding counts separately from today's
+  pending work. This is not an intermediate-state/dispatch-skip certificate or a count
+  of requests saved. SQLite 13→14 adds optional local receipt fields without rewriting
+  older receipts, changing assessment freshness or renewing allowance. Missing older
+  start witnesses remain unavailable. See [compatibility](migrations.md#retained-definition-reviews-in-specification-runs-2026-10-29).
+
 - **Protected-project recovery enabled:** explicit missing-definition recovery now
   records an exact recovery-only revision certificate alongside execution state.
   Otherwise-current plans, legacy code findings and paused-run revision matching retain
@@ -228,7 +236,8 @@ ending is backfilled after upgrade, lease loss or a crash. The original starting
 snapshot must still match exactly to publish net counts. Today's pending work remains
 separate. SQLite 10→11 adds a local table; original evidence, grants and freshness
 identities are unchanged. Only the latest receipt is presented for now; multi-pass,
-cross-operation reports and explicit reused-check provenance remain future work.
+cross-operation reports and dispatch-level reused-check provenance remain future work.
+The newer retained-review slice records exact start/end identity only, not dispatch skips.
 See [compatibility](migrations.md#bounded-specification-run-receipts-2026-10-29).
 
 The coordinator repairs **outdated existing reviews** before new gap discovery,
@@ -325,6 +334,29 @@ keyboard access, saved-work explanations, save-only/manual/automatic modes, rest
 consent, and specification-to-planning-to-coding boundaries.
 
 ## Phase 4 — Safely reduce rechecking
+
+**Per-finding origin preview foundation implemented (2026-10-30):** an explicit internal
+read re-verifies selected publication sources and retains each original finding's own
+revision/date/job/evidence identity. Sources can come from different reviews without
+rebasing dates. Shared original full-area guards are compared separately from today's
+whole-assessment identity. The result always disables mixed publication and leaves
+joint consistency unproved; it changes no SQLite 15 data, existing freshness, workers
+or permissions. Narrower partitions and mixed-result saving remain unfinished. See
+[origin provenance and limits](definition-finding-origins.md).
+
+**Dependency-protocol design/test slice:** `src/core/definition-dependencies.ts` now
+constructs and re-verifies bounded original per-finding identities under an app-owned
+whole-area population guard. It covers uncited new/removed evidence, linked external
+areas, scoped answers/authority, supersession, interpretation and same-numbered content
+replacement. Its comparisons remain inspection-only, with no scheduling or UI consumer.
+The next publication-evidence slice now issues optional local certificates atomically
+with validated definition-only reviews. These bind original snapshots, app-owned
+context/response witnesses and full single/staged record coverage; readers independently
+re-verify their sources. SQLite 14→15 adds local tables without changing old progress,
+job formats, keys or allowance, and never backfills missing witnesses. No automatic
+skips or request reduction are claimed. Sound narrower partitions and per-finding
+mixed-result provenance remain required before activation. See [publication evidence](definition-publication.md)
+and [protocol/gates](definition-dependency-protocol.md).
 
 **Implemented first foundation:** explicit **Overall progress → Inspect changes
 since a definition review** compares finding citation/link closures against one

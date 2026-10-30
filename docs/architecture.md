@@ -1,5 +1,31 @@
 # Architecture outline
 
+`src/core/definition-finding-origin.ts` supplies content-bound original finding identities;
+`src/storage/definition-finding-origin.ts` previews explicit dimension/source selections
+inside a bounded SQLite read transaction. It re-verifies local publication certificates,
+retains each original date/job/evidence key and compares shared whole-area guards under
+a distinct inspection-only policy. It neither saves mixed assessments nor claims joint
+consistency/narrower independence; coverage, scheduling and SQLite 15 remain unchanged.
+See [per-finding provenance](definition-finding-origins.md).
+
+`src/core/definition-dependencies.ts` compares original finding identities plus shared
+whole-area/population guards against a content-bound current view, with inspection-only
+authority. `src/core/definition-publication.ts` and `src/storage/definition-publication.ts`
+add optional local publication evidence at validated definition-only saves. SQLite 15
+adds dispatch/response witnesses and atomically saved certificates; bounded reads
+re-verify original snapshots, actual context/result witnesses and complete single/staged
+coverage. Older work is never backfilled or repeated solely for certification. No
+scheduler/UI consumer, v1 freshness change or skip authority is added. See
+[publication evidence](definition-publication.md) and [activation gates](definition-dependency-protocol.md).
+
+`src/core/definition-retention.ts` compares complete original review identities and
+existing conservative input bases at specification-run boundaries. New local format-1
+run receipts bind current start/end snapshots and store bounded dated identity metadata;
+the workflow drawer shows original revisions without relabeling today's status.
+SQLite 13→14 preserves older receipts unchanged and never backfills missing witnesses.
+This changes neither scheduler/freshness rules nor consent and is not finding-level
+reuse or a skipped-request certificate. See [compatibility](migrations.md#retained-definition-reviews-in-specification-runs-2026-10-29).
+
 Definition persistence uses `src/core/definition-serialization.ts` to normalize
 evidence property order before stamping new reviews without changing the frozen v1
 digest. Its ordering-only proof compares exact original raw/parsed digest documents

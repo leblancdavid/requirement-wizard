@@ -71,6 +71,14 @@ atomic publication, stale-result checks and preservation of previous completed w
 Unknown dependencies, ambiguous scope or insufficient context must still fall back to
 whole-area review. Calling a mutation “wording cleanup” is not a semantic proof.
 
+An [inspection-only dependency-protocol prototype](definition-dependency-protocol.md)
+now tests app-owned per-finding identities with a shared whole-area population guard.
+It is not wired to this inspector or scheduling and enables no automatic skips.
+An optional [local publication/coverage layer](definition-publication.md) now binds
+new validated definition-only reviews to exact app-owned context/response witnesses;
+older reviews remain valid without it. Finer-grained partitions, mixed publication
+and skip activation remain unfinished.
+
 ## Checks
 
 `src/storage/definition-impact.test.ts` covers original/full-context matches, new

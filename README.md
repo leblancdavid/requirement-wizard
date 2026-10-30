@@ -41,9 +41,21 @@ bounded allowance from **Continue specification**, holding separate automatic wo
 Saving a mode starts no work. See [processing permissions](docs/processing-permissions.md).
 Processing & queue also shows a dated **Last specification run** receipt across the
 run's steps, separate from today's pending work and the latest individual change.
+New run receipts also identify original definition reviews unchanged and current at
+both run boundaries, without claiming skipped calls or resolved findings. Older
+receipts are preserved without reconstructed provenance; see
+[compatibility](docs/migrations.md#retained-definition-reviews-in-specification-runs-2026-10-29).
 **Overall progress → Inspect changes since a definition review** compares saved inputs
 without AI calls. Unchanged citations do not justify skipping a whole-area review;
 see [finding impact](docs/definition-finding-impact.md).
+An [inspection-only dependency protocol](docs/definition-dependency-protocol.md) is
+designed and tested in the core; it is not wired to automatic finding-level skips.
+New validated definition-only reviews can also retain [local publication certificates](docs/definition-publication.md)
+binding original snapshots and verified app-owned request/response coverage. Older
+reviews stay valid without certificates; no new calls or automatic skips are authorized.
+An internal [per-finding origin preview](docs/definition-finding-origins.md) also preserves
+individual original dates/evidence across selected reviews; it cannot publish mixed
+findings and does not prove narrower independence or joint consistency.
 Definition reviews no longer become outdated merely because saving reordered object
 properties. SQLite 12→13 repairs older keys only with proof from their original raw
 snapshot, preserving evidence, history, revisions and spent attempts; real changes

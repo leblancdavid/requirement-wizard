@@ -1,20 +1,25 @@
 import { z } from "zod";
 import type { Project } from "./model.js";
+import { definitionRetentionSchema } from "./definition-retention.js";
 
 const count = z.number().int().nonnegative();
 export const workflowRunSchema = z.object({ format: z.literal(1), id: z.string().uuid(), grantID: z.string(),
   fromRevision: z.number().int().positive(), fromSnapshotKey: z.string().regex(/^[a-f0-9]{64}$/), startedAt: z.string().datetime(), initialUsed: count.max(8),
   requests: count.max(8), jobIDs: z.array(z.string()).max(8),
+  retentionStartKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   result: z.object({ throughRevision: z.number().int().positive(), endedAt: z.string().datetime(),
     phase: z.enum(["idle", "working", "needs-decision", "blocked", "paused", "ready-to-plan"]),
     changes: z.array(z.object({ label: z.enum(["decision", "requirement", "question", "feature", "research source", "refinement", "definition review"]),
       added: count, updated: count, removed: count }).strict()).max(7),
     jobs: z.object({ completed: count, unfinished: count, stopped: count }).strict(),
+    retainedDefinitions: definitionRetentionSchema.optional(),
   }).strict().optional(),
 }).strict().superRefine((run, context) => {
   if (run.initialUsed + run.requests > 8 || new Set(run.jobIDs).size !== run.jobIDs.length || run.jobIDs.length > run.requests
     || run.result && (run.result.throughRevision < run.fromRevision || Date.parse(run.result.endedAt) < Date.parse(run.startedAt)
-      || run.result.jobs.completed + run.result.jobs.unfinished + run.result.jobs.stopped !== run.jobIDs.length))
+      || run.result.jobs.completed + run.result.jobs.unfinished + run.result.jobs.stopped !== run.jobIDs.length
+      || run.result.retainedDefinitions && !run.retentionStartKey
+      || run.result.retainedDefinitions?.reviews.some((r) => r.assessmentRevision > run.fromRevision)))
     context.addIssue({ code: "custom", message: "Inconsistent specification run receipt." });
 });
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

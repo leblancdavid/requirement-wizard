@@ -207,6 +207,12 @@ test("run receipts distinguish a whole worker pass from its latest change and do
     const next = store.latestWorkflowRun(p.id)!;
     assert.notEqual(next.id, first.id); assert.equal(next.initialUsed, 0);
     assert.equal(next.requests, 0); assert.deepEqual(next.jobIDs, []); assert.deepEqual(next.result!.changes, []);
+    const retained = next.result!.retainedDefinitions!;
+    assert.equal(retained.status, "recorded"); assert.ok(retained.reviews.length > 0);
+    for (const review of retained.reviews) {
+      const assessment = store.get(p.id).assessments.find((a) => a.epicID === review.epicID)!;
+      assert.equal(review.assessmentRevision, assessment.atRevision); assert.equal(review.inputBasisKey, assessment.inputBasis!.key);
+    }
     assert.equal(calls.length, before, "Reading/reusing completed work needs no repeat calls");
   } finally { await workflow.close(); store.close(); }
 });
@@ -789,7 +795,7 @@ test("schema-6 upgrade adds only workflow metadata and is rollback-safe with no 
   let store = new ProjectStore(path);
   try {
     const p = seed(store), original = store.get(p.id), jobs = store.jobs(p.id), maintenance = store.maintenance(p.id); store.close();
-    let db = new Database(path); db.exec("DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version >= 7; PRAGMA user_version = 6;");
+    let db = new Database(path); db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE workflow_state; DROP TABLE workflow_readiness_receipts; DROP INDEX epic_planning_context_pool; DELETE FROM migration_history WHERE version >= 7; PRAGMA user_version = 6;");
     const bytes = (db.prepare("SELECT payload FROM projects WHERE id = ?").get(p.id) as { payload: string }).payload;
     db.exec("CREATE TRIGGER fail_workflow BEFORE INSERT ON migration_history WHEN new.version = 7 BEGIN SELECT RAISE(ABORT, 'Simulated workflow migration interruption'); END;"); db.close();
     assert.throws(() => new ProjectStore(path), /Simulated workflow migration interruption/);

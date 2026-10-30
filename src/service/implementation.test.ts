@@ -596,7 +596,7 @@ test("one implementation check preserves local/main evidence, updates delivery, 
       if (a.contextFingerprint) { const [, data, paths] = JSON.parse(a.contextFingerprint); a.contextFingerprint = JSON.stringify([data, paths, legacyAssessmentSkillDocument]); }
     }
     legacyDB.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(JSON.stringify(saved), p.id);
-    legacyDB.exec("DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE project_activity; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;"); legacyDB.close();
+    legacyDB.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DROP TABLE workflow_runs; DROP TABLE processing_policy; DROP TABLE project_activity; DROP TABLE migration_history; DROP TABLE execution_migration_backups; PRAGMA user_version = 1;"); legacyDB.close();
     store = new ProjectStore(join(directory, "state.sqlite"));
     service = new ImplementationService(store, { async perform() { assert.fail("Saved unknown assessment must be reused after upgrade"); } });
     service.start(p.id, p.revision, "assess", { requirementID: r.id }); await until(service, p.id);

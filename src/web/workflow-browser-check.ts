@@ -180,6 +180,23 @@ try {
   await page.locator(".topbar .queue-trigger").click();
   await expect(flow.getByRole("region", { name: "Definition review follow-through", exact: true })).toContainText("2 current");
   await flow.getByRole("button", { name: "Pause specification workflow", exact: true }).click();
+  await expect.poll(() => store.workflowBusy(p.id)).toBe(false);
+  const beforeRetention = calls.length, originalReviews = structuredClone(store.get(p.id).assessments);
+  await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await continueProject(); await finishBurst();
+  const retentionRun = store.latestWorkflowRun(p.id)!;
+  assert.equal(retentionRun.requests, 0); assert.equal(retentionRun.result!.retainedDefinitions!.reviews.length, 2);
+  assert.deepEqual(store.get(p.id).assessments, originalReviews); assert.equal(calls.length, beforeRetention);
+  await page.locator(".topbar .queue-trigger").click();
+  const retainedReviews = runSummary.getByRole("region", { name: "Retained definition reviews", exact: true });
+  await expect(retainedReviews).toContainText("current at the start and end of this run: 2");
+  const retainedDetails = retainedReviews.getByText("Original saved reviews retained", { exact: true });
+  await retainedDetails.focus(); await page.keyboard.press("Enter");
+  for (const review of retentionRun.result!.retainedDefinitions!.reviews)
+    await expect(retainedReviews).toContainText(`Original review revision ${review.assessmentRevision}`);
+  await expect(retainedReviews).toContainText("not every intermediate state or a count of AI requests skipped");
+  assert.equal(calls.length, beforeRetention, "Inspecting original retained reviews starts no calls");
+  await flow.getByRole("button", { name: "Pause specification workflow", exact: true }).click();
   const saved = store.get(p.id), priorFindings = structuredClone(saved.assessments), beforeChange = calls.length;
   const changedProject = store.note(p.id, saved.revision, "Keep saved encrypted reports available after restart", "inbox");
   const outcome = flow.getByRole("region", { name: "Saved outcome and next step", exact: true });
@@ -199,6 +216,9 @@ try {
   const savedRun = store.latestWorkflowRun(p.id)!;
   assert.equal(savedRun.status, "recorded");
   await expect(runSummary).toContainText(`Ending revision ${savedRun.result!.throughRevision}`);
+  await expect(retainedReviews).toContainText("current at the start and end of this run: 2");
+  assert.deepEqual(store.latestWorkflowRun(p.id)!.result!.retainedDefinitions, retentionRun.result!.retainedDefinitions,
+    "A later genuine change dates current work without relabeling the saved run's boundary evidence");
   await page.screenshot({ path: ".reqwizit-state/browser-workflow.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -211,6 +231,7 @@ try {
   await page.locator(".topbar .queue-trigger").click();
   assert.deepEqual(store.latestWorkflowRun(p.id), savedRun, "Restart preserves the dated run, not a reconstruction from today's project");
   await expect(runSummary).toContainText(`Ending revision ${savedRun.result!.throughRevision}`);
+  await expect(retainedReviews).toContainText("current at the start and end of this run: 2");
   await expect(flow.getByRole("region", { name: "Definition review follow-through", exact: true })).toContainText("1 need updating");
   await expect(flow.getByRole("region", { name: "Saved outcome and next step", exact: true })).toContainText(`Latest recorded specification change · revision ${changedProject.revision}`);
   await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
@@ -268,6 +289,7 @@ try {
   await page.locator(".topbar .queue-trigger").click();
   await expect(runSummary).toContainText("ended without a complete summary");
   await expect(runSummary).not.toContainText("Ending revision");
+  await expect(retainedReviews).toHaveCount(0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-workflow-incomplete-run-mobile.png", fullPage: true });
   assert.equal(calls.length, callsBeforeInspection, "Incomplete run inspection cannot reconstruct completion or repeat calls");

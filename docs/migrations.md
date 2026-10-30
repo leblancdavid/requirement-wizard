@@ -1,5 +1,202 @@
 # Data migrations and upgrade compatibility
 
+## Per-finding origin preview (2026-10-30)
+
+**Read-only internal addition; no persisted conversion.** Source/target SQLite stays
+**15**, execution stays schema 2, and project/job/assessment/certificate/portable formats,
+v1 freshness/semantic keys, optimistic counters and existing receipts are unchanged.
+Format-1 `definition-finding-origin-v1` packets and
+`definition-finding-origins-preview-v1` results are in-memory inspection representations,
+not newly persisted assessment provenance or authority. No migration, startup backfill,
+model call, allowance renewal or worker claim occurs. Valid older work remains valid;
+uncertified reviews do not receive fabricated origins or forced reassessment.
+
+Explicit bounded selections re-verify original publication certificates and their
+request/response/history sources within one read transaction. Packets retain original
+dimension/job/revisions/date, evidence/finding identities and full-area guards. Missing,
+changed, unsupported or oversized sources stay unavailable without selecting substitutes.
+Current revision plus full content token reject stale/equal-numbered replacement.
+The separate `definition-finding-guard-proof-v1` policy does not weaken the existing
+whole-assessment comparison or coverage/readiness rule: guard equality is only a dated
+candidate fact, not proof that today's finding is unchanged or even present.
+
+Selections from different original dates do not get a shared new assessment date.
+Even a preview where all guards match has `canPublish: false`, inspection-only authority
+and joint consistency explicitly unproved. Relevant changes require the existing
+whole-area fallback; missing current reviews are not restored. No narrow partitions,
+mixed publication, API/UI endpoint, scheduler consumption or saved-call claims are
+introduced. Any future persisted mixed result requires its own forward migration and
+original-provenance preservation tests. See [origin semantics and bounds](definition-finding-origins.md).
+
+Verification: type check, all **1,196 deterministic tests** (494 pretests + 702 main),
+production UI build and diff check passed. The 12 new origin tests cover distinct
+original dates/conclusions, guard-only versus whole-assessment comparison, relevant/
+global versus unrelated edits, partial selections, missing/changed source evidence,
+stale/equal-numbered replacement, unsupported/self-declared packets, bounds, immutable
+source rows, live-worker/spend preservation, repeat reopen, missing current reviews
+and archived targets. Existing publication/upgrade and dependency regressions passed
+in the full suite. Browser runners were not rerun for this internal read-only slice;
+no new UI/HTTP behavior is introduced. The existing bundle-size warning remains.
+No live inference, personal-project writes, commits/pushes or desktop packaging were
+performed. Narrower independence proofs, joint-consistency qualification, saved mixed
+publication, automatic skips and actual request reduction remain unfinished.
+
+## Definition publication certificates (2026-10-29)
+
+**Implemented forward migration:** SQLite **14 → 15**, named
+`definition-publication-witnesses-v1`, adds `definition_request_witnesses` and
+`definition_publications`. Existing project/portable/job/context/assessment formats,
+execution schema 2, v1 semantic keys and optimistic counters are unchanged. No source
+row is rewritten, so this additive migration needs no payload backup. Existing jobs,
+reviews, history, approved plans, grants, spent attempts and live leases remain intact.
+Older apps reject the new SQLite version rather than stripping publication evidence.
+
+New assessment-only definition requests can record app-owned adapter-boundary facts:
+input revision/snapshot, exact context payload and manifest/membership digests, and
+contract-normalized response digest. Reservation alone is not a completed response,
+provider delivery or billing proof. Final publication still uses existing lease,
+revision, citation and complete single/exact-stage validation. Optional certificates
+commit atomically with the review/revision/job completion, retaining original IDs,
+snapshot/manifest keys, accepted context/response witnesses and staged ledger identity.
+Both staged collection and verification must cover all broader guarded records. A
+model assertion, stored result or incomplete/cancelled/stale task cannot self-issue
+coverage evidence. Authority remains `publication-evidence-only`, never skip permission.
+
+Older completed and in-flight requests are not backfilled. Missing witnesses, mismatched
+original history (including compatible ordering-repair metadata differences), unread
+broader guards or bounds suppress optional issuance without invalidating valid reviews,
+resetting attempts or repeating inference. Same-input continuation can retain witnesses
+from earlier job IDs. Local evidence is not exported as portable authority. There is
+no new API/UI action, scheduler, approval or permission grant.
+
+Certificate reads require an explicit original assessment revision. They re-create the
+manifest and published findings from original bounded snapshots, the completed source
+job and replayed single/staged result, then match dispatch/response witnesses. Missing,
+changed or unreadable sources return unavailable without choosing older evidence or
+writing state. Later edits leave dated certificates intact. These are local provenance
+records, not signatures against wholesale malicious database rewriting. Future compatible
+reader/encoder changes must preserve issued policies through frozen validation or a
+forward compatibility path, not make users repeat valid work merely to regain evidence.
+
+Migration/format validation is ordered and transactional: failure rolls back both new
+tables and schema/ledger advancement; reopening supports explicit retry. Repeated startup
+does not duplicate data. Unsupported future formats/row identity mismatches reject
+startup unchanged. Certificates/witnesses are read with a **2 MiB** payload bound;
+coverage is capped at **64** accepted stage contexts, original snapshots at **16 MiB**,
+plus the dependency protocol's record/area/reference bounds. No successful truncated
+proof is produced. A certificate insertion failure rolls back the review/history/job
+completion while retaining the already returned request witness for retry without a
+new model call. See [publication semantics and limits](definition-publication.md).
+
+Verification: type check, all **1,184 deterministic tests** (482 pretests + 702 main),
+production UI build, default seven-runner browser aggregate, focused workflow and
+ordering-upgrade browser checks, and diff check passed. The 19 new publication tests
+cover service-issued single and fully replayed staged coverage, same-input continuation
+with retained requests, response immutability, forged/schema-valid envelopes, missing
+or changed original sources, cancellation/staleness/expiry/partial work, optional
+uncertified legitimate reviews, transactional certificate failure/retry, 14→15 older
+completed/live-work preservation, repeat startup, unsupported future formats and
+bounded/corrupt reads. The existing bundle-size warning remains. No live inference,
+personal-project writes, commits/pushes or desktop packaging were performed;
+`test:browser:all` was not run. Automatic skips, narrower dependency partitions,
+mixed finding publication and actual request-savings reports remain unfinished;
+live model quality and large-project certificate/replay performance remain unqualified.
+
+## Definition dependency protocol prototype (2026-10-29)
+
+**Core inspection-only addition; no persisted conversion.** SQLite source/target
+remains **14**, execution remains schema 2, and project/portable/job/assessment/context
+and exact-stage formats/keys are unchanged. The new format-1
+`definition-dependencies-v1` manifest is an in-memory experimental representation,
+not an issued publication/coverage certificate, persisted field or scheduling input.
+No existing record, history, receipt, grant, attempt or semantic identity changes.
+No startup backfill, migration, model call, worker claim or permission change occurs.
+
+Construction requires the exact original assessed snapshot and existing matching v1
+basis, rejecting field/value-converting reader projections. Inspection reconstructs
+the manifest from that original and validates current revision plus full content token.
+New uncited records/absence guards and linked external-area populations participate;
+all findings share a whole-area guard. Missing/ambiguous/bounded/unsupported evidence
+falls back without truncation or a fabricated original basis. Even matching evidence
+has inspection-only authority, not an automatic skip or a saved-call claim. Existing
+ordering-only repair remains separate; the prototype does not manufacture missing
+older-portable witnesses or require users to repeat valid saved work.
+
+No forward migration is necessary because there is no new saved form. Original-snapshot
+purity and unsupported-manifest tests cover the in-memory boundary; existing upgrade
+tests remain regression coverage for unchanged persisted behavior.
+Any future persistence/activation must ship its own forward-migration and qualification
+slice. See [protocol, bounds and activation gates](definition-dependency-protocol.md).
+Verification: type check, all **1,165 deterministic tests** (463 pretests + 702 main),
+production UI build and diff check passed. The 31 new protocol cases cover actual
+saved-review inspection without writes/jobs, original provenance, population/absence
+guards, new uncited area/dependency/global decisions, external scoped-answer/authority
+links, backward/forward supersession, interpretation, word/array/answer changes,
+unrelated edits, unsupported/forged manifests, missing/cyclic/ambiguous data, bounds,
+and equal-numbered content replacement. Browser runners were not rerun for this unwired
+core-only slice; no new UI/API behavior is introduced. Existing UI bundle-size warning
+remains. No live model calls, personal-project writes, commits/pushes or desktop
+packaging were performed. Automatic skips, request savings, live model quality and
+large-project preparation performance remain unqualified.
+
+## Retained definition reviews in specification runs (2026-10-29)
+
+**Implemented compatibility boundary:** SQLite **13 → 14**, named
+`specification-run-definition-retention-v1`. Format-1 local run receipts gain optional
+`retentionStartKey` and `result.retainedDefinitions` fields. The nested evidence is
+format 1, policy `definition-run-retention-v1`. Project/portable formats, execution
+schema 2, assessment keys, optimistic revisions, grants and exact-stage ledgers are
+unchanged. Older apps reject the newer SQLite version rather than stripping receipt
+evidence. No existing payload is rewritten; no backup/conversion is needed for this
+additive boundary. Existing receipts remain byte-for-byte identical and absence of the
+new fields means unavailable, not zero retained work. They are not reconstructed.
+
+New worker starts bind the actual current schema-read project content. Finalization,
+inside the existing lease-owned release transaction, verifies that start/end history
+snapshots match their actual current-row witnesses. Only the same complete saved
+assessment with an existing basis matching the conservative v1 inputs at **both
+boundaries** is recorded. Entries retain original area ID/title, assessment revision,
+input-basis key, full-assessment digest and finding count, not finding/evidence prose.
+New/replaced reviews, genuinely stale inputs, missing bases and archived areas are
+not listed. This is dated boundary evidence, not proof of intermediate-state validity,
+successful findings, dispatch skips, requests saved or semantic independence.
+
+Comparisons are capped at 16 MiB per snapshot, 64 areas and 8,000 evidence records.
+Limits and ambiguous identities return explicit unavailable evidence, never a shortened
+list. Same-numbered current-row replacement yields unavailable; altered starting history
+still prevents finalization under the existing receipt rule. Older in-flight runs have
+no new start witness and retain their old result representation when released. No
+worker, lease, allowance or model call starts or changes on upgrade. Expired/interrupted
+runs still have no inferred ending or retained-review evidence. Later edits and reopen
+do not relabel previously finalized receipts. These local receipts remain outside
+portable exports and do not authorize planning/coding or change freshness rules.
+An ordering-repaired current row may differ from its unchanged historical representation;
+that can make this receipt comparison unavailable without invalidating the repaired
+review or requiring reassessment. Unavailable provenance never schedules a recheck.
+
+Upgrade and validation share the ordered transaction. Unsupported future receipt
+formats/policies abort startup and roll back schema/ledger advancement, preserving the
+original bytes; retry after resolving the incompatible source is safe. Repeated startup
+does not duplicate migrations. Tests include older completed/live receipts, byte-exact
+preservation, live-owner/spend retention, unsupported-evidence rollback/retry and
+same-numbered replacement at either boundary.
+
+Verification: type check, all **1,134 deterministic tests** (432 pretests + 702 main),
+production UI build, default seven-runner browser aggregate, focused coordinated-workflow,
+Manual/Guided processing and ordering-upgrade browsers, and diff check passed. The
+16 new core retention cases cover current/unresolved reviews, uncited area/dependency/
+project-wide changes, unrelated reuse, replaced/missing/future reviews, archive changes,
+genuine staleness, ambiguity, bounds and unsupported policies. Three new storage cases
+cover 13→14 preservation/reopen, live old runs, rollback/retry and boundary replacement.
+The workflow browser verifies a zero-request pass retaining two original reviews,
+keyboard inspection, later-change/restart/mobile preservation, and no inferred list for
+an interrupted run. Screenshots remain `.reqwizit-state/browser-workflow.png` and
+`.reqwizit-state/browser-workflow-mobile.png`.
+No live inference, personal-project writes, commits/pushes or desktop packaging were
+performed. `test:browser:all` was not run. The existing bundle-size warning remains;
+finding-level skips, dispatch-level reuse proofs, broader cross-operation receipts and
+live quality/large-project upgrade qualification remain unfinished.
+
 ## Definition storage-order compatibility (2026-10-29)
 
 **Implemented forward migration:** SQLite **12 → 13**, named

@@ -300,9 +300,13 @@ export class DiscoveryService {
       throw new Error("Continue exploration retains its saved task, model, research permission and search policy; other discovery options are not accepted.");
     }
     const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest, false, this.navigation.workflow?.owner, options.automatic);
-    const inferenceAdapter: DiscoveryAdapter = this.navigation.workflow ? { ...this.adapter, analyze: (snapshot, request) => {
-      this.navigation.workflow!.beforeRequest(job.id); return this.adapter.analyze(snapshot, request);
-    } } : this.adapter;
+    const inferenceAdapter: DiscoveryAdapter = { ...this.adapter, analyze: async (snapshot, request) => {
+      this.navigation.workflow?.beforeRequest(job.id);
+      const witness = options.definitionEpicID ? this.store.beginDefinitionRequest(job.id, snapshot, request.context) : undefined;
+      const response = await this.adapter.analyze(snapshot, request);
+      if (witness) this.store.finishDefinitionRequest(job.id, witness, response);
+      return response;
+    } };
     // Continuous manual assessments renew a finite lease at each staged dispatch.
     // Ordinary requests retain five minutes; bounded workflows keep their own lease.
     this.store.claimJob(job.id, Date.now() + (options.continuousDefinition ? 360_000 : options.gapMode || options.definitionEpicID ? stagedRunLeaseMs : 360_000));

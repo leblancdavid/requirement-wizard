@@ -47,6 +47,15 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
           {workflow.lastRun.result.changes.length ? <ul>{workflow.lastRun.result.changes.map((count) => <li key={count.label}>{count.label}: {count.added} added · {count.updated} updated · {count.removed} removed.</li>)}</ul>
             : <p>No net changes to specification records were recorded during this run.</p>}
           <p>Counts include proposals and any human edits—not approvals, proof of completeness or changes attributed solely to AI. Intermediate edits can cancel out.</p>
+          {workflow.lastRun.result.retainedDefinitions?.status === "recorded" ? <section aria-label="Retained definition reviews">
+            <p>Saved definition reviews unchanged and current at the start and end of this run: {workflow.lastRun.result.retainedDefinitions.reviews.length}.</p>
+            <details><summary>Original saved reviews retained</summary>
+              <PagedList items={workflow.lastRun.result.retainedDefinitions.reviews} itemID={(item) => item.epicID} label="Retained definition review records">{(item) => <article>
+                <strong>{item.title}</strong><p>Original review revision {item.assessmentRevision} · {item.checks} saved findings.</p>
+              </article>}</PagedList>
+              <p>This compares the run boundaries only, not every intermediate state or a count of AI requests skipped. Retained findings may still contain gaps. Later changes can date these reviews.</p>
+            </details>
+          </section> : <p>Retained-review provenance is unavailable for this run. Older receipts are not reconstructed; missing or bounded evidence does not mean no work was retained. This does not invalidate saved reviews or require another AI check.</p>}
         </>}
         <details><summary>Run record and limits</summary>
           <p>Started at revision {workflow.lastRun.fromRevision}.</p>

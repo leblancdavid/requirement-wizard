@@ -1,10 +1,11 @@
 import type Database from "better-sqlite3";
 import { workflowRunSchema, workflowRunChanges, type WorkflowRun } from "../core/workflow-run.js";
 import type { WorkflowState } from "../core/workflow.js";
-import type { Job } from "../core/model.js";
+import { projectSchema, type Job } from "../core/model.js";
 import { activitySnapshot } from "./activity.js";
 import { OperationConflictError } from "../core/operations.js";
 import { createHash } from "node:crypto";
+import { retainedDefinitionReviews } from "../core/definition-retention.js";
 
 const snapshotKey = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -21,8 +22,10 @@ export function beginWorkflowRun(db: Database.Database, id: string, state: Workf
   const revision = (db.prepare("SELECT revision FROM projects WHERE id = ?").get(id) as { revision: number }).revision;
   const before = activitySnapshot(db, id, revision);
   if (!before) throw new OperationConflictError("The starting specification snapshot is missing. No workflow was started.");
+  const current = db.prepare("SELECT payload FROM projects WHERE id = ?").get(id) as { payload: string };
   write(db, id, { format: 1, id: state.owner!, grantID: state.grant!.id, fromRevision: revision,
-    fromSnapshotKey: snapshotKey(before), startedAt: new Date().toISOString(), initialUsed: state.grant!.used, requests: 0, jobIDs: [] });
+    fromSnapshotKey: snapshotKey(before), retentionStartKey: snapshotKey(projectSchema.parse(JSON.parse(current.payload))),
+    startedAt: new Date().toISOString(), initialUsed: state.grant!.used, requests: 0, jobIDs: [] });
 }
 /** Called in the same transaction that spends the allowance, before dispatch. */
 export function recordWorkflowRunRequest(db: Database.Database, id: string, state: WorkflowState, jobID: string) {
@@ -47,7 +50,13 @@ export function finishWorkflowRun(db: Database.Database, id: string, state: Work
     const status = row ? (JSON.parse(row.payload) as Job).status : undefined;
     if (status === "completed") jobs.completed++; else if (!status || ["pending", "running"].includes(status)) jobs.unfinished++; else jobs.stopped++;
   }
-  run.result = { throughRevision: revision, endedAt: new Date().toISOString(), phase: state.phase, changes: workflowRunChanges(before, after), jobs };
+  const current = db.prepare("SELECT payload FROM projects WHERE id = ?").get(id) as { payload: string };
+  const retainedDefinitions = run.retentionStartKey ? run.retentionStartKey === snapshotKey(before)
+    && snapshotKey(projectSchema.parse(JSON.parse(current.payload))) === snapshotKey(after) ? retainedDefinitionReviews(before, after)
+      : { format: 1 as const, policy: "definition-run-retention-v1" as const, status: "unavailable" as const, reason: "snapshot-mismatch" as const, reviews: [] }
+    : undefined;
+  run.result = { throughRevision: revision, endedAt: new Date().toISOString(), phase: state.phase, changes: workflowRunChanges(before, after), jobs,
+    ...(retainedDefinitions ? { retainedDefinitions } : {}) };
   write(db, id, run);
 }
 export function latestWorkflowRun(db: Database.Database, id: string, state: WorkflowState) {

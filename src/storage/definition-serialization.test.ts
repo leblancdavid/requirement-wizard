@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ProjectStore } from "./store.js";
+import { databaseSchemaVersion } from "./migrations.js";
 import { projectSchema, type Project } from "../core/model.js";
 import { dimensions } from "../core/epics.js";
 import { coverage } from "../core/coverage.js";
@@ -39,7 +40,7 @@ function installLegacy(db: Database.Database, p: Project, current = p) {
   db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(JSON.stringify(original), p.id, p.revision);
   return { original, rawCurrent, payload: JSON.stringify(rawCurrent) };
 }
-function rewind(db: Database.Database) { db.exec("DROP TABLE project_migration_backups; DELETE FROM migration_history WHERE version >= 13; PRAGMA user_version = 12;"); }
+function rewind(db: Database.Database) { db.exec("DROP TABLE definition_publications; DROP TABLE definition_request_witnesses; DROP TABLE project_migration_backups; DELETE FROM migration_history WHERE version >= 13; PRAGMA user_version = 12;"); }
 
 test("reviews born with new requirements/questions match the persisted representation immediately and after reopen", () => {
   const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
@@ -110,7 +111,7 @@ for (const stale of [false, true]) test(`12 to 13 backs up ordering-only keys an
     store.close(); db = new Database(path);
     assert.deepEqual(tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), before);
     assert.deepEqual(db.prepare("SELECT revision, payload FROM project_migration_backups").get(), { revision: current.revision, payload: legacy.payload });
-    assert.equal(db.pragma("user_version", { simple: true }), 13); db.close();
+    assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion); db.close();
     for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.get(p.id), after); store.close(); }
     db = new Database(path); assert.equal((db.prepare("SELECT COUNT(*) AS n FROM project_migration_backups").get() as { n: number }).n, 1); db.close(); store = new ProjectStore(":memory:");
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }

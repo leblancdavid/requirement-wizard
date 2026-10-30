@@ -87,6 +87,15 @@ command now runs both Manual and Guided checks. See [mode guidance](processing-p
 
 ## Saved outcome and next step (2026-10-29)
 
+**Last specification run → Original saved reviews retained** lists original review
+revisions and finding counts when the same whole review matches both run-boundary
+inputs. Later edits do not rewrite this dated evidence; older/unproved receipts report
+unavailable rather than zero retained work. Inspection starts no calls and does not
+prove skipped requests, resolved findings or intermediate-state validity.
+`npm run test:browser:workflow` checks a zero-request pass retaining two reviews,
+keyboard disclosure, later-change/reload preservation and incomplete-run omission.
+See [upgrade compatibility](migrations.md#retained-definition-reviews-in-specification-runs-2026-10-29).
+
 **Overall progress → Inspect changes since a definition review** adds an explicit
 read-only finding comparison. Choose an area and **Compare saved inputs**; opening or
 selecting starts no request. It separates changed linked records from wider-context

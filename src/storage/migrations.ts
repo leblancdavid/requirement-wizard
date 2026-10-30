@@ -10,8 +10,9 @@ import { recoveryRevisionSchema } from "../core/implementation-revisions.js";
 import { processingPolicySchema } from "../core/processing-policy.js";
 import { workflowRunSchema } from "../core/workflow-run.js";
 import { migrateDefinitionStorageOrder } from "./definition-serialization.js";
+import { definitionPublicationSchema, definitionRequestWitnessSchema, definitionPublicationLimits } from "../core/definition-publication.js";
 
-export const databaseSchemaVersion = 13;
+export const databaseSchemaVersion = 15;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -144,7 +145,19 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // remain byte-for-byte unchanged; upgrade never selects or starts this mode.
   const previousPolicy = processingPolicySchema.extend({ mode: z.enum(["legacy", "manual"]) });
   for (const row of db.prepare("SELECT payload FROM processing_policy").all() as { payload: string }[]) previousPolicy.parse(JSON.parse(row.payload));
-} }, { version: 13, name: "definition-persistence-order-v1", apply: migrateDefinitionStorageOrder }];
+} }, { version: 13, name: "definition-persistence-order-v1", apply: migrateDefinitionStorageOrder },
+{ version: 14, name: "specification-run-definition-retention-v1", apply() {
+  // New optional local receipt evidence. Old receipts remain byte-for-byte unchanged;
+  // no historical retention evidence, spending or successful ending is backfilled.
+} }, { version: 15, name: "definition-publication-witnesses-v1", apply(db: Database.Database) {
+  db.exec(`CREATE TABLE definition_request_witnesses (
+    project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT NOT NULL REFERENCES jobs(id),
+    request_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+    CREATE INDEX definition_request_job ON definition_request_witnesses(project_id, job_id);
+    CREATE TABLE definition_publications (project_id TEXT NOT NULL REFERENCES projects(id), epic_id TEXT NOT NULL,
+    assessment_revision INTEGER NOT NULL, job_id TEXT NOT NULL REFERENCES jobs(id), payload TEXT NOT NULL,
+    PRIMARY KEY(project_id, epic_id, assessment_revision));`);
+} }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
  * or filesystem publication. Original execution payloads are backed up in SQLite. */
@@ -168,6 +181,19 @@ export function migrateDatabase(db: Database.Database) {
     for (const row of db.prepare("SELECT payload FROM processing_policy").all() as { payload: string }[]) processingPolicySchema.parse(JSON.parse(row.payload));
     for (const row of db.prepare("SELECT run_id, payload FROM workflow_runs").all() as { run_id: string; payload: string }[]) {
       if (workflowRunSchema.parse(JSON.parse(row.payload)).id !== row.run_id) throw new Error("Specification run receipt identity mismatch. Saved data was not overwritten.");
+    }
+    for (const row of db.prepare("SELECT project_id, job_id, request_id, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM definition_request_witnesses")
+      .iterate(definitionPublicationLimits.payloadBytes) as Iterable<{ project_id: string; job_id: string; request_id: string; payload: string | null }>) {
+      if (!row.payload) throw new Error("Definition request witness exceeds its supported read bound. Saved data was not overwritten.");
+      const w = definitionRequestWitnessSchema.parse(JSON.parse(row.payload));
+      if (w.projectID !== row.project_id || w.jobID !== row.job_id || w.id !== row.request_id) throw new Error("Definition request witness identity mismatch. Saved data was not overwritten.");
+    }
+    for (const row of db.prepare("SELECT project_id, epic_id, assessment_revision, job_id, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM definition_publications")
+      .iterate(definitionPublicationLimits.payloadBytes) as Iterable<{ project_id: string; epic_id: string; assessment_revision: number; job_id: string; payload: string | null }>) {
+      if (!row.payload) throw new Error("Definition publication exceeds its supported read bound. Saved data was not overwritten.");
+      const c = definitionPublicationSchema.parse(JSON.parse(row.payload));
+      if (c.projectID !== row.project_id || c.epicID !== row.epic_id || c.assessmentRevision !== row.assessment_revision || c.jobID !== row.job_id)
+        throw new Error("Definition publication identity mismatch. Saved data was not overwritten.");
     }
   }).immediate();
 }

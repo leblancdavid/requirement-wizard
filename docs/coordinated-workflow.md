@@ -46,6 +46,15 @@ survive restart and later decisions; older runs are not inferred or replayed. Th
 report grants no calls or approval and does not cover separate manual/coding actions.
 See [migration ledger](migrations.md#bounded-specification-run-receipts-2026-10-29).
 
+New runs also list **Original saved reviews retained**: unchanged complete definition
+reviews whose existing evidence key matches both the starting and ending project
+inputs. The original review revision and finding count are shown, with dated identity
+digests in the local receipt. This does not count skipped AI calls, prove intermediate
+states, resolve findings or certify finding-level independence. Later changes can make
+today's reviews outdated without altering this saved run record. Older/interrupted or
+bounded/unprovable receipts do not manufacture a list. See
+[retention compatibility](migrations.md#retained-definition-reviews-in-specification-runs-2026-10-29).
+
 **Saved outcome and next step** combines a revision-labelled latest local
 specification-change receipt with current saved/reusable evidence and pending
 input/decision/definition/refinement/plan work. Receipt counts include proposals,

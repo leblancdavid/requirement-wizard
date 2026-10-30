@@ -29,7 +29,11 @@ import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { assertImplementationPlanningFormats } from "../core/implementation-planning.js";
-import { definitionTaskSchema, validateDefinitionAssessment } from "../core/definition-assessment.js";
+import { definitionTaskSchema, definitionContext, validateDefinitionAssessment } from "../core/definition-assessment.js";
+import type { ContextPack } from "../core/context.js";
+import { definitionPublicationContext, type DefinitionPublicationContext } from "../core/definition-publication.js";
+import { beginDefinitionRequest, finishDefinitionRequest, saveDefinitionPublication, readDefinitionPublication } from "./definition-publication.js";
+import { previewDefinitionFindingOrigins } from "./definition-finding-origin.js";
 import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
 import { applySpecificationUpdates } from "../core/specification.js";
@@ -1426,6 +1430,19 @@ export class ProjectStore {
     }).immediate();
   }
 
+  beginDefinitionRequest(id: string, input: Project, context: ContextPack) {
+    return this.db.transaction(() => beginDefinitionRequest(this.db, this.getJob(id), input, context)).immediate();
+  }
+  finishDefinitionRequest(id: string, requestID: string, response: unknown) {
+    this.db.transaction(() => finishDefinitionRequest(this.db, this.getJob(id), requestID, response)).immediate();
+  }
+  definitionPublication(projectID: string, epicID: string, assessmentRevision: number) {
+    return readDefinitionPublication(this.db, projectID, epicID, assessmentRevision);
+  }
+  previewDefinitionFindingOrigins(projectID: string, request: unknown) {
+    return this.db.transaction(() => previewDefinitionFindingOrigins(this.db, projectID, request)).deferred();
+  }
+
   attachResearch(id: string, evidence: unknown[]) {
     const parsed = evidence.map((item) => researchEvidenceSchema.parse(item));
     this.db.transaction(() => {
@@ -1687,11 +1704,22 @@ export class ProjectStore {
         job.status = "stale";
         job.diagnostic = "Project changed while analysis was running; result was not applied.";
       } else {
-        this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
+        let definitionInput: Project | undefined;
+        let definitionCoverageAvailable = true;
+        const definitionContexts: DefinitionPublicationContext[] = [];
+        const published = this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
           if (job.context?.definitionAssessment) {
-            const verified = job.definitionWork ? completedDefinitionAssessment(project, job.definitionWork) : undefined;
+            definitionInput = structuredClone(project);
+            const verified = job.definitionWork ? completedDefinitionAssessment(project, job.definitionWork, (context, receipt, phase) => {
+              const fact = definitionPublicationContext(context, receipt.response, receipt.jobID, phase);
+              if (fact) definitionContexts.push(fact); else definitionCoverageAvailable = false;
+            }) : undefined;
             if (verified && JSON.stringify(verified) !== JSON.stringify(result)) throw new Error("Definition publication does not match its verified staged result.");
             const assessment = verified ? verified.assessments![0]! : validateDefinitionAssessment(project, job.context, result);
+            if (!verified) {
+              const fact = definitionPublicationContext(definitionContext(project, assessment.epicID), result, job.id, "single");
+              if (fact) definitionContexts.push(fact); else definitionCoverageAvailable = false;
+            }
             const checks = assessment.checks;
             project.assessments = project.assessments.filter((a) => a.epicID !== assessment.epicID);
             project.assessments.push({ ...assessment, atRevision: project.revision + 1,
@@ -1899,6 +1927,7 @@ export class ProjectStore {
             }
           }
         });
+        if (definitionInput && definitionCoverageAvailable) saveDefinitionPublication(this.db, { ...job, result }, definitionInput, published, definitionContexts);
         job.status = "completed";
       }
       job.result = result;
