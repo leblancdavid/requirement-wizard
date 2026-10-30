@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { definitionCombinationPreviewQuerySchema } from "./definition-combination-preview.js";
 import type { DefinitionCombinationReview } from "./definition-combination-review.js";
+import type { DefinitionCombinationApplyActions } from "./definition-combination-apply.js";
 
 export const definitionCombinationSaveSchema = definitionCombinationPreviewQuerySchema.extend({ previewKey: z.string().regex(/^[a-f0-9]{64}$/), confirmReviewed: z.literal(true) }).strict();
 export type DefinitionCombinationSave = z.infer<typeof definitionCombinationSaveSchema>;
@@ -12,4 +13,4 @@ export type DefinitionCombinationReviewPage = { format: 1; policy: "definition-c
 export type DefinitionCombinationReviewResult = { status: "recorded"; review: DefinitionCombinationReview; reused?: boolean } | { status: "unavailable"; reason: string };
 export type DefinitionCombinationReviewActions = { save: (input: DefinitionCombinationSave) => Promise<DefinitionCombinationReviewResult>;
   history: (input: DefinitionCombinationHistory) => Promise<DefinitionCombinationReviewPage>;
-  read: (id: string) => Promise<DefinitionCombinationReviewResult> };
+  read: (id: string) => Promise<DefinitionCombinationReviewResult>; publication?: DefinitionCombinationApplyActions };

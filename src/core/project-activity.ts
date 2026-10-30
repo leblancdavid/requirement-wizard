@@ -1,5 +1,6 @@
 import type { Job, Project, Submission } from "./model.js";
 import type { ExecutionState } from "./execution.js";
+import type { DefinitionCombinationPublication } from "./definition-combination-apply.js";
 
 export type ActivityType = "decisions" | "discovery" | "implementation" | "problems" | "technical";
 export type ProjectActivity = {
@@ -7,6 +8,7 @@ export type ProjectActivity = {
   reason: string; highlight: boolean; features: { id: string; title: string }[];
   changes: { id: string; label: string; before?: string; after?: string }[];
   at?: string; atLabel?: "Recorded" | "Started";
+  definitionPublication?: DefinitionCombinationPublication;
 };
 export type ActivityPage = { entries: ProjectActivity[]; total: number; page: number; pageSize: number; anchor: number; latest: number };
 export type ActivityQuery = { view?: "highlights" | "all"; type?: ActivityType; feature?: string; search?: string; page?: number; anchor?: number };
@@ -90,7 +92,7 @@ export function submissionActivity(item: Submission, project: Project): ProjectA
 export function jobActivity(job: Job, project?: Project): ProjectActivity | undefined {
   if (!["failed", "cancelled", "interrupted", "stale"].includes(job.status)) return;
   const focus = job.context?.focusEpicID ?? (job.helpRequest ? project?.questions.find((q) => q.id === job.helpRequest!.questionID)?.epicID : undefined);
-  return { id: `job:${job.id}:${job.status}`, revision: job.expectedRevision, type: "problems", title: `${job.helpRequest ? "Question help" : job.kind === "scan" ? "Workspace scan" : "Discovery"} ${job.retrievalWork?.stagedRun?.paused ? "paused—progress saved" : job.status}`,
+  return { id: `job:${job.id}:${job.status}`, revision: job.expectedRevision, type: "problems", title: `${job.helpRequest ? "Question help" : job.kind === "scan" ? "Workspace scan" : job.kind === "definition-scope-review" ? "Scoped finding review" : "Discovery"} ${job.retrievalWork?.stagedRun?.paused ? "paused—progress saved" : job.status}`,
     summary: job.diagnostic ?? "Work stopped; saved input is retained.", reason: `Job ${job.id} · ${job.status}`, highlight: true, changes: [],
     features: focus ? [{ id: focus, title: project?.epics.find((e) => e.id === focus)?.title ?? focus }] : [] };
 }

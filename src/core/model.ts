@@ -2,6 +2,7 @@ import { z } from "zod";
 import { folderPreviewSchema } from "./folder-preview.js";
 import type { GapReport, gapCheckSchema } from "./gap-types.js";
 import { wordingKey } from "./similarity.js";
+import { definitionFindingIdentityKey } from "./definition-finding-identity.js";
 import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal, accumulatedAssessmentProposal } from "./epics.js";
 
 const text = z.string().trim().min(1).max(12000);
@@ -108,7 +109,8 @@ const refinementSchema = refinementProposalSchema.extend({
   if (value.resolution && (!value.relatedOriginal || value.relatedOriginal.id !== value.resolution.relatedRequirementID || !value.resolutionContextKey)) ctx.addIssue({ code: "custom", message: "Resolution provenance is incomplete." });
 });
 
-export const projectSchema = z.object({
+/** Schema composition only; persisted/imported projects must use projectSchema. */
+export const projectFields = z.object({
   id: z.string(), name: text, revision: z.number().int().positive(),
   analysisRevision: z.number().int().positive().nullable().default(null),
   model: modelSelection, sources: z.array(source), questions: z.array(question),
@@ -135,6 +137,17 @@ export const projectSchema = z.object({
     changes: z.array(z.object({ path: z.string(), kind: z.enum(["added", "changed", "removed"]) })),
     affectedRequirementIDs: z.array(z.string()),
   })).default([]),
+});
+export const projectSchema = projectFields.superRefine((project, ctx) => {
+  for (const [index, assessment] of project.assessments.entries()) {
+    const combined = assessment.combinedReview; if (!combined) continue;
+    if (!assessment.inputBasis || assessment.stagedReview || assessment.atRevision !== combined.assessmentRevision || assessment.atRevision > project.revision
+      || project.assessments.filter((a) => a.epicID === assessment.epicID).length !== 1
+      || assessment.checks.length !== 9 || new Set(assessment.checks.map((c) => c.dimension)).size !== 9
+      || combined.origins.some((origin) => origin.projectID !== project.id || origin.epicID !== assessment.epicID
+        || definitionFindingIdentityKey(assessment.checks.find((c) => c.dimension === origin.dimension)) !== origin.findingKey))
+      ctx.addIssue({ code: "custom", path: ["assessments", index, "combinedReview"], message: "Combined findings do not match their immutable original provenance." });
+  }
 });
 export type Project = z.infer<typeof projectSchema>;
 
@@ -278,7 +291,7 @@ export type Job = {
   /** Recorded lifecycle times, optional for older/portable saved jobs. */
   createdAt?: string; startedAt?: string; finishedAt?: string;
   id: string; projectID: string; expectedRevision: number;
-  kind?: "scan" | "definition-joint-review";
+  kind?: "scan" | "definition-joint-review" | "definition-scope-review";
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
   model: ModelSelection; leaseUntil: number | null;
   /** Portable completed-check ledger, not a full runtime/navigation transcript. */
@@ -295,6 +308,7 @@ export type Job = {
     epicReview?: import("./epic-review-types.js").EpicReview;
     definitionAssessment?: { format: 1; epicID: string; inputKey: string; staged?: { policy: "exact-batches-v1"; planKey: string } };
     definitionJointReview?: { format: 1; policy: "definition-joint-review-v1"; candidateKey: string; contextKey: string; snapshotKey: string };
+    definitionScopeReview?: { format: 1; policy: "definition-review-scope-v1"; scopeKey: string; contextKey: string; snapshotKey: string };
     readinessQuestions?: import("./readiness-questions.js").ReadinessQuestionTask;
     readinessStage?: { policy: "exact-readiness-batches-v1"; planKey: string; step: number; phase: "read" | "check" };
     decisionProjection?: { format: 1; omittedReviewSourceIDs: string[]; retainedReviewNoteSourceIDs: string[]; projectedReceiptSourceIDs?: string[] };

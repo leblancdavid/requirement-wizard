@@ -1,9 +1,16 @@
 # Saved local combined-content reviews
 
+Later slice: [explicit atomic apply](combined-assessment-format.md#explicit-current-assessment-apply-sqlite-18--19)
+now adds a separate eligibility/consent action. Local saving itself still cannot publish
+or approve anything; earlier local-only verification below remains historical.
+
 Status, 2026-10-30: **implemented explicit durable local review evidence**, not mixed
 publication into current assessments. Saving acknowledges review of the exact combined
 contents only. It does not approve product decisions, certify joint consistency, change
 scores/confidence/readiness or authorize automatic skips, research, planning or coding.
+The later [combined-assessment format foundation](combined-assessment-format.md) advances
+SQLite to 18 and protects optional provenance in transport, but adds no publisher or
+new authority to these local content acknowledgements.
 
 ## Save and reopen
 

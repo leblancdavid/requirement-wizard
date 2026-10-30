@@ -13,6 +13,8 @@ export type Registration = z.infer<typeof registrationSchema>;
 type Fetch = typeof fetch;
 export class ProviderError extends Error {}
 export class AuthorizationDeclined extends ProviderError {}
+export type GenerationProfile = { policy: "scoped-no-tools-v1" };
+const generationProfileSchema = z.object({ policy: z.literal("scoped-no-tools-v1") }).strict();
 const tokenSchema = z.object({ access_token: z.string().min(1), refresh_token: z.string().min(1).optional(),
   id_token: z.string().optional(), token_type: z.literal("Bearer"), expires_in: z.number().positive().max(86400), scope: z.string() });
 
@@ -111,7 +113,8 @@ export async function listModels(saved: Registration, signal: AbortSignal, reque
 }
 
 /** SSE parser handles split UTF-8, CRLF, comments, and multi-line data. */
-export async function consumeResponse(body: ReadableStream<Uint8Array>, signal: AbortSignal) {
+export async function consumeResponse(body: ReadableStream<Uint8Array>, signal: AbortSignal, profile?: GenerationProfile) {
+  if (profile) generationProfileSchema.parse(profile);
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "", data: string[] = [], text = "", completed: unknown;
@@ -123,6 +126,13 @@ export async function consumeResponse(body: ReadableStream<Uint8Array>, signal: 
     const payload = data.join("\n"); data = [];
     if (payload === "[DONE]") return;
     const event = z.object({ type: z.string(), delta: z.string().optional(), response: z.unknown().optional() }).passthrough().parse(JSON.parse(payload));
+    if (profile) {
+      if (/^response\.(?:[a-z_]*call|mcp_|web_search|file_search|code_interpreter|computer_|image_generation|custom_tool)/.test(event.type))
+        throw new ProviderError("Scoped ChatGPT response attempted disallowed tool activity.");
+      if (["response.output_item.added", "response.output_item.done"].includes(event.type)
+        && !z.object({ type: z.enum(["message", "reasoning"]) }).passthrough().safeParse(event.item).success)
+        throw new ProviderError("Scoped ChatGPT response included an unsupported output item.");
+    }
     if (["response.failed", "response.incomplete", "error"].includes(event.type)) throw new ProviderError("ChatGPT inference failed or was incomplete. Check connection and ChatGPT usage settings; no result was accepted.");
     if (event.type === "response.output_text.delta") text += event.delta ?? "";
     if (event.type === "response.completed") completed = event.response;
@@ -146,6 +156,16 @@ export async function consumeResponse(body: ReadableStream<Uint8Array>, signal: 
     // An unterminated SSE event is truncated, not a successful completion.
     const response = z.object({ id: z.string(), model: z.string(), status: z.literal("completed"), usage: z.unknown().optional() }).safeParse(completed);
     if (!response.success) throw new ProviderError("ChatGPT stream ended without a valid response.completed event.");
+    if (profile) {
+      const inventory = z.object({ output: z.array(z.union([
+        z.object({ type: z.literal("reasoning") }).passthrough(),
+        z.object({ type: z.literal("message"), role: z.literal("assistant"), status: z.literal("completed"),
+          content: z.array(z.object({ type: z.literal("output_text"), text: z.string() }).passthrough()).min(1) }).passthrough(),
+      ])) }).passthrough().safeParse(completed);
+      if (!inventory.success) throw new ProviderError("Scoped ChatGPT response lacks a supported text-only completion inventory.");
+      const finalText = inventory.data.output.flatMap((item) => item.type === "message" ? item.content.map((part) => part.text) : []).join("");
+      if (finalText !== text) throw new ProviderError("Scoped ChatGPT final output does not match the received text stream.");
+    }
     return { text, response: response.data };
   } finally {
     signal.removeEventListener("abort", abort);
@@ -160,15 +180,17 @@ export async function probe(saved: Registration, model: string, signal: AbortSig
   return { model: result.response.model, requestID: result.response.id, usage: result.response.usage };
 }
 
-export async function generate(saved: Registration, model: string, instructions: string, input: string, signal: AbortSignal, request: Fetch = fetch) {
+export async function generate(saved: Registration, model: string, instructions: string, input: string, signal: AbortSignal, request: Fetch = fetch, profile?: GenerationProfile) {
+  if (profile) generationProfileSchema.parse(profile);
   const catalog = await listModels(saved, signal, request);
   if (!catalog.some((entry) => entry.id === model)) throw new ProviderError("Choose an exact model ID from this account's model catalog.");
   const response = await checked(await request(`${resource}/responses`, { method: "POST", signal,
     headers: { Authorization: `Bearer ${saved.accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model, store: false, stream: true,
+      ...(profile ? { tools: [], tool_choice: "none", parallel_tool_calls: false } : {}),
       instructions, input: [{ role: "user", content: input }] }) }));
   if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) throw new Error("ChatGPT did not return an event stream.");
-  const result = await consumeResponse(response.body, signal);
+  const result = await consumeResponse(response.body, signal, profile);
   if (result.response.model !== model) throw new ProviderError("ChatGPT returned a different model; the response was not accepted.");
   return result;
 }

@@ -1,9 +1,11 @@
 import { z } from "zod";
 import type { Project } from "./model.js";
 import { definitionStageLimit } from "./definition-continuation.js";
+import { dimensions } from "./definition-dimensions.js";
+import { definitionCombinedAssessmentSchema } from "./definition-combined-assessment.js";
+export { dimensions } from "./definition-dimensions.js";
 
 const text = z.string().trim().min(1).max(4000);
-export const dimensions = ["purpose", "workflows", "rules", "data", "permissions", "dependencies", "failures", "quality", "acceptance"] as const;
 export const dimensionLabels: Record<typeof dimensions[number], string> = {
   purpose: "Purpose & scope", workflows: "Users & workflows", rules: "Behavior & rules", data: "Data & lifecycle",
   permissions: "Permissions", dependencies: "Dependencies", failures: "Failure behavior", quality: "Quality & operations", acceptance: "Acceptance scenarios",
@@ -32,8 +34,9 @@ export const assessmentSchema = z.object({
   answerVersions: z.record(z.string().nullable()).default({}),
   inputBasis: z.object({ format: z.literal(1), key: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
   stagedReview: z.object({ format: z.literal(1), batches: z.number().int().min(1).max(16), policy: z.literal("exact-batches-v1") }).strict().optional(),
+  combinedReview: definitionCombinedAssessmentSchema.optional(),
 });
-export const accumulatedAssessmentProposal = assessmentSchema.omit({ atRevision: true, answerVersions: true, inputBasis: true, stagedReview: true }).strict();
+export const accumulatedAssessmentProposal = assessmentSchema.omit({ atRevision: true, answerVersions: true, inputBasis: true, stagedReview: true, combinedReview: true }).strict();
 export const assessmentProposal = accumulatedAssessmentProposal.extend({ checks: z.array(checkSchema).max(9) });
 export const organizationSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("upsert"), epicID: z.string(), title: text, purpose: text, dependencies: z.array(z.string()).max(20) }).strict(),

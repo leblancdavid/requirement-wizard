@@ -20,7 +20,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { z } from "zod";
 import { emptyExecution, type ExecutionState } from "../core/execution.js";
 import { executionSchemaVersion } from "../core/assessment-identity.js";
-import { extendRecoveryRevision, recoveryRevisionSchema } from "../core/implementation-revisions.js";
+import { extendRecoveryRevision, recoveryRevisionSchema, definitionRevisionSchema, definitionRevisionCurrent, extendDefinitionRevision } from "../core/implementation-revisions.js";
 import { databaseSchemaVersion, migrateDatabase } from "./migrations.js";
 import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, migrateWorkspaceDirectory, readPortableWorkspace, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace } from "./workspace.js";
 import { continuationState, decodePortable, portableDigest } from "./portable.js";
@@ -40,10 +40,16 @@ import { prepareDefinitionJointReview, readDefinitionJointRun, writeDefinitionJo
 import { definitionJointReviewMarkerSchema, validateDefinitionJointResponse } from "../core/definition-joint-review.js";
 import type { DefinitionJointView } from "../core/definition-joint-view.js";
 import { definitionJointUsageQuerySchema, definitionJointUsageReport, type DefinitionJointUsageSource } from "../core/definition-joint-usage.js";
+import { combinationUsageSources } from "./definition-combination-usage.js";
+import { DefinitionScopeReviewStore, readDefinitionScopeRun, inspectDefinitionScopeRun } from "./definition-scope-review.js";
+import { definitionReviewScopeMarkerSchema } from "../core/definition-review-scope.js";
 import { previewDefinitionCombination } from "./definition-combination-preview.js";
 import { definitionCombinationReviewSchema, definitionCombinationReviewBytes } from "../core/definition-combination-review.js";
 import { definitionCombinationSaveSchema, type DefinitionCombinationReviewResult } from "../core/definition-combination-review-view.js";
 import { readDefinitionCombinationReview, definitionCombinationHistory } from "./definition-combination-review.js";
+import { prepareCombinationApply, combinedAssessment, readCombinationPublication, publicationProject } from "./definition-combination-apply.js";
+import { definitionCombinationApplyQuerySchema, definitionCombinationApplySchema, definitionCombinationPublicationSchema,
+  type DefinitionCombinationApplyPreview, type DefinitionCombinationApplyResult } from "../core/definition-combination-apply.js";
 import { definitionPublicationKey as jointKey } from "../core/definition-publication.js";
 import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
@@ -79,8 +85,12 @@ import { questionReviewFingerprint, reviewFingerprint, validateRequirementEviden
 /** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
 function readStoredJob(payload: string): Job {
   const job = JSON.parse(payload) as Job;
-  if (job.kind !== undefined && !["scan", "definition-joint-review"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
+  if (job.kind !== undefined && !["scan", "definition-joint-review", "definition-scope-review"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
   if (job.context?.definitionJointReview) definitionJointReviewMarkerSchema.parse(job.context.definitionJointReview);
+  if (job.kind === "definition-scope-review" || job.context?.definitionScopeReview) {
+    definitionReviewScopeMarkerSchema.parse(job.context?.definitionScopeReview);
+    if (job.kind !== "definition-scope-review") throw new Error("Scoped review marker cannot masquerade as ordinary discovery. Saved work was not overwritten.");
+  }
   if (job.portableReceipt !== undefined && job.portableReceipt !== 1) throw new Error("Unsupported portable checkpoint receipt. Upgrade the app; saved work was not overwritten.");
   if (job.discoveryMetrics !== undefined) discoveryMetricsSchema.parse(job.discoveryMetrics);
   if (job.refinementRequests !== undefined) z.number().int().nonnegative().parse(job.refinementRequests);
@@ -291,12 +301,14 @@ export class ProjectStore {
     const state = row ? JSON.parse(row.payload) as ExecutionState : emptyExecution();
     assertImplementationPlanningFormats(state);
     if (state.recoveryRevision !== undefined) recoveryRevisionSchema.parse(state.recoveryRevision);
+    if (state.definitionRevision !== undefined) definitionRevisionSchema.parse(state.definitionRevision);
     return state;
   }
 
   saveExecution(id: string, state: ExecutionState, owner?: string, expected?: { revision: number; bindingID?: string }) {
     assertImplementationPlanningFormats(state);
     if (state.recoveryRevision !== undefined) recoveryRevisionSchema.parse(state.recoveryRevision);
+    if (state.definitionRevision !== undefined) definitionRevisionSchema.parse(state.definitionRevision);
     if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution data format. Refresh before saving.");
     this.db.transaction(() => {
       if (expected && this.get(id).revision !== expected.revision) throw new StaleRevisionError();
@@ -888,7 +900,7 @@ export class ProjectStore {
     return latestSpecificationChange(this.db, id, revision);
   }
 
-  private assessmentRecoveryBlocker(id: string): string | null {
+  private assessmentRecoveryBlocker(id: string, current?: Project): string | null {
     if (this.executionActive(id) || this.executionExpired(id) || this.workflowBusy(id)
       || this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ? AND json_extract(payload, '$.helpRequest') IS NULL
         AND json_extract(payload, '$.status') IN ('pending', 'running') LIMIT 1`).get(id)) return "Wait for active work to finish or stop it before restoring assessment history. Saved workers and leases were not changed.";
@@ -896,7 +908,7 @@ export class ProjectStore {
     if (workflow.enabled && !workflow.paused) return "Pause the specification workflow before restoring. Recovery does not grant or spend its remaining AI allowance.";
     const maintenance = this.maintenance(id);
     if (maintenance.enabled && !maintenance.paused) return "Pause automatic definition updates before restoring. Recovery never enables or resumes maintenance.";
-    const project = this.get(id), submissions = this.submissions(id), resolved = resolvedReviewAttempts(project, submissions);
+    const project = current ?? this.get(id), submissions = this.submissions(id), resolved = resolvedReviewAttempts(project, submissions);
     if (submissions.some((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status))) return "Process or resolve unfinished saved input before restoring assessment history. Do not resubmit the same answers.";
     this.execution(id); // Reject unsupported saved evidence/certificate formats before offering apply.
     return null;
@@ -916,7 +928,8 @@ export class ProjectStore {
       project.assessments.push(assessment);
       project.roundChanges = [`Restored original definition findings for ${selection.epicID} from saved revision ${selection.sourceRevision}. Original assessment revision: ${assessment.atRevision}. ${candidate.freshness === "current" ? "Original evidence matches current inputs; findings can still contain gaps." : "Dated findings remain outdated and need a current review."} No AI calls, approvals or coding were started.`];
       const execution = this.execution(id);
-      execution.recoveryRevision = extendRecoveryRevision(before, { ...project, revision: project.revision + 1 }, execution.recoveryRevision);
+      if (definitionRevisionCurrent(before, execution.definitionRevision)) execution.definitionRevision = extendDefinitionRevision(before, { ...project, revision: project.revision + 1 }, execution);
+      else execution.recoveryRevision = extendRecoveryRevision(before, { ...project, revision: project.revision + 1 }, execution.recoveryRevision);
       // Nested savepoint and outer revision publication commit/rollback together.
       // Original plan/run revisions, evidence and attempts are never rebased.
       this.saveExecution(id, execution, undefined, { revision });
@@ -1518,6 +1531,20 @@ export class ProjectStore {
     }).immediate();
   }
   definitionJointReview(jobID: string) { return readDefinitionJointRun(this.db, jobID); }
+  private scopedReviews() {
+    return new DefinitionScopeReviewStore(this.db, { begin: (id, revision) => {
+      this.recoverExpiredJobs();
+      const blocker = this.assessmentRecoveryBlocker(id);
+      if (blocker) throw new OperationConflictError(`Scoped review requires an idle, paused workspace with resolved input. ${blocker}`);
+      return this.beginJob(id, revision);
+    }, get: (id) => this.getJob(id), save: (job) => this.saveJob(job) });
+  }
+  beginDefinitionScopeReview(projectID: string, input: unknown) { return this.scopedReviews().begin(projectID, input); }
+  reserveDefinitionScopeReview(jobID: string) { return this.scopedReviews().reserve(jobID); }
+  recordDefinitionScopeResponse(jobID: string, response: unknown) { return this.scopedReviews().response(jobID, response); }
+  finishDefinitionScopeReview(jobID: string, deadline = Number.POSITIVE_INFINITY) { return this.scopedReviews().finish(jobID, deadline); }
+  definitionScopeReview(jobID: string) { return readDefinitionScopeRun(this.db, jobID); }
+  inspectDefinitionScopeReview(projectID: string, query: unknown) { return this.db.transaction(() => inspectDefinitionScopeRun(this.db, projectID, query)).deferred(); }
   previewDefinitionCombination(projectID: string, input: unknown) {
     return this.db.transaction(() => previewDefinitionCombination(this.db, projectID, input)).deferred();
   }
@@ -1547,17 +1574,74 @@ export class ProjectStore {
   }
   definitionCombinationHistory(projectID: string, input: unknown) { return definitionCombinationHistory(this.db, projectID, input); }
   readDefinitionCombinationReview(projectID: string, id: string) { return readDefinitionCombinationReview(this.db, projectID, id); }
+  previewDefinitionCombinationApply(projectID: string, input: unknown): DefinitionCombinationApplyPreview {
+    const query = definitionCombinationApplyQuerySchema.parse(input);
+    return this.db.transaction((): DefinitionCombinationApplyPreview => {
+      const previous = readCombinationPublication(this.db, projectID, query.reviewID);
+      if (previous.status === "recorded") {
+        if (previous.receipt.reviewKey !== query.reviewKey || previous.receipt.inputRevision !== query.revision || previous.receipt.inputSnapshotKey !== query.snapshotKey)
+          return { status: "unavailable", reason: "review-changed" };
+        const current = publicationProject(this.db, projectID);
+        return { status: "applied", receipt: previous.receipt, current: !!current && jointKey(current) === previous.receipt.publishedSnapshotKey };
+      }
+      if (previous.reason !== "not-recorded") return previous;
+      const prepared = prepareCombinationApply(this.db, projectID, query); if (prepared.status !== "prepared") return prepared;
+      const blocker = this.assessmentRecoveryBlocker(projectID, prepared.project);
+      return blocker ? { status: "unavailable", reason: blocker.replaceAll("restoring", "applying reviewed findings").replaceAll("Recovery", "Applying findings") }
+        : { status: "eligible", plan: prepared.plan };
+    }).deferred();
+  }
+  applyDefinitionCombination(projectID: string, input: unknown): DefinitionCombinationApplyResult {
+    const { applyKey, confirmApply: _, ...query } = definitionCombinationApplySchema.parse(input);
+    return this.db.transaction((): DefinitionCombinationApplyResult => {
+      const previous = readCombinationPublication(this.db, projectID, query.reviewID);
+      if (previous.status === "recorded") {
+        const r = previous.receipt, current = publicationProject(this.db, projectID);
+        if (r.reviewKey !== query.reviewKey || r.applyKey !== applyKey || r.inputRevision !== query.revision || r.inputSnapshotKey !== query.snapshotKey)
+          return { status: "unavailable", reason: "apply-plan-changed" };
+        return current && jointKey(current) === r.publishedSnapshotKey ? { status: "applied", receipt: r, project: current, reused: true }
+          : { status: "unavailable", reason: "publication-not-current" };
+      }
+      if (previous.reason !== "not-recorded") return previous;
+      const prepared = prepareCombinationApply(this.db, projectID, query); if (prepared.status !== "prepared") return prepared;
+      const blocker = this.assessmentRecoveryBlocker(projectID, prepared.project); if (blocker) throw new OperationConflictError(blocker);
+      if (prepared.plan.applyKey !== applyKey) return { status: "unavailable", reason: "apply-plan-changed" };
+      const publicationID = randomUUID(), publishedAt = new Date().toISOString(), assessment = combinedAssessment(prepared.project, prepared.review, publicationID, publishedAt);
+      const project = this.mutate(projectID, query.revision, "Reviewed combined definition assessment applied", (project) => {
+        const before = structuredClone(project);
+        project.assessments = [...project.assessments.filter((a) => a.epicID !== prepared.review.epicID), assessment];
+        project.roundChanges = ["Applied reviewed original definition findings. Original statuses, dates, evidence and gaps are retained. Confidence is conservatively low. Product decisions, requirements, approvals and coding are unchanged."];
+        const execution = this.execution(projectID);
+        execution.definitionRevision = extendDefinitionRevision(before, { ...project, revision: project.revision + 1 }, execution);
+        this.saveExecution(projectID, execution, undefined, { revision: query.revision });
+      });
+      const fields = { format: 1 as const, policy: "definition-combination-publication-v1" as const, authority: "publication-evidence-only" as const, canAuthorizeFurtherWork: false as const,
+        publicationID, projectID, epicID: prepared.review.epicID, reviewID: prepared.review.id, reviewKey: prepared.review.reviewKey, previewKey: prepared.review.preview.previewKey,
+        applyKey, inputRevision: query.revision, publishedRevision: project.revision, inputSnapshotKey: query.snapshotKey, publishedSnapshotKey: jointKey(project),
+        assessmentKey: jointKey(assessment), metadataKey: assessment.combinedReview.publicationKey, publishedAt,
+        authorization: "explicit-reviewed-findings-apply" as const, confidencePolicy: "conservative-low-v1" as const };
+      const receipt = definitionCombinationPublicationSchema.parse({ ...fields, receiptKey: jointKey(fields) });
+      saveActivity(this.db, projectID, { id: `combination-publication:${prepared.review.id}`, revision: project.revision, type: "discovery", title: "Reviewed definition findings applied",
+        summary: "Current definition assessment updated from exact original findings. Product decisions and implementation evidence are unchanged.",
+        reason: "Separate explicit current-assessment apply; no AI calls, product approvals, planning or coding authorized.", highlight: true,
+        features: [{ id: prepared.review.epicID, title: project.epics.find((e) => e.id === prepared.review.epicID)!.title }], changes: [], at: publishedAt, atLabel: "Recorded", definitionPublication: receipt });
+      return { status: "applied", project, receipt, reused: false };
+    }).immediate();
+  }
   definitionJointUsage(projectID: string, input: unknown = {}) {
     const query = definitionJointUsageQuerySchema.parse(input);
-    const rows = this.db.prepare(`SELECT j.id, json_extract(j.payload, '$.status') AS status,
-      CASE WHEN length(CAST(json_extract(j.payload, '$.discoveryMetrics') AS BLOB)) <= 32768 THEN json_extract(j.payload, '$.discoveryMetrics') END AS metrics,
-      json_type(j.payload, '$.discoveryMetrics') IS NOT NULL AS metricsPresent,
-      json_extract(r.payload, '$.sourceJobID') AS sourceJobID FROM jobs j
-      LEFT JOIN definition_joint_reviews r ON r.job_id = j.id AND r.project_id = j.project_id
-      WHERE j.project_id = ? AND json_extract(j.payload, '$.kind') = 'definition-joint-review'
-      ${query.epicID ? "AND json_extract(j.payload, '$.context.focusEpicID') = ?" : ""} ORDER BY j.rowid DESC LIMIT 21`)
-      .all(...[projectID, ...(query.epicID ? [query.epicID] : [])]) as DefinitionJointUsageSource[];
-    return definitionJointUsageReport(rows.slice(0, 20), rows.length > 20);
+    return this.db.transaction(() => {
+      const rows = this.db.prepare(`SELECT j.id, json_extract(j.payload, '$.status') AS status,
+        CASE WHEN length(CAST(json_extract(j.payload, '$.discoveryMetrics') AS BLOB)) <= 32768 THEN json_extract(j.payload, '$.discoveryMetrics') END AS metrics,
+        json_type(j.payload, '$.discoveryMetrics') IS NOT NULL AS metricsPresent,
+        json_extract(r.payload, '$.sourceJobID') AS sourceJobID FROM jobs j
+        LEFT JOIN definition_joint_reviews r ON r.job_id = j.id AND r.project_id = j.project_id
+        WHERE j.project_id = ? AND json_extract(j.payload, '$.kind') = 'definition-joint-review'
+        ${query.epicID ? "AND json_extract(j.payload, '$.context.focusEpicID') = ?" : ""} ORDER BY j.rowid DESC LIMIT 21`)
+        .all(...[projectID, ...(query.epicID ? [query.epicID] : [])]) as DefinitionJointUsageSource[];
+      const combinations = combinationUsageSources(this.db, projectID, query.epicID);
+      return definitionJointUsageReport(rows.slice(0, 20), rows.length > 20, combinations.reviews, combinations.hasMore);
+    }).deferred();
   }
   inspectDefinitionJointReview(projectID: string, epicID: string, jobID?: string): DefinitionJointView {
     return this.db.transaction((): DefinitionJointView => {

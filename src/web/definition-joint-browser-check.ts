@@ -78,6 +78,8 @@ try {
   const download = await downloaded, downloadPath = await download.path(); assert.ok(downloadPath);
   assert.equal(download.suggestedFilename(), "reqwizit-joint-check-usage.json");
   const exported = await readFile(downloadPath, "utf8"); const report = JSON.parse(exported);
+  assert.equal(report.format, 2); assert.equal(report.reviewedCombinations.scope, "latest-twenty-local-reviews");
+  assert.equal(report.reviewedCombinations.summary.reviews, 0);
   assert.equal(report.summary.tasks, 2); assert.equal(report.summary.observedRequestAttempts, 2);
   for (const secret of [p.id, p.name, p.sources[0]!.text, ...jobs.map((j) => j.id)]) assert.equal(exported.includes(secret), false);
   await page.setViewportSize({ width: 390, height: 844 }); await result.scrollIntoViewIfNeeded();

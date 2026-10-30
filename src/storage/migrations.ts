@@ -6,7 +6,7 @@ import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
 import { workflowSchema, workflowReadinessSchema } from "../core/workflow.js";
 import { implementationPlanningWorkSchema } from "../core/implementation-planning.js";
-import { recoveryRevisionSchema } from "../core/implementation-revisions.js";
+import { recoveryRevisionSchema, definitionRevisionSchema } from "../core/implementation-revisions.js";
 import { processingPolicySchema } from "../core/processing-policy.js";
 import { workflowRunSchema } from "../core/workflow-run.js";
 import { migrateDefinitionStorageOrder } from "./definition-serialization.js";
@@ -14,8 +14,12 @@ import { definitionPublicationSchema, definitionRequestWitnessSchema, definition
 import { definitionJointRunSchema, definitionJointPayloadBytes } from "./definition-joint-review.js";
 import { definitionJointReviewMarkerSchema } from "../core/definition-joint-review.js";
 import { definitionCombinationReviewSchema, definitionCombinationReviewBytes } from "../core/definition-combination-review.js";
+import { projectSchema } from "../core/model.js";
+import { readCombinationPublication } from "./definition-combination-apply.js";
+import { definitionScopeRunBytes, readDefinitionScopeRun } from "./definition-scope-review.js";
+import { definitionReviewScopeMarkerSchema } from "../core/definition-review-scope.js";
 
-export const databaseSchemaVersion = 17;
+export const databaseSchemaVersion = 20;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -27,6 +31,7 @@ const savedAssessment = savedIdentity.extend({ contextPolicy: z.string().optiona
   skill: z.object({ name: z.string(), version: z.string() }).passthrough().optional() });
 const executionEnvelope = z.object({ schemaVersion: z.number().int().nonnegative().optional(), version: z.number().int().nonnegative(),
   recoveryRevision: recoveryRevisionSchema.optional(),
+  definitionRevision: definitionRevisionSchema.optional(),
   planning: z.object({ format: z.literal(1), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough().optional(), planningHistory: z.array(z.object({ format: z.literal(1), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough()).optional(),
   assessments: z.record(savedAssessment), workspaceAssessments: z.record(savedAssessment).optional(), mainAssessments: z.record(savedAssessment).optional(),
   delivered: z.record(savedIdentity), deliveryHistory: z.array(savedIdentity).optional(), history: z.array(z.unknown()) }).passthrough();
@@ -49,6 +54,7 @@ export function upgradeExecutionPayload(raw: unknown): ExecutionState {
   const state = executionEnvelope.parse(raw);
   if ((state.schemaVersion ?? 0) > executionSchemaVersion) throw new Error("Unsupported future execution data format. Upgrade the app; saved data was not overwritten.");
   if (state.recoveryRevision && state.schemaVersion !== 2) throw new Error("Recovery revision certificates require execution format 2. Saved evidence was not overwritten.");
+  if (state.definitionRevision && state.schemaVersion !== 2) throw new Error("Definition revision certificates require execution format 2. Saved evidence was not overwritten.");
   if ((state.schemaVersion ?? 0) === 0) {
     for (const records of [state.assessments, state.workspaceAssessments, state.mainAssessments]) for (const assessment of Object.values(records ?? {})) {
       const upgraded = upgradeIdentity(assessment);
@@ -168,6 +174,16 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   db.exec(`CREATE TABLE definition_combination_reviews (project_id TEXT NOT NULL REFERENCES projects(id), review_id TEXT PRIMARY KEY,
     epic_id TEXT NOT NULL, preview_key TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(project_id, preview_key));
     CREATE INDEX definition_combination_area ON definition_combination_reviews(project_id, epic_id);`);
+} }, { version: 18, name: "combined-assessment-provenance-format-v1", apply() {
+  // Optional app-owned assessment representation and conditional portable-state
+  // format 2. No publication, backfill, old-key rewrite or model call is issued.
+} }, { version: 19, name: "explicit-reviewed-definition-publication-v1", apply() {
+  // New explicit publication receipts and optional definition-only revision
+  // evidence. Existing project/execution/receipt payloads are not converted.
+} }, { version: 20, name: "explicit-scoped-review-pilot-v1", apply(db: Database.Database) {
+  db.exec(`CREATE TABLE IF NOT EXISTS definition_scope_reviews (project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT PRIMARY KEY REFERENCES jobs(id),
+    scope_key TEXT NOT NULL, payload TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS definition_scope_candidate ON definition_scope_reviews(project_id, scope_key);`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -183,6 +199,35 @@ export function migrateDatabase(db: Database.Database) {
       version = migration.version;
     }
     // Refuse future/corrupt payloads even when the database schema is supported.
+    for (const row of db.prepare("SELECT project_id, job_id FROM definition_scope_reviews").iterate() as Iterable<{ project_id: string; job_id: string }>) {
+      const run = readDefinitionScopeRun(db, row.job_id);
+      const job = db.prepare(`SELECT project_id, json_extract(payload, '$.id') AS id, json_extract(payload, '$.kind') AS kind,
+        json_extract(payload, '$.projectID') AS payload_project_id, json_extract(payload, '$.status') AS status,
+        json_extract(payload, '$.expectedRevision') AS revision,
+        CASE WHEN length(CAST(json_extract(payload, '$.context.definitionScopeReview') AS BLOB)) <= ?
+          THEN json_extract(payload, '$.context.definitionScopeReview') END AS marker FROM jobs WHERE id = ?`)
+        .get(definitionScopeRunBytes, row.job_id) as { project_id: string; payload_project_id: string; id: string; kind: string; status: string; revision: number; marker: string | null } | undefined;
+      if (!run || !job?.marker || job.id !== row.job_id || job.project_id !== row.project_id || run.projectID !== row.project_id
+        || job.payload_project_id !== row.project_id || job.kind !== "definition-scope-review" || job.revision !== run.request.revision
+        || !["pending", "running", "completed", "failed", "cancelled", "interrupted", "stale"].includes(job.status) || (job.status === "completed") !== !!run.completedAt)
+        throw new Error("Scoped review checkpoint/job identity mismatch. Saved evidence was not overwritten.");
+      const marker = definitionReviewScopeMarkerSchema.parse(JSON.parse(job.marker));
+      if (marker.scopeKey !== run.scopeKey || marker.contextKey !== run.contextKey || marker.snapshotKey !== run.request.snapshotKey)
+        throw new Error("Scoped review marker changed. Saved evidence was not overwritten.");
+    }
+    if (db.prepare(`SELECT 1 FROM jobs j LEFT JOIN definition_scope_reviews r ON r.job_id = j.id WHERE
+      (json_extract(j.payload, '$.kind') = 'definition-scope-review' OR json_type(j.payload, '$.context.definitionScopeReview') IS NOT NULL)
+      AND r.job_id IS NULL LIMIT 1`).get()) throw new Error("Scoped review job is missing its checkpoint. Saved evidence was not overwritten.");
+    for (const row of db.prepare("SELECT project_id, substr(event_id, 25) AS review_id FROM project_activity WHERE event_id LIKE 'combination-publication:%'").iterate() as Iterable<{ project_id: string; review_id: string }>) {
+      if (readCombinationPublication(db, row.project_id, row.review_id).status !== "recorded") throw new Error("Combined publication receipt is unsupported or inconsistent. Saved evidence was not overwritten.");
+    }
+    for (const row of db.prepare(`SELECT id, revision, CASE WHEN length(CAST(payload AS BLOB)) <= 16777216 THEN payload END AS payload FROM projects
+      WHERE EXISTS (SELECT 1 FROM json_each(projects.payload, '$.assessments') a WHERE json_type(a.value, '$.combinedReview') IS NOT NULL)`)
+      .iterate() as Iterable<{ id: string; revision: number; payload: string | null }>) {
+      if (!row.payload) throw new Error("Combined assessment project exceeds its supported read bound. Saved data was not overwritten.");
+      const project = projectSchema.parse(JSON.parse(row.payload));
+      if (project.id !== row.id || project.revision !== row.revision) throw new Error("Combined assessment project identity mismatch. Saved data was not overwritten.");
+    }
     for (const row of db.prepare("SELECT project_id, review_id, epic_id, preview_key, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM definition_combination_reviews")
       .iterate(definitionCombinationReviewBytes) as Iterable<{ project_id: string; review_id: string; epic_id: string; preview_key: string; payload: string | null }>) {
       if (!row.payload) throw new Error("Saved combination review exceeds its supported bound. Saved data was not overwritten.");

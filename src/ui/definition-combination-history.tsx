@@ -3,8 +3,9 @@ import type { Project } from "../core/model.js";
 import type { DefinitionCombinationReviewActions, DefinitionCombinationReviewPage } from "../core/definition-combination-review-view.js";
 import type { DefinitionCombinationReview } from "../core/definition-combination-review.js";
 import { DefinitionCombinationContents } from "./definition-combination-preview.js";
+import { DefinitionCombinationApply } from "./definition-combination-apply.js";
 
-export function DefinitionCombinationHistory({ project, epicID, actions }: { project: Project; epicID: string; actions: DefinitionCombinationReviewActions }) {
+export function DefinitionCombinationHistory({ project, epicID, actions, disabled }: { project: Project; epicID: string; actions: DefinitionCombinationReviewActions; disabled?: boolean }) {
   const [page, setPage] = useState<DefinitionCombinationReviewPage | null>(null), [review, setReview] = useState<DefinitionCombinationReview | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const load = async (before?: number) => {
@@ -38,6 +39,7 @@ export function DefinitionCombinationHistory({ project, epicID, actions }: { pro
     {review && <section aria-label="Saved reviewed combination"><p>Content review acknowledged and saved {review.savedAt}. Original finding and joint response dates below are unchanged.</p>
       <p>This is dated local evidence. Opening it does not re-verify current source compatibility, restore an assessment, refresh scores or approve product decisions.</p>
       <DefinitionCombinationContents project={project} preview={review.preview} historical />
+      {actions.publication && <DefinitionCombinationApply key={review.id} project={project} review={review} actions={actions.publication} disabled={disabled} />}
     </section>}
   </details>;
 }

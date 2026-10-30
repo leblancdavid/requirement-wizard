@@ -15,6 +15,72 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Scoped browser pilot implemented (2026-10-30):** Overall progress now exposes exact
+  output selection, status-first fresh consent, dated results, exact owned Stop and explicit
+  reload/lost-response inspection without write replay. No live qualification, publication
+  or automatic skips. Transport-only views keep SQLite 20 and all existing saved-work formats
+  unchanged. See [browser controls and boundaries](definition-scope-pilot.md#browser-authorization-and-readonly-status).
+
+- **Scoped provider bridge implemented (2026-10-30):** exact v1 scope/context and model
+  checks precede existing OpenCode/direct routing; scope requests require no research/tools,
+  observable tool rejection and strict direct completion inventories. Mocked transports
+  cover routing/failure/cancellation without live calls. Saved evidence is unchanged and
+  reuses without requalification inference. Browser start is now explicit; CLI start, live semantic/profile checks,
+  scoped publication and automatic reuse remain gated. See [provider boundary](definition-scope-providers.md).
+
+- **Injected-adapter scoped execution pilot implemented (2026-10-30):** separate strict
+  consent, one reserved invocation, original scope/context/model witnesses, durable replies,
+  atomic completion and explicit no-call recovery. SQLite 19→20 is additive; old work is
+  not rewritten or replayed. Specialized jobs cannot become generic discovery, portable
+  authority or the ordinary coverage baseline. The later provider/browser slices enable
+  explicit starts, not CLI/coordinator dispatch or automatic reuse. See [pilot and remaining gates](definition-scope-pilot.md).
+
+- **App-owned output-scope prototype implemented (2026-10-30):** selected dimensions,
+  exact full-project evidence, bound context/replies and separate cross-dimensional
+  concerns are validated locally. Other categories' prose stays visible, and a reported
+  concern prevents upgrading affected checks. No queue/API/persistence/AI path or narrower
+  freshness change is enabled. Existing keys/work remain compatible. See
+  [scope contract and next gate](definition-review-scope.md).
+
+- **Adversarial narrowing experiment implemented (2026-10-30):** an offline 22-case
+  corpus plus all-dimension/fail-closed tests compares citation-only and stronger
+  category-masking candidates against unchanged conservative controls. Both narrower
+  candidates have authored counterexamples; neither can authorize skips/publication.
+  This starts boundary qualification, not automatic request reduction or live semantic
+  proof. No persisted formats or active freshness keys change. See
+  [results and next gate](definition-partition-experiments.md).
+
+- **Review/publication usage visibility (2026-10-30):** usage export format 2 adds an
+  independent bounded local-review window with validated dated publication receipts,
+  unknown-evidence states and anonymous links to the task window. Counts do not inflate
+  on retries and do not claim counterfactual savings, current compatibility or approval.
+  No persistent format/semantic key or inference permission changes. See
+  [usage boundaries](definition-joint-usage.md).
+
+- **Apply recovery hardening (2026-10-30):** browser receipts now validate all request
+  identities and hashes. Deterministic outage/committed-response-loss and real confirmation-
+  race variants exercise explicit recovery without replay. Actual restoration/apply
+  sequences retain code evidence but cannot bridge a genuine product edit. No persisted
+  format or permission changes; narrower automatic skips remain disabled.
+
+- **Explicit current-assessment apply implemented (2026-10-30):** a saved reviewed
+  combination requires a separate eligibility check and exact-plan confirmation. Atomic
+  apply re-verifies sources/root witnesses, retains original findings/gaps/dates, publishes
+  low aggregate confidence and preserves valid plan/code/run evidence without rebasing.
+  SQLite 18→19 is a no-rewrite boundary; future receipts/certificates fail closed.
+  This supersedes earlier publication/reuse gates below, not narrower partitions,
+  automatic skips, live semantic quality or broad savings qualification. See
+  [apply contract](combined-assessment-format.md#explicit-current-assessment-apply-sqlite-18--19).
+
+- **Combined-assessment format/transport foundation implemented (2026-10-30):** optional
+  strict per-finding origins survive current/historical portable state and folder adoption,
+  with original dates distinct from wrapper and a conservative project-wide evidence
+  guard only for marked data. SQLite 17→18 rewrites no old payload; ordinary exports
+  stay format 1, marked history requires state 2. Model output cannot issue this metadata.
+  Reader fixtures verify compatibility, not a production publisher. Explicit atomic apply,
+  aggregate confidence and implementation-reuse preservation remain separate gates, along
+  with narrower partitions/automatic skips. See [format and limits](combined-assessment-format.md).
+
 - **Durable local combined-content review implemented (2026-10-30):** separate acknowledgement
   and Save reviewed combination atomically retain an immutable exact packet plus one
   Activity entry. Retries reuse the original record/date; missing/stale/unproved sources

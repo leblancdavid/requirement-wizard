@@ -7,7 +7,8 @@ export function DefinitionJointUsage({ load }: { load: () => Promise<DefinitionJ
     if (busy) return; setBusy(true); setError("");
     try {
       const next = await load();
-      if (next.format !== 1 || next.kind !== "reqwizit-definition-joint-usage" || next.scope !== "latest-twenty-saved-tasks") throw new Error("Unsupported report");
+      if (next.format !== 2 || next.kind !== "reqwizit-definition-joint-usage" || next.scope !== "latest-twenty-saved-tasks"
+        || next.reviewedCombinations.scope !== "latest-twenty-local-reviews") throw new Error("Unsupported report");
       setReport(next);
     } catch { setError("The joint-check usage report could not be loaded. No model request was started or repeated."); }
     finally { setBusy(false); }
@@ -30,6 +31,11 @@ export function DefinitionJointUsage({ load }: { load: () => Promise<DefinitionJ
         {run.savedResponseSource ? " · saved-response recovery link" : ""}
         {run.otherLocalMs === null ? "" : ` · local time after claim ${Math.round(run.otherLocalMs)} ms`}
       </li>)}</ul>
+      <h4>Saved reviews and assessment applies</h4>
+      <p>Independent window: {report.reviewedCombinations.summary.reviews} local reviews{report.reviewedCombinations.hasMore ? "; older reviews are outside this window" : ""} · {report.reviewedCombinations.summary.publicationReceipts} dated local publication receipts · {report.reviewedCombinations.summary.reviewsWithoutLocalReceipt} reviews without a local receipt · {report.reviewedCombinations.summary.unavailableReviews} unavailable reviews · {report.reviewedCombinations.summary.unavailablePublications} unavailable publication checks.</p>
+      <p>Apply itself starts no AI requests; prerequisite joint checks can use requests, including checks outside this task window. These are not requests or money saved, product approvals, or proof that a dated assessment is current. Repeated saves and apply retries are not new publications. Missing receipts stay unproved.</p>
+      <ul>{report.reviewedCombinations.entries.map((entry) => <li key={entry.id}>{entry.id} · {entry.review === "recorded" ? "local review recorded" : "review evidence unavailable"} · {entry.publication === "recorded" ? "dated publication receipt recorded" : entry.publication === "not-recorded" ? "no local publication receipt" : "publication evidence unavailable"}
+        {entry.jointCheck ? ` · joint check ${entry.jointCheck}` : ""}</li>)}</ul>
       <p>Metadata only: no project/area/job/model IDs, timestamps, paths, findings, prompts, responses or credentials. Counts and durations can still reveal scale; review before sharing.</p>
       <button type="button" className="secondary progress-action" onClick={download}>Download joint-check usage</button>
     </section>}

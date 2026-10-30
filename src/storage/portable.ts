@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { analysisSchema, stagedDefinitionAnalysisSchema, scanAnalysisSchema, projectSchema, modelSelection, researchEvidenceSchema, reviewFingerprint, type Project, type Job, type Submission, type ModelSelection } from "../core/model.js";
+import { analysisSchema, stagedDefinitionAnalysisSchema, scanAnalysisSchema, projectSchema, projectFields, modelSelection, researchEvidenceSchema, reviewFingerprint, type Project, type Job, type Submission, type ModelSelection } from "../core/model.js";
 import { emptyExecution, executionConfigSchema, assessmentOutputSchema, type ExecutionState } from "../core/execution.js";
 import { executionSchemaVersion, canonicalJSON } from "../core/assessment-identity.js";
 import { implementationPlanningSchema, implementationPlanningWorkSchema } from "../core/implementation-planning.js";
@@ -13,7 +13,7 @@ import { submissionWorkSchema } from "../core/submission-stages.js";
 import { refinementStageSchema, refinementWorkSchema } from "../core/refinement-stages.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionInterruptionSchema } from "../core/definition-interruption.js";
-import { recoveryRevisionSchema, recoveryRevisionCurrent } from "../core/implementation-revisions.js";
+import { recoveryRevisionSchema, recoveryRevisionCurrent, definitionRevisionSchema, definitionRevisionCurrent } from "../core/implementation-revisions.js";
 import { upgradeExecutionPayload } from "./migrations.js";
 
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
@@ -56,7 +56,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   const definitionIdentity = (job: Job) => job.definitionWork && JSON.stringify([job.definitionWork.policy, job.definitionWork.epicID, job.definitionWork.inputKey, job.definitionWork.planKey]);
   const completedDefinitions = new Set(jobs.filter((j) => j.status === "completed" && j.result && j.definitionWork).map(definitionIdentity));
   for (const job of jobs) {
-    if (job.helpRequest || job.kind === "definition-joint-review" || job.context?.definitionJointReview) continue;
+    if (job.helpRequest || job.kind === "definition-joint-review" || job.context?.definitionJointReview || job.kind === "definition-scope-review" || job.context?.definitionScopeReview) continue;
     const context = job.context;
     if (job.definitionWork && !linked.has(job.id)) {
       const work = job.definitionWork;
@@ -154,6 +154,7 @@ export function portableExecution(state: ExecutionState): ExecutionState {
   if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution format; portable publication was not performed.");
   const output = emptyExecution();
   if (state.recoveryRevision !== undefined) output.recoveryRevision = recoveryRevisionSchema.parse(state.recoveryRevision);
+  if (state.definitionRevision !== undefined) output.definitionRevision = definitionRevisionSchema.parse(state.definitionRevision);
   output.config = state.config;
   output.assessments = state.assessments;
   output.workspaceAssessments = state.workspaceAssessments;
@@ -187,10 +188,22 @@ export function portableExecution(state: ExecutionState): ExecutionState {
   return output;
 }
 
+const markedAssessments = (value: unknown): boolean => Array.isArray(value) ? value.some(markedAssessments)
+  : !!value && typeof value === "object" && Object.hasOwn(value, "combinedReview");
+function requiresProvenanceState(project: Project, continuation?: Pick<Continuation, "snapshots" | "objects">, execution?: ExecutionState) {
+  if (execution?.definitionRevision) return true;
+  if (markedAssessments(project.assessments)) return true;
+  for (const delta of Object.values(continuation?.snapshots ?? {})) {
+    const change = delta.assessments; if (!change) continue;
+    const keys = "value" in change ? [change.value] : change.items;
+    if (keys.some((key) => markedAssessments(continuation!.objects[key]))) return true;
+  }
+  return false;
+}
 export function portableFiles(project: Project, execution: ExecutionState, continuation?: Continuation) {
   const { model: _model, sources: _sources, questions: _questions, requirements: _requirements, research: _research, scans: _scans, epics: _epics,
     ...state } = project;
-  return { "state.json": json({ formatVersion: 1, project: state }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
+  return { "state.json": json({ formatVersion: requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
     "continuation.json": json(continuation ?? { formatVersion: 1, jobs: [], submissions: [], snapshots: {}, objects: {} }) };
 }
 
@@ -216,6 +229,7 @@ const codingRunSchema = z.object({ id: z.string(), revision: z.number().int().po
 }).strict();
 const executionSchema = z.object({ schemaVersion: z.union([z.literal(1), z.literal(executionSchemaVersion)]), version: z.literal(0), config: executionConfigSchema.optional(),
   recoveryRevision: recoveryRevisionSchema.optional(),
+  definitionRevision: definitionRevisionSchema.optional(),
   assessments: z.record(assessment), workspaceAssessments: z.record(assessment).optional(), mainAssessments: z.record(assessment).optional(),
   delivered: z.record(delivery), deliveryHistory: z.array(delivery.extend({ requirementID: z.string() })).optional(), history: z.array(codingRunSchema), run: codingRunSchema.optional(),
   assessmentRequests: z.record(z.object({ token: z.string(), reason: z.string(), at: z.string() }).strict()).optional(),
@@ -250,7 +264,7 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
   submissionWork: submissionWorkSchema.optional(),
   refinementWork: refinementWorkSchema.optional(),
   refinementRequests: z.number().int().nonnegative().optional(),
-  scan: z.object({ workspaceKey: z.literal("portable"), snapshot: projectSchema.shape.scans.removeDefault().element, sources: projectSchema.shape.sources }).strict().optional(),
+  scan: z.object({ workspaceKey: z.literal("portable"), snapshot: projectFields.shape.scans.removeDefault().element, sources: projectFields.shape.sources }).strict().optional(),
   scanWork: z.object({ version: z.literal(1), bindingID: z.literal("portable"), resumedFrom: z.string().optional(), batches: z.array(z.object({
     excerpts: z.array(z.object({ sourceID: z.string(), start: z.number().int().nonnegative(), end: z.number().int().positive() }).strict()),
     depth: z.number().int().min(0).max(4), attempts: z.number().int().min(0), timedOut: z.boolean().optional(), output: scanAnalysisSchema.optional(),
@@ -277,7 +291,7 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
 export type PortableProject = { project: Project; execution: ExecutionState; continuation: Continuation; snapshots: () => Generator<Project> };
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.literal(1), project: z.record(z.unknown()) }).strict().parse(read("state.json"));
+  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2)]), project: z.record(z.unknown()) }).strict().parse(read("state.json"));
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -298,11 +312,16 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
   if (execution.recoveryRevision && (execution.recoveryRevision.throughRevision > project.revision
     || execution.recoveryRevision.throughRevision === project.revision && !recoveryRevisionCurrent(project, execution.recoveryRevision)))
     throw new Error("Portable recovery revision certificate does not match its project. Saved work was not overwritten.");
+  if (execution.definitionRevision && (execution.definitionRevision.throughRevision > project.revision
+    || execution.definitionRevision.throughRevision === project.revision && !definitionRevisionCurrent(project, execution.definitionRevision)))
+    throw new Error("Portable definition revision certificate does not match its project. Saved work was not overwritten.");
   const continuation = z.object({ formatVersion: z.literal(1), jobs: z.array(portableJobSchema).max(10000),
     submissions: z.array(z.object({ id: z.string(), projectID: z.literal(project.id), auto: z.literal(false), status: z.enum(["queued", "saved", "completed", "needs-attention", "superseded"]) }).passthrough()),
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(read("continuation.json")) as Continuation;
+  if (state.formatVersion === 1 && requiresProvenanceState(project, continuation, execution))
+    throw new Error("Combined finding provenance requires portable state format 2. Saved work was not adopted or overwritten.");
   for (const [key, value] of Object.entries(continuation.objects)) if (key !== createHash("sha256").update(JSON.stringify(value)).digest("hex")) throw new Error("Portable revision-evidence object hash mismatch.");
   const object = (key: string) => { if (!Object.hasOwn(continuation.objects, key)) throw new Error("Portable revision evidence is missing a shared object."); return continuation.objects[key]; };
   for (const revision of Object.keys(continuation.snapshots)) if (!/^[1-9]\d*$/.test(revision) || !Number.isSafeInteger(Number(revision)) || Number(revision) >= project.revision)
@@ -311,7 +330,7 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     const value: Record<string, unknown> = { ...project };
     for (const [key, change] of Object.entries(delta)) {
       if (["__proto__", "constructor", "prototype", "id"].includes(key)) throw new Error("Invalid portable snapshot field.");
-      if ("value" in change) { const original = object(change.value); if (original === null && !(key in projectSchema.shape && projectSchema.shape[key as keyof typeof projectSchema.shape].isNullable())) delete value[key]; else value[key] = original; }
+      if ("value" in change) { const original = object(change.value); if (original === null && !(key in projectFields.shape && projectFields.shape[key as keyof typeof projectFields.shape].isNullable())) delete value[key]; else value[key] = original; }
       else {
         const base = value[key];
         if (!Array.isArray(base) || change.prefix + change.suffix > base.length) throw new Error("Invalid portable snapshot delta.");
@@ -329,6 +348,7 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
   const revisions = new Set([project.revision, ...Object.keys(continuation.snapshots).map(Number)]);
   for (const job of continuation.jobs) {
     if (job.context?.definitionJointReview) throw new Error("Joint validation is local evidence and cannot be adopted as portable authority.");
+    if (job.context?.definitionScopeReview) throw new Error("Scoped validation is local evidence and cannot be adopted as portable authority.");
     if (job.projectID !== project.id) throw new Error("Portable job belongs to another project.");
     if (job.expectedRevision > project.revision) throw new Error("Portable job references a future project revision.");
     if (needsOriginalRevision(job) && !revisions.has(job.expectedRevision)) throw new Error("Portable checkpoint is missing its original revision.");

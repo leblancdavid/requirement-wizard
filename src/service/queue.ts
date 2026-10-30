@@ -27,8 +27,10 @@ import { definitionClarificationInputs } from "../core/definition-clarification-
 import { refinementMaterials, replayRefinementStages, sameRefinementTask } from "../core/refinement-stages.js";
 import type { DefinitionFindingPreviewRequest } from "../core/definition-finding-origin.js";
 import type { DefinitionJointStart } from "../core/definition-joint-view.js";
+import type { DefinitionScopeReviewService } from "./definition-scope-review.js";
+import type { DefinitionScopeStart } from "../core/definition-scope-view.js";
 
-type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" | "definition-joint-review"; jobID?: string };
+type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" | "definition-joint-review" | "definition-scope-review"; jobID?: string };
 
 function submissionEpic(project: Project, item: Submission) {
   const input = item.input;
@@ -121,6 +123,32 @@ export class DiscoveryQueue {
     const work = this.active.get(id);
     if (work?.kind !== "definition-joint-review" || work.jobID !== jobID) throw new OperationConflictError("This app does not own that active joint check. No other task was stopped.");
     work.controller.abort();
+  }
+
+  async reviewDefinitionScope(id: string, input: unknown, scoped: DefinitionScopeReviewService): Promise<DefinitionScopeStart> {
+    if (this.coordinator) throw new OperationConflictError("Scoped review requires a separate explicit action.");
+    if (this.closing || this.isActive(id)) throw new OperationConflictError("Wait for active work before starting a scoped review.");
+    const controller = new AbortController(); let jobID: string | undefined;
+    const progress: string[] = [];
+    const operation = scoped.review(id, input, { signal: controller.signal, onJob: (job) => {
+      jobID = job.id; this.service.store.pauseQueue(id, true); this.messages.set(id, progress); this.refinementRuns.delete(id);
+      progress.push("Reviewing the assigned dimensions against all project evidence. No publication or automatic follow-up.");
+    } });
+    if (!jobID) {
+      const result = await operation;
+      return { status: "accepted", jobID: result.job.id, action: result.reused && result.job.status === "completed" ? "completed-reuse"
+        : result.run.sourceJobID ? "saved-response-recovery" : "new-attempt" };
+    }
+    const promise = operation.then((result) => { progress.push(result.job.status === "completed" ? "Scoped result saved locally. Scores, decisions and coding are unchanged."
+      : "Scoped review stopped or failed. Saved evidence and spent attempts are retained; continue explicitly."); })
+      .catch(() => { progress.push("Scoped review could not complete. Inspect saved status; no automatic retry."); }).finally(() => this.active.delete(id));
+    this.active.set(id, { controller, promise, kind: "definition-scope-review", jobID });
+    return { status: "accepted", jobID, action: this.service.store.definitionScopeReview(jobID)?.sourceJobID ? "saved-response-recovery" : "new-attempt" };
+  }
+  ownsDefinitionScope(id: string, jobID: string) { const work = this.active.get(id); return work?.kind === "definition-scope-review" && work.jobID === jobID; }
+  stopDefinitionScope(id: string, jobID: string) {
+    if (!this.ownsDefinitionScope(id, jobID)) throw new OperationConflictError("This app does not own that exact scoped review. No other task was stopped.");
+    this.active.get(id)!.controller.abort();
   }
 
   maintenanceView(id: string): MaintenanceView {

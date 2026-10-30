@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import Database from "better-sqlite3";
+import { randomUUID, createHash } from "node:crypto";
+import { z } from "zod";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
@@ -13,7 +15,7 @@ import type { ContextPack } from "../core/context.js";
 import type { DefinitionFindingPreviewRequest } from "../core/definition-finding-origin.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 import { continuationState, decodePortable } from "../storage/portable.js";
-import { renderWorkspace } from "../storage/workspace.js";
+import { renderWorkspace, publishWorkspace, readPortableWorkspace } from "../storage/workspace.js";
 import { emptyExecution } from "../core/execution.js";
 import { databaseSchemaVersion } from "../storage/migrations.js";
 import { startApp } from "../web/server.js";
@@ -21,13 +23,273 @@ import { DiscoveryQueue } from "./queue.js";
 import { definitionJointUsageReport } from "../core/definition-joint-usage.js";
 import { coverage } from "../core/coverage.js";
 import { definitionCombinationReviewSchema } from "../core/definition-combination-review.js";
+import { definitionCombinedAssessmentSchema, definitionCombinedEvidenceKey } from "../core/definition-combined-assessment.js";
+import { definitionFindingIdentityKey } from "../core/definition-finding-identity.js";
+import { projectSchema } from "../core/model.js";
+import { assessmentProposal, accumulatedAssessmentProposal } from "../core/epics.js";
+import { definitionInputKey } from "../core/definition-identity.js";
+import { retainedDefinitionReviews } from "../core/definition-retention.js";
+import { prepareDefinitionDependencies } from "../core/definition-dependencies.js";
+import { definitionImpact } from "../core/definition-impact.js";
+import { definitionCombinationApplySchema, verifiedCombinationApplyReceipt } from "../core/definition-combination-apply.js";
+import { assessmentCurrent, executionConfigSchema } from "../core/execution.js";
+import { planningCurrent, planningConfigFingerprint } from "../core/implementation-planning.js";
+import { requirementFingerprint } from "../core/implementation.js";
+import { implementationRevisionMatches, extendDefinitionRevision } from "../core/implementation-revisions.js";
+import { planningStageMaterials, planImplementationStages, replayImplementationStages } from "./planning-stages.js";
+
+async function applyFixture(store: ProjectStore) {
+  const f = await combinationFixture(store, true), saved = store.saveDefinitionCombinationReview(f.p.id, f.save);
+  if (saved.status !== "recorded") assert.fail();
+  const query = { revision: f.p.revision, snapshotKey: f.save.snapshotKey, reviewID: saved.review.id, reviewKey: saved.review.reviewKey };
+  const eligible = store.previewDefinitionCombinationApply(f.p.id, query); if (eligible.status !== "eligible") assert.fail(JSON.stringify(eligible));
+  return { ...f, review: saved.review, query, plan: eligible.plan, input: { ...query, applyKey: eligible.plan.applyKey, confirmApply: true as const } };
+}
+
+test("explicit combined apply preserves exact findings and history, lowers aggregate confidence and replays without extra revisions", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = await applyFixture(store), jobs = store.jobs(f.p.id);
+    assert.equal(definitionCombinationApplySchema.safeParse({ ...f.input, confirmApply: false }).success, false);
+    const applied = store.applyDefinitionCombination(f.p.id, f.input); if (applied.status !== "applied") assert.fail(JSON.stringify(applied));
+    const assessment = applied.project.assessments.find((a) => a.epicID === "orders")!;
+    assert.equal(applied.project.revision, f.p.revision + 1); assert.equal(assessment.confidence, "low");
+    assert.deepEqual(assessment.checks, f.preview.findings.map((i) => i.originalFinding));
+    assert.deepEqual(assessment.combinedReview!.origins, f.preview.findings.map((i) => i.origin));
+    assert.equal(coverage(applied.project).epics.find((e) => e.epicID === "orders")!.percent, f.plan.proposedPercent);
+    assert.equal(coverage(applied.project).epics.find((e) => e.epicID === "orders")!.stale, false);
+    assert.deepEqual(applied.project.requirements, f.p.requirements); assert.deepEqual(store.get(f.p.id, f.p.revision), f.p);
+    assert.deepEqual(store.jobs(f.p.id), jobs); assert.deepEqual(store.readDefinitionCombinationReview(f.p.id, f.review.id), { status: "recorded", review: f.review });
+    const execution = store.execution(f.p.id), replay = store.applyDefinitionCombination(f.p.id, f.input);
+    assert.equal(replay.status, "applied"); if (replay.status === "applied") { assert.equal(replay.reused, true); assert.deepEqual(replay.receipt, applied.receipt); }
+    assert.deepEqual(store.execution(f.p.id), execution); assert.equal(store.get(f.p.id).revision, applied.project.revision);
+    assert.equal(store.previewDefinitionCombinationApply(f.p.id, f.query).status, "applied");
+    store.note(f.p.id, applied.project.revision, "Real new decision");
+    assert.deepEqual(store.applyDefinitionCombination(f.p.id, f.input), { status: "unavailable", reason: "publication-not-current" });
+    const dated = store.previewDefinitionCombinationApply(f.p.id, f.query); assert.equal(dated.status, "applied");
+    if (dated.status === "applied") { assert.equal(dated.current, false); assert.deepEqual(dated.receipt, applied.receipt); }
+  } finally { store.close(); }
+});
+
+test("apply rejects changed keys, stale views, active workers and unfinished input without changing saved work", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = await applyFixture(store);
+    for (const field of ["reviewKey", "snapshotKey", "applyKey"] as const) {
+      const result = store.applyDefinitionCombination(f.p.id, { ...f.input, [field]: "0".repeat(64) }); assert.equal(result.status, "unavailable");
+      assert.deepEqual(store.get(f.p.id), f.p);
+    }
+    assert.throws(() => store.applyDefinitionCombination(f.p.id, { ...f.input, confirmApply: false }));
+    store.claimExecution(f.p.id, "apply-blocker", "owner");
+    assert.equal(store.previewDefinitionCombinationApply(f.p.id, f.query).status, "unavailable");
+    assert.throws(() => store.applyDefinitionCombination(f.p.id, f.input));
+    store.releaseExecution(f.p.id, "owner");
+    const workflow = store.workflow(f.p.id); workflow.enabled = true; workflow.paused = false; store.saveWorkflow(f.p.id, workflow);
+    assert.equal(store.previewDefinitionCombinationApply(f.p.id, f.query).status, "unavailable");
+    store.saveWorkflow(f.p.id, { ...store.workflow(f.p.id), paused: true });
+    const maintenance = store.maintenance(f.p.id); maintenance.enabled = true; maintenance.paused = false; store.saveMaintenance(f.p.id, maintenance);
+    assert.equal(store.previewDefinitionCombinationApply(f.p.id, f.query).status, "unavailable");
+    store.saveMaintenance(f.p.id, { ...store.maintenance(f.p.id), paused: true });
+    store.enqueue(f.p.id, { id: randomUUID(), auto: false, research: false, input: { type: "note", text: "Unprocessed decision", epicID: "inbox" } });
+    assert.equal(store.previewDefinitionCombinationApply(f.p.id, f.query).status, "unavailable");
+    assert.throws(() => store.applyDefinitionCombination(f.p.id, f.input), /unfinished saved input/);
+    const changed = store.note(f.p.id, f.p.revision, "Changed project input");
+    assert.equal(store.applyDefinitionCombination(f.p.id, f.input).status, "unavailable"); assert.deepEqual(store.get(f.p.id), changed);
+  } finally { store.close(); }
+});
+
+test("apply, implementation compatibility, history and receipt roll back together, with safe explicit retry", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
+  try {
+    const f = await applyFixture(store), before = store.execution(f.p.id), db = new Database(path);
+    try {
+      db.exec("CREATE TRIGGER fail_combination_receipt BEFORE INSERT ON project_activity WHEN NEW.event_id LIKE 'combination-publication:%' BEGIN SELECT RAISE(ABORT, 'Injected apply failure'); END");
+      assert.throws(() => store.applyDefinitionCombination(f.p.id, f.input), /Injected apply failure/);
+      assert.deepEqual(store.get(f.p.id), f.p); assert.deepEqual(store.execution(f.p.id), before);
+      assert.equal(db.prepare("SELECT 1 FROM revisions WHERE project_id = ? AND revision = ?").get(f.p.id, f.p.revision + 1), undefined);
+      db.exec("DROP TRIGGER fail_combination_receipt");
+      assert.equal(store.applyDefinitionCombination(f.p.id, f.input).status, "applied");
+    } finally { db.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("apply re-verifies adapter witnesses and original publications instead of trusting saved local acknowledgement", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
+  try {
+    const f = await applyFixture(store), db = new Database(path);
+    try {
+      db.prepare("UPDATE jobs SET payload = json_set(payload, '$.context', '{}') WHERE id = ?").run(f.preview.requestJobID);
+      assert.equal(store.applyDefinitionCombination(f.p.id, f.input).status, "unavailable"); assert.deepEqual(store.get(f.p.id), f.p);
+    } finally { db.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("saved plans, code findings and paused runs retain original evidence across actual apply, reopen and portable adoption", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const f = await applyFixture(store), state = store.execution(f.p.id), r = f.p.requirements[0]!;
+    state.config = executionConfigSchema.parse({ repository: "fixture/repo", providerID: "openai", modelID: "fixture", strategy: "main", checks: ["fixture-check"] });
+    state.assessments[r.id] = { fingerprint: requirementFingerprint(r), specificationRevision: f.p.revision, status: "complete", explanation: "Saved code finding", evidenceIDs: [], scenarios: [], head: "head", scope: "workspace", capturedAt: "2026-10-29", files: [], omissions: 0, verified: false };
+    state.planning = { format: 1, id: "saved-plan", revision: f.p.revision, bindingID: "saved-binding", createdAt: "2026-10-29", status: "approved", approvedAt: "original-approval", model: f.p.model,
+      configFingerprint: planningConfigFingerprint(state), sessions: ["original-session"], output: { summary: "Saved plan", packages: [{ requirementID: r.id, title: r.statement, reason: "Original", steps: ["Build"], verification: ["Check"], prerequisites: [], questions: [] }] } };
+    state.run = { id: "paused-run", revision: f.p.revision, bindingID: "saved-binding", repositoryRoot: "original-root", config: state.config, scope: {}, requirementIDs: [r.id], units: [], status: "paused", progress: [], createdAt: "2026-10-29" };
+    state.history = [{ ...state.run, id: "stale-run", revision: f.p.revision - 1 }]; store.saveExecution(f.p.id, state);
+    const materials = planningStageMaterials(f.p, state, r.id);
+    state.planning.stageWork = { [r.id]: { ...planImplementationStages(materials), attempts: 2 } }; store.saveExecution(f.p.id, state);
+    const before = store.execution(f.p.id), result = store.applyDefinitionCombination(f.p.id, f.input); if (result.status !== "applied") assert.fail();
+    const after = store.execution(f.p.id), { version: _v, definitionRevision: _certificate, ...original } = after;
+    const { version: _old, ...prior } = before; assert.deepEqual(original, prior);
+    assert.equal(planningCurrent(result.project, after, "saved-binding"), true); assert.equal(assessmentCurrent(result.project, after, r.id), true);
+    assert.equal(implementationRevisionMatches(result.project, after, after.run!.revision), true);
+    assert.equal(implementationRevisionMatches(result.project, after, after.history[0]!.revision), false);
+    replayImplementationStages(result.project, planningStageMaterials(result.project, after, r.id), after.planning!.stageWork![r.id]!);
+    assert.equal(after.planning!.stageWork![r.id]!.attempts, 2);
+    const stale = structuredClone(after); stale.assessments[r.id]!.specificationRevision = f.p.revision - 1;
+    assert.equal(assessmentCurrent(result.project, stale, r.id), false);
+    const manual = structuredClone(after); manual.assessmentRequests = { [r.id]: { token: "new-request", reason: "Changed code", at: "now" } };
+    assert.equal(assessmentCurrent(result.project, manual, r.id), false);
+    const edited = structuredClone(result.project); edited.sources[0]!.text += " changed";
+    assert.equal(planningCurrent(edited, after, "saved-binding"), false); assert.equal(assessmentCurrent(edited, after, r.id), false);
+    edited.revision++; assert.throws(() => extendDefinitionRevision(result.project, edited, after), /changed implementation inputs/);
+    const nextOnly = { ...result.project, revision: result.project.revision + 1, roundChanges: ["Assessment-only receipt"] };
+    const extended = extendDefinitionRevision(result.project, nextOnly, after);
+    assert.equal(extended.fromRevision, f.p.revision); assert.equal(extended.throughRevision, nextOnly.revision);
+    assert.equal(implementationRevisionMatches(nextOnly, { definitionRevision: extended }, f.p.revision - 1), false);
+    const files = renderWorkspace(result.project, after), imported = decodePortable(files, { ...f.p.model, modelID: "another-local-model" });
+    assert.equal(planningCurrent(imported.project, imported.execution, "portable"), true); assert.equal(assessmentCurrent(imported.project, imported.execution, r.id), true);
+    const root = join(directory, "checkout"); mkdirSync(root); publishWorkspace(join(root, ".reqwizit"), files);
+    const clone = new ProjectStore(join(directory, "clone.sqlite"));
+    try {
+      const adopted = clone.openWorkspace(root, { ...f.p.model, connectionID: "different-local-account" }), local = clone.execution(adopted.id);
+      assert.deepEqual(adopted.assessments, result.project.assessments); assert.deepEqual(local.definitionRevision, after.definitionRevision);
+      assert.equal(planningCurrent(adopted, local, clone.workspace(adopted.id)!.bindingID), true);
+      assert.equal(assessmentCurrent(adopted, local, r.id), true); assert.equal(clone.queuePaused(adopted.id), true);
+      assert.equal(clone.syncWorkspace(adopted.id)?.status, "saved");
+    } finally { clone.close(); }
+    const wire = JSON.parse(files["execution.json"]!); wire.execution.definitionRevision.format = 99;
+    assert.throws(() => decodePortable({ ...files, "execution.json": JSON.stringify(wire) }, f.p.model));
+    const unmarked = structuredClone(result.project); delete unmarked.assessments.find((a) => a.epicID === "orders")!.combinedReview;
+    const certificateOnly = renderWorkspace(unmarked, after); assert.equal(JSON.parse(certificateOnly["state.json"]!).formatVersion, 2);
+    const downgraded = JSON.parse(certificateOnly["state.json"]!); downgraded.formatVersion = 1;
+    assert.throws(() => decodePortable({ ...certificateOnly, "state.json": JSON.stringify(downgraded) }, f.p.model), /format 2/);
+    store.close(); store = new ProjectStore(path); assert.deepEqual(store.execution(f.p.id), after);
+    assert.deepEqual(store.applyDefinitionCombination(f.p.id, f.input), { ...result, reused: true });
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("transport receipt validation rejects corrupt and internally valid wrong-request packets without granting retry authority", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = await applyFixture(store), result = store.applyDefinitionCombination(f.p.id, f.input); if (result.status !== "applied") assert.fail();
+    const { receiptKey: _key, ...packet } = result.receipt;
+    assert.deepEqual(verifiedCombinationApplyReceipt(result.receipt, f.query, f.p.id, "orders", f.input.applyKey), result.receipt);
+    for (const change of [{ reviewKey: "0".repeat(64) }, { reviewID: randomUUID() }, { applyKey: "0".repeat(64) }, { inputSnapshotKey: "0".repeat(64) },
+      { inputRevision: f.p.revision + 10, publishedRevision: f.p.revision + 11 }, { projectID: "different-project" }, { epicID: "different-area" }]) {
+      const mismatched = { ...packet, ...change };
+      assert.throws(() => verifiedCombinationApplyReceipt({ ...mismatched, receiptKey: digest(mismatched) }, f.query, f.p.id, "orders", f.input.applyKey), /exact apply request/);
+    }
+    assert.throws(() => verifiedCombinationApplyReceipt({ ...result.receipt, publishedAt: "corrupt" }, f.query, f.p.id, "orders"));
+    assert.equal(store.get(f.p.id).revision, result.project.revision);
+  } finally { store.close(); }
+});
+
+test("actual restoration, apply and restoration extend one compatibility interval without rebasing or reviving older work", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const seeded = await seed(store, true, ["restore-before", "restore-after", "restore-break"]), lost = structuredClone(seeded.p);
+    // Curated historical-loss fixture: original revision evidence stays intact.
+    lost.assessments = lost.assessments.filter((a) => a.epicID === "orders"); store.close(); const db = new Database(path);
+    db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(JSON.stringify(lost), lost.id); db.close(); store = new ProjectStore(path);
+    const original = store.get(lost.id), execution = store.execution(lost.id);
+    execution.config = executionConfigSchema.parse({ repository: "fixture/repo", providerID: "openai", modelID: "fixture", strategy: "main", checks: ["fixture-check"] });
+    const r = original.requirements[0]!;
+    execution.assessments[r.id] = { fingerprint: requirementFingerprint(r), specificationRevision: original.revision, status: "complete", explanation: "Original checked code", evidenceIDs: [], scenarios: [], head: "original-head", scope: "workspace", capturedAt: "2026-10-29", files: [], omissions: 0, verified: false };
+    store.saveExecution(original.id, execution);
+    const restore = (epicID: string) => {
+      const preview = store.previewAssessmentRecovery(original.id, epicID); assert.equal(preview.status, "found"); assert.equal(preview.blocker, null);
+      return store.restoreAssessmentHistory(original.id, preview.revision, { epicID, ...preview.candidate! });
+    };
+    const before = restore("restore-before");
+    assert.equal(assessmentCurrent(before, store.execution(before.id), r.id), true);
+    const request = { ...seeded.request, revision: before.revision, snapshotKey: definitionDependencySnapshotKey(before) };
+    const joint = await new DiscoveryService(store, { async analyze(_p, { context }) { return supported(context); } }).reviewDefinitionCombination(before.id, request);
+    if (joint.status !== "recorded") assert.fail(JSON.stringify(joint));
+    const query = { revision: before.revision, epicID: "orders", snapshotKey: request.snapshotKey, jobID: joint.job.id };
+    const preview = store.previewDefinitionCombination(before.id, query); if (preview.status !== "recorded") assert.fail(JSON.stringify(preview));
+    const review = store.saveDefinitionCombinationReview(before.id, { ...query, previewKey: preview.preview.previewKey, confirmReviewed: true }); if (review.status !== "recorded") assert.fail();
+    const applyQuery = { revision: before.revision, snapshotKey: request.snapshotKey, reviewID: review.review.id, reviewKey: review.review.reviewKey };
+    const plan = store.previewDefinitionCombinationApply(before.id, applyQuery); if (plan.status !== "eligible") assert.fail(JSON.stringify(plan));
+    const applied = store.applyDefinitionCombination(before.id, { ...applyQuery, applyKey: plan.plan.applyKey, confirmApply: true }); if (applied.status !== "applied") assert.fail();
+    const after = restore("restore-after"), state = store.execution(after.id);
+    assert.equal(after.revision, original.revision + 3); assert.equal(state.definitionRevision!.fromRevision, original.revision);
+    assert.equal(state.definitionRevision!.throughRevision, after.revision); assert.deepEqual(state.assessments, execution.assessments);
+    assert.equal(assessmentCurrent(after, state, r.id), true); assert.equal(implementationRevisionMatches(after, state, original.revision - 1), false);
+    const changed = store.note(after.id, after.revision, "Genuine new product input");
+    assert.equal(assessmentCurrent(changed, state, r.id), false);
+    const recoveredAfterEdit = restore("restore-break"), staleState = store.execution(after.id);
+    assert.equal(staleState.recoveryRevision!.fromRevision, changed.revision, "A genuine edit breaks the publication interval; later restoration cannot bridge it");
+    assert.equal(assessmentCurrent(recoveredAfterEdit, staleState, r.id), false);
+    assert.equal(implementationRevisionMatches(recoveredAfterEdit, staleState, original.revision), false);
+    store.close(); store = new ProjectStore(path); assert.deepEqual(store.execution(after.id), staleState);
+    assert.equal(assessmentCurrent(store.get(after.id), staleState, r.id), false);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("apply API requires separate consent and exact keys; parallel duplicate requests publish once without inference", async () => {
+  const store = new ProjectStore(":memory:"), f = await applyFixture(store); let calls = 0;
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; assert.fail("Apply cannot infer"); } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const post = (input: unknown, projectID = f.p.id) => fetch(`${app.origin}/api/projects/${projectID}/definition-combination-apply`, { method: "POST", headers, body: JSON.stringify(input) });
+  try {
+    for (const input of [f.query, { ...f.input, confirmApply: false }, { ...f.input, confirmReviewed: true }, { ...f.input, assessment: {} }])
+      assert.equal((await post(input)).status, 400);
+    const other = store.create("Other project", "Do not disclose or replace", f.p.model);
+    assert.equal((await (await post(f.input, other.id)).json()).status, "unavailable");
+    const responses = await Promise.all([post(f.input), post(f.input)]), results = await Promise.all(responses.map((r) => r.json()));
+    assert.ok(results.every((r) => r.status === "applied")); assert.deepEqual(results[0].receipt, results[1].receipt);
+    assert.deepEqual(results.map((r) => r.reused).sort(), [false, true]); assert.equal(store.get(f.p.id).revision, f.p.revision + 1); assert.equal(calls, 0);
+  } finally { await app.close(); store.close(); }
+});
+
+test("18 to 19 preserves payloads; future publication or compatibility metadata blocks upgrade and supports retry", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const f = await applyFixture(store); store.close(); let db = new Database(path);
+    db.exec("DELETE FROM migration_history WHERE version >= 19; PRAGMA user_version = 18;");
+    const tables = ["projects", "revisions", "jobs", "project_activity", "definition_combination_reviews", "definition_joint_reviews", "execution_state"];
+    const before = tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()); db.close();
+    store = new ProjectStore(path); store.close(); db = new Database(path);
+    assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
+    assert.deepEqual(tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), before); db.close();
+    store = new ProjectStore(path); const applied = store.applyDefinitionCombination(f.p.id, f.input); if (applied.status !== "applied") assert.fail();
+    const execution = store.execution(f.p.id); store.close(); db = new Database(path);
+    for (const target of ["receipt", "certificate"] as const) {
+      const eventID = `combination-publication:${f.review.id}`;
+      const activity = (db.prepare("SELECT payload FROM project_activity WHERE project_id = ? AND event_id = ?").get(f.p.id, eventID) as { payload: string }).payload;
+      db.exec("DELETE FROM migration_history WHERE version >= 19; PRAGMA user_version = 18;");
+      if (target === "receipt") db.prepare("UPDATE project_activity SET payload = json_set(payload, '$.definitionPublication.format', 99) WHERE project_id = ? AND event_id = ?").run(f.p.id, eventID);
+      else db.prepare("UPDATE execution_state SET payload = json_set(payload, '$.definitionRevision.format', 99) WHERE project_id = ?").run(f.p.id);
+      const damaged = tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+      assert.throws(() => new ProjectStore(path)); assert.equal(db.pragma("user_version", { simple: true }), 18);
+      assert.deepEqual(tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), damaged);
+      db.prepare("UPDATE project_activity SET payload = ? WHERE project_id = ? AND event_id = ?").run(activity, f.p.id, eventID);
+      db.prepare("UPDATE execution_state SET payload = ? WHERE project_id = ?").run(JSON.stringify(execution), f.p.id); db.close();
+      store = new ProjectStore(path); assert.deepEqual(store.get(f.p.id), applied.project); assert.deepEqual(store.execution(f.p.id), execution); store.close(); db = new Database(path);
+    }
+    db.close(); store = new ProjectStore(path);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 const empty = { summary: "Fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] };
-async function seed(store: ProjectStore) {
+async function seed(store: ProjectStore, accepted = false, recoveryAreas: string[] = []) {
   let p = store.create("Joint consistency", "Original human decisions\r\n", { providerID: "openai", modelID: "fixture" });
-  p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Original purpose", dependencies: [] }]);
+  p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "orders", title: "Orders", purpose: "Original purpose", dependencies: [] },
+    ...recoveryAreas.map((epicID) => ({ type: "upsert" as const, epicID, title: epicID, purpose: "Retained historical area", dependencies: [] }))]);
   const initial = store.beginJob(p.id, p.revision).job; store.claimJob(initial.id, Date.now() + 60000);
-  store.finishJob(initial.id, { ...empty, requirements: [{ epicID: "orders", statement: "Retain receipts", rationale: "Original idea", sourceIDs: [p.sources[0]!.id], acceptance: ["Saved work remains"] }] });
+  store.finishJob(initial.id, { ...empty, requirements: [{ epicID: "orders", statement: "Retain receipts", rationale: "Original idea", sourceIDs: [p.sources[0]!.id], acceptance: ["Saved work remains"] }],
+    assessments: recoveryAreas.map((epicID) => ({ epicID, confidence: "medium", explanation: "Original historical area", checks: dimensions.map((dimension) => ({ dimension,
+      importance: "important", status: "partial", explanation: "Original historical finding", evidenceIDs: [p.sources[0]!.id] })) })) });
+  if (accepted) { p = store.get(p.id); p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", ""); }
   const cs: DefinitionPublication[] = []; let source = 0;
   const service = new DiscoveryService(store, { async analyze(input) { return { ...empty, assessments: [{ epicID: "orders", confidence: "medium",
     explanation: `Original source ${++source}`, checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "partial", explanation: `Original finding ${source}`, evidenceIDs: [input.sources[0]!.id] })) }] }; } });
@@ -43,14 +305,166 @@ function supported(context: ContextPack): DefinitionJointResponse {
     originKey: c.origin.originKey, decision: "retain", explanation: "The original uncertainty remains compatible with the other findings.", evidenceIDs: [context.manifest.includedIDs[0]!] })) } };
 }
 function folder() { mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true }); return mkdtempSync(resolve(".reqwizit-state/tests/joint-review-")); }
-async function combinationFixture(store: ProjectStore) {
-  const fixture = await seed(store), { p, request } = fixture;
+async function combinationFixture(store: ProjectStore, accepted = false) {
+  const fixture = await seed(store, accepted), { p, request } = fixture;
   const result = await new DiscoveryService(store, { async analyze(_p, { context }) { return supported(context); } }).reviewDefinitionCombination(p.id, request);
   if (result.status !== "recorded") assert.fail(); assert.equal(result.job.status, "completed");
   const query = { revision: p.revision, epicID: "orders", snapshotKey: request.snapshotKey, jobID: result.job.id };
   const prepared = store.previewDefinitionCombination(p.id, query); if (prepared.status !== "recorded") assert.fail(prepared.reason);
   return { ...fixture, result, preview: prepared.preview, save: { ...query, previewKey: prepared.preview.previewKey, confirmReviewed: true as const } };
 }
+
+/** Curated reader fixture, separate from the actual apply tests. */
+async function markedAssessmentFixture(store: ProjectStore) {
+  const fixture = await combinationFixture(store), { p, preview } = fixture;
+  const saved = store.saveDefinitionCombinationReview(p.id, fixture.save); if (saved.status !== "recorded") assert.fail();
+  const fields = { format: 1 as const, policy: "definition-combined-assessment-v1" as const, authority: "provenance-only" as const,
+    publicationID: randomUUID(), reviewID: saved.review.id, reviewKey: saved.review.reviewKey, reviewedAt: saved.review.savedAt,
+    publishedAt: new Date().toISOString(), inputRevision: p.revision, assessmentRevision: p.revision + 1,
+    jointJobID: preview.jointJobID, requestJobID: preview.requestJobID, candidateKey: preview.candidateKey, contextKey: preview.contextKey,
+    responseKey: preview.responseKey, origins: preview.findings.map((f) => f.origin), guardPolicy: "definition-combined-project-evidence-v1" as const,
+    guardKey: definitionCombinedEvidenceKey(p) };
+  const combinedReview = definitionCombinedAssessmentSchema.parse({ ...fields, publicationKey: digest(fields) });
+  const checks = preview.findings.map((f) => f.originalFinding), next = projectSchema.parse({ ...p, revision: p.revision + 1, assessments: [
+    ...p.assessments.filter((a) => a.epicID !== "orders"), { epicID: "orders", confidence: "low", explanation: "Reader-only combined provenance fixture; no app publisher is enabled.",
+      checks, atRevision: p.revision + 1, answerVersions: {}, inputBasis: { format: 1, key: definitionInputKey(p, "orders", checks.flatMap((c) => c.evidenceIDs)) }, combinedReview },
+  ] });
+  return { ...fixture, marked: next, combinedReview };
+}
+
+test("combined assessment reader binds each unchanged original finding, preserves frozen origin hashes and rejects model-issued provenance", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, marked, combinedReview, preview } = await markedAssessmentFixture(store);
+    const a = marked.assessments.find((item) => item.epicID === "orders")!;
+    assert.deepEqual(a.checks, preview.findings.map((f) => f.originalFinding)); assert.deepEqual(a.combinedReview!.origins, preview.findings.map((f) => f.origin));
+    for (const origin of combinedReview.origins) { const { originKey, ...fields } = origin;
+      assert.equal(definitionFindingIdentityKey(fields), digest(fields)); assert.equal(originKey, digest(fields)); }
+    const proposal = { epicID: a.epicID, confidence: a.confidence, explanation: a.explanation, checks: a.checks, combinedReview };
+    assert.equal(assessmentProposal.safeParse(proposal).success, false); assert.equal(accumulatedAssessmentProposal.safeParse(proposal).success, false);
+    const rejected = await new DiscoveryService(store, { async analyze() { return { ...empty, assessments: [proposal] }; } }).analyze(p.id, p.revision, { definitionEpicID: "orders" });
+    assert.equal(rejected.status, "failed", "A model cannot issue the app-owned provenance marker through ordinary assessment output");
+    const changed = structuredClone(marked); changed.assessments.find((item) => item.epicID === "orders")!.checks[0]!.explanation += " rewritten";
+    assert.equal(projectSchema.safeParse(changed).success, false);
+    const foreign = structuredClone(marked); foreign.id = randomUUID(); assert.equal(projectSchema.safeParse(foreign).success, false);
+    const duplicate = structuredClone(marked); duplicate.assessments.push(structuredClone(a)); assert.equal(projectSchema.safeParse(duplicate).success, false);
+    const future = structuredClone(marked) as any; future.assessments.find((item: any) => item.epicID === "orders").combinedReview.format = 999;
+    assert.equal(projectSchema.safeParse(future).success, false);
+    assert.deepEqual(store.get(p.id), p, "Reader support must not publish the fixture or alter existing work");
+  } finally { store.close(); }
+});
+
+test("marked assessments add a conservative project-evidence guard without changing frozen v1 keys or ordinary stored reviews", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, marked } = await markedAssessmentFixture(store), a = marked.assessments.find((item) => item.epicID === "orders")!;
+    assert.equal(coverage(marked).epics.find((e) => e.epicID === "orders")!.stale, false);
+    const global = structuredClone(marked); global.summary += " A changed interpretation";
+    assert.equal(definitionInputKey(global, "orders", a.checks.flatMap((c) => c.evidenceIDs)), a.inputBasis!.key, "Frozen v1 is not silently redefined");
+    assert.equal(coverage(global).epics.find((e) => e.epicID === "orders")!.stale, true);
+    const unrelated = structuredClone(marked); unrelated.sources.push({ id: randomUUID(), kind: "note", epicID: "inbox", text: "New project evidence outside this area" });
+    assert.equal(coverage(unrelated).epics.find((e) => e.epicID === "orders")!.stale, true);
+    assert.equal(retainedDefinitionReviews(marked, unrelated).reviews.some((r) => r.epicID === "orders"), false);
+    const metadata = structuredClone(marked); metadata.revision++; metadata.roundChanges.push("Local receipt only"); metadata.model.modelID = "other-local-route";
+    assert.equal(coverage(metadata).epics.find((e) => e.epicID === "orders")!.stale, false);
+    assert.equal(retainedDefinitionReviews(marked, metadata).reviews.some((r) => r.epicID === "orders"), true);
+    assert.equal(prepareDefinitionDependencies(marked, "orders").status, "unavailable", "A combined wrapper cannot self-issue ordinary single-review provenance");
+    assert.equal(definitionImpact(marked, "orders", marked).comparison, "unavailable");
+    const parsedOld = projectSchema.parse(p); assert.equal(parsedOld.assessments.some((x) => Object.hasOwn(x, "combinedReview")), false);
+    assert.deepEqual(parsedOld, p);
+  } finally { store.close(); }
+});
+
+test("portable format 2 preserves combined origins while unmarked state remains byte-compatible format 1", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, marked } = await markedAssessmentFixture(store);
+    const oldFiles = renderWorkspace(p, emptyExecution()); assert.equal(JSON.parse(oldFiles["state.json"]!).formatVersion, 1);
+    assert.deepEqual(decodePortable(oldFiles, p.model).project, p);
+    const files = renderWorkspace(marked, emptyExecution()); assert.equal(JSON.parse(files["state.json"]!).formatVersion, 2);
+    const oldEnvelope = z.object({ formatVersion: z.literal(1), project: z.record(z.unknown()) }).strict();
+    assert.equal(oldEnvelope.safeParse(JSON.parse(files["state.json"]!)).success, false, "A format-1 reader rejects before dropping unknown assessment fields");
+    const decoded = decodePortable(files, marked.model); assert.deepEqual(decoded.project, marked);
+    assert.deepEqual(renderWorkspace(decoded.project, decoded.execution, decoded.continuation), files);
+    const downgraded = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 1 }) };
+    assert.throws(() => decodePortable(downgraded, marked.model), /format 2/);
+    const future = structuredClone(files), state = JSON.parse(future["state.json"]!); state.project.assessments.find((a: any) => a.epicID === "orders").combinedReview.format = 999;
+    future["state.json"] = JSON.stringify(state); assert.throws(() => decodePortable(future, marked.model));
+  } finally { store.close(); }
+});
+
+test("portable format protection also covers combined origins present only in historical continuation snapshots", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { marked } = await markedAssessmentFixture(store), plain = structuredClone(marked); plain.revision++;
+    delete plain.assessments.find((a) => a.epicID === "orders")!.combinedReview;
+    const historicalAssessments = marked.assessments;
+    const objectKey = createHash("sha256").update(JSON.stringify(historicalAssessments)).digest("hex");
+    const revisionKey = createHash("sha256").update(JSON.stringify(marked.revision)).digest("hex");
+    const continuation = { formatVersion: 1 as const, jobs: [], submissions: [], snapshots: { [marked.revision]: { assessments: { value: objectKey }, revision: { value: revisionKey } } }, objects: { [objectKey]: historicalAssessments, [revisionKey]: marked.revision } };
+    const files = renderWorkspace(plain, emptyExecution(), continuation); assert.equal(JSON.parse(files["state.json"]!).formatVersion, 2);
+    const decoded = decodePortable(files, plain.model); const snapshots = [...decoded.snapshots()];
+    assert.deepEqual(snapshots[0]!.assessments, marked.assessments);
+    const downgraded = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 1 }) };
+    assert.throws(() => decodePortable(downgraded, plain.model), /format 2/);
+  } finally { store.close(); }
+});
+
+test("portable folder adoption/checkpoint preserves combined provenance under new local routing and rejects future data before overwrite", async () => {
+  const directory = folder(), source = new ProjectStore(join(directory, "source.sqlite")), target = new ProjectStore(join(directory, "target.sqlite"));
+  try {
+    const { marked } = await markedAssessmentFixture(source), root = join(directory, "checkout"); mkdirSync(root);
+    publishWorkspace(join(root, ".reqwizit"), renderWorkspace(marked, emptyExecution()));
+    const selection = { ...marked.model, connectionID: "different-local-account" }, opened = target.openWorkspace(root, selection);
+    assert.deepEqual(opened.assessments, marked.assessments); assert.equal(opened.model.connectionID, "different-local-account");
+    assert.equal(coverage(opened).epics.find((e) => e.epicID === "orders")!.stale, false);
+    assert.deepEqual(target.definitionCombinationHistory(marked.id, { epicID: "orders" }).entries, [], "Local acknowledgements are not fabricated by portable provenance");
+    assert.equal(target.syncWorkspace(marked.id)?.status, "saved");
+    assert.equal(JSON.parse(readPortableWorkspace(root).files["state.json"]!).formatVersion, 2);
+    const before = target.get(marked.id), future = structuredClone(marked) as any;
+    future.assessments.find((a: any) => a.epicID === "orders").combinedReview.format = 999;
+    publishWorkspace(join(root, ".reqwizit"), renderWorkspace(future, emptyExecution()));
+    assert.throws(() => target.openWorkspace(root, selection)); assert.deepEqual(target.get(marked.id), before);
+    assert.equal(JSON.parse(readPortableWorkspace(root).files["state.json"]!).project.assessments.find((a: any) => a.epicID === "orders").combinedReview.format, 999, "Unsupported shared evidence was not overwritten");
+  } finally { source.close(); target.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("17 to 18 preserves all existing bytes, local acknowledgements and live workers without backfilling combined assessments", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const { p, save } = await combinationFixture(store); assert.equal(store.saveDefinitionCombinationReview(p.id, save).status, "recorded");
+    const other = store.create("Other live execution", "Preserve its lease", p.model);
+    store.claimExecution(other.id, "fixture-provenance-upgrade", "other-owner");
+    const live = store.beginJob(p.id, p.revision).job; store.claimJob(live.id, Date.now() + 60000); store.close();
+    let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 18; PRAGMA user_version = 17;");
+    const tables = ["projects", "revisions", "jobs", "definition_joint_reviews", "definition_combination_reviews", "definition_publications", "definition_request_witnesses", "workflow_state", "workflow_runs", "execution_leases"];
+    const before = tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.get(p.id), p); assert.equal(store.getJob(live.id).status, "running");
+      assert.equal(store.executionActive(other.id), true); assert.equal(store.get(p.id).assessments.some((a) => a.combinedReview), false); store.close(); db = new Database(path);
+      assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion); assert.deepEqual(tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()), before); db.close(); }
+    store = new ProjectStore(":memory:");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("combined provenance fixtures reopen intact; future format blocks 18 migration transactionally without overwriting evidence", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const { marked } = await markedAssessmentFixture(store); store.close(); let db = new Database(path);
+    db.prepare("UPDATE projects SET revision = ?, payload = ? WHERE id = ?").run(marked.revision, JSON.stringify(marked), marked.id);
+    db.prepare("INSERT INTO revisions VALUES (?, ?, ?, ?)").run(marked.id, marked.revision, "Reader-only combined provenance fixture", JSON.stringify(marked));
+    const valid = db.prepare("SELECT payload FROM projects WHERE id = ?").get(marked.id); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.get(marked.id), marked); store.close(); db = new Database(path);
+      assert.deepEqual(db.prepare("SELECT payload FROM projects WHERE id = ?").get(marked.id), valid); db.close(); }
+    const future = structuredClone(marked) as any; future.assessments.find((a: any) => a.epicID === "orders").combinedReview.format = 999;
+    const payload = JSON.stringify(future); db = new Database(path);
+    db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run(payload, marked.id); db.exec("DELETE FROM migration_history WHERE version >= 18; PRAGMA user_version = 17;"); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 17);
+    assert.equal(db.prepare("SELECT * FROM migration_history WHERE version = 18").get(), undefined);
+    assert.deepEqual(db.prepare("SELECT payload FROM projects WHERE id = ?").get(marked.id), { payload });
+    db.prepare("UPDATE projects SET payload = ? WHERE id = ?").run((valid as { payload: string }).payload, marked.id); db.close();
+    store = new ProjectStore(path); assert.deepEqual(store.get(marked.id), marked);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("explicit local combination save is atomic, idempotent and separate from assessments, approval, portable state and allowance", async () => {
   const store = new ProjectStore(":memory:");
@@ -157,7 +571,7 @@ test("16 to 17 adds only an empty local review table and preserves saved work an
     const tables = ["projects", "revisions", "jobs", "definition_joint_reviews", "definition_publications", "definition_request_witnesses", "workflow_state", "workflow_runs", "execution_leases"];
     const before = tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()); db.close();
     for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.get(p.id), p); assert.equal(store.executionActive(other.id), true); store.close(); db = new Database(path);
-      assert.equal(db.pragma("user_version", { simple: true }), 17); assert.deepEqual(db.prepare("SELECT * FROM definition_combination_reviews").all(), []);
+      assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion); assert.deepEqual(db.prepare("SELECT * FROM definition_combination_reviews").all(), []);
       assert.deepEqual(tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()), before); db.close(); }
     store = new ProjectStore(":memory:");
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
@@ -344,7 +758,7 @@ test("joint browser APIs require exact explicit consent, isolate status and stop
   const post = (action: string, input: unknown, auth = headers, projectID = p.id) => fetch(`${app.origin}/api/projects/${projectID}/${action}`, { method: "POST", headers: auth, body: JSON.stringify(input) });
   try {
     const input = { request, confirmAIUsage: true };
-    for (const action of ["definition-joint-start", "definition-joint-status", "definition-joint-stop", "definition-joint-usage", "definition-combination-preview", "definition-combination-save", "definition-combination-history", "definition-combination-read"]) {
+    for (const action of ["definition-joint-start", "definition-joint-status", "definition-joint-stop", "definition-joint-usage", "definition-combination-preview", "definition-combination-save", "definition-combination-history", "definition-combination-read", "definition-combination-apply-preview", "definition-combination-apply"]) {
       assert.equal((await post(action, input, { ...headers, "X-Reqwizit-Token": "wrong" })).status, 403);
       assert.equal((await post(action, input, { ...headers, Origin: "https://foreign.invalid" })).status, 403);
       assert.equal((await fetch(`${app.origin}/api/projects/${p.id}/${action}`, { headers })).status, 405);
@@ -456,6 +870,70 @@ test("joint browser recovery reuses a saved reply after completion failure and b
     assert.equal(blocked.status, "unavailable"); assert.equal(blocked.reason, "saved-review-unproved"); assert.equal(calls, 1); assert.deepEqual(store.jobs(p.id), before);
     assert.deepEqual(store.get(p.id), p);
   } finally { await app.close(); db.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("usage distinguishes local review from dated publication without counting retries, savings or present-day compatibility", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = await applyFixture(store), foreign = await applyFixture(store);
+    assert.equal(store.applyDefinitionCombination(foreign.p.id, foreign.input).status, "applied");
+    const before = store.definitionJointUsage(f.p.id, { epicID: "orders" });
+    assert.equal(before.format, 2); assert.equal(before.reviewedCombinations.summary.recordedReviews, 1);
+    assert.equal(before.reviewedCombinations.summary.publicationReceipts, 0); assert.equal(before.reviewedCombinations.summary.reviewsWithoutLocalReceipt, 1);
+    assert.equal(before.reviewedCombinations.entries[0]!.jointCheck, "check-1");
+    assert.equal(store.saveDefinitionCombinationReview(f.p.id, f.save).status, "recorded");
+    const applied = store.applyDefinitionCombination(f.p.id, f.input); if (applied.status !== "applied") assert.fail();
+    store.applyDefinitionCombination(f.p.id, f.input);
+    const after = store.definitionJointUsage(f.p.id, { epicID: "orders" });
+    assert.equal(after.reviewedCombinations.summary.recordedReviews, 1); assert.equal(after.reviewedCombinations.summary.publicationReceipts, 1);
+    assert.deepEqual(after.summary, before.summary); assert.equal(after.summary.observedRequestAttempts, 1);
+    const changed = store.note(f.p.id, applied.project.revision, "Private later decision"), jobs = store.jobs(f.p.id), execution = store.execution(f.p.id);
+    assert.deepEqual(store.definitionJointUsage(f.p.id, { epicID: "orders" }), after, "Receipt reporting is dated, not a current compatibility certificate");
+    assert.deepEqual(store.get(f.p.id), changed); assert.deepEqual(store.jobs(f.p.id), jobs); assert.deepEqual(store.execution(f.p.id), execution);
+    assert.equal(store.definitionJointUsage(f.p.id, { epicID: "unrelated" }).reviewedCombinations.summary.reviews, 0);
+    const encoded = JSON.stringify(after);
+    for (const secret of [f.p.id, f.p.name, f.result.job.id, f.review.id, f.review.reviewKey, f.review.savedAt, f.p.sources[0]!.text,
+      f.preview.findings[0]!.originalFinding.explanation, applied.receipt.publicationID, applied.receipt.applyKey, foreign.p.id, foreign.review.id, "Private later decision"])
+      assert.equal(encoded.includes(secret), false, `Private content must not be exported: ${secret}`);
+  } finally { store.close(); }
+});
+
+test("usage keeps corrupt, oversized and unmatched publication/review evidence unknown instead of substituting older rows", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
+  try {
+    const f = await applyFixture(store), applied = store.applyDefinitionCombination(f.p.id, f.input); if (applied.status !== "applied") assert.fail();
+    const db = new Database(path);
+    try {
+      const eventID = `combination-publication:${f.review.id}`;
+      const { receiptKey: _, ...fields } = applied.receipt, wrong = { ...fields, previewKey: "0".repeat(64) };
+      const event = JSON.parse((db.prepare("SELECT payload FROM project_activity WHERE event_id = ?").get(eventID) as { payload: string }).payload);
+      for (const receipt of [{ ...wrong, receiptKey: digest(wrong) }, { ...applied.receipt, format: 999 }]) {
+        db.prepare("UPDATE project_activity SET payload = ? WHERE event_id = ?").run(JSON.stringify({ ...event, definitionPublication: receipt }), eventID);
+        const report = store.definitionJointUsage(f.p.id, {});
+        assert.equal(report.reviewedCombinations.summary.publicationReceipts, 0); assert.equal(report.reviewedCombinations.summary.unavailablePublications, 1);
+        assert.equal(report.reviewedCombinations.summary.reviewsWithoutLocalReceipt, 0);
+      }
+      db.prepare("UPDATE project_activity SET payload = ? WHERE event_id = ?").run("x".repeat(17 * 1024), eventID);
+      assert.equal(store.definitionJointUsage(f.p.id, {}).reviewedCombinations.entries[0]!.publication, "unavailable");
+      db.prepare("DELETE FROM project_activity WHERE event_id = ?").run(eventID);
+      assert.equal(store.definitionJointUsage(f.p.id, {}).reviewedCombinations.entries[0]!.publication, "not-recorded");
+      const insert = db.prepare("INSERT INTO definition_combination_reviews VALUES (?, ?, ?, ?, ?)");
+      for (let i = 0; i < 22; i++) insert.run(f.p.id, randomUUID(), "orders", digest([i]), i === 21 ? "private".repeat(24 * 1024) : JSON.stringify({ private: "Never export error payloads", format: 999 }));
+      const report = store.definitionJointUsage(f.p.id, { epicID: "orders" });
+      assert.equal(report.reviewedCombinations.hasMore, true); assert.equal(report.reviewedCombinations.entries.length, 20);
+      assert.equal(report.reviewedCombinations.summary.recordedReviews, 0); assert.equal(report.reviewedCombinations.summary.unavailableReviews, 20);
+      assert.ok(report.reviewedCombinations.entries.every((r) => r.jointCheck === null && r.publication === "not-inspected"));
+      assert.equal(JSON.stringify(report).includes("Never export"), false);
+    } finally { db.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("usage review window is independent of task history and whitelists only local labels and evidence states", () => {
+  const report = definitionJointUsageReport([], false, [{ review: "recorded", taskID: "private-old-job", publication: "recorded" }], true);
+  assert.equal(report.reviewedCombinations.entries[0]!.jointCheck, "outside-window"); assert.equal(report.reviewedCombinations.hasMore, true);
+  assert.equal(report.summary.tasks, 0); assert.equal(report.reviewedCombinations.summary.publicationReceipts, 1);
+  assert.equal(JSON.stringify(report).includes("private-old-job"), false);
+  assert.throws(() => definitionJointUsageReport([], false, Array.from({ length: 21 }, () => ({ review: "recorded", taskID: null, publication: "not-recorded" }))), /twenty local reviews/);
 });
 
 test("joint usage measurements separate returned attempts from verdict validity and export only bounded metadata", async () => {

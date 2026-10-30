@@ -11,6 +11,11 @@ export const recoveryRevisionSchema = z.object({ format: z.literal(1), policy: z
   inputKey: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict().refine((value) => value.fromRevision < value.throughRevision, "Recovery revision interval must advance.");
 export type RecoveryRevision = z.infer<typeof recoveryRevisionSchema>;
+export const definitionRevisionSchema = z.object({ format: z.literal(1), policy: z.literal("definition-assessment-only-v1"),
+  fromRevision: z.number().int().positive(), throughRevision: z.number().int().positive(), inputKey: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict().refine((value) => value.fromRevision < value.throughRevision, "Definition revision interval must advance.");
+export type DefinitionRevision = z.infer<typeof definitionRevisionSchema>;
+type RevisionEvidence = { recoveryRevision?: RecoveryRevision; definitionRevision?: DefinitionRevision };
 
 /** Frozen v1 projection: recovery's assessment array, revision and receipt prose
  * are excluded. Retain product inputs conservatively, including future project
@@ -26,9 +31,26 @@ export function recoveryRevisionCurrent(project: Project, certificate?: Recovery
     && certificate.throughRevision === project.revision && certificate.inputKey === implementationRecoveryKey(project);
 }
 
-export function implementationRevisionMatches(project: Project, state: { recoveryRevision?: RecoveryRevision }, revision: number | undefined) {
-  return revision === project.revision || revision !== undefined && recoveryRevisionCurrent(project, state.recoveryRevision)
-    && revision >= state.recoveryRevision!.fromRevision && revision <= state.recoveryRevision!.throughRevision;
+export function definitionRevisionCurrent(project: Project, certificate?: DefinitionRevision) {
+  return !!certificate && definitionRevisionSchema.safeParse(certificate).success && certificate.throughRevision === project.revision
+    && certificate.inputKey === implementationRecoveryKey(project);
+}
+export function implementationCompatibleFrom(project: Project, state: RevisionEvidence): number | null {
+  const from = [recoveryRevisionCurrent(project, state.recoveryRevision) ? state.recoveryRevision!.fromRevision : null,
+    definitionRevisionCurrent(project, state.definitionRevision) ? state.definitionRevision!.fromRevision : null].filter((n): n is number => n !== null);
+  return from.length ? Math.min(...from) : null;
+}
+export function implementationRevisionMatches(project: Project, state: RevisionEvidence, revision: number | undefined) {
+  if (revision === project.revision) return true;
+  const from = implementationCompatibleFrom(project, state);
+  return from !== null && revision !== undefined && revision >= from && revision <= project.revision;
+}
+export function extendDefinitionRevision(before: Project, after: Project, state: RevisionEvidence): DefinitionRevision {
+  const inputKey = implementationRecoveryKey(before);
+  if (after.revision !== before.revision + 1 || implementationRecoveryKey(after) !== inputKey || canonicalJSON(before.model) !== canonicalJSON(after.model))
+    throw new Error("Definition publication changed implementation inputs. No compatibility certificate was issued.");
+  return { format: 1, policy: "definition-assessment-only-v1", fromRevision: implementationCompatibleFrom(before, state) ?? before.revision,
+    throughRevision: after.revision, inputKey };
 }
 
 export function extendRecoveryRevision(before: Project, after: Project, previous?: RecoveryRevision): RecoveryRevision {

@@ -3,6 +3,49 @@
 Status, 2026-10-30: **implemented bounded usage inspection/export and immediate action
 disposition**, not a project-wide savings report or permission to skip reviews.
 
+## Current format 2: local reviews and assessment applies
+
+The report now also shows an **independent latest-twenty local-review window** for the
+same project/optional area. It separates validated saved review packets, dated local
+publication receipts, reviews with no local receipt, and unavailable evidence. Each
+window has its own `hasMore`; task and review counts must not be treated as lifetime totals.
+Task links use only `check-N` labels or `outside-window`; review labels are `review-N`.
+No original project/area/job/review/publication IDs, hashes, dates or content are exported.
+
+Saving a review or replaying an identical apply request does not inflate these counts.
+An apply receipt is dated publication evidence, not product approval, present-day source/
+implementation compatibility or permission for further work. The apply route starts no
+AI requests, but prerequisite joint checks can consume requests, including checks outside
+the task window. **Neither publication counts nor zero-request recovery counts establish
+requests/money saved.** There is no counterfactual full-recheck baseline. Missing local
+receipts do not prove that an assessment was never applied; malformed/unsupported/oversized
+or wrong-review receipt evidence stays unavailable rather than being counted as zero.
+
+The storage reader selects at most 21 review row identities, validates only the first 20
+packets under the existing **132 KiB per review / 16 KiB per receipt** bounds, and checks
+receipt/review/preview/area/input identities. It does not load original source snapshots,
+re-run eligibility, inspect code or ask a model. An unreadable latest review is not skipped
+in favor of an older valid one. Task and review windows are read in one deferred transaction
+for a consistent snapshot. Report generation remains an explicit read with no writes,
+lease claims, allowance changes, inference or automatic retry.
+
+JSON export/API `format` is now **2**, adding `reviewedCombinations`; the existing task
+measurement fields retain their meanings. The browser validates format 2 and offers the
+same download name. Earlier format-1 downloaded files are untouched historical reports;
+there is no report-import feature, file rewrite or automatic conversion. Consumers must
+recognize format 2 rather than silently assuming the extra window is a savings counter.
+This is an ephemeral report change: SQLite stays **19**, execution schema stays **2**,
+portable formats and all saved jobs/reviews/receipts/freshness keys remain unchanged.
+No migration/reset/repeated model call is needed to gain the report. See the
+[compatibility ledger](migrations.md#review-and-publication-usage-report-2026-10-30).
+
+Format-2 verification, 2026-10-30: type check, **1,265** deterministic tests (561 pretests
+and 704 main), focused usage/privacy/bounds checks, UI build, all thirteen default browser
+runs and diff check passed. Browser checks cover review-before-apply, dated-receipt-after-
+apply, unchanged request counts, stale-state reporting and format-2 download. No live
+model calls, commits or pushes; existing bundle-size warning remains. This is not broad
+savings, large-project performance or live semantic/provider qualification.
+
 ## What the browser shows
 
 Under **Overall progress → Inspect original finding sources → Check the findings
@@ -64,7 +107,7 @@ can leave an unmeasured job. Missing measurements remain unknown, not backfilled
 ## Storage, API and compatibility
 
 `src/core/definition-joint-usage.ts` validates whitelisted metadata and produces the
-report. `ProjectStore.definitionJointUsage` selects at most **21** metadata rows to
+report. `ProjectStore.definitionJointUsage` selects at most **21** task metadata rows to
 return 20 plus an older-history indicator, without reading project revisions, source
 prose or model replies. Individual metrics are bounded to **32 KiB before decoding**;
 missing, future, malformed or oversized metadata stays unknown/unavailable. More than
@@ -77,7 +120,8 @@ filters by the selected project and runs before generic project/history projecti
 It writes no project/job/queue/lease/allowance state. No automatic report generation,
 export, startup replay or inference is introduced.
 
-SQLite remains **16**, execution remains schema 2. The already-supported optional
+The original measurement slice used SQLite **16**; current SQLite **19** also supports
+the independent review/publication features above. Execution remains schema 2. The optional
 `job.discoveryMetrics` format is unchanged; the existing response classifier recognizes
 the joint contract as an analysis response before validation. No project/assessment/
 certificate/run/result/portable format, semantic key, optimistic counter or saved
@@ -89,7 +133,7 @@ See [migration ledger](migrations.md#joint-check-usage-measurements-2026-10-30).
 
 This is one bounded task-family report, not project-wide request savings, a counterfactual
 comparison with full rechecking, a performance benchmark or narrower dependency proof.
-Mixed publication, safe narrower partitions, broad request-savings qualification and live
+Explicit mixed publication is now separately implemented; safe narrower partitions, broad request-savings qualification and live
 semantic/provider performance checks remain unfinished.
 
 Deterministic joint tests cover returned-invalid replies, cancellation, completed reuse,

@@ -4,12 +4,13 @@ import { logHistoryQuery, type JobLogEntry, type LogHistoryPage } from "../core/
 /** SQL-bounded diagnostics only: no prompt, response, session, account or credential payloads. */
 export function logHistory(db: Database.Database, projectID: string, input: unknown): LogHistoryPage {
   const query = logHistoryQuery.parse(input);
-  const source = `CASE WHEN json_extract(j.payload, '$.kind') = 'definition-joint-review' THEN 'Definition review'
+  const source = `CASE WHEN json_extract(j.payload, '$.kind') IN ('definition-joint-review', 'definition-scope-review') THEN 'Definition review'
     WHEN json_type(j.payload, '$.context.definitionAssessment') = 'object' THEN 'Definition review'
     WHEN json_type(j.payload, '$.helpRequest') = 'object' THEN 'Question help'
     WHEN json_extract(j.payload, '$.kind') = 'scan' THEN 'Folder scan' ELSE 'Discovery' END`;
   const area = "COALESCE(json_extract(j.payload, '$.context.definitionAssessment.epicID'), json_extract(j.payload, '$.context.focusEpicID'))";
-  const title = `CASE WHEN json_extract(j.payload, '$.kind') = 'definition-joint-review' THEN 'Joint finding check'
+  const title = `CASE WHEN json_extract(j.payload, '$.kind') = 'definition-scope-review' THEN 'Scoped finding review'
+    WHEN json_extract(j.payload, '$.kind') = 'definition-joint-review' THEN 'Joint finding check'
     WHEN json_type(j.payload, '$.context.definitionAssessment') = 'object' THEN 'Definition review'
     WHEN json_type(j.payload, '$.helpRequest') = 'object' THEN 'Question help'
     WHEN json_extract(j.payload, '$.kind') = 'scan' THEN 'Folder scan'

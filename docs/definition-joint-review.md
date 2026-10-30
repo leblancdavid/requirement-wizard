@@ -15,12 +15,18 @@ original findings beside current saved content, with original dates/identities. 
 nothing and leaves publication disabled. See [exact-content preview](definition-combination-preview.md).
 After separate acknowledgement, its exact contents can also be [saved as a local review](definition-combination-reviews.md),
 with original dates and immutable history. This still changes no assessment or publication authority.
+Later [explicit apply](combined-assessment-format.md#explicit-current-assessment-apply-sqlite-18--19)
+requires a separate eligibility check and confirmation; neither the joint task nor its
+preview/local-review acknowledgement grants that authority.
 
 Accepted actions now distinguish a new attempt, completed-result reuse and saved-reply
 recovery. **Inspect joint-check request usage** explicitly loads/downloads metadata for
 at most 20 saved tasks. New tasks retain optional measured adapter attempts/timings;
 older/partial/unreadable data remains unknown, and repeated completed reuse is not
 manufactured into a new historical task or a savings count. See [usage evidence](definition-joint-usage.md).
+The current format-2 usage report adds an independent bounded local-review/publication-
+receipt window. Dated receipts are not current compatibility, approval or a request-savings
+baseline; missing/unavailable evidence stays distinguished from zero.
 
 Open **Overall progress → Inspect original finding sources**, explicitly load sources,
 select all nine original findings and compare their provenance. Only a complete preview

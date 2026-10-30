@@ -78,6 +78,6 @@ export function DefinitionCombinationContents({ project, preview, historical = f
         </section>}
         <details><summary>Original provenance identifiers</summary><p>Original request job: <code>{origin.jobID}</code></p><p>Original finding: <code>{origin.originKey}</code></p></details>
       </details>)}
-      <p>Whole-area guards remain required. Current-assessment publication and automatic skips are disabled; matching or model-supported findings do not prove narrower independence.</p>
+      <p>Whole-area guards remain required. This preview cannot publish an assessment. Applying findings requires a saved local review, a separate eligibility check and explicit confirmation. Automatic skips remain disabled; matching or model-supported findings do not prove narrower independence.</p>
     </section>;
 }

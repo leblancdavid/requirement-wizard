@@ -107,7 +107,7 @@ function inputs(p: Project, records: Record[], epicID: string, citations: string
 }
 function manifest(p: Project, records: Record[], epicID: string): DefinitionDependencyManifest {
   const assessment = p.assessments.find((a) => a.epicID === epicID);
-  if (!assessment?.inputBasis || assessment.atRevision !== p.revision || !assessment.checks.length) fail("invalid-origin");
+  if (!assessment?.inputBasis || assessment.combinedReview || assessment.atRevision !== p.revision || !assessment.checks.length) fail("invalid-origin");
   const citations = assessment.checks.flatMap((c) => c.evidenceIDs);
   if (assessment.inputBasis.key !== definitionInputKey(p, epicID, citations)) fail("invalid-origin");
   const result = { format: 1 as const, policy: "definition-dependencies-v1" as const, authority: "inspection-only" as const,
@@ -118,6 +118,19 @@ function manifest(p: Project, records: Record[], epicID: string): DefinitionDepe
   return validated.data;
 }
 const reason = (error: unknown): DefinitionDependencyReason => error instanceof Unproved ? error.reason : "invalid-snapshot";
+
+/** New local scope-contract preparation only, not an old assessment manifest.
+ * Seed EVERY record so no free-form population is silently omitted. This pilot
+ * rejects archived required areas rather than claiming their evidence irrelevant. */
+export function prepareDefinitionScopeEvidence(raw: unknown, epicID: string): { status: "recorded"; project: Project; recordIDs: string[] } | Unavailable {
+  try {
+    const { project, records } = snapshot(raw);
+    for (const epic of project.epics) if (epic.dependencies.some((dependency) => !project.epics.some((target) => target.id === dependency && !target.archived)))
+      fail("missing-dependency");
+    inputs(project, records, epicID, records.map((r) => r.id));
+    return { status: "recorded", project, recordIDs: records.map((r) => r.id).sort() };
+  } catch (error) { return { status: "unavailable", reason: reason(error) }; }
+}
 
 /** Construct only from the exact original assessed revision, never today's
  * replacement inputs. No lazy persistence, model assertions or migration. */

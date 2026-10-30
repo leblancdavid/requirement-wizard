@@ -1,5 +1,264 @@
 # Data migrations and upgrade compatibility
 
+## Scoped-review browser exposure (2026-10-30)
+
+**No persisted format migration.** Source/target SQLite **20**, execution **2**, usage
+export **2** and portable envelopes are unchanged. New format-1 status/start transport
+contracts are not saved into project/job/checkpoint payloads. Browser ownership comes from
+the local queue and is never durable evidence. Admission/response/publication semantics,
+scope/context fingerprints and original completed work remain unchanged.
+
+Existing completed results and valid saved replies reuse with their original dates/IDs,
+without backfill, history rewriting, reset or model requalification. Explicit readonly
+inspection projects bounded dated records without history replay or lease claims; damaged
+evidence fails unavailable, never upgrades authority or substitutes older evidence.
+Reload/uncertain acknowledgements use explicit status inspection, not automatic write replay;
+only the exact app-owned worker can be stopped. The existing durable pilot handles failed
+completion and zero-call saved-reply recovery. See [browser/pilot behavior](definition-scope-pilot.md#browser-authorization-and-readonly-status).
+
+Verification: **1,334** deterministic tests (630 + 704), type check, UI build, all
+fourteen browser runners, focused scoped browser checks and diff check passed. Tests
+preserve completed/recovered output and dates across reopen/restart, reject foreign Stop,
+leave expired workers unchanged, and return unavailable for damaged/oversized/future or
+inconsistent newest checkpoints without falling back or replaying original history.
+No live calls, commits or pushes; effective provider/tool behavior and larger-project
+status/preparation performance remain unqualified.
+
+## Scoped-review provider bridge (2026-10-30)
+
+**No persisted migration or schema bump:** SQLite 20, execution schema 2, usage export 2,
+portable envelopes and every original scope/context/response key remain unchanged.
+The provider bridge factors out the exact prior v1 job manifest and passes authoritative
+project state to explicitly injected adapters. It does not rewrite old jobs, results,
+grants, plans, certificates or history, and does not repeat completed work or saved replies
+to add equivalent routing metadata. Older injected-pilot evidence retains its original
+validated-output-only authority, never a fabricated live-provider/tool witness.
+
+New scope requests can use existing selected-account/provider routing with strict model
+identity, exact scope prompts, no research/tools, and a scoped-only direct stream profile.
+Direct profile `scoped-no-tools-v1` requests no tools and rejects observed tool events,
+unsupported/missing inventories and final-text mismatches. Ordinary direct request/parser
+behavior is unchanged. Unknown profile parameters fail without weaker-profile/provider
+fallback. No API/CLI/browser/coordinator start path or assessment publication is added.
+Future persistent provider qualifications must have their own compatibility decision;
+do not infer them from successful transport or retroactively invalidate valid saved work.
+See [routing, checks and qualification limits](definition-scope-providers.md).
+
+Verification: type check, **1,329** deterministic tests (625 pretests + 704 main),
+focused provider/scope/pinned-client checks, UI build, all thirteen default browser runs
+and diff check passed. Tests preserve older injected-pilot results/jobs without bridge
+invocations or upgraded authority, while ordinary direct requests retain prior behavior.
+Profile/routing/stream checks use synthetic credentials and mocked transports, not live
+provider enforcement. No live calls, commits or pushes; existing bundle warning remains.
+
+## Explicit scoped-review execution pilot (2026-10-30)
+
+**SQLite 19 → 20**, `explicit-scoped-review-pilot-v1`, adds local `definition_scope_reviews`
+and the specialized job kind/context marker `definition-scope-review`/`definitionScopeReview`.
+Run format 1 (`definition-scope-run-v1`) binds strict explicit one-request authorization,
+original revision/snapshot/scope/context/model witnesses, reservation, validated reply/date,
+and output-only completion or original root-job recovery link. Checkpoints cap at 192 KiB;
+original revision reads remain bounded. No scheduler, default provider, browser/CLI start
+route or publisher is added; execution requires an explicitly constructed injected adapter.
+
+This is additive: no old job/project/assessment/plan/check/run/receipt/grant is rewritten,
+no semantic key/revision is rebased and no completed work repeated to acquire metadata.
+Execution schema 2, portable formats and usage-report format 2 are unchanged. New pilot
+jobs/results are excluded from continuation; imports reject markers masquerading as generic
+discovery. Old SQLite-19 apps refuse database 20 before silently consuming the new job kind.
+No backup is needed for the no-rewrite schema addition. Migration/startup verification is
+transactional/retryable and preserves other workers' live leases. Future run/marker formats,
+identity mismatches and orphan checkpoints/jobs reject without overwrite or schema advancement.
+
+Completed exact tasks reuse unchanged; saved replies recover only under explicit action,
+retaining the original observation date/spent request and linking the original root.
+Original context/model/snapshot witnesses are re-verified; missing/changed witnesses never
+fall back to another paid request. The v1 scope builder/document/instructions must remain
+reproducible; future equivalent changes need compatibility handling, not repeated inference.
+Completion commits result/job atomically and never publishes an assessment or changes
+implementation evidence. See [scope, recovery and remaining gates](definition-scope-pilot.md).
+
+Verification: type check, **1,309** deterministic tests (605 pretests + 704 main),
+focused scope/joint/migration/portable checks, UI build, all thirteen default browser runs
+and diff check passed. Actual upgrade fixtures preserve old rows/live leases, roll back
+failed table/ledger creation, reject future checkpoints without overwrite and retry safely.
+Completed results and saved replies survive reopen without another adapter invocation;
+generic/portable paths cannot publish or resume them. Existing browser workflows remain
+qualified by deterministic checks, not a new scoped provider/UI. No live calls, commits
+or pushes; existing bundle-size warning and live/semantic/performance gaps remain.
+
+## Local review-scope contract prototype (2026-10-30)
+
+**No persisted change/migration:** SQLite remains 19, execution 2, portable envelopes and
+all saved semantic keys unchanged. `definition-review-scope-v1` is an in-memory task-binding
+prototype, not a job field, original-finding certificate or new authorization. It assigns
+outputs but retains all free-form project evidence and the existing conservative guard.
+No adapter, queue, API, browser or scheduler dispatches this contract; no old assessment/
+job/plan/receipt is converted, invalidated or replayed to acquire it. The new result cannot
+authorize publication, skips or requests. Any future persistence/dispatch needs a separate
+compatibility decision; do not backfill original scope witnesses from today's inputs.
+
+The combined evidence-document helper is extracted without changing the canonical v1
+document/hash; a direct comparison with the old projection and existing upgrade/reuse
+tests cover equivalence. Existing saved work needs no reset, migration or model call.
+New local contracts reject omitted/masked/rehash-forged packets and stale equal-numbered
+views, limit outputs/citations, and retain uncertainty for reported cross-dimension concerns.
+Archived required populations and oversized envelopes conservatively remain unavailable,
+not a new restriction on opening/using existing app data. See [scope and remaining gates](definition-review-scope.md).
+
+Verification: type check, **1,296** deterministic tests (592 pretests + 704 main),
+focused scope/dependency/partition checks, offline experiment regression, UI build,
+all thirteen default browser runs and diff check passed. Browser checks protect existing
+workflows/guard compatibility; there is no new scope dispatch to qualify there. No live
+model calls, commits or pushes; bundle-size warning and live/semantic/narrowing gates remain.
+
+## Offline narrower-boundary experiments (2026-10-30)
+
+**No persisted change/migration.** The new authored-fixture evaluation/report has its own
+format 1 and `offline-experiment-only` authority, distinct from usage export format 2.
+SQLite remains 19, execution schema 2, portable envelopes, v1 input/recovery/whole-area
+keys and combined project-evidence guard unchanged. No historical evidence is restamped,
+backfilled, replayed or invalidated. No scheduler/API/UI consumes experiment outcomes as
+authority; reports cannot authorize skips or publication. Existing completed work and
+original provenance remain intact without repeated inference or reset.
+
+Snapshots are bounded and exact-schema/origin/finding identity is checked before comparison;
+invalid/missing/ambiguous/future evidence is unavailable, not a passing equality. Empty or
+partly unavailable non-refuted runs are inconclusive. The script reads only synthetic
+in-memory fixtures, writes no application state and performs no model/network work. See
+[candidate definitions, observed counterexamples and remaining gates](definition-partition-experiments.md).
+
+Verification: type check, **1,278** deterministic tests (574 pretests + 704 main),
+focused partition/dependency tests, standalone offline experiment and diff check passed.
+No UI/runtime paths changed; browser/packaging/live model checks were not rerun for this
+offline slice. No calls, commits or pushes. Passing controls remain finite-corpus evidence,
+not semantic qualification, performance benchmarks or request savings.
+
+## Review and publication usage report (2026-10-30)
+
+**Ephemeral export/API format 1 → 2 only.** The usage report adds an independent bounded
+window for local reviewed combinations and validated dated publication receipts. Existing
+task measurement fields retain their meanings; new counts do not claim requests/money
+saved, current compatibility, product approvals or lifetime totals. Invalid/missing evidence
+is distinguished from zero and no older substitute is selected. Both windows share a
+consistent read transaction; only whitelist metadata/local labels cross the API/export.
+
+SQLite remains **19**, execution schema **2**, portable envelopes/semantic keys unchanged.
+No old project/job/review/receipt/certificate/metric payload, grant, concurrency counter,
+completed work or historical report is rewritten. Old downloaded format-1 files remain
+historical artifacts; there is no report import/migration. Current clients expect report
+format 2, and external consumers must recognize it. Upgrade does not repeat inference or
+require data resets. Bounded readers preserve malformed/future/oversized evidence as
+unavailable without writing it. See [report boundaries](definition-joint-usage.md).
+
+Verification: type check, **1,265** deterministic tests (561 pretests + 704 main),
+focused usage/privacy/bounds checks, UI build, all thirteen default browser runs and
+diff check passed. Tests distinguish review/publication, repeated saves/applies, dated
+receipts after edits, cross-project/area filtering, independent windows, unavailable/
+oversized/wrong-review receipts and non-substitution of older rows. No live model calls,
+commits or pushes; existing bundle-size warning and live/performance/savings gaps remain.
+
+## Apply response recovery and request binding (2026-10-30)
+
+**No new migration or persisted format:** SQLite 19, execution schema 2 and existing
+portable versions remain unchanged. Browser response validation now checks the existing
+strict receipt/hash against every request identity, including the submitted apply key on
+writes, rather than accepting project/review IDs alone. No saved receipt/certificate,
+freshness key, revision, history or completed work is rewritten or invalidated. Valid old
+receipts use the same format; mismatched transport packets fail closed with explicit
+eligibility inspection, not automatic inference/retry or manufactured publication authority.
+
+Deterministic transport tests cover failure before commit, lost response after commit,
+new unchecked consent before explicit retry, receipt-only recovery/reload without write
+replay, internally valid wrong-request receipts and an actual post-confirmation concurrent
+product edit. Actual restoration→apply→restoration tests preserve code evidence; a later
+product edit and restoration cannot bridge the broken interval. These checks add no
+request permission and do not qualify arbitrary crashes/networks or narrower independence.
+
+Verification: type check, all **1,262** deterministic tests (558 pretests + 704 main),
+focused recovery tests, UI build, all **thirteen** default browser runs (including the
+new transport-recovery and confirmation-race variants) and diff check passed. No live
+model calls, commits or pushes. Existing bundle-size warning remains.
+
+## Explicit reviewed definition apply (2026-10-30)
+
+**SQLite 18 → 19**, `explicit-reviewed-definition-publication-v1`: no old payload rewrite,
+backfill, new table, inference or execution schema bump. Existing reviews/jobs, counters,
+plans/checks, workers and evidence remain unchanged on upgrade. Explicit apply atomically
+writes an assessment revision, optional execution-schema-2 `definitionRevision` and a
+bounded Activity publication receipt. Prior local reviews retain `canPublish: false` and
+never grant apply consent. Confidence is low and findings retain original provenance.
+
+Policy `definition-assessment-only-v1` uses the frozen implementation recovery-input key
+and a contiguous interval, extending only current recovery/publication evidence. Original
+plan/run/check revisions survive; product edits, older stale work and other freshness gates
+cannot be bypassed. Schema versions remain separate from optimistic-concurrency counters.
+Portable state format 2 is additionally required for this certificate; adoption validates
+supported/current metadata under local rerouting without exporting native sessions or full
+Activity archives. Unmarked exports otherwise stay format 1.
+
+Receipts use `definition-combination-publication-v1`, Activity IDs
+`combination-publication:<review UUID>`, a 16 KiB read ceiling and no further-work authority.
+Identical requests reuse only against the exact published snapshot; later edits retain a
+dated receipt but reject reapply. Startup validates receipts/certificates. Future formats
+reject without overwrite; failed startup rolls back schema/ledger advancement and allows
+retry. No backup/reassessment is needed for equivalent old payloads. See the
+[apply contract and qualification limits](combined-assessment-format.md#explicit-current-assessment-apply-sqlite-18--19).
+
+Verification: type check, all **1,260** deterministic tests (556 pretests + 704 main),
+focused apply/recovery/portable/migration checks, UI build, all eleven default browser
+runners and diff check passed. Checks include actual low-confidence browser apply, exact
+receipt reuse, duplicate API requests, stale/forged witnesses, injected receipt-write
+rollback, saved plan/code/paused-run/stage-attempt preservation, real folder adoption,
+certificate-only format protection and 18→19 future-format failure/retry without overwrite.
+No live calls, commits or pushes occurred. Narrower automatic skips, broad savings/live
+semantic quality and large-project performance remain unqualified; bundle-size warning remains.
+
+## Combined assessment provenance format (2026-10-30)
+
+**Implemented compatibility boundary, no payload conversion:** SQLite **17 → 18**,
+`combined-assessment-provenance-format-v1`, supports an optional strict app-owned
+`assessment.combinedReview` packet and conditional portable `state.json` format 2.
+No production publisher/API or automatic skip activation is added. No old table/row,
+project revision, v1 key, saved receipt/plan/checkpoint, grant, local review, execution
+schema 2 or credential/routing state is rewritten/backfilled. Older apps reject database
+18 rather than silently dropping new provenance; no backup is needed for this no-rewrite
+boundary. Existing work does not repeat inference solely to gain the representation.
+
+Marked assessments bind nine exact original finding packets, dates/jobs/evidence keys,
+wrapper and reviewed-content/joint references, and an additional conservative project-wide
+evidence guard. The v1 inputBasis algorithm stays frozen. Only marked data uses the new
+broader guard in coverage/retention; unmarked saved reviews retain previous behavior.
+Model assessment output cannot issue the marker. The browser distinguishes original
+finding dates from wrapper revision; imported shape/content hashes are not authentication,
+publication/readiness authority or narrower independence.
+
+Origin hashing/schema extraction is byte-compatible with the original canonical Node
+SHA-256 packet. Current marked projects are bounded and validated at startup, historical
+marked evidence on read/adoption; no whole-history backfill occurs. Unsupported future
+formats/identity mismatches reject without overwriting evidence. Failed startup rolls
+back the ledger/schema advancement; reopen supports retry while retaining old rows and
+other workers' live leases.
+
+Portable state format **1 remains byte-compatible for unmarked current/history data**.
+Format **2 is emitted only when provenance occurs in current or retained historical
+assessments**, protecting both from old format-1 readers. The new reader accepts legacy
+1 and new 2, rejects downlevel envelopes carrying the new field, and preserves supported
+metadata/semantic keys under new local account routing. Unsupported future shared data
+does not overwrite local state or the folder. Manifest/layout, execution and continuation
+envelope versions stay unchanged; local acknowledgement records/native sessions are not
+invented or exported as authority. See [format, guard and qualification limits](combined-assessment-format.md).
+
+Verification: type check, all **1,253** deterministic tests (549 pretests + 704 main),
+focused provenance/portable/migration/retention checks, focused reader browser, full
+eleven-runner default browser aggregate/UI build and diff check passed. Actual folder
+adoption/checkpoint uses a new local account without calls; future data rejection retains
+both local state and shared bytes. Raw 17→18/reopen fixtures preserve original rows,
+local acknowledgements and live workers. The reader browser is a curated format fixture,
+not publication qualification. Existing bundle-size warning remains. No live model calls,
+commits/pushes or packaging occurred; atomic apply, implementation-reuse preservation,
+narrower partitions and live/performance qualification remain unfinished.
+
 ## Saved local combination reviews (2026-10-30)
 
 **Implemented forward migration:** SQLite **16 → 17**, named

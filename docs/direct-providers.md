@@ -1,5 +1,18 @@
 # Direct provider migration
 
+## Scoped-review transport profile (2026-10-30)
+
+The [explicit scoped provider bridge](definition-scope-providers.md) now supports existing
+selected direct accounts without OpenCode fallback. Only scope requests opt into
+`scoped-no-tools-v1`: explicit empty tools/none selection, rejection of observable tool
+activity/unsupported output, and exact final-message versus streamed-text checks. Complete
+text-only inventory is required; errors never downgrade to a weaker profile. Ordinary
+direct discovery/help/probe requests and existing credentials/refresh/selection rules are
+unchanged. Tests use synthetic credentials and mocked streams, not live account inference.
+A later explicit browser pilot uses this bridge with status-first consent; CLI start,
+publication authority, credential export and live provider qualification remain disabled.
+Saved scope work is not replayed to acquire the new transport.
+
 Status, October 15, 2026: app-owned browser connection management and direct
 discovery/question help are implemented, alongside the independent CLI spike.
 Deterministic checks and Windows credential protection pass. Direct live sign-in,

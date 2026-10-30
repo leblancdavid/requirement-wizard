@@ -1,5 +1,59 @@
 # Browser workspace, epics, and estimated completeness
 
+## Scoped review browser pilot (2026-10-30)
+
+**Overall progress → Review selected definition dimensions (pilot)** exposes a separate
+explicit action. Choose an area/output dimensions, **Check saved scoped task**, then give
+fresh one-request consent before **Start scoped review**. The packet retains complete
+captured project evidence, not just the selected categories. The existing selected
+OpenCode/direct connection is used without fallback; live quality/tool enforcement remains
+unqualified. Opening controls or reading status never starts inference.
+
+Results show dated checks, uncertainty and cross-dimensional concerns as plain text.
+**Load latest scoped review** explicitly loads/polls a saved live task after reload;
+**Stop scoped review** targets only the exact worker owned by this app queue. Other
+instances/expired leases can be inspected but are not claimed or stopped. Closing controls
+stops polling, not work. An uncertain start response locks out further starts until
+**Check saved scoped task** resolves the frozen attempted request; no write is replayed.
+Repeating a confirmed exact request can reuse completed work or a saved valid reply without
+another AI call; a failed attempt without a reply requires fresh consent.
+
+SQLite stays 20; browser views are transport-only format 1. Jobs never replace the ordinary
+coverage baseline or appear as generic discovery Resume. Results cannot publish assessments,
+approve product choices or authorize skips/coding; portable continuation excludes them.
+See [pilot boundaries and qualification limits](definition-scope-pilot.md).
+
+`npm run test:browser:definition-scope` uses a deterministic adapter, not live inference.
+The default browser aggregate now includes this fourteenth runner. Mobile screenshot:
+`.reqwizit-state/browser-definition-scope-mobile.png`.
+
+## Reviewed-combination usage inspection (2026-10-30)
+
+**Inspect joint-check request usage** now includes separate bounded local-review and
+dated publication-receipt counts. Export format 2 contains only whitelist metadata and
+window-local labels; the task and review windows each cap at twenty. Repeated saves/
+applies do not inflate publication counts. Unknown evidence stays unknown, and neither
+these counts nor the no-AI apply path establish requests/money saved. Loading remains
+explicit and starts no work. See [report semantics and compatibility](definition-joint-usage.md).
+
+## Combined assessment reader compatibility (2026-10-30)
+
+The assessment reader now preserves an optional combined-provenance representation and
+shows individual original review dates separately from the wrapper version. Marked data
+uses an extra conservative project-evidence freshness guard. SQLite 17→18 and conditional
+portable state format 2 prevent older readers from silently losing those origins; normal
+unmarked exports stay format 1. A separate saved-review eligibility check and explicit
+confirmation now apply exact findings with low confidence and no AI calls/product approvals;
+SQLite 18→19 preserves valid implementation work through exact assessment-only revisions.
+Response-recovery and confirmation-race variants are part of the default browser aggregate:
+`npm run test:browser:definition-combination-recovery` and
+`npm run test:browser:definition-combination-race`. They check explicit receipt recovery,
+fresh unchecked consent after a pre-commit failure, no write replay after an ambiguous
+commit, and rejection of real product edits after confirmation. Receipt responses are
+bound to all exact request identities. These add no automatic skips or AI calls.
+The reader browser check uses a curated fixture only, not an enabled publication workflow:
+`npm run test:browser:combined-assessment-reader`. See [scope and remaining gates](combined-assessment-format.md).
+
 ## Save reviewed combined contents locally (2026-10-30)
 
 After an exact combined-finding preview, separately acknowledge **I reviewed these exact

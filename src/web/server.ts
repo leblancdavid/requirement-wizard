@@ -42,6 +42,11 @@ import { definitionFindingPreviewRequestSchema } from "../core/definition-findin
 import { definitionJointUsageQuerySchema } from "../core/definition-joint-usage.js";
 import { definitionCombinationPreviewQuerySchema } from "../core/definition-combination-preview.js";
 import { definitionCombinationSaveSchema, definitionCombinationHistorySchema } from "../core/definition-combination-review-view.js";
+import { definitionCombinationApplyQuerySchema, definitionCombinationApplySchema } from "../core/definition-combination-apply.js";
+import { definitionReviewScopeStartSchema } from "../core/definition-review-scope.js";
+import { definitionScopeStatusQuerySchema } from "../core/definition-scope-view.js";
+import { DefinitionScopeReviewService } from "../service/definition-scope-review.js";
+import { definitionScopeDiscoveryAdapter } from "../service/definition-scope-adapter.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -50,6 +55,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
   const token = randomBytes(32).toString("hex");
   const service = new DiscoveryService(options.store, options.adapter);
   const queue = new DiscoveryQueue(service);
+  const scoped = new DefinitionScopeReviewService(options.store, definitionScopeDiscoveryAdapter(options.adapter));
   const workflow = new ProjectWorkflow(options.store, options.adapter);
   const implementation = new ImplementationService(options.store, options.executionAdapter);
   const snapshotEncoder = new SnapshotEncoder();
@@ -224,6 +230,21 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
         json(res, 200, options.store.definitionJointUsage(id, definitionJointUsageQuerySchema.parse(await body(req)))); return;
       }
+      if (action === "definition-scope-start" || action === "definition-scope-status" || action === "definition-scope-stop") {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        const raw = await body(req);
+        if (action === "definition-scope-status") {
+          const view = options.store.inspectDefinitionScopeReview(id, definitionScopeStatusQuerySchema.parse(raw));
+          json(res, 200, view.status === "recorded" ? { ...view, owned: queue.ownsDefinitionScope(id, view.jobID) } : view); return;
+        }
+        if (action === "definition-scope-stop") {
+          const input = z.object({ jobID: z.string().uuid() }).strict().parse(raw);
+          queue.stopDefinitionScope(id, input.jobID); json(res, 200, { stopped: true }); return;
+        }
+        const input = definitionReviewScopeStartSchema.parse(raw);
+        if (implementation.isActive(id) || workflow.active(id)) throw new OperationConflictError("Stop active work before starting a scoped review.");
+        json(res, 202, await queue.reviewDefinitionScope(id, input, scoped)); return;
+      }
       if (action === "definition-combination-preview") {
         if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
         json(res, 200, options.store.previewDefinitionCombination(id, definitionCombinationPreviewQuerySchema.parse(await body(req)))); return;
@@ -239,6 +260,14 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         if (action === "definition-combination-history") { json(res, 200, options.store.definitionCombinationHistory(id, definitionCombinationHistorySchema.parse(raw))); return; }
         const input = z.object({ reviewID: z.string().uuid() }).strict().parse(raw);
         json(res, 200, options.store.readDefinitionCombinationReview(id, input.reviewID)); return;
+      }
+      if (action === "definition-combination-apply-preview" || action === "definition-combination-apply") {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        const raw = await body(req);
+        if (action === "definition-combination-apply-preview") { json(res, 200, options.store.previewDefinitionCombinationApply(id, definitionCombinationApplyQuerySchema.parse(raw))); return; }
+        const input = definitionCombinationApplySchema.parse(raw);
+        if (queue.isActive(id) || implementation.isActive(id) || workflow.active(id)) throw new OperationConflictError("Stop active work before applying reviewed definition findings.");
+        json(res, 200, options.store.applyDefinitionCombination(id, input)); return;
       }
       const project = options.store.get(id);
       if (req.method === "GET" && !action) {
@@ -257,7 +286,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
           ...(scan ? { scan: { ...scan, sources: [] } } : {}),
           ...(scan && scanWork ? { scanProgress: { completed: scanWork.batches.filter((batch) => batch.output).length, total: scanWork.batches.length, capturedAt: scan.snapshot.capturedAt,
             resumable: ["failed", "cancelled", "interrupted"].includes(job.status) && job.expectedRevision === project.revision && scanWork.bindingID === options.store.workspace(id)?.bindingID } } : {}) }));
-        const lastRound = jobs.filter((item) => item.status === "completed" && item.kind !== "definition-joint-review").at(-1);
+        const lastRound = jobs.filter((item) => item.status === "completed" && item.kind !== "definition-joint-review" && item.kind !== "definition-scope-review").at(-1);
         const previousCoverage = lastRound ? revisionSnapshot(options.store.get(id, lastRound.expectedRevision)).coverage.percent : null;
         const helpJobs = recent.helpJobs.map(({ result: _, researchEvidence: __, ...job }) => job);
         const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), processingPolicy: options.store.processingPolicy(id), maintenance: queue.maintenanceView(id), workflow: workflow.view(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };

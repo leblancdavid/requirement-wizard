@@ -1,5 +1,18 @@
 # OpenCode runtime spike
 
+## Scoped-review adapter bridge (2026-10-30)
+
+The explicit scope pilot now has a [provider bridge](definition-scope-providers.md) to
+the existing discovery adapter. Scope prompts re-verify complete context and reject mixed
+scan/research/help profiles before runtime startup. The existing non-research deny-all/
+disabled-tools profile, JSON-text output, exact-model validation and owned-server lifecycle
+are retained; the V2 client remains pinned to 2.1.4 with no new SDK calls or V1 fallback.
+An injectable runtime factory enables deterministic request/cleanup/tool-rejection tests.
+Those mocked checks do not qualify live subscription availability, permission enforcement,
+provider-side cancellation or semantic scope quality. A later explicit browser pilot uses
+this bridge with status-first consent and exact owned Stop; no CLI start action or live
+model probe is introduced. Compatible old scope results/replies reuse unchanged.
+
 ## Current OpenCode V2 adapter (2026-10-25)
 
 User-approved migration: `@opencode/client@2.1.4` replaces the old

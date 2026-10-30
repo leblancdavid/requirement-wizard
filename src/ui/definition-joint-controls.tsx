@@ -116,6 +116,6 @@ export function DefinitionJointControls({ project, epicID, request, actions, dis
         project={project} epicID={epicID} jobID={view.jobID} enabled={savedMatches} inspect={actions.combinationPreview} reviews={actions.combinationReviews} saveDisabled={disabled} />}
     </section>}
     {actions.usage && <DefinitionJointUsage key={`${project.id}:${epicID}`} load={() => actions.usage!(epicID)} />}
-    {actions.combinationReviews && <DefinitionCombinationHistory key={`reviews:${project.id}:${epicID}`} project={project} epicID={epicID} actions={actions.combinationReviews} />}
+    {actions.combinationReviews && <DefinitionCombinationHistory key={`reviews:${project.id}:${epicID}`} project={project} epicID={epicID} actions={actions.combinationReviews} disabled={disabled} />}
   </section>;
 }

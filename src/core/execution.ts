@@ -6,7 +6,7 @@ import { assessmentSkill } from "./execution-skills.js";
 import { assessmentCompatibility, executionSchemaVersion } from "./assessment-identity.js";
 import { assessmentImpactPolicy, assessmentPathSchema, reviewedAssessmentPaths, type AssessmentFootprint, type AssessmentImpact } from "./assessment-impact.js";
 import type { ImplementationPlanning } from "./implementation-planning.js";
-import { implementationRevisionMatches, recoveryRevisionCurrent, type RecoveryRevision } from "./implementation-revisions.js";
+import { implementationRevisionMatches, implementationCompatibleFrom, type RecoveryRevision, type DefinitionRevision } from "./implementation-revisions.js";
 
 const branch = z.string().trim().min(1).max(200).refine((s) => !s.startsWith("-") && !/[\s~^:?*\[\\]|\.\.|@\{|\/\/|\/$|\.$/.test(s), "Invalid branch name");
 export const executionConfigSchema = z.object({
@@ -79,6 +79,7 @@ export type ExecutionRun = {
 export type MainDelivery = { fingerprint: string; contextFingerprint?: string; legacyContextFingerprint?: string; main: string; at: string; repository: string; checks: CheckResult[] };
 export type ExecutionState = {
   recoveryRevision?: RecoveryRevision;
+  definitionRevision?: DefinitionRevision;
   planning?: ImplementationPlanning; planningHistory?: ImplementationPlanning[];
   schemaVersion: number; version: number; config?: ExecutionConfig; assessments: Record<string, Assessment>;
   workspaceAssessments?: Record<string, Assessment>; mainAssessments?: Record<string, Assessment>;
@@ -89,7 +90,7 @@ export type ExecutionState = {
 };
 /** Read-only inputs to freshness/progress/order calculations. Worker progress,
  * sessions, command output and historical diagnostics do not affect these results. */
-export type ExecutionEvaluation = Pick<ExecutionState, "config" | "assessments" | "workspaceAssessments" | "mainAssessments" | "delivered" | "assessmentRequests" | "run" | "history" | "recoveryRevision"> & {
+export type ExecutionEvaluation = Pick<ExecutionState, "config" | "assessments" | "workspaceAssessments" | "mainAssessments" | "delivered" | "assessmentRequests" | "run" | "history" | "recoveryRevision" | "definitionRevision"> & {
   assessmentRuns?: Pick<AssessmentRun, "operation" | "capture" | "head" | "impacts">[];
 };
 export const emptyExecution = (): ExecutionState => ({ schemaVersion: executionSchemaVersion, version: 0, assessments: {}, delivered: {}, history: [] });
@@ -110,11 +111,11 @@ export function eligibleRequirements(project: Project) {
 export function createExecutionIndex(project: Project, state: ExecutionEvaluation) {
   const requirements = new Map(eligibleRequirements(project).map((r) => [r.id, r]));
   const contexts = new Map<string, string | undefined>();
-  let recoveryCurrent: boolean | undefined;
+  let compatibleFrom: number | null | undefined;
   return { requirements, matchesRevision(revision: number | undefined) {
     if (revision === project.revision) return true;
-    recoveryCurrent ??= recoveryRevisionCurrent(project, state.recoveryRevision);
-    return recoveryCurrent && revision !== undefined && revision >= state.recoveryRevision!.fromRevision && revision <= project.revision;
+    if (compatibleFrom === undefined) compatibleFrom = implementationCompatibleFrom(project, state);
+    return compatibleFrom !== null && revision !== undefined && revision >= compatibleFrom && revision <= project.revision;
   }, context(id: string) {
     if (!contexts.has(id)) {
       try { contexts.set(id, assessmentContextFingerprint(project, id, state.config?.dependencies)); }

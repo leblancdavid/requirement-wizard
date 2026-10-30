@@ -8,6 +8,18 @@ assessment and real GitHub delivery/installer integration remain unqualified.
 
 ## Browser workflow
 
+### Reviewed definition apply preserves valid work (2026-10-30)
+
+The separate [reviewed-assessment apply](combined-assessment-format.md#explicit-current-assessment-apply-sqlite-18--19)
+action now recognizes exact assessment-only revision intervals using optional
+`definitionRevision` evidence in execution schema 2. A currently valid restoration interval
+can extend through apply, and a current publication interval through restoration. Plans,
+approvals, code findings, paused runs and spent stage attempts keep their original evidence
+and revisions; already stale work stays stale. Other decision/config/code/manual gates
+still apply. SQLite 18→19 upgrades do not issue compatibility evidence or repeat calls.
+Portable state 2 protects the new certificate and retains valid plan/code reuse on adoption,
+without exporting local coding sessions. Apply itself starts no AI, planning or coding work.
+
 ### Recovery-only revisions preserve valid work (2026-10-29)
 
 Explicit recovery of missing definition assessments no longer requires discarding

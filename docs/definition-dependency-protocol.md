@@ -97,7 +97,7 @@ The prototype accepts in-memory snapshots; future storage readers must enforce b
 bounds before reading/parsing database payloads. Large-project preparation performance
 and live provider quality are not qualified by these deterministic bounds.
 
-## Activation gates — not implemented
+## Activation gates — progress and remaining limits
 
 1. **Publication provenance (local evidence slice implemented):** optional certificates
    now commit atomically with validated assessment-only refreshes, binding original
@@ -109,6 +109,14 @@ and live provider quality are not qualified by these deterministic bounds.
    dependencies, population/absence guards, global interpretation, scope and negative
    assumptions. A partition must account for new/removed evidence and cross-area
    interactions. Without a sound partition, retain the v1 whole-area guard/fallback.
+   The [offline adversarial experiment](definition-partition-experiments.md) now refutes
+   citations-only and a stronger category-content mask on an authored 22-case corpus.
+   Neither may activate skips; finite passing controls are not semantic qualification.
+   A new [local review-scope prototype](definition-review-scope.md) assigns exact outputs
+   while retaining all project evidence, validates bound replies/cross-dimensional concerns
+   and rejects rehashed omission packets. A later [injected-adapter execution pilot](definition-scope-pilot.md)
+   now adds explicit one-request execution/checkpoints and original-witness recovery,
+   without a default provider/browser dispatch or narrower automatic reuse.
 3. **Mixed publication (origin preview foundation implemented):** a read-only
    preview, with explicit source loading/selection in Overall progress, now retains
    each selected finding's verified original date, source job and
@@ -122,14 +130,23 @@ and live provider quality are not qualified by these deterministic bounds.
    with current saved findings without writes or AI. A separately acknowledged
    [local review record](definition-combination-reviews.md) can now retain those exact
    contents durably without changing assessments/approvals or granting skip authority.
-   Publishing a mixed current assessment, sound narrower
-   partitions and atomic stale-publication checks remain unfinished. Never rebase an old finding's date/evidence
+    A separate [explicit atomic apply](combined-assessment-format.md#explicit-current-assessment-apply-sqlite-18--19)
+    now publishes a mixed current assessment after re-verification and exact-plan consent,
+    with low aggregate confidence and implementation-reuse safeguards. Lost-response and
+    confirmation-race browser checks retain explicit recovery boundaries. Sound narrower
+    partitions remain unfinished. Never rebase an old finding's date/evidence
    onto a new assessment revision. See [original finding provenance](definition-finding-origins.md).
 4. **Continuation and consent:** integrate only with the existing authorized coordinator
    and durable job/attempt ledgers. Stop, limits, restart and worker conflicts must retain
    completed calls and require existing explicit continuation. No new automatic workers.
 5. **Forward compatibility:** any saved manifest/per-finding schema needs its own ordered
    migration, unsupported-future rejection and preservation/reopen/failure-retry tests.
+   The [combined assessment reader format](combined-assessment-format.md) now provides
+   strict original-finding association, SQLite 17→18 and conditional portable state 2
+   without backfilling old data or enabling publication. Its conservative project-wide
+   guard does not establish narrower independence. The later explicit apply slice now
+   adds atomic re-verification and exact assessment-only implementation reuse; narrower
+   partitions and automatic skips remain unfinished.
    Preserve existing current reviews and their semantic identities without requiring
    fresh inference merely to gain the new representation. Missing historical witnesses
    remain unavailable; do not fabricate provenance from current inputs.

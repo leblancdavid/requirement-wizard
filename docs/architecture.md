@@ -1,5 +1,50 @@
 # Architecture outline
 
+`src/service/definition-scope-adapter.ts` explicitly bridges scoped tasks to existing
+discovery/provider adapters using an unchanged v1 manifest and authoritative project.
+`runtime/discovery.ts` has a scope-only prompt/profile guard; the direct provider opts
+scope requests into no-tools and complete text-inventory checking. Default owned-server
+and exact-account routing stay intact. Browser dispatch is explicit; coordinator dispatch
+remains disabled.
+See [provider bridge versus live qualification](definition-scope-providers.md).
+
+`src/service/definition-scope-review.ts` and `src/storage/definition-scope-review.ts` add an
+explicit injected-adapter execution pilot: one reserved invocation, bounded original scope/
+model/context witnesses, durable validated replies, atomic completion and no-call recovery.
+SQLite 20 adds a local table/job kind; generic discovery/portable/resume/baseline paths
+exclude it. `startApp` constructs the provider bridge for strict explicit browser POSTs;
+`definition-scope-view.ts` defines bounded dated transport contracts and the queue owns
+exact-job Stop/serialization. `definition-scope-controls.tsx` requires status-first consent
+and explicit ambiguous-ack recovery. No scheduler route or scoped publisher is registered.
+See [pilot boundaries](definition-scope-pilot.md).
+
+`definition-review-scope.ts` is a local prototype for app-owned output assignments,
+complete project-evidence contexts and strict scope-bound replies/cross-dimensional
+concerns. It uses exhaustive dependency validation and the unchanged extracted combined
+evidence document. The dedicated injected-adapter pilot now binds its durable witnesses;
+provider/browser dispatch is explicit, while scheduling and scoped assessment publication
+remain unwired.
+See [task binding versus independence](definition-review-scope.md).
+
+`definition-partition-evaluation.ts` and synthetic `definition-partition-fixtures.ts`
+support an offline adversarial narrowing experiment, invoked only by tests and
+`scripts/qualify-definition-partitions.ts`. They compare rejected citation/category
+prototypes with unchanged conservative controls and grant no publication/skip authority.
+No scheduler/API/UI consumes these results, and no persisted format/key changes. See
+[scope, observed counterexamples and next gate](definition-partition-experiments.md).
+
+`src/core/definition-finding-identity.ts` extracts the unchanged origin schema/hash into
+a browser-safe module, with stable dimensions shared through `definition-dimensions.ts`.
+`definition-combined-assessment.ts` defines optional strict original-finding provenance
+and a separate conservative project-evidence guard; project validation binds it to exact
+checks, while model output schemas reject it. Coverage/retention apply the additional
+guard only to marked data. SQLite 18 establishes a no-rewrite compatibility boundary;
+portable state format 2 is conditional on current/historical provenance, with legacy
+format 1 unchanged otherwise. The explicit apply path now adds atomic source re-verification,
+assessment/history/implementation-compatibility/Activity receipt writes and a SQLite 19
+no-rewrite boundary, with separate browser eligibility and consent.
+See [format boundaries](combined-assessment-format.md).
+
 `src/core/definition-combination-review.ts` defines strict immutable local review evidence;
 SQLite 17 adds `definition_combination_reviews` without changing project/assessment or
 portable formats. `ProjectStore.saveDefinitionCombinationReview` re-verifies the exact

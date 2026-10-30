@@ -63,14 +63,28 @@ review those findings together with one bounded request and retain/recover its l
 verdict without rewriting originals. The same inspector offers separate consent, Stop
 and saved results; there is no automatic route or publication authority.
 Its [bounded usage report](docs/definition-joint-usage.md) separates measured attempts,
-saved-reply recovery and unknown older data, without claiming provider billing or
+saved-reply recovery, local reviews, dated publication receipts and unknown evidence, without claiming provider billing or
 inventing requests saved. Inspection/export starts no model calls.
 Completed supported checks also offer an [exact combined-finding preview](docs/definition-combination-preview.md),
 preserving original text/dates and showing current differences without saving an assessment
-or making another model request. Combined publication remains disabled.
+or making another model request. The preview itself cannot publish an assessment.
 After separate acknowledgement, **Save reviewed combination** retains those exact
 contents in [local review history](docs/definition-combination-reviews.md), not as a
 replacement assessment, product approval or shared/portable authority.
+The [combined-assessment reader format](docs/combined-assessment-format.md) now protects
+original finding provenance across storage/export without backfilling older work.
+An explicit saved-review eligibility check and separate confirmation can now apply those
+exact findings with low aggregate confidence, without AI calls or product approvals.
+The [offline boundary experiment](docs/definition-partition-experiments.md) now tests
+narrower reuse proposals against authored counterexamples; citation/category shortcuts
+remain unsafe and automatic finding-level skips remain disabled.
+A [review-scope contract](docs/definition-review-scope.md) validates assigned outputs
+against complete evidence. An [injected-adapter execution pilot](docs/definition-scope-pilot.md)
+now saves and recovers scoped results. Its [provider bridge](docs/definition-scope-providers.md)
+is fixture-tested with existing adapters. **Overall progress → Review selected definition
+dimensions (pilot)** now provides status-first consent, dated results, owned Stop and
+explicit reload/lost-response inspection. Live provider qualification, scoped assessment
+publication and automatic reuse remain gated.
 Definition reviews no longer become outdated merely because saving reordered object
 properties. SQLite 12→13 repairs older keys only with proof from their original raw
 snapshot, preserving evidence, history, revisions and spent attempts; real changes

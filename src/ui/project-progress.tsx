@@ -15,6 +15,8 @@ import { DefinitionImpactInspector, type InspectDefinitionImpact } from "./defin
 import { DefinitionSourceInspector } from "./definition-source-inspection.js";
 import type { DefinitionSourceActions } from "../core/definition-source-inspection.js";
 import type { DefinitionJointActions } from "../core/definition-joint-view.js";
+import type { DefinitionScopeActions } from "../core/definition-scope-view.js";
+import { DefinitionScopeInspector } from "./definition-scope-controls.js";
 
 function ProgressMeter({ value, label }: { value: number; label: string }) {
   return <div className="meter" role="meter" aria-label={label} aria-valuenow={value} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${value}%` }} /></div>;
@@ -29,7 +31,7 @@ function LocalCodeProgress({ counts, epic }: { counts: LocalAssessmentCounts; ep
 }
 
 export const ProjectProgress = React.memo(ProjectProgressView);
-function ProjectProgressView({ progress, definition, project, jobs = [], refreshDefinition, assessmentHistory, inspectDefinitionImpact, definitionSources, definitionJoint, disabled, disabledReason }: { progress: ReturnType<typeof projectProgress>; definition: ReturnType<typeof coverage>; project: Project; jobs?: Job[]; refreshDefinition?: (epicID?: string, additionalRequests?: DefinitionAdditionalRequest[]) => void; assessmentHistory?: AssessmentHistoryActions; inspectDefinitionImpact?: InspectDefinitionImpact; definitionSources?: DefinitionSourceActions; definitionJoint?: DefinitionJointActions; disabled?: boolean; disabledReason?: string }) {
+function ProjectProgressView({ progress, definition, project, jobs = [], refreshDefinition, assessmentHistory, inspectDefinitionImpact, definitionSources, definitionJoint, definitionScope, disabled, disabledReason }: { progress: ReturnType<typeof projectProgress>; definition: ReturnType<typeof coverage>; project: Project; jobs?: Job[]; refreshDefinition?: (epicID?: string, additionalRequests?: DefinitionAdditionalRequest[]) => void; assessmentHistory?: AssessmentHistoryActions; inspectDefinitionImpact?: InspectDefinitionImpact; definitionSources?: DefinitionSourceActions; definitionJoint?: DefinitionJointActions; definitionScope?: DefinitionScopeActions; disabled?: boolean; disabledReason?: string }) {
   const [open, setOpen] = useState(false);
   const [refreshScope, setRefreshScope] = useState<{ epicID?: string } | null>(null);
   const latestAreas = new Map<string, Job>();
@@ -75,6 +77,7 @@ function ProjectProgressView({ progress, definition, project, jobs = [], refresh
       {assessmentHistory && <AssessmentHistory key={project.id} project={project} actions={assessmentHistory} disabled={disabled} />}
       {inspectDefinitionImpact && <DefinitionImpactInspector key={`impact:${project.id}`} project={project} inspect={inspectDefinitionImpact} />}
       {definitionSources && <DefinitionSourceInspector key={`sources:${project.id}`} project={project} actions={definitionSources} joint={definitionJoint} jointDisabled={disabled} />}
+      {definitionScope && <DefinitionScopeInspector key={`scope:${project.id}`} project={project} actions={definitionScope} disabled={disabled} />}
       {progress.stages.map((stage) => <details className="progress-stage" key={stage.id}>
         <summary><span><strong>{stage.title}</strong><small>{stage.status} · {stage.detail}</small></span><strong>{progressLabel(stage)}</strong></summary>
         {(!stage.assessmentState || stage.assessmentState === "current") && <ProgressMeter value={stage.percent} label={`${stage.title} progress`} />}<p>{stage.explanation}</p>

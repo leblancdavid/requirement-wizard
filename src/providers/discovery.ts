@@ -4,16 +4,22 @@ import type { Project, QuestionHelpRequest } from "../core/model.js";
 import { discoveryPrompt, questionHelpPrompt, scanPrompt } from "../runtime/discovery.js";
 import { ConnectionManager, connectionError } from "./connections.js";
 import { generate, ProviderError } from "./chatgpt.js";
+import { verifyDefinitionReviewScopeContext } from "../core/definition-review-scope.js";
 
 /** Explicit selection dispatch: a disconnected direct account never falls back to OpenCode. */
 export class ConnectedDiscovery implements DiscoveryAdapter {
   constructor(private readonly connections: ConnectionManager, private readonly legacy: DiscoveryAdapter, private readonly request: typeof fetch = fetch) {}
   analyze(project: Project, options: DiscoveryOptions) {
+    if (options.context.manifest.definitionScopeReview) {
+      if (options.scan || options.research) throw new ProviderError("Scoped review cannot use a scan or research profile.");
+      verifyDefinitionReviewScopeContext(project, options.context);
+    }
     if (!project.model.connectionID) return this.legacy.analyze(project, options);
     if (options.research) throw new ProviderError("Direct ChatGPT research is not available yet. Turn off targeted research in Settings before exploring.");
     return this.direct(project, options, options.scan ? scanPrompt(project, options.context) : discoveryPrompt(project, options.context, false));
   }
   clarify(project: Project, request: QuestionHelpRequest, options: DiscoveryOptions) {
+    if (options.context.manifest.definitionScopeReview) throw new ProviderError("Scoped review cannot use a question-help profile.");
     if (!project.model.connectionID) {
       if (!this.legacy.clarify) throw new ProviderError("Question help is unavailable for this connection.");
       return this.legacy.clarify(project, request, options);
@@ -26,7 +32,8 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
       options.onProgress("Generating with your connected ChatGPT plan…");
       return await this.connections.withAccount(project.model.connectionID!, async (account, signal) => {
         options.onProgress("Request sent to the selected ChatGPT model; awaiting its response…");
-        const result = await generate(account, project.model.modelID, "You are Reqwizit's requirements assistant. Follow the supplied task and JSON schema. Do not use tools.", prompt, signal, this.request);
+        const result = await generate(account, project.model.modelID, "You are Reqwizit's requirements assistant. Follow the supplied task and JSON schema. Do not use tools.", prompt, signal, this.request,
+          options.context.manifest.definitionScopeReview ? { policy: "scoped-no-tools-v1" } : undefined);
         signal.throwIfAborted();
         options.onProgress("Response received; checking the returned output…");
         const usage = z.object({ input_tokens: z.number().nonnegative(), output_tokens: z.number().nonnegative(),
