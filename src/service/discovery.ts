@@ -81,7 +81,7 @@ export class DiscoveryService {
   }
   /** Explicit one-request validation only. Never called by automatic coordination,
    * never publishes findings, and completed/returned equivalent work is reused. */
-  async reviewDefinitionCombination(projectID: string, request: unknown, options: { signal?: AbortSignal; durationMs?: number } = {}) {
+  async reviewDefinitionCombination(projectID: string, request: unknown, options: { signal?: AbortSignal; durationMs?: number; onJob?: (job: Job) => void } = {}) {
     if (this.navigation.workflow) throw new Error("Joint validation requires a separate explicit action; coordinator continuation does not authorize it.");
     options.signal?.throwIfAborted();
     const duration = z.number().int().min(1).max(180000).parse(options.durationMs ?? definitionJointReviewLimits.durationMs);
@@ -94,7 +94,7 @@ export class DiscoveryService {
     const timer = setTimeout(() => { timedOut = true; controller.abort(new DOMException("Joint review time limit reached", "TimeoutError")); }, duration);
     const check = () => { if (Date.now() >= deadline && !controller.signal.aborted) { timedOut = true; controller.abort(new DOMException("Joint review time limit reached", "TimeoutError")); } controller.signal.throwIfAborted(); };
     try {
-      this.store.claimJob(started.job.id, Date.now() + duration + 30000); check();
+      this.store.claimJob(started.job.id, Date.now() + duration + 30000); options.onJob?.(this.store.getJob(started.job.id)); check();
       if (!started.reused) {
         const prepared = this.store.reserveDefinitionJointReview(started.job.id); check();
         options.signal?.throwIfAborted();

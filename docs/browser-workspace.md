@@ -1,5 +1,24 @@
 # Browser workspace, epics, and estimated completeness
 
+## Explicit joint finding check (2026-10-30)
+
+After comparing all nine original sources with matching inputs in **Overall progress →
+Inspect original finding sources**, explicitly confirm the one-request allowance and
+choose **Check selected findings together**. This is separate from provenance inspection,
+Continue specification, assessments and coding. It changes no finding/score/approval.
+Completed equivalent checks and saved valid responses are reused without another model
+request; unproved sources block rather than silently retry. If no valid reply was saved,
+another confirmed attempt can spend one more request without erasing earlier spending.
+
+The view shows saved verdicts/conflicts as dated local model judgement, never formal
+consistency, readiness or permission to publish/skip calls. Stop targets the exact owned
+task; closing/reloading does not restart it. **Load saved joint check** is an explicit
+local read after reload; **Use this saved combination** separately selects matching
+saved inputs before new consent. Only an explicitly started/loaded live task polls its
+status. Changes date the result and disable continuation under old tokens. There is no
+automatic coordination or follow-up work. See [scope and recovery](definition-joint-review.md).
+Focused browser command: `npm run test:browser:definition-joint` (also in the default suite).
+
 ## Original finding provenance inspection (2026-10-30)
 
 **Overall progress → Inspect original finding sources** exposes explicit local source
@@ -10,7 +29,8 @@ whole-area guards. Original dates/jobs/identities remain distinct. Missing older
 certificates do not invalidate saved reviews. Loading another page clears selections;
 there is no automatic replay after polling/reload or concurrent changes. Stale results
 are dated, including equal-numbered replacement. No AI, restoration, score refresh,
-joint-consistency proof, skip permission or mixed publication is provided. See
+joint-consistency proof, skip permission or mixed publication is provided by inspection.
+The separate confirmed joint action above can record model judgement only. See
 [scope and limits](definition-finding-origins.md#browser-inspection).
 Focused check: `npm run test:browser:definition-sources`, also in `npm run test:browser`.
 

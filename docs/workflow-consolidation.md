@@ -15,6 +15,16 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Explicit joint-check browser slice implemented (2026-10-30):** all nine matching
+  original-source selections can be checked together after separate one-request consent.
+  The ordinary queue owns exact-task Stop; explicit status inspection survives reload,
+  and only an acknowledged/loaded live task polls its saved result. Completed equivalent
+  checks and saved valid replies retain no-call reuse/recovery; unproved witnesses block
+  without a paid retry. New work holds saved-response processing without changing grants
+  or preferences or starting follow-up discovery. Verdicts remain dated local model
+  judgement, not publication/freshness/skip authority. SQLite stays 16, with no reset,
+  backfill or semantic-key change. See [consent and recovery](definition-joint-review.md#browser-consent-and-saved-results).
+
 - **Original-source inspection UI implemented (2026-10-30):** Overall progress offers
   explicit bounded certificate loading and per-dimension original-source comparison.
   Original dates/jobs/identities remain distinct; partial selections stay incomplete
@@ -22,7 +32,7 @@ and [implementation workspace](implementation-workspace.md).
   comparison and pagination are explicit local reads, not AI actions or publication.
   No persisted format, freshness key, grant or saved review changes. Missing legacy
   certificates remain unavailable without forcing reassessment. Joint model validation
-  remains engine-only; automatic skips and mixed publication remain unfinished. See
+  is now a separate explicit action above; automatic skips and mixed publication remain unfinished. See
   [browser scope and limits](definition-finding-origins.md#browser-inspection).
 
 - **Saved-review provenance slice implemented:** new specification-run receipts record
@@ -352,7 +362,8 @@ checks. Completed equivalent checks are reused; valid saved replies from failed/
 workers need not repeat inference. Conflicts cannot retain their affected findings.
 SQLite 15→16 adds local checkpoints/specialized jobs without resetting older data or
 shared allowance. Results remain model judgement, never publication/skip permission;
-there is no UI/HTTP or automatic coordinator entry point. Sound narrower partitions,
+the later browser slice adds separate consent/Stop/status controls, not an automatic
+coordinator entry point. Sound narrower partitions,
 mixed-result saving and live quality qualification remain unfinished. See [joint review](definition-joint-review.md).
 
 **Per-finding origin preview foundation implemented (2026-10-30):** an explicit internal

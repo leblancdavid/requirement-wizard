@@ -1,5 +1,14 @@
 # Architecture outline
 
+`src/core/definition-joint-view.ts` projects bounded dated local run evidence for the
+browser. `DiscoveryQueue.reviewDefinitionCombination` serializes a separate explicit
+one-request task with ordinary workers and owns exact-job cancellation; it starts no
+follow-up discovery or coordinator work. `definition-joint-start/status/stop` routes
+retain token/host/origin/input guards. `src/ui/definition-joint-controls.tsx` requires
+exact-combination consent, explicitly loads saved results and polls only an acknowledged
+or explicitly loaded live job. No persisted contract changes; SQLite stays 16. See
+[browser joint checks](definition-joint-review.md#browser-consent-and-saved-results).
+
 `src/storage/definition-source-inspection.ts` pages at most six locally re-verified
 publication certificates inside a read transaction, returning only original identity
 metadata. Authenticated `definition-sources`/`definition-origins` inspection routes run

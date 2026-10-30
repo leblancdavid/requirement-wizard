@@ -58,9 +58,10 @@ individual original dates/evidence across selected reviews; it cannot publish mi
 findings and does not prove narrower independence or joint consistency.
 Inspect it through **Overall progress → Inspect original finding sources**: explicitly
 load local sources and compare chosen origins without AI or assessment changes.
-An explicit internal [joint validation task](docs/definition-joint-review.md) can now
+An explicitly confirmed [joint validation task](docs/definition-joint-review.md) can now
 review those findings together with one bounded request and retain/recover its local
-verdict without rewriting originals. It has no UI/automatic route or publication authority.
+verdict without rewriting originals. The same inspector offers separate consent, Stop
+and saved results; there is no automatic route or publication authority.
 Definition reviews no longer become outdated merely because saving reordered object
 properties. SQLite 12→13 repairs older keys only with proof from their original raw
 snapshot, preserving evidence, history, revisions and spent attempts; real changes

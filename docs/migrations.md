@@ -1,5 +1,42 @@
 # Data migrations and upgrade compatibility
 
+## Explicit browser joint finding checks (2026-10-30)
+
+**Workflow/API projection only; no persisted conversion.** Source/target SQLite stays
+**16**, execution stays schema 2, and existing `definition-joint-review-v1`, run/result,
+assessment, project, certificate, portable and job formats/keys are unchanged. The
+format-1 `definition-joint-view-v1` response is transient dated evidence, not a current
+publication certificate. Old joint checkpoints display without backfill, revised dates,
+reset attempts or repeated model calls. Expired live statuses are projected interrupted
+without rewriting the worker row or claiming its lease.
+
+The browser requires separate exact-combination consent for at most one request. The
+ordinary app queue owns cancellation/close; coordinator-owned queues reject the action.
+New work holds automatic saved-response processing but does not rewrite preferences or
+shared grants, continue saved input, change assessments or trigger follow-up discovery.
+Completed equivalent checks return unchanged; explicit recovery of saved valid replies
+keeps original source jobs/dates and consumes no new request. Unproved original witnesses
+block rather than silently retry. If no valid reply exists, another confirmed action can
+spend a fresh one-request attempt while preserving prior spending. Restart, status reads,
+reload and failed transport/status requests never authorize replay.
+
+Status/Stop are project/task scoped; exact Stop only cancels this app's matching active
+joint worker. Views are dated by revision/full-content changes, and continuing a saved
+combination needs a separate selection plus consent. New source selection never silently
+becomes saved-task consent. Log labels/queue status are derived only, and joint completion
+does not replace the ordinary previous-coverage baseline. Portable exclusions and ordinary
+discovery-resume/publication safeguards remain. See [browser behavior](definition-joint-review.md#browser-consent-and-saved-results).
+
+Verification: type check, all **1,226** deterministic tests (522 pretests + 704 main),
+focused joint/API/log tests, the focused joint browser, full nine-runner default browser
+aggregate/UI build, workflow browser and diff check passed. Tests include old saved
+checkpoint reopening with unchanged dates, zero-request returned-response recovery,
+missing original witnesses blocking paid retry, exact task isolation, stop/reload and
+unchanged assessments/grants/previous-coverage baseline. Existing bundle-size warning
+remains; no live inference, commits/pushes or desktop packaging were performed. Provider
+permission/cancellation enforcement, live semantic quality and large-project replay
+cost remain unqualified.
+
 ## Browser inspection of original finding sources (2026-10-30)
 
 **Read-only UI/API addition; no persisted conversion.** Source/target SQLite remains

@@ -7,7 +7,8 @@ reviews and model-supplied declarations cannot self-issue them. No scheduler or 
 permission consumes these certificates. The explicit read-only
 [per-finding origin preview](definition-finding-origins.md), now exposed in Overall
 progress, re-verifies them as dated sources without changing saved reviews or granting
-publication/skip authority. Joint model validation remains a separate engine-only action.
+publication/skip authority. Joint model validation is a separate explicitly confirmed
+browser action and still grants no publication authority.
 
 ## What is witnessed
 

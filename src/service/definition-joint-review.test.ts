@@ -16,6 +16,8 @@ import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
 import { emptyExecution } from "../core/execution.js";
 import { databaseSchemaVersion } from "../storage/migrations.js";
+import { startApp } from "../web/server.js";
+import { DiscoveryQueue } from "./queue.js";
 
 const empty = { summary: "Fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] };
 async function seed(store: ProjectStore) {
@@ -38,6 +40,108 @@ function supported(context: ContextPack): DefinitionJointResponse {
     originKey: c.origin.originKey, decision: "retain", explanation: "The original uncertainty remains compatible with the other findings.", evidenceIDs: [context.manifest.includedIDs[0]!] })) } };
 }
 function folder() { mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true }); return mkdtempSync(resolve(".reqwizit-state/tests/joint-review-")); }
+
+test("joint browser APIs require exact explicit consent, isolate status and stop ownership, and never publish or retry on reads", async () => {
+  const store = new ProjectStore(":memory:"), { p, request } = await seed(store); let calls = 0;
+  const before = structuredClone(p), workflow = store.workflow(p.id), jobs = store.jobs(p.id);
+  const app = await startApp({ store, port: 0, adapter: { async analyze(_p, { signal }) { calls++;
+    await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const post = (action: string, input: unknown, auth = headers, projectID = p.id) => fetch(`${app.origin}/api/projects/${projectID}/${action}`, { method: "POST", headers: auth, body: JSON.stringify(input) });
+  try {
+    const input = { request, confirmAIUsage: true };
+    for (const action of ["definition-joint-start", "definition-joint-status", "definition-joint-stop"]) {
+      assert.equal((await post(action, input, { ...headers, "X-Reqwizit-Token": "wrong" })).status, 403);
+      assert.equal((await post(action, input, { ...headers, Origin: "https://foreign.invalid" })).status, 403);
+      assert.equal((await fetch(`${app.origin}/api/projects/${p.id}/${action}`, { headers })).status, 405);
+    }
+    for (const invalid of [{ request }, { ...input, confirmAIUsage: false }, { ...input, research: true }, { ...input, durationMs: 999999 }])
+      assert.equal((await post("definition-joint-start", invalid)).status, 400);
+    assert.equal((await post("definition-joint-status", { epicID: "orders", confirmAIUsage: true })).status, 400);
+    assert.equal((await (await post("definition-joint-status", { epicID: "orders" })).json()).status, "unavailable");
+    const incomplete = await (await post("definition-joint-start", { ...input, request: { ...request, selections: request.selections.slice(0, 1) } })).json();
+    assert.equal(incomplete.status, "unavailable"); assert.equal(calls, 0); assert.deepEqual(store.jobs(p.id), jobs);
+    const startedResponse = await post("definition-joint-start", input); assert.equal(startedResponse.status, 202); const started = await startedResponse.json();
+    assert.equal(calls, 1); assert.equal((await post("definition-joint-start", input)).status, 409);
+    const status = await (await post("definition-joint-status", { epicID: "orders", jobID: started.jobID })).json();
+    assert.equal(status.jobStatus, "running"); assert.equal(status.reserved, true); assert.equal(status.response, undefined); assert.equal(status.canPublish, false);
+    const foreign = store.create("Other project", "Isolated status", p.model);
+    assert.deepEqual(await (await post("definition-joint-status", { epicID: "orders", jobID: started.jobID }, headers, foreign.id)).json(), { status: "unavailable", reason: "not-recorded" });
+    assert.equal((await post("definition-joint-stop", { jobID: started.jobID }, headers, foreign.id)).status, 409);
+    assert.equal((await post("definition-joint-stop", { jobID: jobs[0]!.id })).status, 409); assert.equal(store.getJob(started.jobID).status, "running");
+    assert.equal((await post("definition-joint-stop", { jobID: started.jobID })).status, 200);
+    const stopped = await (await post("definition-joint-status", { epicID: "orders" })).json(); assert.equal(stopped.jobStatus, "cancelled");
+    assert.equal(stopped.result, undefined); assert.equal(stopped.reserved, true); assert.equal(calls, 1);
+    assert.deepEqual(store.get(p.id), before); assert.deepEqual(store.workflow(p.id), workflow);
+    assert.equal(store.logHistory(p.id, { jobID: started.jobID }).entries[0]!.title, "Joint finding check");
+  } finally { await app.close(); store.close(); }
+});
+
+test("joint browser start reuses completed checks and dated status survives restart without resuming inference", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  const { p, request } = await seed(store); let calls = 0;
+  let app = await startApp({ store, port: 0, adapter: { async analyze(_p, { context }) { calls++; return supported(context); } } });
+  const post = (action: string, input: unknown) => fetch(`${app.origin}/api/projects/${p.id}/${action}`, { method: "POST", headers: { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin }, body: JSON.stringify(input) });
+  try {
+    const snapshot = () => fetch(`${app.origin}/api/projects/${p.id}`, { headers: { "X-Reqwizit-Token": app.token, Origin: app.origin } }).then((r) => r.json());
+    const previousCoverage = (await snapshot()).previousCoverage;
+    const first = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
+    const result = await (await post("definition-joint-status", { epicID: "orders", jobID: first.jobID })).json();
+    assert.equal(result.jobStatus, "completed"); assert.equal(result.result.outcome, "model-supported"); assert.equal(calls, 1);
+    assert.equal((await snapshot()).previousCoverage, previousCoverage, "Local joint judgement must not become the previous ordinary discovery round");
+    const jobs = store.jobs(p.id); const repeated = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
+    assert.equal(repeated.jobID, first.jobID); assert.deepEqual(store.jobs(p.id), jobs); assert.equal(calls, 1);
+    await app.close(); store.close(); store = new ProjectStore(path);
+    app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; assert.fail("Restart/status cannot authorize inference"); } } });
+    assert.deepEqual(await (await post("definition-joint-status", { epicID: "orders" })).json(), result);
+    const changed = store.note(p.id, p.revision, "A later decision", "orders");
+    assert.deepEqual(await (await post("definition-joint-status", { epicID: "orders" })).json(), result, "Dated result retains original dates and tokens");
+    const stale = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json(); assert.equal(stale.status, "unavailable");
+    assert.equal(calls, 1); assert.deepEqual(store.get(p.id).assessments, changed.assessments);
+  } finally { await app.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("joint queue cannot authorize coordinator work and exact status reads never claim an expired worker", async (t) => {
+  const store = new ProjectStore(":memory:"), { p, request } = await seed(store);
+  const service = new DiscoveryService(store, { async analyze() { assert.fail("No inference"); } });
+  const coordinator = new DiscoveryQueue(service, { manualOnly: true, owner: "fixture" });
+  try {
+    await assert.rejects(coordinator.reviewDefinitionCombination(p.id, request), /separate explicit action/);
+    const started = store.beginDefinitionJointReview(p.id, request); if (started.status !== "started") assert.fail();
+    store.claimJob(started.job.id, Date.now() + 1000); const prepared = store.reserveDefinitionJointReview(started.job.id);
+    store.recordDefinitionJointResponse(started.job.id, supported(prepared.task.context));
+    const before = store.getJob(started.job.id), run = store.definitionJointReview(started.job.id);
+    const later = Date.now() + 10000; t.mock.method(Date, "now", () => later);
+    const read = store.inspectDefinitionJointReview(p.id, "orders", started.job.id); if (read.status !== "recorded") assert.fail();
+    assert.equal(read.jobStatus, "interrupted"); assert.equal(read.result, undefined); assert.ok(read.response);
+    assert.deepEqual(store.getJob(started.job.id), before); assert.deepEqual(store.definitionJointReview(started.job.id), run);
+  } finally { await coordinator.close(); store.close(); }
+});
+
+test("joint browser recovery reuses a saved reply after completion failure and blocks an unproved original witness without paid retry", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"), store = new ProjectStore(path);
+  const { p, request } = await seed(store); let calls = 0;
+  const db = new Database(path);
+  db.exec("CREATE TRIGGER reject_joint_web_completion BEFORE UPDATE ON definition_joint_reviews WHEN json_type(NEW.payload, '$.result') = 'object' BEGIN SELECT RAISE(ABORT, 'fixture completion failure'); END;");
+  const app = await startApp({ store, port: 0, adapter: { async analyze(_p, { context }) { calls++; return supported(context); } } });
+  const post = (action: string, input: unknown) => fetch(`${app.origin}/api/projects/${p.id}/${action}`, { method: "POST", headers: { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin }, body: JSON.stringify(input) });
+  try {
+    const failed = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
+    const saved = store.definitionJointReview(failed.jobID)!; assert.ok(saved.response); assert.equal(saved.result, undefined);
+    assert.equal(store.getJob(failed.jobID).status, "failed"); assert.equal(calls, 1); const sourceJob = store.getJob(failed.jobID);
+    db.exec("DROP TRIGGER reject_joint_web_completion;");
+    const recovered = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
+    const status = await (await post("definition-joint-status", { epicID: "orders", jobID: recovered.jobID })).json();
+    assert.equal(status.jobStatus, "completed"); assert.equal(status.sourceJobID, failed.jobID); assert.equal(status.reserved, false);
+    assert.equal(status.respondedAt, saved.respondedAt); assert.equal(calls, 1);
+    assert.deepEqual(store.getJob(failed.jobID), sourceJob); assert.deepEqual(store.definitionJointReview(failed.jobID), saved);
+    db.prepare("DELETE FROM definition_joint_reviews WHERE job_id = ?").run(failed.jobID);
+    const before = store.jobs(p.id); const blocked = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
+    assert.equal(blocked.status, "unavailable"); assert.equal(blocked.reason, "saved-review-unproved"); assert.equal(calls, 1); assert.deepEqual(store.jobs(p.id), before);
+    assert.deepEqual(store.get(p.id), p);
+  } finally { await app.close(); db.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("explicit joint validation reviews exact evidence and all nine original findings once, stores local judgement and reuses it without publishing", async () => {
   const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);

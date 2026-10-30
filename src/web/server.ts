@@ -202,6 +202,21 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
           ? options.store.inspectDefinitionSources(id, definitionSourceQuerySchema.parse(raw))
           : options.store.previewDefinitionFindingOrigins(id, definitionFindingPreviewRequestSchema.parse(raw))); return;
       }
+      if (action === "definition-joint-status" || action === "definition-joint-start" || action === "definition-joint-stop") {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        const raw = await body(req);
+        if (action === "definition-joint-status") {
+          const input = z.object({ epicID: z.string().min(1).max(500), jobID: z.string().uuid().optional() }).strict().parse(raw);
+          json(res, 200, options.store.inspectDefinitionJointReview(id, input.epicID, input.jobID)); return;
+        }
+        if (action === "definition-joint-stop") {
+          const input = z.object({ jobID: z.string().uuid() }).strict().parse(raw);
+          queue.stopDefinitionCombination(id, input.jobID); json(res, 200, { stopped: true }); return;
+        }
+        const input = z.object({ request: definitionFindingPreviewRequestSchema, confirmAIUsage: z.literal(true) }).strict().parse(raw);
+        const result = await queue.reviewDefinitionCombination(id, input.request);
+        json(res, result.status === "accepted" ? 202 : 200, result); return;
+      }
       const project = options.store.get(id);
       if (req.method === "GET" && !action) {
         const rawTokens = req.headers["x-reqwizit-snapshot"];
@@ -219,7 +234,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
           ...(scan ? { scan: { ...scan, sources: [] } } : {}),
           ...(scan && scanWork ? { scanProgress: { completed: scanWork.batches.filter((batch) => batch.output).length, total: scanWork.batches.length, capturedAt: scan.snapshot.capturedAt,
             resumable: ["failed", "cancelled", "interrupted"].includes(job.status) && job.expectedRevision === project.revision && scanWork.bindingID === options.store.workspace(id)?.bindingID } } : {}) }));
-        const lastRound = jobs.filter((item) => item.status === "completed").at(-1);
+        const lastRound = jobs.filter((item) => item.status === "completed" && item.kind !== "definition-joint-review").at(-1);
         const previousCoverage = lastRound ? revisionSnapshot(options.store.get(id, lastRound.expectedRevision)).coverage.percent : null;
         const helpJobs = recent.helpJobs.map(({ result: _, researchEvidence: __, ...job }) => job);
         const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), processingPolicy: options.store.processingPolicy(id), maintenance: queue.maintenanceView(id), workflow: workflow.view(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };

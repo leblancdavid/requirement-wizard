@@ -38,6 +38,7 @@ import { inspectDefinitionSources } from "./definition-source-inspection.js";
 import { definitionFindingPreviewRequestSchema } from "../core/definition-finding-origin.js";
 import { prepareDefinitionJointReview, readDefinitionJointRun, writeDefinitionJointRun, reusableDefinitionJointRun } from "./definition-joint-review.js";
 import { definitionJointReviewMarkerSchema, validateDefinitionJointResponse } from "../core/definition-joint-review.js";
+import type { DefinitionJointView } from "../core/definition-joint-view.js";
 import { definitionPublicationKey as jointKey } from "../core/definition-publication.js";
 import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
@@ -1512,6 +1513,24 @@ export class ProjectStore {
     }).immediate();
   }
   definitionJointReview(jobID: string) { return readDefinitionJointRun(this.db, jobID); }
+  inspectDefinitionJointReview(projectID: string, epicID: string, jobID?: string): DefinitionJointView {
+    return this.db.transaction((): DefinitionJointView => {
+      const row = jobID ? this.db.prepare("SELECT job_id FROM definition_joint_reviews WHERE project_id = ? AND job_id = ? AND json_extract(payload, '$.request.epicID') = ?").get(projectID, jobID, epicID)
+        : this.db.prepare("SELECT job_id FROM definition_joint_reviews WHERE project_id = ? AND json_extract(payload, '$.request.epicID') = ? ORDER BY rowid DESC LIMIT 1").get(projectID, epicID);
+      if (!row) return { status: "unavailable", reason: "not-recorded" };
+      const run = readDefinitionJointRun(this.db, (row as { job_id: string }).job_id);
+      if (!run || run.projectID !== projectID || run.request.epicID !== epicID) return { status: "unavailable", reason: "saved-review-unproved" };
+      const job = this.getJob(run.jobID);
+      if (job.projectID !== projectID || job.kind !== "definition-joint-review" || job.context?.definitionJointReview?.candidateKey !== run.candidateKey
+        || job.context.definitionJointReview.contextKey !== run.contextKey || job.context.definitionJointReview.snapshotKey !== run.request.snapshotKey)
+        return { status: "unavailable", reason: "saved-review-unproved" };
+      return { status: "recorded", format: 1, policy: "definition-joint-view-v1", authority: "review-evidence-only", canPublish: false,
+        projectID, epicID, jobID: run.jobID, jobStatus: ["pending", "running"].includes(job.status) && (job.leaseUntil ?? 0) <= Date.now() ? "interrupted" : job.status,
+        request: run.request, createdAt: run.createdAt, reserved: run.reserved,
+        ...(run.sourceJobID ? { sourceJobID: run.sourceJobID } : {}), ...(run.respondedAt ? { respondedAt: run.respondedAt } : {}),
+        ...(run.completedAt ? { completedAt: run.completedAt } : {}), ...(run.result ? { result: run.result } : {}), ...(run.response ? { response: run.response } : {}) };
+    }).deferred();
+  }
 
   attachResearch(id: string, evidence: unknown[]) {
     const parsed = evidence.map((item) => researchEvidenceSchema.parse(item));

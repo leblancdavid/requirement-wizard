@@ -25,8 +25,10 @@ import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionQuestionTask, readinessQuestionContext, readinessQuestionTask, submissionQuestionBlock, submissionQuestionTask, submissionClarificationQuestions, type ReadinessQuestionTask } from "../core/readiness-questions.js";
 import { definitionClarificationInputs } from "../core/definition-clarification-inputs.js";
 import { refinementMaterials, replayRefinementStages, sameRefinementTask } from "../core/refinement-stages.js";
+import type { DefinitionFindingPreviewRequest } from "../core/definition-finding-origin.js";
+import type { DefinitionJointStart } from "../core/definition-joint-view.js";
 
-type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" };
+type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" | "definition-joint-review"; jobID?: string };
 
 function submissionEpic(project: Project, item: Submission) {
   const input = item.input;
@@ -90,6 +92,35 @@ export class DiscoveryQueue {
   async wait(id: string) { await this.active.get(id)?.promise; }
   progress(id: string) { return this.messages.get(id) ?? []; }
   refinementProgress(id: string) { return this.refinementRuns.get(id) ?? null; }
+
+  /** Separate explicit one-request action. No coordinator allowance, automatic
+   * continuation, submission processing or post-check discovery is authorized. */
+  async reviewDefinitionCombination(id: string, request: DefinitionFindingPreviewRequest): Promise<DefinitionJointStart> {
+    if (this.coordinator) throw new OperationConflictError("Joint validation requires a separate explicit action.");
+    if (this.closing || this.isActive(id)) throw new OperationConflictError("Wait for active work to finish before checking this combination.");
+    this.service.store.assertNoExecution(id);
+    const controller = new AbortController(); let jobID: string | undefined;
+    const progress: string[] = [];
+    const operation = this.service.reviewDefinitionCombination(id, request, { signal: controller.signal, onJob: (job) => {
+      jobID = job.id; this.service.store.pauseQueue(id, true); this.messages.set(id, progress); this.refinementRuns.delete(id);
+      progress.push("Checking all nine original findings together. At most one request; no publication, research or follow-up discovery.");
+    } });
+    if (!jobID) {
+      const result = await operation;
+      return result.status === "unavailable" ? result : { status: "accepted", jobID: result.job.id };
+    }
+    const promise = operation.then((result) => { progress.push(result.status === "recorded" && result.job.status === "completed"
+      ? "Joint check saved as local model judgement. Findings and scores are unchanged."
+      : "Joint check stopped or unavailable. Original findings and saved attempts are retained; continue explicitly.");
+    }).catch(() => { progress.push("Joint check could not complete. Saved evidence is retained; no automatic retry."); }).finally(() => this.active.delete(id));
+    this.active.set(id, { controller, promise, kind: "definition-joint-review", jobID });
+    return { status: "accepted", jobID };
+  }
+  stopDefinitionCombination(id: string, jobID: string) {
+    const work = this.active.get(id);
+    if (work?.kind !== "definition-joint-review" || work.jobID !== jobID) throw new OperationConflictError("This app does not own that active joint check. No other task was stopped.");
+    work.controller.abort();
+  }
 
   maintenanceView(id: string): MaintenanceView {
     const { settingsVersion: version, enabled, paused, tasks } = this.service.store.maintenance(id);

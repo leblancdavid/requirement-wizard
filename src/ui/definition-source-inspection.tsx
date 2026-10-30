@@ -6,6 +6,8 @@ import type { DefinitionFindingPreviewRequest, DefinitionFindingOriginPreview } 
 import type { DefinitionSourceActions, DefinitionSourcePage } from "../core/definition-source-inspection.js";
 import { issueSummary } from "./user-messages.js";
 import { LogLink } from "./log-access.js";
+import { DefinitionJointControls } from "./definition-joint-controls.js";
+import type { DefinitionJointActions } from "../core/definition-joint-view.js";
 
 type Page = Extract<DefinitionSourcePage, { status: "recorded" }>;
 const unavailable = (reason: string) => reason === "stale-view" ? "The project changed. Load saved sources again explicitly."
@@ -14,7 +16,7 @@ const unavailable = (reason: string) => reason === "stale-view" ? "The project c
 
 /** Loading, selecting and comparing are separate explicit local reads. No effects,
  * automatic history fetches, inference, current-status updates or publication. */
-export function DefinitionSourceInspector({ project, actions }: { project: Project; actions: DefinitionSourceActions }) {
+export function DefinitionSourceInspector({ project, actions, joint, jointDisabled }: { project: Project; actions: DefinitionSourceActions; joint?: DefinitionJointActions; jointDisabled?: boolean }) {
   const id = useId(), areas = project.epics.filter((e) => !e.archived);
   const [selected, setSelected] = useState(areas[0]?.id ?? ""), [pending, setPending] = useState(false), [error, setError] = useState("");
   const [page, setPage] = useState<Page | null>(null), [selections, setSelections] = useState<DefinitionFindingPreviewRequest["selections"]>([]);
@@ -98,5 +100,8 @@ export function DefinitionSourceInspector({ project, actions }: { project: Proje
       </details>)}
       <p>Joint consistency is not established. Publication is disabled. Existing whole-area freshness rules still apply; no AI requests saved are claimed.</p>
     </section>}
+    {joint && chosen && <DefinitionJointControls key={`${project.id}:${chosen}`} project={project} epicID={chosen} actions={joint} disabled={jointDisabled}
+      request={preview && !reportDated && preview.findings.length === 9 && preview.findings.every((f) => f.state === "guard-match")
+        ? { revision: preview.revision, epicID: chosen, snapshotKey: preview.snapshotKey, selections } : null} />}
   </details></section>;
 }

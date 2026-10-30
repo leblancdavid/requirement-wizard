@@ -1,10 +1,63 @@
 # Joint consistency review of selected definition findings
 
-Status, 2026-10-30: **implemented explicit engine/service task**, not mixed publication
+Status, 2026-10-30: **implemented explicit engine/service and browser task**, not mixed publication
 or automatic finding-level reuse. `DiscoveryService.reviewDefinitionCombination` can
 validate all nine selected original findings together, using the existing selected
-provider/model adapter. There is no new browser/HTTP button or automatic coordinator
-route. Fixture execution is verified; live model quality is not qualified.
+provider/model adapter. Overall progress now exposes separate consent, exact-task Stop
+and dated saved results. There is no automatic coordinator route. Fixture execution
+is verified; live model quality is not qualified.
+
+## Browser consent and saved results
+
+Open **Overall progress → Inspect original finding sources**, explicitly load sources,
+select all nine original findings and compare their provenance. Only a complete preview
+with matching current whole-area guards enables the separate joint-check consent.
+Tick **Allow at most one AI request for this exact joint check**, then choose
+**Check selected findings together**. The consent is tied to the exact selection and
+snapshot; it is cleared after submission or explicit status loading. Opening controls,
+ticking consent, selecting sources or changing mode starts no work; the confirmed Check
+button is the dispatch action. The chosen connection/model stays
+the existing project selection; a pending unsaved selection disables starting.
+
+The queue serializes this task with other discovery/execution/workflow operations.
+Starting new work holds automatic saved-response processing, without changing its
+preferences, coordinating new work or renewing grants. Completion does not process
+waiting submissions or start discovery, research, questions, planning or coding. The
+queue and Logs identify this as **Joint finding check**, not an ordinary discovery round;
+it does not replace the previous discovery-coverage baseline.
+
+Once a task is acknowledged, this view polls only its bounded saved status. Closing the
+drawer stops that local polling, not the underlying worker. **Stop joint check** targets
+the exact job owned by this app; a stale/foreign job cannot stop unrelated work. The
+normal header Stop also remains available for this app's active discovery worker.
+Reload/reopen performs no joint-history read or model retry. **Load saved joint check**
+explicitly loads the latest local check for the chosen area and polls only if it has a
+live lease. An expired worker is displayed as interrupted without rewriting or claiming
+its job; recovery still requires an explicit action.
+
+Saved results show lifecycle state, request observation/completion dates, original
+finding revisions, per-dimension verdict explanations, conflicts and spent/reused
+attempt provenance. This is a dated read of local evidence, not a new source-verification
+or freshness certificate. Original source dates remain unchanged. Current content/revision
+changes date the view and disable continuing its old combination, including equal-numbered
+replacement. **Use this saved combination** separately selects a same-input saved task
+for an explicitly confirmed check/recovery; it never silently replaces current selections.
+The selected nine original review versions can be inspected before consent.
+
+Every start re-verifies provenance/current tokens in the existing engine. Completed
+equivalent checks and provable saved replies are reused without another request;
+missing/changed witnesses block without an implicit paid retry. If an earlier task has
+no valid saved reply, a new confirmed attempt can consume one more request. Prior spent
+attempts remain saved. A failed status read does not replay the start request; after an
+acknowledgement the view tracks its exact job or asks for explicit status inspection.
+
+The token/host/origin/body-guarded POST endpoints are `definition-joint-start` (strict
+`{ request, confirmAIUsage: true }`), `definition-joint-status` (strict area plus optional
+exact job ID) and `definition-joint-stop` (strict exact job ID), under
+`/api/projects/:id/`. They reject other methods, cross-project inspection/Stop and
+unsupported consent/research/duration fields. Status returns bounded app-owned view
+metadata/validated saved reply, never provider credentials, sessions, full prompts or
+historical source snapshots. The read does not start or resume work.
 
 ## Scope and admission
 
@@ -108,7 +161,7 @@ generic discovery-resume controls cannot treat a failed joint validation as auth
 to run ordinary discovery. Normal local job lifecycle may mark a workspace dirty; this
 does not export joint results as shared authority or alter specification revisions.
 
-Future UI exposure, automatic routing, narrower partitions and mixed-result publication
+Future automatic routing, narrower partitions and mixed-result publication
 need their own consent, provenance, stale-publication and forward-compatibility slices.
 Nothing here authorizes coding, commands, research, new questions or requirement changes.
 See [origin provenance](definition-finding-origins.md),
@@ -124,7 +177,7 @@ leases, cancellation/time limits, stale inputs, context bounds, portable exclusi
 ordinary-publication rejection and SQLite upgrade/reopen/failure/future-format behavior.
 The queue-routing test separately prevents generic discovery resume for this task.
 
-Verification, 2026-10-30: type check, all **1,218** deterministic tests (515 pretests
+Initial engine-slice verification, 2026-10-30: type check, all **1,218** deterministic tests (515 pretests
 and 703 main tests), the default browser suite/UI build, workflow browser checks and
 diff whitespace checks passed. No live model calls were made. The build reports a
 non-blocking bundle-size warning; live quality/permission/cancellation behavior and
@@ -133,3 +186,18 @@ large-project replay performance remain unqualified.
 ```powershell
 npx tsx --test src/service/definition-joint-review.test.ts
 ```
+
+The browser/API slice additionally tests explicit consent, method/auth/origin/input
+guards, exact task ownership, cancel/reload, saved-response failure/recovery, no-call
+completed reuse, expired status without lease claims, dated results and unchanged
+assessment/grant/ordinary coverage baselines. Focused browser command:
+
+```powershell
+npm run test:browser:definition-joint
+```
+
+Browser-slice verification, 2026-10-30: type check, all **1,226** deterministic tests
+(522 pretests + 704 main), focused joint/API/log tests, focused joint browser, full
+nine-runner default browser aggregate/UI build, workflow browser and diff check passed.
+All adapters were deterministic; no live model calls were made. The existing bundle-size
+warning and live quality/permission/cancellation/large-project qualification gaps remain.

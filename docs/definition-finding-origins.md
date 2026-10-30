@@ -38,7 +38,8 @@ snapshot token and optional exclusive `beforeRevision` cursor.
 `POST /api/projects/:id/definition-origins` accepts the strict existing preview request
 below. Both use the loopback API's token/host/origin/body guards, reject non-POST methods
 and dispatch before generic `get()` so inspection does not trigger legacy history
-projection. Neither endpoint exposes joint model validation or publication.
+projection. Neither inspection endpoint exposes joint model validation or publication;
+the separate confirmed joint routes are described in [joint checks](definition-joint-review.md#browser-consent-and-saved-results).
 
 ## Content-bound original identity
 
@@ -112,7 +113,8 @@ declaration do not establish narrower dependency partitions. Such partitions sti
 need sound positive/absence/global-scope guards and verified interaction boundaries.
 Mixed publication additionally needs cross-finding validation, per-finding immutable
 origins in the saved format, atomic stale-result checks and forward compatibility.
-An explicit internal [joint consistency task](definition-joint-review.md) now reviews
+An explicit separately confirmed [joint consistency task](definition-joint-review.md),
+now available in the same browser inspector, reviews
 all nine selected findings together against exact current evidence and saves bounded
 local model judgement. The origin preview itself remains inspection-only and unchanged;
 neither a supported joint verdict nor matching guards authorize mixed publication.
