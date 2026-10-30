@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
@@ -35,8 +35,8 @@ const app = await startApp({ store, port: 0, catalog: new OpenCodeCatalog("unuse
 const browser = await chromium.launch(); let diagnose: ReturnType<typeof browserDiagnostics> | undefined;
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }); diagnose = browserDiagnostics(page);
-  let starts = 0, reads = 0;
-  page.on("request", (request) => { if (request.url().endsWith("/definition-joint-start")) starts++; if (request.url().endsWith("/definition-joint-status")) reads++; });
+  let starts = 0, reads = 0, usageReads = 0;
+  page.on("request", (request) => { if (request.url().endsWith("/definition-joint-start")) starts++; if (request.url().endsWith("/definition-joint-status")) reads++; if (request.url().endsWith("/definition-joint-usage")) usageReads++; });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
   await page.getByRole("button", { name: /Overall progress/ }).click();
   const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
@@ -47,12 +47,14 @@ try {
   const start = joint.getByRole("button", { name: "Check selected findings together", exact: true });
   const consent = joint.getByRole("checkbox", { name: "Allow at most one AI request for this exact joint check", exact: true });
   await expect(start).toBeDisabled(); assert.equal(reads, 0); assert.equal(starts, 0); assert.equal(calls, 0);
+  await joint.getByText("Inspect joint-check request usage", { exact: true }).click(); assert.equal(usageReads, 0);
   await inspector.getByRole("button", { name: "Load saved sources", exact: true }).click();
   for (const dimension of dimensions) await inspector.getByLabel(`${dimensionLabels[dimension]} source`, { exact: true }).selectOption(String(p.revision));
   await inspector.getByRole("button", { name: "Compare selected origins", exact: true }).click();
   await expect(start).toBeDisabled(); await consent.check(); await expect(start).toBeEnabled(); assert.equal(calls, 0);
   await start.click(); const result = joint.getByRole("region", { name: "Saved joint check result", exact: true });
   await expect(result).toContainText("running"); assert.equal(calls, 1); assert.equal(starts, 1); await expect(consent).not.toBeChecked();
+  await expect(joint).toContainText("This action started a new task with at most one request");
   await dialog.getByRole("button", { name: "Close progress", exact: true }).click(); await page.reload();
   await page.getByRole("button", { name: /Overall progress/ }).click(); await disclosure.click();
   await inspector.getByLabel("Source area", { exact: true }).selectOption("orders"); await expect(result).toHaveCount(0);
@@ -66,6 +68,18 @@ try {
   assert.equal(calls, 2); assert.equal(starts, 2); const jobs = store.jobs(p.id);
   await consent.check(); await start.click(); await expect(result).toContainText("Conflicting findings");
   assert.equal(calls, 2); assert.equal(starts, 3); assert.deepEqual(store.jobs(p.id), jobs, "Completed equivalent check returns without a new job/request");
+  await expect(joint).toContainText("This action reused a completed verdict: no new task or model request");
+  await joint.getByText("Inspect joint-check request usage", { exact: true }).click(); assert.equal(usageReads, 0);
+  await joint.getByRole("button", { name: "Load joint-check usage", exact: true }).click();
+  const usage = joint.getByRole("region", { name: "Saved joint-check usage report", exact: true });
+  await expect(usage).toContainText("2 observed adapter request attempts"); await expect(usage).toContainText("0 unknown or partial tasks");
+  assert.equal(usageReads, 1); assert.equal(calls, 2); assert.equal(starts, 3);
+  const downloaded = page.waitForEvent("download"); await usage.getByRole("button", { name: "Download joint-check usage", exact: true }).click();
+  const download = await downloaded, downloadPath = await download.path(); assert.ok(downloadPath);
+  assert.equal(download.suggestedFilename(), "reqwizit-joint-check-usage.json");
+  const exported = await readFile(downloadPath, "utf8"); const report = JSON.parse(exported);
+  assert.equal(report.summary.tasks, 2); assert.equal(report.summary.observedRequestAttempts, 2);
+  for (const secret of [p.id, p.name, p.sources[0]!.text, ...jobs.map((j) => j.id)]) assert.equal(exported.includes(secret), false);
   await page.setViewportSize({ width: 390, height: 844 }); await result.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   assert.ok((await start.boundingBox())!.height >= 44);

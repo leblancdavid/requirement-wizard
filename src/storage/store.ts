@@ -39,6 +39,7 @@ import { definitionFindingPreviewRequestSchema } from "../core/definition-findin
 import { prepareDefinitionJointReview, readDefinitionJointRun, writeDefinitionJointRun, reusableDefinitionJointRun } from "./definition-joint-review.js";
 import { definitionJointReviewMarkerSchema, validateDefinitionJointResponse } from "../core/definition-joint-review.js";
 import type { DefinitionJointView } from "../core/definition-joint-view.js";
+import { definitionJointUsageQuerySchema, definitionJointUsageReport, type DefinitionJointUsageSource } from "../core/definition-joint-usage.js";
 import { definitionPublicationKey as jointKey } from "../core/definition-publication.js";
 import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
@@ -1513,6 +1514,18 @@ export class ProjectStore {
     }).immediate();
   }
   definitionJointReview(jobID: string) { return readDefinitionJointRun(this.db, jobID); }
+  definitionJointUsage(projectID: string, input: unknown = {}) {
+    const query = definitionJointUsageQuerySchema.parse(input);
+    const rows = this.db.prepare(`SELECT j.id, json_extract(j.payload, '$.status') AS status,
+      CASE WHEN length(CAST(json_extract(j.payload, '$.discoveryMetrics') AS BLOB)) <= 32768 THEN json_extract(j.payload, '$.discoveryMetrics') END AS metrics,
+      json_type(j.payload, '$.discoveryMetrics') IS NOT NULL AS metricsPresent,
+      json_extract(r.payload, '$.sourceJobID') AS sourceJobID FROM jobs j
+      LEFT JOIN definition_joint_reviews r ON r.job_id = j.id AND r.project_id = j.project_id
+      WHERE j.project_id = ? AND json_extract(j.payload, '$.kind') = 'definition-joint-review'
+      ${query.epicID ? "AND json_extract(j.payload, '$.context.focusEpicID') = ?" : ""} ORDER BY j.rowid DESC LIMIT 21`)
+      .all(...[projectID, ...(query.epicID ? [query.epicID] : [])]) as DefinitionJointUsageSource[];
+    return definitionJointUsageReport(rows.slice(0, 20), rows.length > 20);
+  }
   inspectDefinitionJointReview(projectID: string, epicID: string, jobID?: string): DefinitionJointView {
     return this.db.transaction((): DefinitionJointView => {
       const row = jobID ? this.db.prepare("SELECT job_id FROM definition_joint_reviews WHERE project_id = ? AND job_id = ? AND json_extract(payload, '$.request.epicID') = ?").get(projectID, jobID, epicID)

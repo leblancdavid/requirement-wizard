@@ -39,6 +39,7 @@ import { canContinueGapExploration } from "../core/gap-retrieval.js";
 import { resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { definitionSourceQuerySchema } from "../core/definition-source-inspection.js";
 import { definitionFindingPreviewRequestSchema } from "../core/definition-finding-origin.js";
+import { definitionJointUsageQuerySchema } from "../core/definition-joint-usage.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -216,6 +217,10 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const input = z.object({ request: definitionFindingPreviewRequestSchema, confirmAIUsage: z.literal(true) }).strict().parse(raw);
         const result = await queue.reviewDefinitionCombination(id, input.request);
         json(res, result.status === "accepted" ? 202 : 200, result); return;
+      }
+      if (action === "definition-joint-usage") {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        json(res, 200, options.store.definitionJointUsage(id, definitionJointUsageQuerySchema.parse(await body(req)))); return;
       }
       const project = options.store.get(id);
       if (req.method === "GET" && !action) {

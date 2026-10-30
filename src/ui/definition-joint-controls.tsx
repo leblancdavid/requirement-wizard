@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { Project } from "../core/model.js";
 import type { DefinitionFindingPreviewRequest } from "../core/definition-finding-origin.js";
-import type { DefinitionJointActions, DefinitionJointView } from "../core/definition-joint-view.js";
+import type { DefinitionJointActions, DefinitionJointView, DefinitionJointStart } from "../core/definition-joint-view.js";
 import { definitionDependencySnapshotKey } from "../core/definition-dependencies.js";
 import { dimensionLabels } from "../core/epics.js";
 import { LogLink } from "./log-access.js";
+import { DefinitionJointUsage } from "./definition-joint-usage.js";
 
 type View = Extract<DefinitionJointView, { status: "recorded" }>;
 const active = (view: View) => ["pending", "running"].includes(view.jobStatus);
@@ -18,6 +19,7 @@ export function DefinitionJointControls({ project, epicID, request, actions, dis
   const [view, setView] = useState<View | null>(null), [tracking, setTracking] = useState<string | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [consentKey, setConsentKey] = useState("");
   const [useSaved, setUseSaved] = useState(false);
+  const [lastAction, setLastAction] = useState<Extract<DefinitionJointStart, { status: "accepted" }> | null>(null);
   const snapshotKey = useMemo(() => request || view ? definitionDependencySnapshotKey(project) : null, [project, !!request, !!view]);
   const savedMatches = !!view && view.request.revision === project.revision && view.request.snapshotKey === snapshotKey;
   const candidate = useSaved ? savedMatches ? view!.request : null : request, key = candidate ? JSON.stringify({ useSaved, candidate }) : "";
@@ -48,16 +50,17 @@ export function DefinitionJointControls({ project, epicID, request, actions, dis
   }, [tracking, project.id, epicID]);
   const inspect = async () => {
     if (busy) return; setBusy(true); setError("");
-    try { const next = accept(await actions.inspect(epicID)); setView(next); setTracking(active(next) ? next.jobID : null); setConsentKey(""); setUseSaved(false); }
+    try { const next = accept(await actions.inspect(epicID)); setView(next); setTracking(active(next) ? next.jobID : null); setConsentKey(""); setUseSaved(false); setLastAction(null); }
     catch (error) { setError(error instanceof Error ? error.message : "The saved joint check could not be loaded."); }
     finally { setBusy(false); }
   };
   const start = async () => {
     if (!candidate || !consent || busy || live || disabled) return;
-    setBusy(true); setError(""); setConsentKey("");
+    setBusy(true); setError(""); setConsentKey(""); setLastAction(null);
     try {
       const result = await actions.start(candidate);
       if (result.status === "unavailable") throw new Error("This exact combination cannot be checked now. Reload and compare sources; missing or changed evidence never triggers an automatic retry.");
+      setLastAction(result);
       // Track immediately: if this status read fails, a successful start must not
       // masquerade as a failed request or silently authorize another attempt.
       setTracking(result.jobID);
@@ -89,6 +92,10 @@ export function DefinitionJointControls({ project, epicID, request, actions, dis
     </div>
     {tracking && <p role="status">Checking saved task status. Closing this view does not stop the task or authorize a retry.</p>}
     {error && <p role="alert">{error}</p>}
+    {lastAction && <p role="status">{lastAction.action === "completed-reuse" ? "This action reused a completed verdict: no new task or model request."
+      : lastAction.action === "saved-response-recovery" ? "This action recovers a saved valid reply: no new model request."
+        : lastAction.action === "new-attempt" ? "This action started a new task with at most one request; this is not a provider billing receipt."
+          : "The action was accepted. Its request disposition was not reported by this app version."}</p>}
     {view && <section aria-label="Saved joint check result">
       <p>Saved joint check · {view.jobStatus} · project version {view.request.revision}.</p>
       {!savedMatches && <p role="status">Project inputs changed since this check. This is dated evidence, not a current compatibility proof.</p>}
@@ -104,5 +111,6 @@ export function DefinitionJointControls({ project, epicID, request, actions, dis
       <p>Local model judgement only—not formal consistency, completeness, readiness, approval or narrower independence. Publication stays disabled; existing whole-area review rules remain.</p>
       <LogLink target={view.jobID} />
     </section>}
+    {actions.usage && <DefinitionJointUsage key={`${project.id}:${epicID}`} load={() => actions.usage!(epicID)} />}
   </section>;
 }

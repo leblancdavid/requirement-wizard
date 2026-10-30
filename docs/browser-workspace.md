@@ -2,6 +2,13 @@
 
 ## Explicit joint finding check (2026-10-30)
 
+Accepted actions identify new attempts versus completed-result reuse or saved-reply
+recovery. **Inspect joint-check request usage → Load joint-check usage** explicitly
+loads a bounded metadata-only snapshot; download exports that already-loaded report.
+No automatic report read or model call occurs. Unknown/partial older measurements are
+not zeros; adapter attempts are not provider billing or requests saved. See [report
+privacy, measurement boundary and limits](definition-joint-usage.md).
+
 After comparing all nine original sources with matching inputs in **Overall progress →
 Inspect original finding sources**, explicitly confirm the one-request allowance and
 choose **Check selected findings together**. This is separate from provenance inspection,

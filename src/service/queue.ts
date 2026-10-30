@@ -107,14 +107,15 @@ export class DiscoveryQueue {
     } });
     if (!jobID) {
       const result = await operation;
-      return result.status === "unavailable" ? result : { status: "accepted", jobID: result.job.id };
+      return result.status === "unavailable" ? result : { status: "accepted", jobID: result.job.id,
+        action: result.reused && result.job.status === "completed" ? "completed-reuse" : result.run.sourceJobID ? "saved-response-recovery" : "new-attempt" };
     }
     const promise = operation.then((result) => { progress.push(result.status === "recorded" && result.job.status === "completed"
       ? "Joint check saved as local model judgement. Findings and scores are unchanged."
       : "Joint check stopped or unavailable. Original findings and saved attempts are retained; continue explicitly.");
     }).catch(() => { progress.push("Joint check could not complete. Saved evidence is retained; no automatic retry."); }).finally(() => this.active.delete(id));
     this.active.set(id, { controller, promise, kind: "definition-joint-review", jobID });
-    return { status: "accepted", jobID };
+    return { status: "accepted", jobID, action: this.service.store.definitionJointReview(jobID)?.sourceJobID ? "saved-response-recovery" : "new-attempt" };
   }
   stopDefinitionCombination(id: string, jobID: string) {
     const work = this.active.get(id);

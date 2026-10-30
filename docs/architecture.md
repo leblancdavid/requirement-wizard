@@ -1,5 +1,13 @@
 # Architecture outline
 
+Joint checks reuse the existing optional `DiscoveryMeasurement` job metadata, with
+request checkpoints before dispatch and zero-request recovery measured separately.
+`src/core/definition-joint-usage.ts` validates metadata-only, anonymized bounded reports;
+the store selects at most 21 metadata rows/32 KiB per measurement without source/reply
+reads. Explicit `definition-joint-usage` and browser load/download controls perform no
+writes or inference. Missing old measurements remain unknown; completed reuse never
+resets original timings or creates a new job. SQLite stays 16. See [usage evidence](definition-joint-usage.md).
+
 `src/core/definition-joint-view.ts` projects bounded dated local run evidence for the
 browser. `DiscoveryQueue.reviewDefinitionCombination` serializes a separate explicit
 one-request task with ordinary workers and owns exact-job cancellation; it starts no

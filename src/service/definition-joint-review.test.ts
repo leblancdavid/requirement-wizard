@@ -18,6 +18,7 @@ import { emptyExecution } from "../core/execution.js";
 import { databaseSchemaVersion } from "../storage/migrations.js";
 import { startApp } from "../web/server.js";
 import { DiscoveryQueue } from "./queue.js";
+import { definitionJointUsageReport } from "../core/definition-joint-usage.js";
 
 const empty = { summary: "Fixture", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] };
 async function seed(store: ProjectStore) {
@@ -51,7 +52,7 @@ test("joint browser APIs require exact explicit consent, isolate status and stop
   const post = (action: string, input: unknown, auth = headers, projectID = p.id) => fetch(`${app.origin}/api/projects/${projectID}/${action}`, { method: "POST", headers: auth, body: JSON.stringify(input) });
   try {
     const input = { request, confirmAIUsage: true };
-    for (const action of ["definition-joint-start", "definition-joint-status", "definition-joint-stop"]) {
+    for (const action of ["definition-joint-start", "definition-joint-status", "definition-joint-stop", "definition-joint-usage"]) {
       assert.equal((await post(action, input, { ...headers, "X-Reqwizit-Token": "wrong" })).status, 403);
       assert.equal((await post(action, input, { ...headers, Origin: "https://foreign.invalid" })).status, 403);
       assert.equal((await fetch(`${app.origin}/api/projects/${p.id}/${action}`, { headers })).status, 405);
@@ -63,6 +64,7 @@ test("joint browser APIs require exact explicit consent, isolate status and stop
     const incomplete = await (await post("definition-joint-start", { ...input, request: { ...request, selections: request.selections.slice(0, 1) } })).json();
     assert.equal(incomplete.status, "unavailable"); assert.equal(calls, 0); assert.deepEqual(store.jobs(p.id), jobs);
     const startedResponse = await post("definition-joint-start", input); assert.equal(startedResponse.status, 202); const started = await startedResponse.json();
+    assert.equal(started.action, "new-attempt");
     assert.equal(calls, 1); assert.equal((await post("definition-joint-start", input)).status, 409);
     const status = await (await post("definition-joint-status", { epicID: "orders", jobID: started.jobID })).json();
     assert.equal(status.jobStatus, "running"); assert.equal(status.reserved, true); assert.equal(status.response, undefined); assert.equal(status.canPublish, false);
@@ -73,6 +75,9 @@ test("joint browser APIs require exact explicit consent, isolate status and stop
     assert.equal((await post("definition-joint-stop", { jobID: started.jobID })).status, 200);
     const stopped = await (await post("definition-joint-status", { epicID: "orders" })).json(); assert.equal(stopped.jobStatus, "cancelled");
     assert.equal(stopped.result, undefined); assert.equal(stopped.reserved, true); assert.equal(calls, 1);
+    assert.equal((await post("definition-joint-usage", { epicID: "orders", confirmAIUsage: true })).status, 400);
+    const usage = await (await post("definition-joint-usage", { epicID: "orders" })).json();
+    assert.equal(usage.summary.observedRequestAttempts, 1); assert.equal(usage.runs[0].requestOutcomes.cancelled, 1); assert.equal(calls, 1);
     assert.deepEqual(store.get(p.id), before); assert.deepEqual(store.workflow(p.id), workflow);
     assert.equal(store.logHistory(p.id, { jobID: started.jobID }).entries[0]!.title, "Joint finding check");
   } finally { await app.close(); store.close(); }
@@ -91,6 +96,7 @@ test("joint browser start reuses completed checks and dated status survives rest
     assert.equal(result.jobStatus, "completed"); assert.equal(result.result.outcome, "model-supported"); assert.equal(calls, 1);
     assert.equal((await snapshot()).previousCoverage, previousCoverage, "Local joint judgement must not become the previous ordinary discovery round");
     const jobs = store.jobs(p.id); const repeated = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
+    assert.equal(first.action, "new-attempt"); assert.equal(repeated.action, "completed-reuse");
     assert.equal(repeated.jobID, first.jobID); assert.deepEqual(store.jobs(p.id), jobs); assert.equal(calls, 1);
     await app.close(); store.close(); store = new ProjectStore(path);
     app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; assert.fail("Restart/status cannot authorize inference"); } } });
@@ -132,15 +138,98 @@ test("joint browser recovery reuses a saved reply after completion failure and b
     assert.equal(store.getJob(failed.jobID).status, "failed"); assert.equal(calls, 1); const sourceJob = store.getJob(failed.jobID);
     db.exec("DROP TRIGGER reject_joint_web_completion;");
     const recovered = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
+    assert.equal(recovered.action, "saved-response-recovery");
     const status = await (await post("definition-joint-status", { epicID: "orders", jobID: recovered.jobID })).json();
     assert.equal(status.jobStatus, "completed"); assert.equal(status.sourceJobID, failed.jobID); assert.equal(status.reserved, false);
     assert.equal(status.respondedAt, saved.respondedAt); assert.equal(calls, 1);
+    const usage = await (await post("definition-joint-usage", { epicID: "orders" })).json();
+    assert.equal(usage.summary.observedRequestAttempts, 1); assert.equal(usage.summary.zeroRequestRecoveryTasks, 1);
+    assert.equal(usage.runs[0].totalRequestAttempts, 0); assert.equal(usage.runs[0].savedResponseSource, "check-2");
     assert.deepEqual(store.getJob(failed.jobID), sourceJob); assert.deepEqual(store.definitionJointReview(failed.jobID), saved);
     db.prepare("DELETE FROM definition_joint_reviews WHERE job_id = ?").run(failed.jobID);
     const before = store.jobs(p.id); const blocked = await (await post("definition-joint-start", { request, confirmAIUsage: true })).json();
     assert.equal(blocked.status, "unavailable"); assert.equal(blocked.reason, "saved-review-unproved"); assert.equal(calls, 1); assert.deepEqual(store.jobs(p.id), before);
     assert.deepEqual(store.get(p.id), p);
   } finally { await app.close(); db.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("joint usage measurements separate returned attempts from verdict validity and export only bounded metadata", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, request } = await seed(store);
+    const service = new DiscoveryService(store, { async analyze() { return { secretResponse: "Never export this private prose" }; } });
+    const result = await service.reviewDefinitionCombination(p.id, request); if (result.status !== "recorded") assert.fail();
+    assert.equal(result.job.status, "failed"); const metrics = store.getJob(result.job.id).discoveryMetrics!;
+    assert.equal(metrics.state, "finished"); assert.equal(metrics.requests.length, 1); assert.equal(metrics.requests[0]!.outcome, "returned");
+    const partial = { ...metrics, state: "recording", requests: metrics.requests.map((r) => ({ ...r, outcome: "in-flight", durationMs: null })) };
+    const rows = [
+      { id: "private-job", status: "failed", metrics: JSON.stringify(metrics), metricsPresent: 1, sourceJobID: null },
+      { id: "private-partial", status: "interrupted", metrics: JSON.stringify(partial), metricsPresent: 1, sourceJobID: "private-job" },
+      { id: "private-old", status: "completed", metrics: null, metricsPresent: 0, sourceJobID: "private-external" },
+      { id: "private-future", status: "completed", metrics: JSON.stringify({ ...metrics, format: 999 }), metricsPresent: 1, sourceJobID: null },
+      { id: "private-malformed", status: "completed", metrics: JSON.stringify({ ...metrics, secret: "private-prompt" }), metricsPresent: 1, sourceJobID: null },
+      { id: "private-unread", status: "completed", metrics: null, metricsPresent: 1, sourceJobID: null },
+    ];
+    const report = definitionJointUsageReport(rows, true);
+    assert.deepEqual(report.runs.map((r) => r.measurement), ["finished", "partial", "not-recorded", "unavailable", "unavailable", "unavailable"]);
+    assert.equal(report.summary.observedRequestAttempts, 2); assert.equal(report.summary.unknownOrPartialTasks, 5);
+    assert.equal(report.runs[1]!.totalRequestAttempts, null); assert.equal(report.runs[1]!.savedResponseSource, "check-1");
+    assert.equal(report.runs[2]!.savedResponseSource, "outside-window"); assert.equal(report.runs[2]!.observedRequestAttempts, null);
+    assert.ok(report.runs[0]!.otherLocalMs! >= 0); assert.equal(report.runs[1]!.otherLocalMs, null); assert.equal(report.hasMore, true);
+    const encoded = JSON.stringify(report);
+    for (const secret of ["private-job", "private-external", "private-prompt", p.id, p.name, p.sources[0]!.text, "Never export this private prose"])
+      assert.equal(encoded.includes(secret), false);
+    assert.throws(() => definitionJointUsageReport(Array.from({ length: 21 }, () => rows[0]!), false), /twenty/);
+  } finally { store.close(); }
+});
+
+test("joint usage reads the latest twenty tasks only and cannot start inference or reconstruct earlier cache-hit actions", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, request } = await seed(store); let calls = 0;
+    const service = new DiscoveryService(store, { async analyze() { calls++; return {}; } });
+    for (let i = 0; i < 22; i++) assert.equal((await service.reviewDefinitionCombination(p.id, request)).status, "recorded");
+    const before = store.jobs(p.id), report = store.definitionJointUsage(p.id, { epicID: "orders" });
+    assert.equal(report.runs.length, 20); assert.equal(report.hasMore, true); assert.equal(report.summary.observedRequestAttempts, 20);
+    assert.equal(report.summary.finishedMeasuredTasks, 20); assert.equal(report.summary.zeroRequestRecoveryTasks, 0);
+    assert.equal(calls, 22); assert.deepEqual(store.jobs(p.id), before); assert.deepEqual(store.get(p.id), p);
+    assert.equal(store.definitionJointUsage(p.id, { epicID: "other" }).summary.tasks, 0);
+    assert.throws(() => store.definitionJointUsage(p.id, { limit: 1000 }));
+  } finally { store.close(); }
+});
+
+test("older completed joint jobs without measurements reopen and reuse unchanged; missing metrics never become zero or trigger calls", async () => {
+  const directory = folder(), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const { p, request } = await seed(store);
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) { return supported(context); } }).reviewDefinitionCombination(p.id, request);
+    if (result.status !== "recorded") assert.fail(); const run = store.definitionJointReview(result.job.id); store.close();
+    let db = new Database(path); db.prepare("UPDATE jobs SET payload = json_remove(payload, '$.discoveryMetrics') WHERE id = ?").run(result.job.id);
+    const original = db.prepare("SELECT payload FROM jobs WHERE id = ?").get(result.job.id); db.close();
+    for (let i = 0; i < 2; i++) {
+      store = new ProjectStore(path); const report = store.definitionJointUsage(p.id, {});
+      assert.equal(report.runs[0]!.measurement, "not-recorded"); assert.equal(report.runs[0]!.totalRequestAttempts, null);
+      assert.equal(report.summary.finishedMeasuredTasks, 0); assert.equal(report.summary.unknownOrPartialTasks, 1);
+      const reused = await new DiscoveryService(store, { async analyze() { assert.fail("A metric representation change cannot repeat inference"); } }).reviewDefinitionCombination(p.id, request);
+      if (reused.status !== "recorded") assert.fail(); assert.equal(reused.job.id, result.job.id);
+      assert.equal(store.getJob(result.job.id).discoveryMetrics, undefined); assert.deepEqual(store.definitionJointReview(result.job.id), run);
+      assert.deepEqual(store.get(p.id), p); store.close(); db = new Database(path);
+      assert.deepEqual(db.prepare("SELECT payload FROM jobs WHERE id = ?").get(result.job.id), original); db.close();
+    }
+    store = new ProjectStore(":memory:");
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("a pre-claim failure cannot masquerade as completed-result reuse or measured zero requests", async (t) => {
+  const store = new ProjectStore(":memory:"), { p, request } = await seed(store);
+  const queue = new DiscoveryQueue(new DiscoveryService(store, { async analyze() { assert.fail("The failed claim cannot dispatch"); } }));
+  try {
+    t.mock.method(store, "claimJob", () => { throw new Error("Fixture claim failure"); });
+    const result = await queue.reviewDefinitionCombination(p.id, request); if (result.status !== "accepted") assert.fail();
+    assert.equal(result.action, "new-attempt"); assert.equal(store.getJob(result.jobID).status, "failed");
+    const report = store.definitionJointUsage(p.id, {}); assert.equal(report.runs[0]!.measurement, "not-recorded");
+    assert.equal(report.runs[0]!.totalRequestAttempts, null); assert.equal(report.summary.zeroRequestRecoveryTasks, 0);
+  } finally { await queue.close(); store.close(); }
 });
 
 test("explicit joint validation reviews exact evidence and all nine original findings once, stores local judgement and reuses it without publishing", async () => {
@@ -167,7 +256,7 @@ test("explicit joint validation reviews exact evidence and all nine original fin
     assert.equal(calls, 1); assert.deepEqual(store.jobs(p.id), jobs);
     const portable = continuationState(p, jobs, [], (r) => store.get(p.id, r)); assert.equal(portable.jobs.some((j) => j.id === result.job.id), false);
     const decoded = decodePortable(renderWorkspace(p, emptyExecution(), portable), p.model); assert.deepEqual(decoded.project.assessments, p.assessments);
-    const forged = { ...portable, jobs: [{ ...result.job, kind: undefined, status: "interrupted" as const, leaseUntil: null }] };
+    const forged = { ...portable, jobs: [{ ...result.job, kind: undefined, discoveryMetrics: undefined, status: "interrupted" as const, leaseUntil: null }] };
     assert.throws(() => decodePortable(renderWorkspace(p, emptyExecution(), forged), p.model), /local evidence/);
     store.close(); store = new ProjectStore(path); const old = store.definitionJointReview(result.job.id)!;
     assert.equal(old.result!.outcome, "model-supported"); assert.equal(old.respondedAt, result.run.respondedAt); assert.deepEqual(store.get(p.id), before);

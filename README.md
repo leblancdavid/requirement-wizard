@@ -62,6 +62,9 @@ An explicitly confirmed [joint validation task](docs/definition-joint-review.md)
 review those findings together with one bounded request and retain/recover its local
 verdict without rewriting originals. The same inspector offers separate consent, Stop
 and saved results; there is no automatic route or publication authority.
+Its [bounded usage report](docs/definition-joint-usage.md) separates measured attempts,
+saved-reply recovery and unknown older data, without claiming provider billing or
+inventing requests saved. Inspection/export starts no model calls.
 Definition reviews no longer become outdated merely because saving reordered object
 properties. SQLite 12→13 repairs older keys only with proof from their original raw
 snapshot, preserving evidence, history, revisions and spent attempts; real changes

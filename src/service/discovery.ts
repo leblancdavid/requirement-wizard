@@ -88,6 +88,7 @@ export class DiscoveryService {
     const started = this.store.beginDefinitionJointReview(projectID, request);
     if (started.status !== "started") return started;
     const controller = new AbortController(), deadline = Date.now() + duration;
+    let measurement: DiscoveryMeasurement | undefined;
     let timedOut = false;
     const abort = () => controller.abort(options.signal?.reason ?? new DOMException("Joint review cancelled", "AbortError"));
     options.signal?.addEventListener("abort", abort, { once: true });
@@ -95,19 +96,22 @@ export class DiscoveryService {
     const check = () => { if (Date.now() >= deadline && !controller.signal.aborted) { timedOut = true; controller.abort(new DOMException("Joint review time limit reached", "TimeoutError")); } controller.signal.throwIfAborted(); };
     try {
       this.store.claimJob(started.job.id, Date.now() + duration + 30000); options.onJob?.(this.store.getJob(started.job.id)); check();
+      measurement = new DiscoveryMeasurement((value) => this.store.saveDiscoveryMetrics(started.job.id, value));
       if (!started.reused) {
         const prepared = this.store.reserveDefinitionJointReview(started.job.id); check();
+        measurement.planned(prepared.task.context);
         options.signal?.throwIfAborted();
         let onAbort: () => void = () => {};
         const interrupted = new Promise<never>((_, reject) => { onAbort = () => reject(controller.signal.reason); controller.signal.addEventListener("abort", onAbort, { once: true }); });
         try {
-          const response = await Promise.race([this.adapter.analyze(prepared.project, { signal: controller.signal, context: prepared.task.context, research: false,
+          const response = await measurement.request(() => Promise.race([this.adapter.analyze(prepared.project, { signal: controller.signal, context: prepared.task.context, research: false,
             onSession: (id) => this.store.attachSession(started.job.id, id), onProgress: () => {}, onTelemetry: (value) => this.store.attachTelemetry(started.job.id, value),
-            onResearch: (evidence) => { if (evidence.length) throw new Error("Joint validation cannot authorize research."); } }), interrupted]);
+            onResearch: (evidence) => { if (evidence.length) throw new Error("Joint validation cannot authorize research."); } }), interrupted]), prepared.task.context, controller.signal);
           controller.signal.throwIfAborted(); this.store.recordDefinitionJointResponse(started.job.id, response);
         } finally { controller.signal.removeEventListener("abort", onAbort); }
       }
-      check(); return this.store.finishDefinitionJointReview(started.job.id, deadline);
+      check(); const result = this.store.finishDefinitionJointReview(started.job.id, deadline);
+      measurement.finish(); return { ...result, job: this.store.getJob(started.job.id) };
     } catch (error) {
       if (error instanceof DOMException && error.name === "TimeoutError") timedOut = true;
       const job = this.store.getJob(started.job.id);
@@ -115,6 +119,7 @@ export class DiscoveryService {
         timedOut ? "Joint validation reached its time limit. Original findings and any saved response were retained. Continue explicitly."
           : controller.signal.aborted ? "Joint validation stopped. Original findings and spent attempts were retained."
             : error instanceof z.ZodError ? schemaDiagnostic(error) : "Joint validation could not complete. Original findings and any saved response were retained; no mixed review was published.");
+      measurement?.finish();
       return { status: "recorded" as const, job: this.store.getJob(started.job.id), run: this.store.definitionJointReview(started.job.id)!, reused: started.reused };
     } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
   }

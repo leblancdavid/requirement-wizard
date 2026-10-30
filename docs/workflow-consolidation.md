@@ -15,6 +15,15 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Bounded joint usage evidence implemented (2026-10-30):** accepted actions distinguish
+  new attempts, completed reuse and saved-response recovery. New joint jobs record
+  optional adapter-attempt/timing metadata; explicit bounded inspection/export preserves
+  unknown older/partial data and reveals no original IDs, dates, prose or credentials.
+  Completed reuse creates no new task and is not backfilled as a savings counter.
+  This is not a broad request-savings report, provider billing receipt, narrower proof
+  or performance qualification. Saved work and SQLite 16 formats stay unchanged. See
+  [measurement boundaries and limits](definition-joint-usage.md).
+
 - **Explicit joint-check browser slice implemented (2026-10-30):** all nine matching
   original-source selections can be checked together after separate one-request consent.
   The ordinary queue owns exact-task Stop; explicit status inspection survives reload,

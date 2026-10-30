@@ -9,6 +9,12 @@ is verified; live model quality is not qualified.
 
 ## Browser consent and saved results
 
+Accepted actions now distinguish a new attempt, completed-result reuse and saved-reply
+recovery. **Inspect joint-check request usage** explicitly loads/downloads metadata for
+at most 20 saved tasks. New tasks retain optional measured adapter attempts/timings;
+older/partial/unreadable data remains unknown, and repeated completed reuse is not
+manufactured into a new historical task or a savings count. See [usage evidence](definition-joint-usage.md).
+
 Open **Overall progress → Inspect original finding sources**, explicitly load sources,
 select all nine original findings and compare their provenance. Only a complete preview
 with matching current whole-area guards enables the separate joint-check consent.

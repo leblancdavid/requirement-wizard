@@ -1,5 +1,40 @@
 # Data migrations and upgrade compatibility
 
+## Joint-check usage measurements (2026-10-30)
+
+**No persisted conversion:** SQLite remains **16**, execution stays schema 2, and new
+joint tasks use the already-supported optional format-1 `job.discoveryMetrics` payload.
+Project/assessment/certificate/joint run/result/portable formats, semantic keys,
+optimistic counters, saved receipts and grants are unchanged. Older completed tasks
+without measurements stay valid, byte-identical and reusable without backfill or calls.
+An explicit completed-reuse action does not reset measurements or create another job.
+
+Measurement starts after claim and checkpoints an adapter attempt immediately before
+dispatch. It is not provider acceptance/billing or a successful-review receipt. Returned
+responses are categorized before validation; cancelled/late replies cannot become
+successful verdicts or late measurement writes. Recovery tasks measure zero new requests
+separately from the original root; pre-measurement failure and older missing measurements
+remain unknown, never manufactured zero. The classifier now recognizes a returned joint
+contract as analysis within the unchanged existing response-category enum.
+
+New transient action disposition distinguishes a new attempt, completed reuse and saved-
+reply recovery. It is not persisted as a new historical receipt/counter. The separate
+metadata-only usage report returns at most 20 saved tasks, distinguishes partial/unknown
+data and anonymizes recovery links. SQL caps metrics at 32 KiB before parsing; future,
+malformed and oversized metrics stay unavailable. Inspection/export causes no state
+changes or inference; old work never repeats merely to populate diagnostics. Tests
+cover old saved-data reopen/reuse preservation, missing/future/partial metadata,
+zero-request recovery, pre-claim failure, request/validity separation, bounds and privacy.
+See [usage semantics and limits](definition-joint-usage.md).
+
+Verification: type check, all **1,230** deterministic tests (526 pretests + 704 main),
+focused joint/diagnostics/log tests, focused joint browser, full nine-runner default
+browser aggregate/UI build and diff check passed. Browser export checks verify privacy
+and no extra model calls; older-data tests preserve raw jobs and original checkpoints
+across repeated reopen/reuse. The existing bundle-size warning remains. No live model
+calls, commits/pushes or packaging were performed; broad savings/performance and live
+semantic/provider qualification remain unfinished.
+
 ## Explicit browser joint finding checks (2026-10-30)
 
 **Workflow/API projection only; no persisted conversion.** Source/target SQLite stays
