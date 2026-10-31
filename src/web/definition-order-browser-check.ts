@@ -9,7 +9,7 @@ import { coverage } from "../core/coverage.js";
 import { legacyDefinitionOrder } from "../storage/fixtures/definition-storage-order.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, assessmentTools } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -47,7 +47,9 @@ try {
   await area.getByText("See what is defined and what needs attention", { exact: true }).click();
   await expect(area).toContainText("This check uses the latest relevant project information");
   await expect(area.getByRole("button", { name: "Refresh definition: Saved area", exact: true })).toHaveCount(0);
-  const inspector = dialog.getByRole("region", { name: "Definition finding impact", exact: true });
+   await dialog.getByRole("button", { name: "Close progress", exact: true }).click();
+   const tools = await assessmentTools(page);
+   const inspector = tools.getByRole("region", { name: "Definition finding impact", exact: true });
   await inspector.getByText("Inspect changes since a definition review", { exact: true }).click();
   await inspector.getByLabel("Reviewed area", { exact: true }).selectOption("a");
   await inspector.getByRole("button", { name: "Compare saved inputs", exact: true }).click();
@@ -56,8 +58,11 @@ try {
   await expect(report).not.toContainText("The project changed after this inspection");
   assert.equal(store.get(p.id).requirements[0]!.status, "proposed"); assert.equal(store.get(p.id).questions[0]!.status, "pending");
   p = store.note(p.id, p.revision, "A genuinely changed rule", "a");
-  await expect(area).toContainText("Project information has changed since this check");
-  await expect(report).toContainText(`Current project version ${p.revision}`);
+   await expect(report).toContainText(`Current project version ${p.revision}`);
+   await tools.getByRole("button", { name: "Close assessment tools", exact: true }).click();
+   await page.getByRole("button", { name: /Back to workspace/ }).click();
+   await page.getByRole("button", { name: /Overall progress/ }).click(); await stage.locator(":scope > summary").click();
+   await expect(area).toContainText("Project information has changed since this check");
   await page.setViewportSize({ width: 390, height: 844 }); await area.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-definition-order-upgrade-mobile.png", fullPage: true });

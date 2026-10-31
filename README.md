@@ -45,7 +45,7 @@ New run receipts also identify original definition reviews unchanged and current
 both run boundaries, without claiming skipped calls or resolved findings. Older
 receipts are preserved without reconstructed provenance; see
 [compatibility](docs/migrations.md#retained-definition-reviews-in-specification-runs-2026-10-29).
-**Overall progress → Inspect changes since a definition review** compares saved inputs
+**Settings → Advanced assessment tools → Inspect changes since a definition review** compares saved inputs
 without AI calls. Unchanged citations do not justify skipping a whole-area review;
 see [finding impact](docs/definition-finding-impact.md).
 An [inspection-only dependency protocol](docs/definition-dependency-protocol.md) is
@@ -56,7 +56,7 @@ reviews stay valid without certificates; no new calls or automatic skips are aut
 The [per-finding origin preview](docs/definition-finding-origins.md) also preserves
 individual original dates/evidence across selected reviews; it cannot publish mixed
 findings and does not prove narrower independence or joint consistency.
-Inspect it through **Overall progress → Inspect original finding sources**: explicitly
+Inspect it through **Settings → Advanced assessment tools → Inspect original finding sources**: explicitly
 load local sources and compare chosen origins without AI or assessment changes.
 An explicitly confirmed [joint validation task](docs/definition-joint-review.md) can now
 review those findings together with one bounded request and retain/recover its local
@@ -81,7 +81,7 @@ remain unsafe and automatic finding-level skips remain disabled.
 A [review-scope contract](docs/definition-review-scope.md) validates assigned outputs
 against complete evidence. An [injected-adapter execution pilot](docs/definition-scope-pilot.md)
 now saves and recovers scoped results. Its [provider bridge](docs/definition-scope-providers.md)
-is fixture-tested with existing adapters. **Overall progress → Review selected definition
+is fixture-tested with existing adapters. **Settings → Advanced assessment tools → Review selected definition
 dimensions (pilot)** now provides status-first consent, dated results, owned Stop and
 explicit reload/lost-response inspection. Live provider qualification, scoped assessment
 publication and automatic reuse remain gated.
@@ -100,7 +100,7 @@ The [durable in-process mixed task pilot](docs/definition-mixed-execution.md) no
 actual sources and saves/recovers one-request judgments under SQLite 22. Opening a project starts no work.
 Its [explicit provider bridge](docs/definition-mixed-providers.md) now supports selected
 OpenCode/direct connections with mocked no-tools/exact-model checks.
-**Overall progress → Check mixed original findings (pilot)** now provides
+**Settings → Advanced assessment tools → Check mixed original findings (pilot)** provides
 [explicit source selection/preview, consent, status, owned Stop and saved judgments](docs/definition-mixed-browser.md),
 including lost-response inspection without replay. It also supports
 [local reviewed-content history and separately confirmed assessment apply](docs/definition-mixed-publication.md)
@@ -114,7 +114,7 @@ In Implement, **Prepare implementation** groups code checks, plan review and set
 **Build and verify** keeps Start/Resume implementation and Verify delivery separate.
 Viewing preparation does not run checks, call the model or start coding.
 Missing definition assessments removed by older versions can be explicitly previewed
-and restored from Overall progress. Recovery-only revisions preserve valid implementation
+and restored from Settings' advanced assessment tools. Recovery-only revisions preserve valid implementation
 work without rewriting evidence or repeating model calls; already stale work stays stale.
 Unresolved definition behavior can now produce targeted questions; answers trigger
 affected rechecks using the same allowance.
@@ -168,6 +168,9 @@ zero. Unassessed areas have unknown gaps; outdated critical flags are separate f
 current gaps. Expand an area's definition assessment in the breakdown for category
 explanations and linked evidence. Local code findings do not earn main-delivery credit.
 Review requirements and coverage evidence without entering IDs.
+Experimental source/scoped/mixed reviews and recovery tools live separately in **Settings →
+Advanced assessment tools**. They are optional, not extra steps required to make progress.
+Empty source pages explain missing provenance without invalidating or resetting older work.
 Use **Overall progress → Refresh definition coverage** for a complete current-area
 assessment, separate from gap discovery. Relevant evidence changes—not every project
 revision—make it outdated. The dialog also separates discovery blockers from assessed

@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { mixedPublicationFixture } from "../storage/definition-mixed-publication-fixture.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, assessmentTools } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -20,11 +20,11 @@ try {
       let saves = 0, applies = 0;
       page.on("request", (r) => { if (r.url().endsWith("/definition-mixed-save")) saves++; if (r.url().endsWith("/definition-mixed-apply")) applies++; });
       await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: f.p.name, exact: true }).click();
-      await page.getByRole("button", { name: /Overall progress/ }).click();
-      const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+      const dialog = await assessmentTools(page);
       const disclosure = dialog.getByText("Check mixed original findings (pilot)", { exact: true }); await disclosure.focus(); await page.keyboard.press("Enter");
       const controls = dialog.getByRole("region", { name: "Mixed review controls", exact: true });
       await controls.getByLabel("Mixed review area", { exact: true }).selectOption("orders");
+      await controls.getByText("Saved experimental reviews", { exact: true }).click();
       const history = controls.getByRole("region", { name: "Mixed reviewed findings history", exact: true });
       const previewButton = history.getByRole("button", { name: "Preview mixed findings for review", exact: true }); await expect(previewButton).toBeDisabled();
       assert.equal(calls, 0); assert.equal(saves, 0); assert.equal(applies, 0);
@@ -84,7 +84,8 @@ try {
         assert.deepEqual(p.requirements, f.p.requirements); assert.deepEqual(p.sources, f.p.sources);
       }
       assert.deepEqual(f.store.jobs(f.p.id), jobs); assert.deepEqual(f.store.workflow(f.p.id), workflow); assert.deepEqual(f.store.maintenance(f.p.id), maintenance); assert.equal(calls, 0);
-      const beforeReload = applies; await page.reload(); await page.getByRole("button", { name: /Overall progress/ }).click(); await disclosure.click();
+      const beforeReload = applies; await page.reload(); await assessmentTools(page); await disclosure.click();
+      await controls.getByText("Saved experimental reviews", { exact: true }).click();
       await controls.getByLabel("Mixed review area", { exact: true }).selectOption("orders");
       await history.getByRole("button", { name: "Load saved mixed reviews", exact: true }).click(); await history.getByRole("button", { name: /Open mixed review/ }).click();
       await eligibility.click(); assert.equal(applies, beforeReload); assert.equal(calls, 0);

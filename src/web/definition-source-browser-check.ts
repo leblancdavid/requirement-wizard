@@ -7,7 +7,7 @@ import { DiscoveryService } from "../service/discovery.js";
 import { dimensions, dimensionLabels } from "../core/epics.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, assessmentTools } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -34,8 +34,7 @@ try {
   let reads = 0, comparisons = 0;
   page.on("request", (request) => { if (request.url().endsWith("/definition-sources")) reads++; if (request.url().endsWith("/definition-origins")) comparisons++; });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+  const dialog = await assessmentTools(page);
   const inspector = dialog.getByRole("region", { name: "Original definition finding sources", exact: true });
   const disclosure = inspector.getByText("Inspect original finding sources", { exact: true });
   await disclosure.focus(); await page.keyboard.press("Enter"); await inspector.getByLabel("Source area", { exact: true }).selectOption("orders");
@@ -78,8 +77,8 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   assert.ok((await compare.boundingBox())!.height >= 44);
   await page.screenshot({ path: ".reqwizit-state/browser-definition-sources-mobile.png", fullPage: true });
-  await dialog.getByRole("button", { name: "Close progress", exact: true }).click(); await page.reload();
-  await page.getByRole("button", { name: /Overall progress/ }).click(); await disclosure.click();
+  await dialog.getByRole("button", { name: "Close assessment tools", exact: true }).click(); await page.reload();
+  await assessmentTools(page); await disclosure.click();
   await expect(list).toHaveCount(0); await expect(report).toHaveCount(0); assert.equal(reads, 3); assert.equal(comparisons, 5);
   await inspector.getByLabel("Source area", { exact: true }).selectOption("inbox"); await load.click();
   await expect(list).toContainText("Missing certificates do not invalidate otherwise valid saved reviews");

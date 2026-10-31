@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import { startupLabels, reportStartup, type StartupProgress, type StartupPhase } from "../core/startup.js";
 
 /** Own the service worker without running SQLite/export work on Electron's event loop. */
 export class DesktopBackend {
@@ -7,7 +8,7 @@ export class DesktopBackend {
   private readonly exited: Promise<void>;
   private closing = false;
 
-  constructor(directory: string, staticDir: string, onFailure: () => void, entry = new URL("./backend.js", import.meta.url)) {
+  constructor(directory: string, staticDir: string, onFailure: () => void, entry = new URL("./backend.js", import.meta.url), onProgress?: StartupProgress) {
     this.worker = new Worker(entry, { workerData: { directory, staticDir } });
     let accept: (origin: string) => void;
     let reject: (error: Error) => void;
@@ -22,6 +23,8 @@ export class DesktopBackend {
       if (!this.closing) onFailure();
     };
     this.worker.on("message", (message: unknown) => {
+      if (message && typeof message === "object" && "type" in message && message.type === "startup" && "phase" in message
+        && typeof message.phase === "string" && Object.hasOwn(startupLabels, message.phase)) reportStartup(onProgress, message.phase as StartupPhase);
       if (message && typeof message === "object" && "type" in message && message.type === "ready" && "origin" in message && typeof message.origin === "string") accept(message.origin);
     });
     this.worker.on("error", failure);

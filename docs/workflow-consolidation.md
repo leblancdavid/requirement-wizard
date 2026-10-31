@@ -15,6 +15,12 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Progress UI simplified (2026-10-31):** normal score breakdown/refresh is separate from
+  Settings' optional history/recovery and scoped/mixed experimental tools. Missing source
+  records get an honest empty state, not nine dead-end menus or a demand to recheck old work.
+  The desktop now shows a pre-backend spinner with actual startup stages; saved-data validation
+  and all task/apply consent boundaries remain unchanged. No reset, migration or live calls.
+
 - **Reviewed mixed publication implemented (2026-10-31):** supported/current original-witness
   preview, immutable local content review/history, separate current eligibility/fresh consent
   and atomic low-confidence assessment-only apply with durable idempotent receipts. Original

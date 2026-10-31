@@ -1,5 +1,14 @@
 # Architecture outline
 
+Startup observers in `src/core/startup.ts` project actual store/upgrade/validation phases through
+the owned desktop worker. Electron creates a sandboxed local splash before backend startup,
+then navigates that same window to its owned loopback origin; progress is indeterminate, not
+a fabricated completion percentage. The store's verification/transaction behavior is unchanged.
+`ProjectProgress` keeps ordinary progress separate from the Settings-launched advanced-tools
+dialog. Empty source catalogs are explained without fabricated origins, model calls or resets.
+No persisted format change is involved. See [startup](desktop.md#visible-startup-2026-10-31)
+and [navigation](browser-workspace.md#simpler-progress-and-optional-assessment-tools-2026-10-31).
+
 `definition-mixed-publication.ts` in core/storage and its UI component add exact supported-source
 publication previews, immutable local review history, separate eligibility/consent and idempotent
 atomic apply. SQLite 23 adds only local saved-review/receipt tables. `ProjectStore` commits

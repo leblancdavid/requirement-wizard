@@ -12,6 +12,19 @@ import { assessmentCurrent, assessmentFreshness, deliveredRequirement, emptyExec
 import { requirementFingerprint } from "../core/implementation.js";
 import type { Project } from "../core/model.js";
 import { randomUUID } from "node:crypto";
+test("startup distinguishes actual upgrades from saved-data checks and failed display callbacks cannot alter saved work", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const directory = mkdtempSync(resolve(".reqwizit-state/tests/startup-stages-")), path = join(directory, "state.sqlite"), phases: string[] = [];
+  try {
+    const first = new ProjectStore(path, (phase) => { phases.push(phase); if (phase === "upgrading-data") throw new Error("Upgrade display unavailable"); });
+    const p = first.create("Startup fixture", "Retain original choices", { providerID: "openai", modelID: "fixture" }); first.close();
+    assert.deepEqual(phases, ["opening-data", "upgrading-data", "checking-data"]);
+    phases.length = 0;
+    const reopened = new ProjectStore(path, (phase) => { phases.push(phase); throw new Error("Display unavailable"); });
+    try { assert.deepEqual(reopened.get(p.id), p); assert.deepEqual(phases, ["opening-data", "checking-data"]); }
+    finally { reopened.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("13 to 14 preserves old completed and live receipts byte-for-byte without inventing retained-review provenance", () => {
   mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });

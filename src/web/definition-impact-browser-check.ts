@@ -7,7 +7,7 @@ import { dimensions } from "../core/epics.js";
 import { coverage } from "../core/coverage.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, assessmentTools } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -37,8 +37,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }); diagnose = browserDiagnostics(page);
   let requests = 0; page.on("request", (r) => { if (r.url().endsWith("/definition-impact")) requests++; });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+  const dialog = await assessmentTools(page);
   const inspector = dialog.getByRole("region", { name: "Definition finding impact", exact: true });
   const disclosure = inspector.getByText("Inspect changes since a definition review", { exact: true });
   await disclosure.focus(); await page.keyboard.press("Enter");
@@ -77,8 +76,8 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   assert.ok((await compare.boundingBox())!.height >= 44);
   await page.screenshot({ path: ".reqwizit-state/browser-definition-impact-mobile.png", fullPage: true });
-  await dialog.getByRole("button", { name: "Close progress", exact: true }).click();
-  await page.reload(); await page.getByRole("button", { name: /Overall progress/ }).click();
+  await dialog.getByRole("button", { name: "Close assessment tools", exact: true }).click();
+  await page.reload(); await assessmentTools(page);
   await disclosure.click(); await expect(report).toHaveCount(0); assert.equal(requests, 5, "Reopen/reload cannot replay a comparison");
   assert.deepEqual(store.get(p.id).assessments, originalAssessment); assert.deepEqual(store.workflow(p.id), originalWorkflow);
   assert.deepEqual(store.maintenance(p.id), originalMaintenance); assert.deepEqual(store.jobs(p.id), originalJobs); assert.equal(calls, 0);

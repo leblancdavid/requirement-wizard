@@ -3,6 +3,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultDataDirectory } from "../storage/paths.js";
 import { DesktopBackend } from "./backend-host.js";
+import { desktopSplash } from "./splash.js";
+import { startupLabels, type StartupPhase } from "../core/startup.js";
 
 app.setName("Reqwizit");
 const args = process.argv.slice(1);
@@ -48,16 +50,6 @@ else {
   process.once("SIGTERM", () => { void shutdown(); });
   startup = app.whenReady().then(async () => {
     if (shuttingDown) return;
-    // Stable preferred origin retains Chromium UI preferences. A busy browser port
-    // must not prevent the desktop from opening its own authenticated backend.
-    backend = new DesktopBackend(directory, join(app.getAppPath(), "web"), () => {
-      if (!shuttingDown) {
-        if (window) dialog.showErrorBox("Reqwizit stopped unexpectedly", "Reopen the app to continue. Previously saved work is still available; check whether your latest changes were saved before continuing.");
-        setImmediate(() => { void shutdown(); });
-      }
-    });
-    const origin = await backend.ready;
-    if (shuttingDown) return;
     const browserSession = session.defaultSession;
     browserSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     browserSession.setPermissionCheckHandler(() => false);
@@ -65,16 +57,35 @@ else {
       title: "Reqwizit", width: 1360, height: 920, minWidth: 800, minHeight: 600,
       show: false, autoHideMenuBar: true,
       icon: join(app.getAppPath(), "assets", process.platform === "win32" ? "reqwizit.ico" : "reqwizit.png"),
-      ...(process.platform === "win32" ? {
-        titleBarStyle: "hidden" as const,
-        titleBarOverlay: { color: "#315f45", symbolColor: "#ffffff", height: 36 },
-      } : {}),
-      webPreferences: {
-        preload: fileURLToPath(new URL("./preload.cjs", import.meta.url)),
-        nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false,
-      },
+      ...(process.platform === "win32" ? { titleBarStyle: "hidden" as const, titleBarOverlay: { color: "#315f45", symbolColor: "#ffffff", height: 36 } } : {}),
+      webPreferences: { preload: fileURLToPath(new URL("./preload.cjs", import.meta.url)), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false },
     });
     window.removeMenu();
+    window.on("close", (event) => { event.preventDefault(); void shutdown(); });
+    window.webContents.on("render-process-gone", () => { void shutdown(); });
+    window.webContents.on("will-attach-webview", (event) => event.preventDefault());
+    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(desktopSplash)}`);
+    if (shuttingDown) return;
+    window.show();
+    const startedAt = Date.now();
+    let workspaceReady = false;
+    const progress = (phase: StartupPhase) => {
+      console.info(`Startup: ${phase} (${Date.now() - startedAt} ms)`);
+      if (window && !shuttingDown && window.webContents.getURL().startsWith("data:text/html"))
+        void window.webContents.executeJavaScript(`{ const target = document.getElementById('startup-detail'); if (target) target.textContent = ${JSON.stringify(startupLabels[phase])}; }`).catch(() => {});
+    };
+    // Stable preferred origin retains Chromium UI preferences. A busy browser port
+    // must not prevent the desktop from opening its own authenticated backend.
+    backend = new DesktopBackend(directory, join(app.getAppPath(), "web"), () => {
+      if (!shuttingDown) {
+        if (window && workspaceReady) dialog.showErrorBox("Reqwizit stopped unexpectedly", "Reopen the app to continue. Previously saved work is still available; check whether your latest changes were saved before continuing.");
+        setImmediate(() => { void shutdown(); });
+      }
+    }, undefined, progress);
+    const origin = await backend.ready;
+    if (shuttingDown) return;
+    progress("loading-interface");
     const trusted = (event: Electron.IpcMainInvokeEvent) => {
       if (!window || shuttingDown || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || new URL(event.senderFrame.url).origin !== origin) throw new Error("Invalid desktop request.");
     };
@@ -109,10 +120,8 @@ else {
     window.webContents.on("will-navigate", (event, url) => {
       if (new URL(url).origin !== origin) { event.preventDefault(); void external(url).catch(() => {}); }
     });
-    window.webContents.on("will-attach-webview", (event) => event.preventDefault());
-    window.on("close", (event) => { event.preventDefault(); void shutdown(); });
-    window.webContents.on("render-process-gone", () => { void shutdown(); });
     await window.loadURL(origin);
+    workspaceReady = true;
     if (!shuttingDown) window.show();
   }).catch((error: unknown) => {
     if (!shuttingDown) dialog.showErrorBox("Reqwizit could not start", error instanceof Error ? error.message : "Unknown startup error.");

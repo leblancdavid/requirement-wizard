@@ -12,3 +12,9 @@ export async function workspaceMenu(page: Page) {
   if (await recent.getAttribute("aria-expanded") !== "true") await recent.click();
   return menu;
 }
+
+export async function assessmentTools(page: Page) {
+  await (await applicationMenu(page)).getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Open advanced assessment tools", exact: true }).click();
+  return page.getByRole("dialog", { name: "Advanced assessment tools", exact: true });
+}

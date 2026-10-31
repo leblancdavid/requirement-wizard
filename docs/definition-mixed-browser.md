@@ -9,7 +9,7 @@ No live model calls were used to implement or test these controls.
 
 ## Explicit source selection and consent
 
-Open **Overall progress → Check mixed original findings (pilot)**. Opening, selecting,
+Open **Settings → Advanced assessment tools → Check mixed original findings (pilot)**. Opening, selecting,
 loading sources and inspecting evidence never start AI work. Choose an area and explicitly
 **Load mixed finding sources**. A bounded page contains at most six ordinary publication
 certificates and four completed scoped provenance packets. Older-page buttons replace the

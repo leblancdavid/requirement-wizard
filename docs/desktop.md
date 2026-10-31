@@ -1,5 +1,41 @@
 # Electron desktop application
 
+## Visible startup (2026-10-31)
+
+The desktop shows its own window **before** opening/checking the SQLite store, rather than
+remaining invisible until the backend is ready. A local splash displays an indeterminate
+spinner and allowlisted stages: opening local data, updating data (only when a migration
+actually runs), checking saved projects/history, checking interrupted work, starting the local
+workspace and loading its interface. No estimated percentage is invented. The main process
+logs phase elapsed times without project text, paths or credentials.
+
+This exposes progress; it does not establish that a reported slow launch was a migration
+or remove validation work. Current-format stores still validate saved data on every open.
+Large real-project startup performance remains unmeasured. Source launches also build the UI/
+desktop before Electron starts; the splash cannot cover that pre-launch build interval.
+Browser clients show initial interface/project-list/project loading states after the server
+is available; they cannot render a page before a CLI server binds its port.
+
+The same sandboxed window transitions to the owned loopback app. Native IPC remains limited
+to the owned app origin, not the splash; permissions, cancellation and owned-worker shutdown
+are unchanged. Closing during startup waits for safe worker cleanup, not forced termination.
+Display callback failure cannot interrupt migration or change saved evidence. SQLite stays 23.
+`npm run test:desktop:startup` checks an isolated deliberately blocked SQLite startup, visible
+splash, IPC rejection, close-during-startup and normal relaunch without model calls.
+
+Verification, 2026-10-31: type checking, desktop build, the full `npm run test:desktop` and
+the dedicated startup check passed on Windows. The existing missing 36px desktop header
+offset was corrected; the full runner now passes native window/title-bar/theme/IPC, saved
+SQLite continuity, renderer isolation, relaunch and owned shutdown checks. This supersedes
+the older dated title-bar failure below, not larger-project startup performance qualification.
+Screenshot: `.reqwizit-state/desktop-startup.png`.
+
+Header-layout correction: the native title bar is reserved once by the app container's
+36px padding. The relatively positioned header must have **zero** extra top offset; setting
+it to 36px produced both a visible second gap and content overlap. Desktop regression checks
+now compare actual title-bar/header/content boundaries rather than accepting a computed
+`top` value, including maximized/restored windows and enlarged UI text.
+
 Reqwizit now has a Windows-first Electron shell around the existing React workspace
 and local service. Browser and terminal clients remain available and share project
 data with the desktop when they use the same data directory.

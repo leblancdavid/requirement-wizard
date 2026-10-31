@@ -10,7 +10,7 @@ import { definitionDependencySnapshotKey } from "../core/definition-dependencies
 import { definitionMixedSourceConcerns, type DefinitionMixedAssembly } from "../core/definition-mixed-assessment.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, assessmentTools } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -50,8 +50,7 @@ try {
   let starts = 0, reads = 0;
   page.on("request", (r) => { if (r.url().endsWith("/definition-mixed-start")) starts++; if (r.url().endsWith("/definition-mixed-status")) reads++; });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+  const dialog = await assessmentTools(page);
   const disclosure = dialog.getByText("Check mixed original findings (pilot)", { exact: true });
   await disclosure.focus(); await page.keyboard.press("Enter");
   const controls = dialog.getByRole("region", { name: "Mixed review controls", exact: true });
@@ -59,7 +58,7 @@ try {
   const consent = controls.getByRole("checkbox", { name: "Allow at most one AI request for these exact mixed sources and inputs", exact: true });
   const result = controls.getByRole("region", { name: "Saved mixed review result", exact: true });
   await controls.getByLabel("Mixed review area", { exact: true }).selectOption("orders");
-  await expect(start).toBeDisabled(); await expect(consent).toBeDisabled(); assert.equal(reads, 0); assert.equal(calls, 0);
+  await expect(start).toBeHidden(); await expect(consent).toBeHidden(); assert.equal(reads, 0); assert.equal(calls, 0);
   await controls.getByRole("button", { name: "Load mixed finding sources", exact: true }).click();
   const choose = async (d: typeof dimensions[number], kind: "scoped" | "publication") => {
     const select = controls.getByLabel(`Mixed source: ${dimensionLabels[d]}`, { exact: true });
@@ -67,7 +66,7 @@ try {
     assert.ok(value); await select.selectOption(value);
   };
   for (const d of dimensions) await choose(d, "publication");
-  await expect(inspect).toBeDisabled(); assert.equal(calls, 0);
+  await expect(inspect).toBeHidden(); assert.equal(calls, 0);
   await choose("rules", "scoped"); await choose("data", "scoped");
   await inspect.click(); await expect(controls).toContainText("No saved mixed task matches this selection"); await expect(consent).toBeEnabled();
   const preview = controls.getByRole("region", { name: "Mixed selection preview", exact: true });
@@ -96,7 +95,7 @@ try {
   hold = true; await choose("permissions", "scoped"); await expect(consent).toBeDisabled();
   await inspect.click(); await consent.check(); await start.click(); await expect(result).toContainText("Mixed review · running"); assert.equal(calls, 2);
   await page.reload(); const afterReload = reads;
-  await page.getByRole("button", { name: /Overall progress/ }).click(); await disclosure.click();
+  await assessmentTools(page); await disclosure.click();
   await controls.getByLabel("Mixed review area", { exact: true }).selectOption("orders");
   assert.equal(reads, afterReload); assert.equal(calls, 2);
   await controls.getByRole("button", { name: "Load latest mixed review", exact: true }).click();

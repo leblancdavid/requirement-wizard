@@ -5,9 +5,7 @@
 .topbar .progress-trigger > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .progress-dialog p, .progress-dialog small { color: var(--muted); }
 .progress-stage { margin: 12px 0; border: 1px solid var(--border); border-radius: 9px; padding: 14px; }
-.progress-stage > summary { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.progress-stage > summary::before { content: "▸"; }
-.progress-stage[open] > summary::before { content: "▾"; }
+.progress-stage > summary { display: flex; align-items: center; gap: 12px; list-style: none; min-height: 44px; }
 .progress-stage > summary > span { flex: 1; min-width: 0; }
 .progress-stage small { display: block; margin-top: 4px; }
 .progress-stage .meter { margin: 10px 0; }
@@ -29,3 +27,19 @@
 @media (max-width: 540px) { .progress-actions { grid-template-columns: minmax(0, 1fr); } .progress-dialog .definition-refresh { width: 100%; } }
 .definition-check { margin: 10px 0; padding: 10px; border: 1px solid var(--border); border-radius: 7px; }
 .definition-check p, .definition-assessment > p { margin: 10px 0; overflow-wrap: anywhere; }
+.assessment-tools-group { margin-top: 24px; }
+.assessment-tools-group > details { margin: 12px 0; border: 1px solid var(--border); border-radius: 9px; padding: 14px; }
+.assessment-tools-group > details > summary { display: flex; align-items: center; gap: 12px; min-height: 44px; list-style: none; font-weight: 600; }
+.assessment-tools-dialog select { width: 100%; max-width: 100%; min-width: 0; }
+.assessment-tools-dialog fieldset { min-width: 0; margin: 16px 0; }
+.assessment-tools-dialog label { display: block; margin: 12px 0; }
+.assessment-tools-dialog input[type=checkbox] { width: auto; }
+.assessment-tools-dialog .progress-action { margin: 6px 6px 6px 0; }
+.source-empty-state { padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); margin: 12px 0; }
+/* Inspector roots include both details and section > details. Style their
+   summaries alike, including nested accordions, without font-sized triangles. */
+.progress-dialog summary { display: flex; align-items: center; gap: 12px; min-height: 44px; list-style: none; font-weight: 600; line-height: 1.4; }
+.progress-dialog summary::-webkit-details-marker { display: none; }
+.progress-dialog summary::marker { content: ""; }
+.progress-dialog summary::before { content: ""; display: block; box-sizing: border-box; flex: 0 0 8px; width: 8px; height: 8px; margin: 0 4px 0 2px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); }
+.progress-dialog details[open] > summary::before { transform: rotate(45deg); }

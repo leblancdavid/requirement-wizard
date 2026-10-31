@@ -7,7 +7,7 @@ import { dimensions, dimensionLabels } from "../core/epics.js";
 import type { DefinitionJointResponse } from "../core/definition-joint-review.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, assessmentTools } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -38,8 +38,7 @@ try {
   let starts = 0, reads = 0, usageReads = 0;
   page.on("request", (request) => { if (request.url().endsWith("/definition-joint-start")) starts++; if (request.url().endsWith("/definition-joint-status")) reads++; if (request.url().endsWith("/definition-joint-usage")) usageReads++; });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+  const dialog = await assessmentTools(page);
   const inspector = dialog.getByRole("region", { name: "Original definition finding sources", exact: true });
   const disclosure = inspector.getByText("Inspect original finding sources", { exact: true });
   await disclosure.focus(); await page.keyboard.press("Enter"); await inspector.getByLabel("Source area", { exact: true }).selectOption("orders");
@@ -55,8 +54,8 @@ try {
   await start.click(); const result = joint.getByRole("region", { name: "Saved joint check result", exact: true });
   await expect(result).toContainText("running"); assert.equal(calls, 1); assert.equal(starts, 1); await expect(consent).not.toBeChecked();
   await expect(joint).toContainText("This action started a new task with at most one request");
-  await dialog.getByRole("button", { name: "Close progress", exact: true }).click(); await page.reload();
-  await page.getByRole("button", { name: /Overall progress/ }).click(); await disclosure.click();
+  await dialog.getByRole("button", { name: "Close assessment tools", exact: true }).click(); await page.reload();
+  await assessmentTools(page); await disclosure.click();
   await inspector.getByLabel("Source area", { exact: true }).selectOption("orders"); await expect(result).toHaveCount(0);
   assert.equal(starts, 1); assert.equal(calls, 1);
   await joint.getByRole("button", { name: "Load saved joint check", exact: true }).click(); await expect(result).toContainText("running");

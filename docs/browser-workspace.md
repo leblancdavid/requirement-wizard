@@ -1,5 +1,48 @@
 # Browser workspace, epics, and estimated completeness
 
+## Simpler progress and optional assessment tools (2026-10-31)
+
+Layout follow-up: all progress/advanced-tool accordions, including section-wrapped inspectors,
+use one fixed 8px CSS chevron and consistent summary typography/spacing instead of mixing native
+markers and font-sized triangles. Keyboard toggling rotates the same indicator; focus outlines
+remain visible. Native desktop header spacing reserves the title bar once, without a relative
+offset that can push the header down and overlap content. No saved state or consent rules change.
+
+Follow-up verification: the full 1,418-test suite and all 18 browser runners were rerun and
+passed, along with type checking, UI/desktop build, full Windows Electron checks and diff check.
+New checks compare all five advanced accordions' marker dimensions/typography at desktop/mobile
+widths and exercise keyboard open/close rotation. Electron checks compare actual title-bar/header/
+content bounds at normal/maximized/restored sizes and enlarged text; the corrected header and
+accordion screenshots were inspected. No live calls or project-data changes were made.
+
+Overall progress starts with the three consistently styled score breakdowns, followed by
+the ordinary definition-refresh action and supporting status. Recovery, change inspection,
+original-source inspection and scoped/mixed experiments are no longer embedded in that dialog.
+Open **Settings → Project settings → Advanced assessment tools → Open advanced assessment tools**
+for optional history/recovery and separately grouped experiments. These are not normal workflow
+steps; use **Refresh definition coverage** in Overall progress for everyday review. Calculations,
+saved work, source verification, AI consent and apply permissions are unchanged.
+
+The mixed experiment explains an empty source page instead of displaying nine empty selectors.
+Older assessments can remain valid without the original publication/scoped records required
+by this experiment. Missing options are never fabricated or backfilled; no reset/repeated model
+call is required just to populate menus. Partial pages mark source-less dimensions disabled;
+older-page navigation is retained. Consent/start stays out of the way until a selection or saved
+task exists; saved review/apply controls are behind **Saved experimental reviews**.
+
+Browser boot includes visible interface/project-list/selected-project loading states. The
+desktop additionally has a pre-backend [startup splash](desktop.md#visible-startup-2026-10-31).
+No personal project data or live AI calls were used for this UI change. Earlier sections below
+describe their original entry points; all advanced inspectors now live in Settings.
+
+Verification: **1,418** deterministic tests (713 pretests + 705 main), type checking, UI
+build and all **18** default browser runners passed. Additional impact/storage-order browser
+checks passed after their navigation updates. A new fixture exercises initial loading, the
+clean three-stage breakdown and an older assessment with no eligible source records, preserving
+its project/execution/jobs without AI calls or writes. Mobile screenshots were inspected;
+the existing non-blocking bundle-size warning remains. Full Electron and isolated blocked-store
+startup checks also passed; large real-project startup duration remains unmeasured.
+
 ## Reviewed mixed findings and explicit apply (2026-10-31)
 
 The mixed inspector now offers **Preview mixed findings for review**, a separate content

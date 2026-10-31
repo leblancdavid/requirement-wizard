@@ -1,5 +1,33 @@
 # Data migrations and upgrade compatibility
 
+## Startup visibility and assessment-tool navigation (2026-10-31)
+
+The header/accordion layout follow-up also has no persistence impact: native title-bar space
+is reserved once, and progress/advanced inspectors share a fixed-size CSS chevron. Geometry
+and keyboard/mobile display regressions do not change data, fingerprints or authorizations.
+
+**No persisted migration:** source/target SQLite **23**, execution **2**, usage export **2**,
+portable 1/2/3 and all saved review/request/assessment/provenance/receipt formats, identities,
+freshness rules and CAS counters are unchanged. Optional startup observers report real upgrade
+versus reopen validation stages; callback failure is ignored and cannot alter transaction
+success/rollback, source evidence or worker ownership. No saved data is skipped or repaired to
+make the splash advance. No startup requalification/model calls or reset are introduced.
+
+Assessment experiments/recovery move from Overall progress to Settings' advanced tools;
+empty catalog pages explain missing eligible provenance rather than invent source choices.
+Old assessments and implementation reuse remain unchanged. Existing saved scopes, mixed tasks,
+content reviews and apply receipts stay accessible with their original consent/source checks.
+Navigation and transient display states are not persisted authorities. Browser preference,
+API/IPC authentication and loopback ownership boundaries remain intact.
+
+Verification: 1,418 deterministic tests, all 18 default browser runners, type checking/UI build,
+full Windows Electron checks, the deliberate blocked-database startup/close/relaunch test and
+diff check passed. The focused 26-test migration/desktop-worker rerun confirms that upgrade
+display failures cannot interrupt migration and that current-format reopen reports validation,
+not an invented upgrade. The older-assessment browser fixture preserves exact project/jobs/
+execution with an empty mixed catalog; existing task/apply/recovery regressions remain passing.
+No real user data was migrated for these checks, and no model calls or resets were made.
+
 ## Reviewed mixed-assessment publication (2026-10-31)
 
 **SQLite 22 → 23**, `explicit-reviewed-mixed-publication-v1`, adds local

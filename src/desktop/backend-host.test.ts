@@ -3,6 +3,12 @@ import test from "node:test";
 import { DesktopBackend } from "./backend-host.js";
 
 const fixture = new URL("./fixtures/backend-worker.mjs", import.meta.url);
+test("startup stages are allowlisted and display failures cannot change backend readiness or shutdown", async () => {
+  const stages: string[] = [];
+  const backend = new DesktopBackend("normal", "unused", () => assert.fail(), fixture, (phase) => { stages.push(phase); throw new Error("Display failed"); });
+  try { assert.equal(await backend.ready, "http://127.0.0.1:12345"); assert.deepEqual(stages, ["opening-data", "checking-data"]); }
+  finally { await backend.close(); }
+});
 
 test("CPU-bound backend startup leaves owner responsive; close waits for flush and is idempotent", async () => {
   let ticks = 0, failures = 0;

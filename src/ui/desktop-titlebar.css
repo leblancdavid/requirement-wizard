@@ -1,4 +1,7 @@
 .app:has(.desktop-titlebar) { padding-top: 36px; }
+/* The parent reserves the native title bar once. The header stays in normal
+   flex flow; a relative top offset would create a gap and overlap content. */
+.app:has(.desktop-titlebar) .topbar { top: 0; }
 .desktop-titlebar {
   position: fixed; inset: 0 0 auto; height: 36px; z-index: 50;
   display: flex; align-items: center; gap: 8px;

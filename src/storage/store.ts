@@ -22,6 +22,7 @@ import { emptyExecution, type ExecutionState } from "../core/execution.js";
 import { executionSchemaVersion } from "../core/assessment-identity.js";
 import { extendRecoveryRevision, recoveryRevisionSchema, definitionRevisionSchema, definitionRevisionCurrent, extendDefinitionRevision } from "../core/implementation-revisions.js";
 import { databaseSchemaVersion, migrateDatabase } from "./migrations.js";
+import { reportStartup, type StartupProgress } from "../core/startup.js";
 import { canonicalDirectory, directoryKey, checkWorkspace, managedDirectory, migrateWorkspaceDirectory, readPortableWorkspace, readArtifact, renderWorkspace, publishWorkspace, hash, requirementFingerprint, type Workspace } from "./workspace.js";
 import { continuationState, decodePortable, portableDigest } from "./portable.js";
 import { dirname, join } from "node:path";
@@ -186,7 +187,8 @@ export class ProjectStore {
   private readonly db: Database.Database;
   private readonly deferredWorkspaceSync = new Map<string, number>();
 
-  constructor(path: string) {
+  constructor(path: string, private readonly startupProgress?: StartupProgress) {
+    reportStartup(startupProgress, "opening-data");
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path);
     try { this.initialize(); } catch (error) { this.db.close(); throw error; }
@@ -229,7 +231,7 @@ export class ProjectStore {
         imported_at TEXT NOT NULL, project_payload TEXT NOT NULL, execution_payload TEXT NOT NULL, records_payload TEXT NOT NULL
       );
     `);
-    migrateDatabase(this.db);
+    migrateDatabase(this.db, this.startupProgress);
     for (const row of this.db.prepare("SELECT project_id, payload FROM workspaces").all() as { project_id: string; payload: string }[]) {
       const binding = JSON.parse(row.payload) as Workspace;
       if (!binding.bindingID) {

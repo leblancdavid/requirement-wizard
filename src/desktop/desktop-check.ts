@@ -57,7 +57,15 @@ try {
     assert.equal(await page.evaluate(() => window.reqwizitDesktop!.titleBarOverlay), true);
     assert.equal(await page.evaluate(() => (navigator as Navigator & { windowControlsOverlay?: { visible: boolean } }).windowControlsOverlay?.visible), true);
     assert.equal(await page.locator(".desktop-titlebar").evaluate((element) => getComputedStyle(element).getPropertyValue("app-region")), "drag");
-    assert.equal(await page.locator(".topbar").evaluate((element) => getComputedStyle(element).top), "36px");
+    const checkHeader = async () => {
+      const geometry = await page.evaluate(() => {
+        const title = document.querySelector(".desktop-titlebar")!.getBoundingClientRect(), header = document.querySelector(".topbar")!.getBoundingClientRect(), content = document.querySelector(".tab-content")!.getBoundingClientRect();
+        return { titleBottom: title.bottom, headerTop: header.top, headerBottom: header.bottom, contentTop: content.top };
+      });
+      assert.ok(Math.abs(geometry.headerTop - geometry.titleBottom) < 1, `Header meets native title bar without a second gap: ${JSON.stringify(geometry)}`);
+      assert.ok(Math.abs(geometry.contentTop - geometry.headerBottom) < 1, `Header does not overlap workspace content: ${JSON.stringify(geometry)}`);
+    };
+    await checkHeader();
     // Keep native resizing/maximize/minimize available with the hidden title bar.
     assert.deepEqual(await desktop.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0]!;
@@ -65,10 +73,15 @@ try {
     }), [true, true, true, true]);
     await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.maximize());
     await expect.poll(() => desktop!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMaximized())).toBe(true);
+    await checkHeader();
     await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.unmaximize());
     await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.minimize());
     await expect.poll(() => desktop!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMinimized())).toBe(true);
     await desktop.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]!; window.restore(); window.focus(); });
+    await checkHeader();
+    await page.evaluate(() => document.documentElement.style.fontSize = "18px");
+    await checkHeader();
+    await page.evaluate(() => document.documentElement.style.removeProperty("font-size"));
     // Exercise the real native setter before capturing theme updates at the IPC boundary.
     await page.evaluate(() => window.reqwizitDesktop!.setTitleBarColors("#176b91", "#ffffff"));
     await desktop.evaluate(({ BrowserWindow }) => {

@@ -34,6 +34,7 @@ function DefinitionMixedControls({ project, actions, disabled }: { project: Proj
   const [attempt, setAttempt] = useState<DefinitionMixedReviewRequest | null>(null), [uncertain, setUncertain] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const catalogFresh = !!catalog && keyOf({ epicID: catalog.epicID, revision: catalog.revision, snapshotKey: catalog.snapshotKey }) === targetKey;
+  const hasSources = catalogFresh && (catalog.publications.some((p) => p.status === "verified" && p.origins.length) || catalog.scopes.some((s) => s.status === "verified" && s.provenance.origins.length));
   const parsed = definitionMixedReviewRequestSchema.safeParse({ ...target, selections: dimensions.map((d) => selected[d]).filter(Boolean) });
   const request = parsed.success && (catalogFresh || selectionBasis === targetKey) ? parsed.data : null, key = request ? keyOf(request) : "";
   const previewFresh = !!request && !!preview && keyOf(preview.request) === key, running = !!view && live(view);
@@ -65,7 +66,7 @@ function DefinitionMixedControls({ project, actions, disabled }: { project: Proj
         ...(more === "scopes" && catalog?.nextBeforeScope ? { beforeScope: catalog.nextBeforeScope } : {}) });
       if (page.status !== "recorded" || page.projectID !== project.id || keyOf({ epicID: page.epicID, revision: page.revision, snapshotKey: page.snapshotKey }) !== targetKey) throw new Error();
       // Replace, never accumulate an unbounded archive. Selections survive paging.
-      setCatalog(page); if (!more) setSelected({}); setNotice("Bounded source page loaded. Select one exact source per dimension; at least one must be scoped. Compatibility is checked only for the complete selection.");
+      setCatalog(page); if (!more) setSelected({}); setNotice("");
     } catch { setError("Sources could not be verified. No AI work was started."); }
     finally { setBusy(false); }
   };
@@ -124,28 +125,31 @@ function DefinitionMixedControls({ project, actions, disabled }: { project: Proj
     finally { setBusy(false); }
   };
   return <section aria-label="Mixed review controls" style={{ overflowWrap: "anywhere" }}>
-    <p>Pilot: check nine unchanged original findings together against all captured project evidence and every original scoped concern. Starting a check never publishes assessments, updates scores, approves choices or changes implementation. Applying findings requires a separate saved review and fresh confirmation below.</p>
-    <p>Uses selected {project.model.providerID}/{project.model.modelID} connection; two minutes, at most one AI request. Completed results and valid saved replies reuse without a new request. Failed spent attempts need fresh consent. No research/tools or automatic follow-up. Live quality and effective tool restrictions remain unqualified.</p>
+    <p>Optional experiment: check whether findings from different saved reviews fit together. This is not needed for normal definition refresh or project progress.</p>
+    <details><summary>How this experiment works</summary><p>All captured project evidence and every original scoped concern are retained. Starting a check does not publish an assessment or change implementation. Applying findings requires a separate saved review and fresh confirmation.</p><p>Uses selected {project.model.providerID}/{project.model.modelID} connection; two minutes, at most one AI request. Completed results and valid saved replies reuse without a new request. Failed spent attempts need fresh consent. No research/tools or automatic follow-up. Live quality and effective tool restrictions remain unqualified.</p></details>
     <label>Mixed review area<select aria-label="Mixed review area" value={epicID} disabled={busy || uncertain} onChange={(e) => { setEpicID(e.target.value); setConsentKey(""); setCheckedKey(""); setSelected({}); }}>{project.epics.filter((e) => !e.archived).map((e) => <option key={e.id} value={e.id}>{e.title}</option>)}</select></label>
     <button type="button" className="secondary progress-action" disabled={busy || uncertain} onClick={() => void load()}>Load mixed finding sources</button>
     {catalogFresh && <>
-      <fieldset disabled={busy || uncertain}><legend>One original source for each dimension</legend>{dimensions.map((d) => {
+      {!hasSources ? <div className="source-empty-state" role="status"><strong>No eligible saved sources on this page</strong><p>This experimental check needs original source records from a supported definition review and/or completed scoped reviews. Older assessments may not contain these records. Your existing assessments and implementation progress are still retained.</p><p>You do not need this tool to continue. Use the normal definition refresh from Overall progress. Do not reset the project or repeat reviews just to populate these menus.</p></div>
+        : <p>Choose exact original sources only if you are testing this experimental workflow. At least one must be a completed scoped review. Missing dimensions are marked below; try older source pages if available. Compatibility is checked for the complete selection.</p>}
+      {hasSources && <fieldset disabled={busy || uncertain}><legend>One original source for each dimension</legend>{dimensions.map((d) => {
         const choices: Array<{ selection: Selection; label: string }> = [];
         for (const p of catalog.publications) if (p.status === "verified" && p.origins.some((o) => o.dimension === d)) choices.push({ selection: { kind: "publication", dimension: d, assessmentRevision: p.assessmentRevision, certificateKey: p.certificateKey }, label: `Publication v${p.assessmentRevision} · ${p.origins.find((o) => o.dimension === d)!.publishedAt}` });
         for (const s of catalog.scopes) if (s.status === "verified" && s.provenance.origins.some((o) => o.dimension === d)) choices.push({ selection: { kind: "scoped", dimension: d, jobID: s.jobID, provenanceKey: s.provenance.provenanceKey }, label: `Scoped · ${s.provenance.origins[0]!.respondedAt} · ${s.jobID}` });
         if (selected[d] && !choices.some((c) => keyOf(c.selection) === keyOf(selected[d]))) choices.unshift({ selection: selected[d]!, label: "Selected exact source from earlier page" });
-        return <label key={d}>{dimensionLabels[d]}<select aria-label={`Mixed source: ${dimensionLabels[d]}`} value={selected[d] ? keyOf(selected[d]) : ""} onChange={(e) => { setSelected((old) => ({ ...old, [d]: e.target.value ? JSON.parse(e.target.value) : undefined })); setConsentKey(""); setCheckedKey(""); }}><option value="">Choose source</option>{choices.map((c) => <option key={keyOf(c.selection)} value={keyOf(c.selection)}>{c.label}</option>)}</select></label>;
-      })}</fieldset>
+        return <label key={d}>{dimensionLabels[d]}<select disabled={!choices.length} aria-label={`Mixed source: ${dimensionLabels[d]}`} value={selected[d] ? keyOf(selected[d]) : ""} onChange={(e) => { setSelected((old) => ({ ...old, [d]: e.target.value ? JSON.parse(e.target.value) : undefined })); setConsentKey(""); setCheckedKey(""); }}><option value="">{choices.length ? "Choose source" : "No eligible saved source on this page"}</option>{choices.map((c) => <option key={keyOf(c.selection)} value={keyOf(c.selection)}>{c.label}</option>)}</select></label>;
+      })}</fieldset>}
       <p>{catalog.publications.filter((p) => p.status === "unavailable").length + catalog.scopes.filter((s) => s.status === "unavailable").length} sources unavailable on this page. Unproved sources cannot be selected.</p>
       {catalog.nextBeforeRevision && <button type="button" className="secondary progress-action" disabled={busy || uncertain} onClick={() => void load("publications")}>Older publication sources</button>}
       {catalog.nextBeforeScope && <button type="button" className="secondary progress-action" disabled={busy || uncertain} onClick={() => void load("scopes")}>Older scoped sources</button>}
     </>}
     <p>Opening this view, selecting sources and reading status never start AI work. Check saved status and preview exact sources before consenting.</p>
-    <button type="button" className="secondary progress-action" disabled={busy || !(uncertain && attempt || request)} onClick={() => void inspect()}>Check saved mixed task</button>
+    <div hidden={!request && !attempt && !view}><button type="button" className="secondary progress-action" disabled={busy || !(uncertain && attempt || request)} onClick={() => void inspect()}>Check saved mixed task</button></div>
     <button type="button" className="secondary progress-action" disabled={busy || uncertain} onClick={() => void inspect(true)}>Load latest mixed review</button>
     {previewFresh && <section aria-label="Mixed selection preview"><p>Exact nine-finding candidate · version {preview.request.revision} · complete captured context {preview.characters} characters. Candidate only; not publication authority.</p><OriginalFindings assembly={preview.assembly} /></section>}
-    <label><input type="checkbox" checked={!!key && consentKey === key} disabled={!previewFresh || !key || busy || disabled || running || !!tracking || uncertain || checkedKey !== key} onChange={(e) => setConsentKey(e.target.checked ? key : "")} />Allow at most one AI request for these exact mixed sources and inputs</label>
+    <div hidden={!request && !attempt && !view}><label><input type="checkbox" checked={!!key && consentKey === key} disabled={!previewFresh || !key || busy || disabled || running || !!tracking || uncertain || checkedKey !== key} onChange={(e) => setConsentKey(e.target.checked ? key : "")} />Allow at most one AI request for these exact mixed sources and inputs</label>
     <button type="button" className="secondary progress-action" disabled={!previewFresh || !key || busy || disabled || running || !!tracking || uncertain || checkedKey !== key || consentKey !== key} onClick={() => void start()}>Start mixed review</button>
+    </div>
     {tracking && <p role="status">Reading saved mixed status. Closing this view stops polling, not the task.</p>}{notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
     {view && <section aria-label="Saved mixed review result"><p>Mixed review · {view.jobStatus} · input version {view.request.revision}</p>
       {(view.request.revision !== project.revision || view.request.snapshotKey !== snapshotKey) && <p role="status">Project inputs changed since this review. Dated evidence is not current compatibility proof.</p>}
@@ -161,6 +165,6 @@ function DefinitionMixedControls({ project, actions, disabled }: { project: Proj
       {evidence?.jobID === view.jobID && <OriginalFindings assembly={evidence.assembly} />}
       <p>Review evidence only. Assessment publication, automatic skips and product approvals are disabled here; scores and implementation evidence are unchanged.</p><LogLink target={view.jobID} />
     </section>}
-    {actions.publication && <MixedPublicationControls project={project} epicID={epicID} jobID={view?.jobStatus === "completed" ? view.jobID : undefined} actions={actions.publication} disabled={disabled || busy || uncertain || running} />}
+    {actions.publication && <details><summary>Saved experimental reviews</summary><MixedPublicationControls project={project} epicID={epicID} jobID={view?.jobStatus === "completed" ? view.jobID : undefined} actions={actions.publication} disabled={disabled || busy || uncertain || running} /></details>}
   </section>;
 }

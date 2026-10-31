@@ -8,6 +8,10 @@ semantic/live-provider qualification. Tests use synthetic adapters, not live inf
 
 ## Three separate permissions
 
+These optional experiments are in **Settings → Advanced assessment tools**, not Overall
+progress. For everyday use, simply refresh definition coverage from Overall progress; missing
+experimental source records do not invalidate saved assessments or require another model call.
+
 1. **Start mixed review** authorizes at most one consistency request, not publication.
 2. **Preview mixed findings for review → Save reviewed mixed findings** retains an immutable
    local content acknowledgement, not a replacement assessment or product decision.

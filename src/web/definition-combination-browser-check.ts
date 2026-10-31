@@ -9,7 +9,7 @@ import { definitionPublicationKey as digest, type DefinitionPublication } from "
 import type { DefinitionJointResponse } from "../core/definition-joint-review.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, assessmentTools } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -48,8 +48,7 @@ try {
     if (request.url().endsWith("/definition-combination-apply")) applyWrites++;
   });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+  const dialog = await assessmentTools(page);
   const inspector = dialog.getByRole("region", { name: "Original definition finding sources", exact: true });
   const disclosure = inspector.getByText("Inspect original finding sources", { exact: true });
   await disclosure.focus(); await page.keyboard.press("Enter"); await inspector.getByLabel("Source area", { exact: true }).selectOption("orders");
@@ -100,8 +99,8 @@ try {
     await expect(applyButton).toHaveCount(0); assert.equal(applyWrites, 1);
     assert.deepEqual(store.get(p.id).assessments, original.assessments); assert.equal(store.execution(p.id).definitionRevision, undefined);
     await eligibility.click(); await expect(applyPanel.getByRole("alert")).toContainText("not eligible now");
-    await dialog.getByRole("button", { name: "Close progress", exact: true }).click(); await page.reload();
-    await page.getByRole("button", { name: /Overall progress/ }).click(); await disclosure.click();
+    await dialog.getByRole("button", { name: "Close assessment tools", exact: true }).click(); await page.reload();
+    await assessmentTools(page); await disclosure.click();
     await inspector.getByLabel("Source area", { exact: true }).selectOption("orders"); await historyDisclosure.click();
     await historyPanel.getByRole("button", { name: "Load saved combination reviews", exact: true }).click();
     await historyPanel.getByRole("button", { name: /^Open reviewed version / }).click();
@@ -145,8 +144,8 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.ok((await preview.boundingBox())!.height >= 44);
     await page.screenshot({ path: ".reqwizit-state/browser-definition-combination-mobile.png", fullPage: true });
-    await dialog.getByRole("button", { name: "Close progress", exact: true }).click(); await page.reload();
-    await page.getByRole("button", { name: /Overall progress/ }).click(); await disclosure.click();
+    await dialog.getByRole("button", { name: "Close assessment tools", exact: true }).click(); await page.reload();
+    await assessmentTools(page); await disclosure.click();
     await expect(contents).toHaveCount(0); assert.equal(previewReads, 1); assert.equal(calls, 0);
     assert.equal(saves, 1); assert.equal(historyReads, 1); assert.equal(reviewReads, 1, "Reload never replays a content-review acknowledgement or history read");
     await inspector.getByLabel("Source area", { exact: true }).selectOption("orders"); await historyDisclosure.click();

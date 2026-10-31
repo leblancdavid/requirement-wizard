@@ -22,6 +22,7 @@ import { definitionMixedRunBytes, readDefinitionMixedRun } from "./definition-mi
 import { definitionMixedReviewMarkerSchema } from "../core/definition-mixed-review.js";
 import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-publication.js";
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
+import { reportStartup, type StartupProgress } from "../core/startup.js";
 
 export const databaseSchemaVersion = 23;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
@@ -205,10 +206,11 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
  * or filesystem publication. Original execution payloads are backed up in SQLite. */
-export function migrateDatabase(db: Database.Database) {
+export function migrateDatabase(db: Database.Database, progress?: StartupProgress) {
   db.transaction(() => {
     let version = db.pragma("user_version", { simple: true }) as number;
     if (version > databaseSchemaVersion) throw new Error("Unsupported project database version.");
+    if (version < databaseSchemaVersion) reportStartup(progress, "upgrading-data");
     for (const migration of migrations) if (version < migration.version) {
       migration.apply(db);
       db.prepare("INSERT INTO migration_history VALUES (?, ?, ?)").run(migration.version, migration.name, new Date().toISOString());
@@ -216,6 +218,7 @@ export function migrateDatabase(db: Database.Database) {
       version = migration.version;
     }
     // Refuse future/corrupt payloads even when the database schema is supported.
+    reportStartup(progress, "checking-data");
     for (const row of db.prepare("SELECT project_id, review_id FROM definition_mixed_saved_reviews").iterate() as Iterable<{ project_id: string; review_id: string }>) {
       if (readMixedSavedReview(db, row.project_id, row.review_id).status !== "recorded") throw new Error(`Saved mixed review is unsupported or exceeds ${definitionMixedSavedReviewBytes} bytes. Saved evidence was not overwritten.`);
     }

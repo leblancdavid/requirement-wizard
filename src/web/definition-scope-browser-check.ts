@@ -5,7 +5,7 @@ import { ProjectStore } from "../storage/store.js";
 import { emptyExecution } from "../core/execution.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, assessmentTools } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import type { dimensions } from "../core/definition-dimensions.js";
 
@@ -34,8 +34,7 @@ try {
   let starts = 0, reads = 0;
   page.on("request", (request) => { if (request.url().endsWith("/definition-scope-start")) starts++; if (request.url().endsWith("/definition-scope-status")) reads++; });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
-  await page.getByRole("button", { name: /Overall progress/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Project progress", exact: true });
+  const dialog = await assessmentTools(page);
   const disclosure = dialog.getByText("Review selected definition dimensions (pilot)", { exact: true });
   await disclosure.focus(); await page.keyboard.press("Enter");
   const controls = dialog.getByRole("region", { name: "Scoped review controls", exact: true });
@@ -60,7 +59,7 @@ try {
   await expect(consent).toBeDisabled(); await inspect.click(); await consent.check(); await start.click();
   await expect(result).toContainText("Scoped review · running"); assert.equal(calls, 2);
   await page.reload(); const afterReload = reads;
-  await page.getByRole("button", { name: /Overall progress/ }).click(); await disclosure.click();
+  await assessmentTools(page); await disclosure.click();
   await controls.getByLabel("Scoped review area", { exact: true }).selectOption("orders");
   assert.equal(reads, afterReload, "Reload/open/selection never start a status read or retry");
   await controls.getByRole("button", { name: "Load latest scoped review", exact: true }).click();

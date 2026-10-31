@@ -624,7 +624,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const directory = resolve(values["data-dir"] ?? defaultDataDirectory());
     const port = Number(values.port ?? "4317");
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid port.");
-    const store = new ProjectStore(join(directory, "projects.sqlite"));
+    const startupAt = Date.now();
+    const store = new ProjectStore(join(directory, "projects.sqlite"), (phase) => console.info(`Startup: ${phase} (${Date.now() - startupAt} ms)`));
     store.recoverExpiredJobs();
     try {
       const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));

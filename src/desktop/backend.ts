@@ -7,6 +7,7 @@ import { ConnectedDiscovery } from "../providers/discovery.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
 import { startApp } from "../web/server.js";
+import type { StartupPhase } from "../core/startup.js";
 
 if (!parentPort) throw new Error("Desktop backend requires an owning worker.");
 const port = parentPort;
@@ -16,8 +17,11 @@ let backend: Awaited<ReturnType<typeof startApp>> | undefined;
 let closing: Promise<void> | undefined;
 
 async function start() {
-  store = new ProjectStore(join(directory, "projects.sqlite"));
+  const progress = (phase: StartupPhase) => port.postMessage({ type: "startup", phase });
+  store = new ProjectStore(join(directory, "projects.sqlite"), progress);
+  progress("recovering-work");
   store.recoverExpiredJobs();
+  progress("starting-workspace");
   const connections = new ConnectionManager(new CredentialStore(join(directory, "providers")));
   const options = { store, connections, catalog: new OpenCodeCatalog(join(directory, "runtime")), adapter: new ConnectedDiscovery(connections, new OpenCodeDiscovery(join(directory, "runtime"))), staticDir };
   try { backend = await startApp({ ...options, port: 4318 }); }
