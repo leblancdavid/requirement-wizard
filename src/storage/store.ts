@@ -42,6 +42,9 @@ import type { DefinitionJointView } from "../core/definition-joint-view.js";
 import { definitionJointUsageQuerySchema, definitionJointUsageReport, type DefinitionJointUsageSource } from "../core/definition-joint-usage.js";
 import { combinationUsageSources } from "./definition-combination-usage.js";
 import { DefinitionScopeReviewStore, readDefinitionScopeRun, inspectDefinitionScopeRun } from "./definition-scope-review.js";
+import { DefinitionMixedReviewStore, readDefinitionMixedRun } from "./definition-mixed-review.js";
+import { definitionMixedReviewMarkerSchema } from "../core/definition-mixed-review.js";
+import { inspectDefinitionMixedCatalog, inspectDefinitionMixedStatus } from "./definition-mixed-view.js";
 import { definitionReviewScopeMarkerSchema } from "../core/definition-review-scope.js";
 import { previewDefinitionCombination } from "./definition-combination-preview.js";
 import { definitionCombinationReviewSchema, definitionCombinationReviewBytes } from "../core/definition-combination-review.js";
@@ -85,7 +88,11 @@ import { questionReviewFingerprint, reviewFingerprint, validateRequirementEviden
 /** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
 function readStoredJob(payload: string): Job {
   const job = JSON.parse(payload) as Job;
-  if (job.kind !== undefined && !["scan", "definition-joint-review", "definition-scope-review"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
+  if (job.kind !== undefined && !["scan", "definition-joint-review", "definition-scope-review", "definition-mixed-review"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
+  if (job.kind === "definition-mixed-review" || job.context?.definitionMixedReview) {
+    definitionMixedReviewMarkerSchema.parse(job.context?.definitionMixedReview);
+    if (job.kind !== "definition-mixed-review") throw new Error("Mixed review marker cannot masquerade as ordinary discovery. Saved evidence was not overwritten.");
+  }
   if (job.context?.definitionJointReview) definitionJointReviewMarkerSchema.parse(job.context.definitionJointReview);
   if (job.kind === "definition-scope-review" || job.context?.definitionScopeReview) {
     definitionReviewScopeMarkerSchema.parse(job.context?.definitionScopeReview);
@@ -1545,6 +1552,23 @@ export class ProjectStore {
   finishDefinitionScopeReview(jobID: string, deadline = Number.POSITIVE_INFINITY) { return this.scopedReviews().finish(jobID, deadline); }
   definitionScopeReview(jobID: string) { return readDefinitionScopeRun(this.db, jobID); }
   inspectDefinitionScopeReview(projectID: string, query: unknown) { return this.db.transaction(() => inspectDefinitionScopeRun(this.db, projectID, query)).deferred(); }
+  inspectDefinitionScopeProvenance(projectID: string, query: unknown) { return this.db.transaction(() => this.scopedReviews().provenance(projectID, query)).deferred(); }
+  private mixedReviews() {
+    return new DefinitionMixedReviewStore(this.db, { begin: (id, revision) => {
+      this.recoverExpiredJobs(); const blocker = this.assessmentRecoveryBlocker(id);
+      if (blocker) throw new OperationConflictError(`Mixed review requires an idle, paused workspace with resolved input. ${blocker}`);
+      const started = this.beginJob(id, revision); this.pauseQueue(id, true); return started;
+    }, get: (id) => this.getJob(id), save: (job) => this.saveJob(job) }, this.scopedReviews());
+  }
+  prepareDefinitionMixedReview(projectID: string, request: unknown) { return this.db.transaction(() => this.mixedReviews().prepare(projectID, request)).deferred(); }
+  beginDefinitionMixedReview(projectID: string, input: unknown) { return this.mixedReviews().begin(projectID, input); }
+  reserveDefinitionMixedReview(jobID: string) { return this.mixedReviews().reserve(jobID); }
+  recordDefinitionMixedResponse(jobID: string, response: unknown) { return this.mixedReviews().response(jobID, response); }
+  finishDefinitionMixedReview(jobID: string, deadline = Number.POSITIVE_INFINITY) { return this.mixedReviews().finish(jobID, deadline); }
+  definitionMixedReview(jobID: string) { return readDefinitionMixedRun(this.db, jobID); }
+  inspectDefinitionMixedReview(projectID: string, query: unknown) { return this.db.transaction(() => this.mixedReviews().inspect(projectID, query)).deferred(); }
+  definitionMixedCatalog(projectID: string, query: unknown) { return this.db.transaction(() => inspectDefinitionMixedCatalog(this.db, this.scopedReviews(), projectID, query)).deferred(); }
+  definitionMixedStatus(projectID: string, query: unknown) { return this.db.transaction(() => inspectDefinitionMixedStatus(this.db, projectID, query)).deferred(); }
   previewDefinitionCombination(projectID: string, input: unknown) {
     return this.db.transaction(() => previewDefinitionCombination(this.db, projectID, input)).deferred();
   }

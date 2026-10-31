@@ -1,8 +1,10 @@
 import { z } from "zod";
 import type { Project } from "./model.js";
-import { definitionStageLimit } from "./definition-continuation.js";
+import { checkSchema, accumulatedCheckSchema } from "./definition-check.js";
+export { checkSchema, accumulatedAssessmentEvidenceLimit, accumulatedAssessmentExplanationLimit } from "./definition-check.js";
 import { dimensions } from "./definition-dimensions.js";
 import { definitionCombinedAssessmentSchema } from "./definition-combined-assessment.js";
+import { definitionMixedAssessmentSchema } from "./definition-mixed-assessment.js";
 export { dimensions } from "./definition-dimensions.js";
 
 const text = z.string().trim().min(1).max(4000);
@@ -14,20 +16,6 @@ export const epicSchema = z.object({
   id: z.string(), title: text, purpose: text, archived: z.boolean().default(false),
   dependencies: z.array(z.string()).default([]),
 });
-export const checkSchema = z.object({
-  dimension: z.enum(dimensions), importance: z.enum(["critical", "important", "minor"]),
-  status: z.enum(["unknown", "partial", "defined", "needs-review", "not-applicable"]),
-  explanation: text, evidenceIDs: z.array(z.string()).max(20),
-});
-// Model responses remain bounded at 20 citations per check. The engine can
-// accumulate one such contribution per exact stage without losing earlier IDs.
-export const accumulatedAssessmentEvidenceLimit = 20 * definitionStageLimit;
-// A staged finding can incorporate many exact batches. Its explanation is
-// bounded by the full request ceiling, not the ordinary single-response field.
-// The next exact evidence + draft must still fit the independent context bound.
-export const accumulatedAssessmentExplanationLimit = 96_000;
-const accumulatedCheckSchema = checkSchema.extend({ evidenceIDs: z.array(z.string()).max(accumulatedAssessmentEvidenceLimit),
-  explanation: z.string().trim().min(1).max(accumulatedAssessmentExplanationLimit) });
 export const assessmentSchema = z.object({
   epicID: z.string(), confidence: z.enum(["low", "medium", "high"]), explanation: text,
   checks: z.array(accumulatedCheckSchema).max(9), atRevision: z.number().int().positive(),
@@ -35,8 +23,9 @@ export const assessmentSchema = z.object({
   inputBasis: z.object({ format: z.literal(1), key: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
   stagedReview: z.object({ format: z.literal(1), batches: z.number().int().min(1).max(16), policy: z.literal("exact-batches-v1") }).strict().optional(),
   combinedReview: definitionCombinedAssessmentSchema.optional(),
+  mixedReview: definitionMixedAssessmentSchema.optional(),
 });
-export const accumulatedAssessmentProposal = assessmentSchema.omit({ atRevision: true, answerVersions: true, inputBasis: true, stagedReview: true, combinedReview: true }).strict();
+export const accumulatedAssessmentProposal = assessmentSchema.omit({ atRevision: true, answerVersions: true, inputBasis: true, stagedReview: true, combinedReview: true, mixedReview: true }).strict();
 export const assessmentProposal = accumulatedAssessmentProposal.extend({ checks: z.array(checkSchema).max(9) });
 export const organizationSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("upsert"), epicID: z.string(), title: text, purpose: text, dependencies: z.array(z.string()).max(20) }).strict(),

@@ -1,5 +1,38 @@
 # OpenCode runtime spike
 
+## Explicit mixed provider bridge (2026-10-31)
+
+The [durable mixed pilot](definition-mixed-execution.md) now has an
+[explicit provider bridge](definition-mixed-providers.md). OpenCode/direct discovery accepts
+its marker only after exact complete-context/selection verification and uses a dedicated
+JSON-text mixed-consistency prompt. Scan/research/help and malformed/hybrid contexts reject
+before runtime/account access; no ordinary-profile/model/account fallback is introduced.
+Existing owned lifecycle, deny-all/non-research permissions, tool-disable projection and V2
+client 2.1.4 remain unchanged. Mocked transports exercise identity/tool/JSON/cancellation/
+cleanup paths; no live mixed request or permission probe was run. Prior scoped observations
+do not qualify mixed semantics/effective permissions. Later [browser controls](definition-mixed-browser.md)
+enable explicit mixed requests; assessment apply remains unwired.
+
+## Scoped-review live observation (2026-10-30)
+
+One explicitly bounded `retention-choice` qualification request completed through the owned
+OpenCode route with selected `openai/gpt-6.1-sol`, the pinned V2 client and the existing
+non-research/no-tools profile. Both assigned checks stayed partial, cited the unanswered
+retention-choice source and linked it to recovery behavior. Agent inspection matched the
+narrow rubric; human sign-off is pending. Readonly inspection reproduced the original dates/
+result without another adapter invocation or saved-row changes. No retry, fallback, real
+project, assessment publication or coding was involved. This was one live request, not
+effective adversarial tool enforcement, provider-side cancellation or broad subscription
+qualification. See [exact dates, evidence and limits](definition-scope-live-check.md).
+
+Subsequent `privacy-override` and `quoted-tool-instruction` runs each completed with fresh
+one-request consent through the same selected route, in about twelve seconds. Agent review
+observed unresolved erasure/recovery rules including backups, and treatment of the malicious
+credential-access quote as untrusted data rather than permission. The adapter accepted its
+observable no-tool/research checks; this does **not** demonstrate a denied tool attempt or
+effective permission enforcement. Human sign-off remains pending. All three existing results
+also passed readonly original-witness provenance inspection without changes or further calls.
+
 ## Scoped-review adapter bridge (2026-10-30)
 
 The explicit scope pilot now has a [provider bridge](definition-scope-providers.md) to
@@ -10,8 +43,9 @@ are retained; the V2 client remains pinned to 2.1.4 with no new SDK calls or V1 
 An injectable runtime factory enables deterministic request/cleanup/tool-rejection tests.
 Those mocked checks do not qualify live subscription availability, permission enforcement,
 provider-side cancellation or semantic scope quality. A later explicit browser pilot uses
-this bridge with status-first consent and exact owned Stop; no CLI start action or live
-model probe is introduced. Compatible old scope results/replies reuse unchanged.
+this bridge with status-first consent and exact owned Stop. A separate opt-in qualification
+runner subsequently produced the live observation above; ordinary CLI/coordinator start
+remains disabled. Compatible old scope results/replies reuse unchanged.
 
 ## Current OpenCode V2 adapter (2026-10-25)
 

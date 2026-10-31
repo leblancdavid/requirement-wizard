@@ -17,6 +17,8 @@ import { startApp } from "../web/server.js";
 import { DiscoveryService } from "./discovery.js";
 import { DiscoveryQueue } from "./queue.js";
 import { definitionScopeViewSchema } from "../core/definition-scope-view.js";
+import { definitionScopeProvenanceSchema, definitionScopedFindingOriginSchema, type DefinitionScopeProvenance } from "../core/definition-scope-provenance.js";
+import { definitionFindingIdentityKey as provenanceDigest, definitionFindingOriginSchema } from "../core/definition-finding-identity.js";
 
 type Packet = Extract<ReturnType<typeof prepareDefinitionReviewScope>, { status: "prepared" }>;
 function fixture() {
@@ -334,5 +336,163 @@ test("scoped status is bounded, readonly and fails closed on damaged newest evid
     db.prepare("UPDATE definition_scope_reviews SET payload = ? WHERE job_id = ?").run(row.payload, second.job.id);
     assert.deepEqual(inspect(), expected);
     assert.equal(f.store.getJob(second.job.id).status, "completed");
+  } finally { db.close(); f.cleanup(); }
+});
+
+test("scoped provenance preserves exact findings, full concerns, original dates and separate source identities without publishing", async () => {
+  const f = fixture(); let calls = 0;
+  try {
+    const input = { ...f.input, request: { ...f.input.request, dimensions: ["data", "rules"] } };
+    const saved = await new DefinitionScopeReviewService(f.store, { async review(packet) {
+      calls++; const response = reply(packet);
+      return { ...response, checks: response.checks.reverse().map((c) => ({ ...c, explanation: "Original text\nΩ <b>quoted</b>" })),
+        crossDimensionConcerns: [{ dimensions: ["rules", "data", "permissions"], explanation: "Original unresolved interaction", evidenceIDs: [packet.scope.recordIDs[0]!] }] };
+    } }).review(f.p.id, input);
+    const jobs = f.store.jobs(f.p.id), view = f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: saved.job.id });
+    assert.equal(view.status, "recorded"); if (view.status !== "recorded") assert.fail();
+    const { provenance } = view;
+    assert.deepEqual(provenance.result, saved.run.result); assert.deepEqual(provenance.request.dimensions, ["rules", "data"]);
+    assert.deepEqual(provenance.origins.map((o) => o.dimension), ["rules", "data"]);
+    for (const origin of provenance.origins) {
+      assert.equal(origin.requestJobID, saved.job.id); assert.equal(origin.completedJobID, saved.job.id);
+      assert.equal(origin.respondedAt, saved.run.respondedAt); assert.equal(origin.completedAt, saved.run.completedAt);
+      assert.equal(origin.inputRevision, f.p.revision); assert.equal(origin.inputSnapshotKey, f.input.request.snapshotKey);
+      assert.equal(origin.findingKey, provenanceDigest(saved.run.result!.checks.find((c) => c.dimension === origin.dimension)));
+      assert.equal(origin.crossDimensionConcernsKey, provenanceDigest(saved.run.result!.crossDimensionConcerns));
+      assert.equal(origin.canPublish, false); assert.equal(origin.canAuthorizeRequests, false); assert.equal(origin.canAuthorizeSkips, false);
+      assert.equal(definitionFindingOriginSchema.safeParse(origin).success, false, "A scoped observation cannot masquerade as an ordinary publication");
+      assert.equal("assessmentRevision" in origin, false); assert.equal("publishedAt" in origin, false);
+    }
+    assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: saved.job.id }), view);
+    assert.deepEqual(f.store.get(f.p.id), f.p); assert.deepEqual(f.store.jobs(f.p.id), jobs); assert.equal(calls, 1);
+    const foreign = f.store.create("Foreign", "Unrelated original input", f.p.model);
+    assert.deepEqual(f.store.inspectDefinitionScopeProvenance(foreign.id, { jobID: saved.job.id }), { status: "unavailable", reason: "not-recorded" });
+    assert.throws(() => f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: saved.job.id, confirmApply: true }));
+  } finally { f.cleanup(); }
+});
+
+test("scoped provenance is dated original evidence, not a current/equal-version compatibility certificate", async () => {
+  const f = fixture(), db = new Database(f.path);
+  try {
+    const saved = await new DefinitionScopeReviewService(f.store, { async review(packet) { return reply(packet); } }).review(f.p.id, f.input);
+    const before = f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: saved.job.id }); assert.equal(before.status, "recorded");
+    const later = f.store.note(f.p.id, f.p.revision, "New preference: erase after thirty days");
+    assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: saved.job.id }), before);
+    db.prepare("UPDATE projects SET payload = json_set(payload, '$.sources[0].text', ?) WHERE id = ?").run("Equal-numbered replacement", later.id);
+    assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: saved.job.id }), before);
+    assert.equal(f.store.get(f.p.id).revision, later.revision); assert.equal(f.store.get(f.p.id).assessments.length, 0);
+  } finally { db.close(); f.cleanup(); }
+});
+
+test("older completed scope results and saved-reply recovery gain no-call provenance without any migration or backfill", async (t) => {
+  const f = fixture(); let calls = 0;
+  try {
+    const mock = t.mock.method(f.store, "finishDefinitionScopeReview", () => { throw new Error("Injected completion loss"); });
+    const service = new DefinitionScopeReviewService(f.store, { async review(packet) { calls++; return reply(packet); } });
+    const original = await service.review(f.p.id, f.input); mock.mock.restore();
+    const completed = await service.review(f.p.id, f.input);
+    const root = structuredClone(f.store.definitionScopeReview(original.job.id)), run = structuredClone(completed.run);
+    f.reopen();
+    const before = f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id });
+    assert.equal(before.status, "recorded"); if (before.status !== "recorded") assert.fail();
+    assert.equal(before.provenance.origins[0]!.requestJobID, original.job.id);
+    assert.equal(before.provenance.origins[0]!.completedJobID, completed.job.id);
+    assert.equal(before.provenance.origins[0]!.respondedAt, original.run.respondedAt);
+    assert.equal(before.provenance.origins[0]!.completedAt, completed.run.completedAt);
+    assert.deepEqual(f.store.definitionScopeReview(original.job.id), root); assert.deepEqual(f.store.definitionScopeReview(completed.job.id), run);
+    f.reopen(); assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id }), before);
+    const reused = await new DefinitionScopeReviewService(f.store, { async review() { assert.fail("No requalification calls for provenance"); } }).review(f.p.id, f.input);
+    assert.equal(reused.job.id, completed.job.id); assert.equal(calls, 1);
+    assert.equal(databaseSchemaVersion, 22); assert.deepEqual(f.store.get(f.p.id), f.p);
+  } finally { f.cleanup(); }
+});
+
+test("scoped provenance rejects incomplete work and damaged original witnesses without fallback or mutations", async () => {
+  const f = fixture(), db = new Database(f.path);
+  try {
+    const pending = f.store.beginDefinitionScopeReview(f.p.id, f.input);
+    assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: pending.job.id }), { status: "unavailable", reason: "scope-not-completed" });
+    f.store.failJob(pending.job.id, "cancelled", "Synthetic setup cancelled");
+    const completed = await new DefinitionScopeReviewService(f.store, { async review(packet) { return reply(packet); } }).review(f.p.id, f.input);
+    const expected = f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id }); assert.equal(expected.status, "recorded");
+    const jobRow = db.prepare("SELECT payload FROM jobs WHERE id = ?").get(completed.job.id) as { payload: string };
+    const job = JSON.parse(jobRow.payload);
+    // The original run has its own completion date. Older optional lifecycle
+    // metadata need not be invented or reacquired by a replacement request.
+    const withoutOptionalTimes = JSON.stringify({ ...job, createdAt: undefined, startedAt: undefined, finishedAt: undefined });
+    db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(withoutOptionalTimes, completed.job.id);
+    assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id }), expected);
+    assert.equal((db.prepare("SELECT payload FROM jobs WHERE id = ?").get(completed.job.id) as { payload: string }).payload, withoutOptionalTimes);
+    for (const changed of [{ ...job, model: { providerID: "other", modelID: "forged" } }, { ...job, kind: undefined },
+      { ...job, finishedAt: "2020-01-01T00:00:00.000Z" }, { ...job, diagnostic: "x".repeat(262145) },
+      { ...job, context: { ...job.context, includedIDs: [] } }]) {
+      const payload = JSON.stringify(changed); db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(payload, completed.job.id);
+      assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id }), { status: "unavailable", reason: "saved-scope-provenance-unproved" });
+      assert.equal((db.prepare("SELECT payload FROM jobs WHERE id = ?").get(completed.job.id) as { payload: string }).payload, payload);
+    }
+    db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(jobRow.payload, completed.job.id);
+    const runRow = db.prepare("SELECT payload FROM definition_scope_reviews WHERE job_id = ?").get(completed.job.id) as { payload: string };
+    for (const payload of ["not-json", JSON.stringify({ ...JSON.parse(runRow.payload), format: 99 }), " ".repeat(192 * 1024 + 1)]) {
+      db.prepare("UPDATE definition_scope_reviews SET payload = ? WHERE job_id = ?").run(payload, completed.job.id);
+      assert.equal(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id }).status, "unavailable");
+    }
+    db.prepare("UPDATE definition_scope_reviews SET payload = ? WHERE job_id = ?").run(runRow.payload, completed.job.id);
+    const source = db.prepare("SELECT payload FROM revisions WHERE project_id = ? AND revision = ?").get(f.p.id, f.p.revision) as { payload: string };
+    db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(" ".repeat(16 * 1024 * 1024 + 1), f.p.id, f.p.revision);
+    assert.equal(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id }).status, "unavailable");
+    db.prepare("UPDATE revisions SET payload = ? WHERE project_id = ? AND revision = ?").run(source.payload, f.p.id, f.p.revision);
+    assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id }), expected);
+  } finally { db.close(); f.cleanup(); }
+});
+
+test("scoped origin declarations reject altered contents/concerns/assignments even with a recomputed wrapper hash", async () => {
+  const f = fixture();
+  try {
+    const saved = await new DefinitionScopeReviewService(f.store, { async review(packet) { return reply(packet); } }).review(f.p.id, f.input);
+    const view = f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: saved.job.id }); if (view.status !== "recorded") assert.fail();
+    for (const edit of [
+      (p: typeof view.provenance) => { p.result.checks[0]!.explanation = "Changed text"; },
+      (p: typeof view.provenance) => { p.result.crossDimensionConcerns.push({ dimensions: ["rules", "data"], explanation: "New concern", evidenceIDs: [] }); },
+      (p: typeof view.provenance) => { p.origins[0]!.requestJobID = "00000000-0000-4000-8000-000000000000"; },
+      (p: typeof view.provenance) => { p.request.dimensions = ["data"]; },
+      (p: typeof view.provenance) => { p.origins[0]!.inputRevision++; },
+      (p: typeof view.provenance) => { (p as { canPublish: boolean }).canPublish = true; },
+      (p: typeof view.provenance) => { (p as { format: number }).format = 99; },
+    ]) {
+      const changed: DefinitionScopeProvenance = structuredClone(view.provenance); edit(changed);
+      const { provenanceKey: _, ...packet } = changed;
+      assert.equal(definitionScopeProvenanceSchema.safeParse({ ...packet, provenanceKey: provenanceDigest(packet) }).success, false);
+    }
+    const origin = structuredClone(view.provenance.origins[0]!); origin.assignedDimensions = ["data"];
+    const { originKey: _, ...fields } = origin;
+    assert.equal(definitionScopedFindingOriginSchema.safeParse({ ...fields, originKey: provenanceDigest(fields) }).success, false);
+  } finally { f.cleanup(); }
+});
+
+test("scoped recovery provenance rejects missing/live roots, preserves expired workers and never substitutes another task", async (t) => {
+  const f = fixture(), db = new Database(f.path);
+  try {
+    const mock = t.mock.method(f.store, "finishDefinitionScopeReview", () => { throw new Error("Injected durable reply"); });
+    const service = new DefinitionScopeReviewService(f.store, { async review(packet) { return reply(packet); } });
+    const root = await service.review(f.p.id, f.input); mock.mock.restore();
+    const completed = await service.review(f.p.id, f.input);
+    const query = { jobID: completed.job.id }, expected = f.store.inspectDefinitionScopeProvenance(f.p.id, query);
+    assert.equal(expected.status, "recorded");
+    const jobRow = db.prepare("SELECT payload FROM jobs WHERE id = ?").get(root.job.id) as { payload: string };
+    const job = JSON.parse(jobRow.payload);
+    for (const leaseUntil of [Date.now() + 60000, Date.now() - 1]) {
+      const payload = JSON.stringify({ ...job, status: "running", leaseUntil });
+      db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(payload, root.job.id);
+      const view = f.store.inspectDefinitionScopeProvenance(f.p.id, query);
+      if (leaseUntil > Date.now()) assert.equal(view.status, "unavailable"); else assert.deepEqual(view, expected);
+      assert.equal((db.prepare("SELECT payload FROM jobs WHERE id = ?").get(root.job.id) as { payload: string }).payload, payload);
+    }
+    db.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(jobRow.payload, root.job.id);
+    const original = db.prepare("SELECT * FROM definition_scope_reviews WHERE job_id = ?").get(root.job.id) as { project_id: string; job_id: string; scope_key: string; payload: string };
+    db.prepare("DELETE FROM definition_scope_reviews WHERE job_id = ?").run(root.job.id);
+    assert.equal(f.store.inspectDefinitionScopeProvenance(f.p.id, query).status, "unavailable");
+    db.prepare("INSERT INTO definition_scope_reviews (project_id, job_id, scope_key, payload) VALUES (?, ?, ?, ?)").run(original.project_id, original.job_id, original.scope_key, original.payload);
+    assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, query), expected);
+    assert.equal(f.store.jobs(f.p.id).length, 2); assert.deepEqual(f.store.get(f.p.id), f.p);
   } finally { db.close(); f.cleanup(); }
 });

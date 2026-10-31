@@ -1,5 +1,52 @@
 # Architecture outline
 
+`src/core/definition-mixed-view.ts`, `src/storage/definition-mixed-view.ts` and
+`src/ui/definition-mixed-controls.tsx` add explicit bounded source pages, exact candidate preview,
+lightweight dated status and separately requested original-witness display. The web server now
+constructs the mixed bridge/service for explicit consented starts through the discovery queue;
+exact job/kind ownership gates Stop. Reload and uncertain responses require reads, not write
+replay. No automatic coordinator, assessment publisher or persisted-format change is introduced.
+See [browser workflow boundaries](definition-mixed-browser.md).
+
+`src/service/definition-mixed-adapter.ts` explicitly bridges store-verified mixed tasks to
+existing selected OpenCode/direct adapters. Provider preflight reconstructs the frozen
+canonical selection identity and exact full context; private snapshots and sticky callback
+checks bind expected model/research observations. Runtime uses a dedicated JSON-text prompt,
+while direct opts mixed requests into the unchanged strict no-tools/text-inventory profile.
+The bridge itself introduces no API/task scheduling/publication authority or persisted format. See
+[provider boundary versus live qualification](definition-mixed-providers.md).
+
+`definition-mixed-review.ts` in core/storage/service adds exact typed source selections,
+actual ordinary/scoped witness reconstruction and a separately authorized in-process task.
+SQLite 22 records one-request reservation, validated replies, atomic completion and explicit
+no-call recovery, with bounded dated/verified inspection. Explicit browser dispatch now exists;
+automatic coordinator dispatch and apply remain absent. The provider bridge rejects malformed/alternate profiles before startup;
+portable/generic discovery/resume/coverage-baseline paths exclude it. See
+[durable mixed pilot boundaries](definition-mixed-execution.md).
+
+`definition-mixed-assessment.ts` adds a separate persisted mixed-origin reader format,
+exact nine-finding assemblies and structural consistency declarations. Schema-only check/
+scope/provenance modules prevent project-schema cycles while preserving frozen v1 identities.
+`definition-mixed-consistency.ts` builds complete bounded evidence contexts and validates
+dedicated replies, but has no provider, task dispatcher or publisher. SQLite 21 and conditional
+portable state 3 protect the new marker from older readers; old payloads are unchanged.
+The browser displays distinct dates/complete source concerns as declarations, not independent
+authentication. See [implemented reader versus future apply](definition-mixed-assessment.md).
+
+`src/core/definition-scope-provenance.ts` adds distinct scoped-observation origins and a
+whole-result provenance packet, without changing ordinary origin/assessment schemas.
+`ProjectStore.inspectDefinitionScopeProvenance` verifies exact original/root witnesses in
+a bounded readonly transaction. It does not use today's project as the original review.
+The later mixed source catalog explicitly calls it; there is no publisher, migration or automatic caller. See
+[provenance and future assembly gates](definition-scope-provenance.md).
+
+`src/service/definition-scope-qualification.ts` and `scripts/qualify-definition-scope.ts`
+provide offline structural preflight and explicit one-shot OpenCode qualification runs in
+exclusive synthetic directories. Readonly bounded inspection binds case/model/original inputs
+without startup migration or automatic recovery. Reports require human semantic review;
+this harness grants no browser/coordinator/publication authority and changes no app schema.
+See [qualification boundaries](definition-scope-qualification.md).
+
 `src/service/definition-scope-adapter.ts` explicitly bridges scoped tasks to existing
 discovery/provider adapters using an unchanged v1 manifest and authoritative project.
 `runtime/discovery.ts` has a scope-only prompt/profile guard; the direct provider opts

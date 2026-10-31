@@ -58,7 +58,7 @@ export function prepareCombinationApply(db: Database.Database, projectID: string
     currentAssessmentKey: p.currentAssessmentKey, checksKey: digest(checks), guardKey, confidencePolicy: "conservative-low-v1" });
   // Estimate only: final provenance IDs/dates are issued inside the apply transaction.
   const proposal = { ...project.assessments.find((a) => a.epicID === review.epicID), epicID: review.epicID, checks, confidence: "low" as const,
-    explanation: "Proposed combined findings", atRevision: project.revision, answerVersions: {}, combinedReview: undefined,
+    explanation: "Proposed combined findings", atRevision: project.revision, answerVersions: {}, combinedReview: undefined, mixedReview: undefined,
     inputBasis: { format: 1 as const, key: definitionInputKey(project, review.epicID, checks.flatMap((c) => c.evidenceIDs)) } };
   const plan: DefinitionCombinationApplyPlan = { ...query, format: 1, policy: "definition-combination-apply-plan-v1", projectID, epicID: review.epicID,
     previewKey: p.previewKey, applyKey, currentPercent: coverage(project).epics.find((e) => e.epicID === review.epicID)!.percent,

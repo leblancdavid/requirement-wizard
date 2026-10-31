@@ -100,8 +100,10 @@ The separately authorized injected-adapter execution pilot now retains original 
 response witnesses with explicit cancellation/recovery, without downgrading old provenance.
 Provider integration and explicit browser dispatch are implemented with deterministic
 checks; live provider/semantic qualification remains a separate gate.
-Before saving new scoped findings, specify a forward-compatible representation and atomic
-whole-assessment/joint-consistency rules. **Automatic finding-level reuse remains blocked**
+The [readonly original-provenance foundation](definition-scope-provenance.md) now describes
+verified original scoped observations without rebasing them. Before saving findings as
+assessments, add a forward-compatible persisted representation and atomic whole-assessment/
+joint-consistency rules. **Automatic finding-level reuse remains blocked**
 until there is a sound narrower evidence contract plus adversarial and human-reviewed
 qualification. The local output-scope contract alone does not establish that independence.
 

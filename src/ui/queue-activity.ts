@@ -10,7 +10,8 @@ export type QueueActivity = {
 /** Local joint validation has a separate explicit service entry point and must
  * never turn into a generic discovery-resume permission after failure/timeout. */
 export function discoveryResumeJob(job?: Job) {
-  return job?.kind === "definition-joint-review" || job?.context?.definitionJointReview || job?.kind === "definition-scope-review" || job?.context?.definitionScopeReview ? undefined : job;
+  return job?.kind === "definition-joint-review" || job?.context?.definitionJointReview || job?.kind === "definition-scope-review" || job?.context?.definitionScopeReview
+    || job?.kind === "definition-mixed-review" || job?.context?.definitionMixedReview ? undefined : job;
 }
 
 export function queueActivities(project: Project, execution: ExecutionState, implementationActive: boolean, helpJobs: Job[], operation?: string): QueueActivity[] {

@@ -68,7 +68,7 @@ export function definitionImpact(project: Project, epicID: string, original?: Pr
     ...(saved ? { assessmentRevision: saved.atRevision } : {}), comparison: "unavailable", reason: !saved ? "not-assessed" : unavailableReason,
     context: "unknown", findings: dimensions.map((dimension) => ({ dimension, change: saved?.checks.some((c) => c.dimension === dimension) ? "unknown" : "not-recorded" })), reviewPolicy: "existing-whole-area" };
   if (!saved) return base;
-  if (saved.combinedReview) return { ...base, reason: "provenance-mismatch" }; // v1 comparison cannot certify multiple originals or the broader guard.
+  if (saved.combinedReview || saved.mixedReview) return { ...base, reason: "provenance-mismatch" }; // v1 comparison cannot certify multiple originals or the broader guard.
   if (assessments.length !== 1 || new Set(saved.checks.map((c) => c.dimension)).size !== saved.checks.length
     || saved.atRevision > project.revision) return { ...base, reason: "provenance-mismatch" };
   if (!original) return base;

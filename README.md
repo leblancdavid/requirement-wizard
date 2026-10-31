@@ -85,6 +85,25 @@ is fixture-tested with existing adapters. **Overall progress → Review selected
 dimensions (pilot)** now provides status-first consent, dated results, owned Stop and
 explicit reload/lost-response inspection. Live provider qualification, scoped assessment
 publication and automatic reuse remain gated.
+An [opt-in qualification harness](docs/definition-scope-qualification.md) adds offline
+preflight and one-shot, explicitly selected OpenCode experiments with readonly inspection;
+it does not turn structural checks into semantic or live permission qualification.
+[Three bounded live OpenCode scenarios](docs/definition-scope-live-check.md) retained
+retention/recovery uncertainty and handled privacy/quoted-instruction conflicts on agent review;
+human sign-off and effective tool enforcement remain pending. A
+[readonly scoped-provenance foundation](docs/definition-scope-provenance.md) now verifies
+original findings and dates, without publishing assessments or changing saved formats.
+A [mixed-source reader and consistency-contract foundation](docs/definition-mixed-assessment.md)
+now preserves ordinary/scoped origins under SQLite 21 and conditional portable format 3,
+without converting old work.
+The [durable in-process mixed task pilot](docs/definition-mixed-execution.md) now verifies
+actual sources and saves/recovers one-request judgments under SQLite 22. Opening a project starts no work.
+Its [explicit provider bridge](docs/definition-mixed-providers.md) now supports selected
+OpenCode/direct connections with mocked no-tools/exact-model checks.
+**Overall progress → Check mixed original findings (pilot)** now provides
+[explicit source selection/preview, consent, status, owned Stop and saved judgments](docs/definition-mixed-browser.md),
+including lost-response inspection without replay. Live mixed qualification, assessment save/apply
+and automatic reuse remain gated.
 Definition reviews no longer become outdated merely because saving reordered object
 properties. SQLite 12→13 repairs older keys only with proof from their original raw
 snapshot, preserving evidence, history, revisions and spent attempts; real changes

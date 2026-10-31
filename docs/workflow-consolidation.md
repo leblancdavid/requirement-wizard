@@ -15,6 +15,60 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Mixed browser workflow implemented (2026-10-31):** bounded explicit ordinary/scoped source
+  selection, unchanged nine-finding preview/full concerns, status-first fresh consent, selected
+  provider start, reload/status, exact-owned Stop and ambiguous-ack inspection without write replay.
+  Saved judgments preserve original dates/conflicts; explicit witness inspection is separate from
+  polling. No migration, assessment publication, automatic skip or implementation mutation.
+  See [controls and verification](definition-mixed-browser.md).
+
+- **Mixed provider bridge implemented (2026-10-31):** exact selected OpenCode/direct routing,
+  dedicated JSON-text prompt, complete context/source-concern checks, sticky model/research
+  observations and existing deny-tool/direct strict-inventory paths. Mocked transports cover
+  rejection, cancellation/cleanup and no-call old-result/reply reuse; no live mixed call or
+  schema/key/backfill change. Browser source/start/status/owned Stop are now implemented;
+  atomic apply remains next. See [provider restrictions and limits](definition-mixed-providers.md).
+
+- **Durable mixed-consistency pilot implemented (2026-10-30):** exact ordinary certificate/
+  scoped completed-source selection, complete-context rebuilding, one reserved invocation,
+  immutable validated replies, atomic completion, explicit no-call recovery and original-root
+  inspection. SQLite 21→22 is additive; old work, dates, keys and live leases remain intact.
+  Conflicting results are evidence only. No default provider/browser/coordinator dispatch,
+  saved-review/apply or automatic skips. See [task and remaining gates](definition-mixed-execution.md).
+
+- **Mixed-source reader/consistency foundation implemented (2026-10-30):** a distinct marker
+  preserves ordinary/scoped origins, all original concerns and low-confidence nine-finding
+  assemblies. The pure bounded consistency contract binds exact sources/concern inventories
+  and refuses supported retention when an original concern touches a defined finding.
+  SQLite 20→21 and conditional portable 3 preserve older payloads and protect new provenance;
+  no automatic migration calls, provider dispatch or apply authority. Store-authenticated
+  selection and durable injected mixed consistency now exist in the later pilot above;
+  provider/browser dispatch and atomic explicit preview/apply remain next.
+  See [format, migration and remaining work](definition-mixed-assessment.md).
+
+- **Scoped provenance foundation implemented (2026-10-30):** exact-job readonly original/
+  root witness verification now describes scoped origins separately from ordinary publication
+  certificates, preserving full findings/concerns and original reply dates through recovery.
+  No persisted metadata/format/key changes or replacement calls. Two further bounded OpenCode
+  privacy/quoted-instruction cases completed and matched narrow rubrics on agent review;
+  human sign-off/effective tool enforcement remain pending. Persisted mixed-assessment
+  provenance, assembly/joint consistency and explicit apply are still unfinished. See
+  [foundation and next publisher slice](definition-scope-provenance.md).
+
+- **First scoped live observation recorded (2026-10-30):** one two-minute-bounded OpenCode
+  `openai/gpt-6.1-sol` retention-choice request completed in about ten seconds. Agent review
+  observed unresolved retention/recovery findings and matching citations; human sign-off
+  is pending. Repeated readonly inspection preserved exact dates/results and saved rows
+  without further calls. This does not qualify adversarial permissions, other cases/routes,
+  publication or skips. See [dated observation](definition-scope-live-check.md).
+
+- **Scoped qualification harness implemented (2026-10-30):** offline structural preflight
+  plus explicitly consented one-shot OpenCode runs in exclusive synthetic directories.
+  Readonly inspection cannot replay a lost/interrupted attempt. Reports bind case/model/
+  original inputs and retain human semantic review, unknown billing and unqualified effective
+  tool enforcement. The subsequent first live observation is listed above; no application
+  migration, publication or automatic reuse. See [qualification commands and boundaries](definition-scope-qualification.md).
+
 - **Scoped browser pilot implemented (2026-10-30):** Overall progress now exposes exact
   output selection, status-first fresh consent, dated results, exact owned Stop and explicit
   reload/lost-response inspection without write replay. No live qualification, publication

@@ -47,6 +47,10 @@ import { definitionReviewScopeStartSchema } from "../core/definition-review-scop
 import { definitionScopeStatusQuerySchema } from "../core/definition-scope-view.js";
 import { DefinitionScopeReviewService } from "../service/definition-scope-review.js";
 import { definitionScopeDiscoveryAdapter } from "../service/definition-scope-adapter.js";
+import { DefinitionMixedReviewService } from "../service/definition-mixed-review.js";
+import { definitionMixedDiscoveryAdapter } from "../service/definition-mixed-adapter.js";
+import { definitionMixedReviewRequestSchema, definitionMixedReviewStartSchema, definitionMixedReviewInspectSchema } from "../core/definition-mixed-review.js";
+import { definitionMixedCatalogQuerySchema, definitionMixedStatusQuerySchema } from "../core/definition-mixed-view.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -56,6 +60,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
   const service = new DiscoveryService(options.store, options.adapter);
   const queue = new DiscoveryQueue(service);
   const scoped = new DefinitionScopeReviewService(options.store, definitionScopeDiscoveryAdapter(options.adapter));
+  const mixed = new DefinitionMixedReviewService(options.store, definitionMixedDiscoveryAdapter(options.adapter));
   const workflow = new ProjectWorkflow(options.store, options.adapter);
   const implementation = new ImplementationService(options.store, options.executionAdapter);
   const snapshotEncoder = new SnapshotEncoder();
@@ -245,6 +250,27 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         if (implementation.isActive(id) || workflow.active(id)) throw new OperationConflictError("Stop active work before starting a scoped review.");
         json(res, 202, await queue.reviewDefinitionScope(id, input, scoped)); return;
       }
+      if (["definition-mixed-catalog", "definition-mixed-preview", "definition-mixed-status", "definition-mixed-evidence", "definition-mixed-start", "definition-mixed-stop"].includes(action ?? "")) {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        const raw = await body(req);
+        if (action === "definition-mixed-catalog") { json(res, 200, options.store.definitionMixedCatalog(id, definitionMixedCatalogQuerySchema.parse(raw))); return; }
+        if (action === "definition-mixed-preview") {
+          const prepared = options.store.prepareDefinitionMixedReview(id, definitionMixedReviewRequestSchema.parse(raw));
+          json(res, 200, { status: "recorded", projectID: id, request: prepared.request, requestKey: prepared.requestKey,
+            contextKey: prepared.packet.contextKey, characters: prepared.context.manifest.characters, assembly: prepared.assembly }); return;
+        }
+        if (action === "definition-mixed-status") {
+          const view = options.store.definitionMixedStatus(id, definitionMixedStatusQuerySchema.parse(raw));
+          json(res, 200, view.status === "recorded" ? { ...view, owned: queue.ownsDefinitionMixed(id, view.jobID) } : view); return;
+        }
+        if (action === "definition-mixed-evidence") { json(res, 200, options.store.inspectDefinitionMixedReview(id, definitionMixedReviewInspectSchema.parse(raw))); return; }
+        if (action === "definition-mixed-stop") {
+          const input = definitionMixedReviewInspectSchema.parse(raw); queue.stopDefinitionMixed(id, input.jobID); json(res, 200, { stopped: true }); return;
+        }
+        const input = definitionMixedReviewStartSchema.parse(raw);
+        if (implementation.isActive(id) || workflow.active(id)) throw new OperationConflictError("Stop active work before starting a mixed review.");
+        json(res, 202, await queue.reviewDefinitionMixed(id, input, mixed)); return;
+      }
       if (action === "definition-combination-preview") {
         if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
         json(res, 200, options.store.previewDefinitionCombination(id, definitionCombinationPreviewQuerySchema.parse(await body(req)))); return;
@@ -286,7 +312,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
           ...(scan ? { scan: { ...scan, sources: [] } } : {}),
           ...(scan && scanWork ? { scanProgress: { completed: scanWork.batches.filter((batch) => batch.output).length, total: scanWork.batches.length, capturedAt: scan.snapshot.capturedAt,
             resumable: ["failed", "cancelled", "interrupted"].includes(job.status) && job.expectedRevision === project.revision && scanWork.bindingID === options.store.workspace(id)?.bindingID } } : {}) }));
-        const lastRound = jobs.filter((item) => item.status === "completed" && item.kind !== "definition-joint-review" && item.kind !== "definition-scope-review").at(-1);
+        const lastRound = jobs.filter((item) => item.status === "completed" && item.kind !== "definition-joint-review" && item.kind !== "definition-scope-review" && item.kind !== "definition-mixed-review").at(-1);
         const previousCoverage = lastRound ? revisionSnapshot(options.store.get(id, lastRound.expectedRevision)).coverage.percent : null;
         const helpJobs = recent.helpJobs.map(({ result: _, researchEvidence: __, ...job }) => job);
         const snapshot = { ...current, workspace: options.store.syncWorkspace(id), previousCoverage, jobs, helpJobs, active: queue.isActive(id), progress: queue.progress(id), refinementProgress: queue.refinementProgress(id), processingPolicy: options.store.processingPolicy(id), maintenance: queue.maintenanceView(id), workflow: workflow.view(id), submissions: options.store.submissions(id), queuePaused: options.store.queuePaused(id), execution: implementation.snapshot(id), implementationActive: implementation.isActive(id), implementationOperation: implementation.operation(id) };

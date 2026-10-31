@@ -36,7 +36,7 @@ export function retainedDefinitionReviews(before: Project, after: Project): Defi
       || p.assessments.some((a) => new Set(a.checks.map((c) => c.dimension)).size !== a.checks.length)) return unavailable("ambiguous-records");
   }
   const reviews: DefinitionRetention["reviews"] = [];
-  const combinedKeys = before.assessments.some((a) => a.combinedReview) ? [definitionCombinedEvidenceKey(before), definitionCombinedEvidenceKey(after)] : null;
+  const combinedKeys = before.assessments.some((a) => a.combinedReview || a.mixedReview) ? [definitionCombinedEvidenceKey(before), definitionCombinedEvidenceKey(after)] : null;
   for (const epic of before.epics.filter((e) => !e.archived)) {
     if (!after.epics.some((e) => e.id === epic.id && !e.archived)) continue;
     const original = before.assessments.find((a) => a.epicID === epic.id), next = after.assessments.find((a) => a.epicID === epic.id);
@@ -47,6 +47,8 @@ export function retainedDefinitionReviews(before: Project, after: Project): Defi
       || original.inputBasis.key !== definitionInputKey(after, epic.id, citations)) continue;
     if (original.combinedReview && (!combinedKeys || original.combinedReview.guardKey !== combinedKeys[0]
       || original.combinedReview.guardKey !== combinedKeys[1])) continue;
+    if (original.mixedReview && (!combinedKeys || original.mixedReview.assembly.guardKey !== combinedKeys[0]
+      || original.mixedReview.assembly.guardKey !== combinedKeys[1])) continue;
     reviews.push({ epicID: epic.id, title: epic.title, assessmentRevision: original.atRevision,
       inputBasisKey: original.inputBasis.key, assessmentKey: digest(original), checks: original.checks.length });
   }

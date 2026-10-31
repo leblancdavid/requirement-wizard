@@ -1,5 +1,207 @@
 # Data migrations and upgrade compatibility
 
+## Mixed-review browser workflow (2026-10-31)
+
+**No persisted migration.** Source/target SQLite **22**, execution **2**, usage export **2**,
+portable 1/2/3 and all frozen ordinary/scoped/mixed origins, request/assembly/context identities,
+run/result formats and optimistic revision counters remain unchanged. Catalog/status/preview
+responses are transient views; no provider observation or browser metadata is backfilled.
+
+Explicit browser controls now call the existing one-request task and separate read-only source,
+preview, status and original-witness operations. Older completed tasks and valid saved replies
+remain reusable/recoverable without requalification calls, resets or altered dates. Damaged or
+missing newest evidence fails closed rather than substituting older checkpoints. Source pages
+and original-witness reads remain bounded. Read actions do not claim workers, recover replies,
+write receipts or authorize automatic continuation. Exact-owned Stop preserves other workers.
+
+There is no new assessment publisher, saved-review/apply state or implementation fingerprint
+change; existing implementation reuse and dated history remain intact. Original checkpoints
+and spent attempts survive cancellation/late replies and failed atomic completion. Recovery
+requires another explicitly confirmed start and retains the original saved response identity/date.
+See [browser boundary and verification](definition-mixed-browser.md).
+
+Verification: final full `npm test` passed **1,400 tests** (696 pretests + 704 main),
+including dated status across reopen, original-source paging, malformed/missing/orphan newest
+witnesses, exact queue ownership, token/origin/method/consent gates and unchanged old-result reuse.
+Type checking, UI build, all **16 browser runners**, a final dedicated mixed browser rerun
+and diff check passed. Completion-failure browser fixtures preserve the original reply/date
+and recover with zero further adapter calls. No live inference or assessment apply was run.
+
+## Mixed-consistency provider bridge (2026-10-31)
+
+**No persisted format migration.** Source/target SQLite **22**, execution **2**, usage
+export **2**, portable envelopes 1/2/3 and every original request/assembly/context/source/
+response/result policy/key remain unchanged. The bridge reconstructs the existing canonical
+selection identity for verification; it does not rewrite the frozen mixed evidence document,
+instruction, manifest or saved tasks to add provider metadata.
+
+New explicit requests can use exact selected OpenCode/direct routing with dedicated JSON-text
+prompts, no research/tools, actual-model observation checks and the existing direct
+`scoped-no-tools-v1` complete-output inventory profile. Ordinary discovery/help/probe transport
+and credential/refresh ownership are unchanged. No default browser/CLI/coordinator dispatcher
+or publisher is installed merely by constructing the bridge.
+
+Older completed injected-pilot tasks and valid saved replies reuse/recover with unchanged
+original IDs/dates, without another provider call, credential read, reset or metadata backfill.
+Missing old provider observations stay unknown; new bridge availability does not authenticate
+older evidence, confer live-profile qualification or upgrade publication/skip authority.
+Unsupported/malformed contexts fail before new provider work rather than downgrading profiles.
+See [routing, compatibility and qualification limits](definition-mixed-providers.md).
+
+Verification: full `npm test` passed 1,395 tests (691 pretests + 704 main), including
+old saved-reply recovery/completed reuse across reopen without new inference or metadata.
+The final focused mixed/scope adapter, mixed task and native-client rerun passed 62 tests;
+type checking, UI build, all 15 browser runners and `git diff --check` passed. No live mixed
+provider call or permission-enforcement qualification was performed for this change.
+
+## Durable mixed-consistency pilot (2026-10-30)
+
+**SQLite 21 → 22**, `explicit-mixed-review-pilot-v1`, adds local `definition_mixed_reviews`
+and job/marker `definition-mixed-review` / `definition-mixed-review-v1`. Run format 1,
+`definition-mixed-run-v1`, records exact canonical source selections, original request/
+assembly/context identities, explicit one-request consent/reservation, validated reply/date,
+root recovery reference and atomic completion result. Authority is review-evidence-only;
+publication/request/skip flags stay false. No default provider/coordinator/browser dispatcher
+or publisher is registered by the migration.
+
+No old row/history, ordinary/scoped/mixed-reader metadata, frozen fingerprint, concurrency
+counter, grant, source finding or execution evidence is rewritten. No backup/backfill or
+replacement inference is needed because old payloads are unchanged. Existing reader schemas,
+execution **2**, usage export **2** and conditional portable formats 1/2/3 remain. Raw mixed
+jobs/checkpoints are excluded from portable authority; generic discovery/resume/baseline
+paths cannot consume them. The saved v1 mixed builder/document/instruction must stay
+reproducible across future compatible upgrades, not silently invalidate completed work.
+
+Startup validates bounded run/job/marker identities and orphan checkpoints without full
+source-history replay, worker claims or model calls. Transactional failure rolls back ledger/
+schema advancement and new table/index creation where applicable, preserving original data
+for supported repair/retry. Future/oversized/missing or changed source/root witnesses fail
+closed on explicit operations; no older source/checkpoint substitution or automatic paid retry.
+Qualified readonly inspection of older scoped experiments supports SQLite 20/21/22 without
+upgrading the older files or reacquiring provider evidence.
+
+Explicit completion commits result/job atomically. Saved valid replies survive completion
+failure and can recover under a new local task with the original request identity/date and
+zero adapter invocations. Original spent attempts and other workers' live leases are retained.
+No recovery manufactures missing provider, publication or human approval evidence.
+See [task, bounds, recovery and remaining gates](definition-mixed-execution.md).
+
+Verification: type check, **1,374** deterministic tests (670 + 704), UI build, fifteen
+browser runners and diff check passed. Upgrade fixtures preserve original projects/revisions,
+ordinary/scoped evidence and other owners' live leases; completed mixed tasks reopen/reuse
+without another request. Unsupported future mixed checkpoints roll 22 ledger/schema advancement
+back without overwrite and can retry after restoration. Completion-trigger failure rolls
+result/job changes back while preserving the earlier reply for zero-call recovery. Older
+SQLite-20 live scope reports/row digests were reproduced readonly without migration or calls.
+No live inference, publication or automatic skip was introduced by this migration.
+
+## Mixed-source assessment reader boundary (2026-10-30)
+
+**SQLite 20 → 21**, `mixed-assessment-provenance-format-v1`, recognizes optional
+`assessment.mixedReview` format 1 (`definition-mixed-assessment-v1`). It retains exact ordinary
+and scoped observation origins, complete scoped concern/result packets and a bound nine-finding
+assembly/consistency declaration. Authority remains provenance-only; models cannot issue it
+and no new publisher/task dispatcher is registered. Aggregate confidence is conservatively low.
+
+This is a reader boundary, not conversion: no old project/history, semantic key, receipt,
+scope request/result/origin, concurrency counter, grant, execution evidence or live lease is
+rewritten. Existing unmarked/combined reviews retain their previous freshness and export
+formats. Only new mixed markers use the separate conservative complete-project guard; frozen
+v1 input/ordinary/scoped identities remain unchanged. Schema-only extraction preserves old
+field shapes/order/limits and a pinned pre-extraction synthetic scope/context digest.
+
+Startup validates current marked projects within 16 MiB; historical data validates on explicit
+read/adoption. Unsupported future/corrupt/oversized markers reject without overwrite and roll
+back schema/ledger advancement. No backup is needed because old payloads are not modified.
+Retry after supported data is restored leaves valid completed work and other workers intact.
+
+Portable `state.json` writes **format 3 conditionally** for current or referenced historical
+mixed provenance. Normal format 1 and combined-only format 2 output remain unchanged. New
+readers accept 1/2/3, reject mixed declarations hidden in 1/2 and reject future formats;
+older readers reject 3 before dropping origins. Execution schema stays **2**, usage export
+**2**, continuation/workspace envelopes unchanged. Raw scope jobs/sessions/credentials are
+not exported; bounded source observations nested in mixed metadata carry no task authority.
+
+Readonly qualification inspection supports both original SQLite 20 and new 21 without startup
+migration or reacquisition calls. No source format is backfilled merely to expose the new
+reader. Actual mixed source verification, durable consistency and atomic preview/apply remain
+separate upgrade/authorization work. See [format and remaining gates](definition-mixed-assessment.md).
+
+Verification: type check, **1,359** deterministic tests (655 + 704), UI build, fifteen
+browser runners, focused reader/upgrade/consistency cases, offline preflight and diff check
+passed. Tests preserve old raw rows/completed scoped work/live leases through repeated
+20→21 startup, and future marked data rolls schema/ledger advancement back without overwrite
+before successful repair/retry. Current and historical-only format-3 round trips, real folder
+adoption and older-envelope rejection preserve original provenance without local task records.
+Readonly inspection of all three original SQLite-20 live observations reproduced exact reports/
+row digests without migration or calls. No live request was made for this reader boundary.
+
+## Scoped finding provenance foundation (2026-10-30)
+
+**No persisted format migration.** SQLite **20**, execution **2**, usage export **2**,
+portable formats, checkpoint/job/project payloads and frozen semantic keys remain unchanged.
+New `definition-scoped-finding-origin-v1` / `definition-scope-provenance-v1` format-1 packets
+are transient readonly projections, not accepted assessment markers or portable authority.
+Scoped observations remain distinct from ordinary v1 publication origins; no certificate,
+assessment revision, publication date, confidence or human approval is fabricated.
+
+An exact-job in-process inspection verifies bounded original/completed jobs, checkpoints,
+original revision snapshots and root response witnesses within a deferred read transaction.
+Recovered findings keep original response dates/request IDs and separate later completion
+identities. Missing older optional job times use the existing durable run completion date,
+without backfill; conflicting present times reject. Changed/oversized/future/missing witnesses
+return unavailable, never an older substitute, lease claim, repair or new model request.
+
+Existing completed/recovered scope work gains inspection without reset, revised freshness,
+source mutation or calls to acquire new metadata. Ordinary/combined origins are unchanged;
+no source packet is silently converted to a stricter or higher-authority policy. Later
+persisted mixed/scoped assessment publication requires its own forward reader/SQLite/portable
+boundary, complete assembly/consistency policy, consent and upgrade tests. See
+[implemented foundation versus remaining publisher](definition-scope-provenance.md).
+
+Verification: **1,350** deterministic tests (646 + 704), type check, UI build, all fourteen
+browser runners and diff check passed. New fixtures preserve older completed/recovered v1
+packets and optional missing lifecycle metadata across reopen and repeated inspection,
+without backfill or replacement calls; damaged/future/oversized and missing/live root
+witnesses reject without mutation. Three saved live observations also projected unchanged
+original results/dates and saved-row digests. Two new live scenario calls were made for
+qualification, not migration/reacquisition. No app schema/version/freshness change occurred.
+
+## Scoped-review qualification harness (2026-10-30)
+
+**No application migration.** SQLite **20**, execution **2**, usage export **2**, portable
+formats and existing scope/context/response identities remain unchanged. Existing completed
+work requires no reset, backfill or requalification call. This optional tool only creates a
+new synthetic project database in a newly reserved local directory, never a personal database.
+
+New standalone artifact: absent → `qualification.json` **format 1**, policy
+`definition-scope-qualification-v1`, binding case, OpenCode route, exact provider/model,
+original request and creation date. Printed report policy is `definition-scope-qualification-report-v1`.
+Neither artifact has publication/skip/implementation authority or enters portable state.
+Inspection bounds manifest/status/original-snapshot reads, rejects unknown future formats
+and changed case/model witnesses, and uses readonly SQLite with no startup migration.
+
+Exclusive directory creation precedes provider construction. Crash/partial setup retains
+the directory and any completed manifest/checkpoint; repeating the live command fails
+before provider construction, even if no reply was saved. Explicit inspection never claims
+leases, retries inference, recovers replies or repairs missing provenance. Partial/future
+artifacts stay intact for supported/manual inspection rather than being overwritten.
+There is no older harness format to migrate. Future compatible harness changes must preserve
+existing manifests and original evidence rather than require replacement calls.
+See [commands, recovery and qualification limits](definition-scope-qualification.md).
+
+Verification: type check, **1,344** deterministic tests (640 + 704), offline preflight,
+CLI argument/help checks, UI build and diff check passed. New artifact tests preserve
+results across reopen/repeated readonly inspection; partial runs cannot be replayed,
+future/oversized manifests and database formats stay untouched, and changed original
+case/model witnesses reject. No live inference or browser rerun; application formats and
+existing saved work are unchanged.
+
+Subsequent live observation: one new synthetic retention-choice run completed and repeated
+readonly inspection preserved original dates/results and saved rows without additional
+adapter calls. No format, schema, fingerprint or authority changed; nothing was backfilled
+or made current by the check. See [dated evidence and remaining gates](definition-scope-live-check.md).
+
 ## Scoped-review browser exposure (2026-10-30)
 
 **No persisted format migration.** Source/target SQLite **20**, execution **2**, usage

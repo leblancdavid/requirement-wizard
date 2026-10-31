@@ -4,9 +4,10 @@ Status, 2026-10-30: **explicit adapter bridge implemented; deterministic transpo
 passed**. The engine pilot can be constructed with `definitionScopeDiscoveryAdapter`
 around the existing `ConnectedDiscovery`/`OpenCodeDiscovery` adapters. The later
 [browser pilot](browser-workspace.md#scoped-review-browser-pilot-2026-10-30) constructs this
-bridge for explicit consented starts; CLI/coordinator routing, scoped assessment publication
-and automatic finding-level reuse remain disabled. No live scoped model call or provider
-permission probe has been run.
+bridge for explicit consented starts; ordinary CLI/coordinator routing, scoped assessment
+publication and automatic finding-level reuse remain disabled. A separate qualification
+runner has now completed [three bounded live OpenCode scenarios](definition-scope-live-check.md).
+These are not proof of effective permission enforcement or human semantic sign-off.
 
 ## Routing and request boundary
 
@@ -106,9 +107,16 @@ npx tsx --test src/service/definition-scope-adapter.test.ts src/service/definiti
 ```
 
 Explicit browser start/status/owned Stop and ambiguous-response handling are implemented.
-Next: separately bounded live provider/semantic qualification when authorized.
-Scoped publication provenance and genuinely narrower evidence contracts remain separate
-gates. This bridge does not establish independence, readiness or actual requests saved.
+The [qualification harness](definition-scope-qualification.md) now provides offline preflight
+and an opt-in single-request OpenCode runner with readonly inspection and human review rubrics.
+Live OpenCode retention-choice, privacy and quoted-instruction requests completed; their dated
+results and agent reviews are recorded separately, without upgrading authority. Human sign-off, direct live access and
+effective adversarial permission enforcement remain unqualified.
+Next: human review of that saved result, then separately consented broader qualification.
+The [scoped provenance foundation](definition-scope-provenance.md) now verifies original
+finding witnesses readonly; persisted publication/mixed consistency and genuinely narrower
+evidence contracts remain separate gates. This bridge does not establish independence,
+readiness or actual requests saved.
 
 Verification, 2026-10-30: type check, **1,329** deterministic tests (625 pretests +
 704 main), focused scope/provider/pinned-client checks, UI build, all thirteen default

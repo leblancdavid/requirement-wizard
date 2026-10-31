@@ -542,7 +542,13 @@ function App() {
            inspectDefinitionImpact={(epicID, revision) => api(`projects/${project.id}/definition-impact`, { revision, epicID })}
            definitionScope={{ start: (request) => api(`projects/${project.id}/definition-scope-start`, { request, confirmAIUsage: true }),
              inspect: (query) => api(`projects/${project.id}/definition-scope-status`, query), stop: (jobID) => api(`projects/${project.id}/definition-scope-stop`, { jobID }) }}
-          definitionSources={{ sources: (query) => api(`projects/${project.id}/definition-sources`, query), compare: (request) => api(`projects/${project.id}/definition-origins`, request) }}
+           definitionMixed={{ catalog: (query) => api(`projects/${project.id}/definition-mixed-catalog`, query),
+             preview: (request) => api(`projects/${project.id}/definition-mixed-preview`, request),
+             inspect: (query) => api(`projects/${project.id}/definition-mixed-status`, query),
+             evidence: (jobID) => api(`projects/${project.id}/definition-mixed-evidence`, { jobID }),
+             start: (request) => api(`projects/${project.id}/definition-mixed-start`, { request, confirmAIUsage: true }),
+             stop: (jobID) => api(`projects/${project.id}/definition-mixed-stop`, { jobID }) }}
+           definitionSources={{ sources: (query) => api(`projects/${project.id}/definition-sources`, query), compare: (request) => api(`projects/${project.id}/definition-origins`, request) }}
           definitionJoint={{ start: (request) => api(`projects/${project.id}/definition-joint-start`, { request, confirmAIUsage: true }),
             inspect: (epicID, jobID) => api(`projects/${project.id}/definition-joint-status`, { epicID, ...(jobID ? { jobID } : {}) }),
             stop: (jobID) => api(`projects/${project.id}/definition-joint-stop`, { jobID }),

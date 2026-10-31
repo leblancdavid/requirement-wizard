@@ -8,6 +8,7 @@ import { definitionReviewScopeRequestSchema, definitionReviewScopeStartSchema, d
 import { definitionDependencyLimits } from "../core/definition-dependencies.js";
 import { definitionScopeStatusQuerySchema, definitionScopeViewSchema, type DefinitionScopeView } from "../core/definition-scope-view.js";
 import { dimensions } from "../core/definition-dimensions.js";
+import { describeDefinitionScopeProvenance, definitionScopeProvenanceQuerySchema, type DefinitionScopeProvenanceView } from "../core/definition-scope-provenance.js";
 
 const key = z.string().regex(/^[a-f0-9]{64}$/);
 export const definitionScopeRunBytes = 192 * 1024;
@@ -81,6 +82,28 @@ export function inspectDefinitionScopeRun(db: Database.Database, projectID: stri
 type Jobs = { begin: (projectID: string, revision: number) => { job: Job }; get: (jobID: string) => Job; save: (job: Job) => void };
 export class DefinitionScopeReviewStore {
   constructor(private readonly db: Database.Database, private readonly jobs: Jobs) {}
+  /** Explicit original-witness replay, unlike the lightweight dated status view.
+   * No current snapshot, write, lease claim, recovery or provider operation. */
+  provenance(projectID: string, input: unknown): DefinitionScopeProvenanceView {
+    const { jobID } = definitionScopeProvenanceQuerySchema.parse(input);
+    try {
+      const owner = this.db.prepare("SELECT project_id FROM definition_scope_reviews WHERE job_id = ?").get(jobID) as { project_id: string } | undefined;
+      if (!owner || owner.project_id !== projectID) return { status: "unavailable", reason: "not-recorded" };
+      const run = readDefinitionScopeRun(this.db, jobID);
+      if (!run || run.projectID !== projectID) return { status: "unavailable", reason: "not-recorded" };
+      if (!run.result || !run.completedAt) return { status: "unavailable", reason: "scope-not-completed" };
+      for (const id of new Set([jobID, run.sourceJobID ?? jobID])) {
+        const row = this.db.prepare("SELECT 1 FROM jobs WHERE id = ? AND project_id = ? AND length(CAST(payload AS BLOB)) <= 262144").get(id, projectID);
+        if (!row) throw new Error("Scoped job witness is missing or exceeds its bound.");
+      }
+      const completed = this.witness(jobID), original = this.root(run);
+      if (completed.job.status !== "completed" || completed.job.finishedAt !== undefined && completed.job.finishedAt !== completed.run.completedAt
+        || !original.run.response || !original.run.respondedAt) throw new Error("Scoped original output is unproved.");
+      const provenance = describeDefinitionScopeProvenance(original.project, original.run.request, original.packet, completed.run.result,
+        { requestJobID: original.run.jobID, completedJobID: completed.run.jobID, respondedAt: original.run.respondedAt, completedAt: completed.run.completedAt });
+      return { status: "recorded", provenance };
+    } catch { return { status: "unavailable", reason: "saved-scope-provenance-unproved" }; }
+  }
   private prepare(projectID: string, request: unknown, historicalRevision?: number) {
     const row = historicalRevision === undefined
       ? this.db.prepare("SELECT revision, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM projects WHERE id = ?").get(definitionDependencyLimits.snapshotBytes, projectID)

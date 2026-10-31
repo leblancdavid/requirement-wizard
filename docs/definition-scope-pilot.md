@@ -3,9 +3,10 @@
 Status, 2026-10-30: **explicit engine/provider/browser pilot implemented**. It executes the
 [complete-evidence scope contract](definition-review-scope.md) with a durable one-request
 ledger and explicit saved-result/reply recovery. A later [explicit provider bridge](definition-scope-providers.md)
-now supports existing OpenCode/direct adapters with separate browser controls, but no CLI
-start or coordinator registration. Only deterministic injected/mocked transports have been exercised;
-live provider/tool enforcement is unqualified.
+now supports existing OpenCode/direct adapters with separate browser controls, but no ordinary
+CLI start or coordinator registration. Alongside deterministic transports, a separate
+qualification runner completed [three bounded live OpenCode scenarios](definition-scope-live-check.md).
+Broader live behavior, human semantic sign-off and effective tool enforcement remain unqualified.
 No scoped finding is published into the specification or used for automatic skips.
 
 ## Explicit boundary
@@ -89,7 +90,9 @@ for unchanged old payloads. Older apps reject SQLite 20 before consuming the new
 Transactional migration/startup failure rolls back schema/ledger advancement; unknown future
 run/marker formats reject without overwrite and can retry after supported data is restored.
 
-Scoped jobs/checkpoints/results are local-only and excluded from portable continuation.
+Raw scoped jobs/checkpoints are local-only and excluded from portable continuation. The
+later mixed-assessment reader can retain bounded original source observations inside a
+format-3 assessment declaration, not as raw jobs, sessions or publication authority.
 Complete evidence means available captured project state, not exhaustive knowledge of
 the external product/codebase. This pilot does not initialize folders or prove missing
 external evidence absent, and cannot override existing initialization/publication gates.
@@ -128,11 +131,17 @@ and original reply dates survive unchanged; no backfill, reset or requalificatio
 
 ## Remaining gates
 
+- An [offline/opt-in qualification harness](definition-scope-qualification.md) is implemented;
+  its structural checks are not semantic-quality qualification. One live retention-choice
+  observation plus privacy/quoted-instruction runs are recorded, with human sign-off still pending.
 - The provider/runtime bridge is implemented with fixture-checked no-tools/research
   restrictions; effective live permission/profile and subscription behavior remain unqualified.
 - Human-reviewed live semantic quality and bounded larger-project behavior.
-- Forward-compatible original-finding/publication provenance before saving scoped findings
-  as assessments; mixed consistency and aggregate confidence rules remain separate.
+- An [original-finding provenance foundation](definition-scope-provenance.md) now verifies
+  completed/root witnesses readonly, without new saved metadata. Persisted assessment
+  reader representation and a pure consistency contract now exist in the
+  [mixed reader foundation](definition-mixed-assessment.md); durable source/task verification
+  and actual preview/apply remain separate.
 - A sound narrower evidence contract before automatic finding-level reuse. Keeping complete
   evidence and selecting outputs does **not** establish independence or request reduction.
 

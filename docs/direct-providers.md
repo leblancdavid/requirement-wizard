@@ -1,9 +1,17 @@
 # Direct provider migration
 
+The later [mixed-consistency provider bridge](definition-mixed-providers.md) now supports
+explicit mixed requests on the selected direct account, with exact context preflight before
+credential access and no ordinary-profile fallback. It reuses `scoped-no-tools-v1` strict
+no-tools/output-inventory semantics; ordinary direct discovery/help/probe behavior and
+authentication/refresh ownership are unchanged. Tests use mocked HTTP and synthetic accounts,
+not live sign-in/inference. Later [browser controls](definition-mixed-browser.md) support
+explicit mixed starts; assessment apply remains unwired.
+
 ## Scoped-review transport profile (2026-10-30)
 
 The [explicit scoped provider bridge](definition-scope-providers.md) now supports existing
-selected direct accounts without OpenCode fallback. Only scope requests opt into
+selected direct accounts without OpenCode fallback. Scope and later explicit mixed requests opt into
 `scoped-no-tools-v1`: explicit empty tools/none selection, rejection of observable tool
 activity/unsupported output, and exact final-message versus streamed-text checks. Complete
 text-only inventory is required; errors never downgrade to a weaker profile. Ordinary

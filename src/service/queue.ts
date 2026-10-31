@@ -29,8 +29,10 @@ import type { DefinitionFindingPreviewRequest } from "../core/definition-finding
 import type { DefinitionJointStart } from "../core/definition-joint-view.js";
 import type { DefinitionScopeReviewService } from "./definition-scope-review.js";
 import type { DefinitionScopeStart } from "../core/definition-scope-view.js";
+import type { DefinitionMixedReviewService } from "./definition-mixed-review.js";
+import type { DefinitionMixedStart } from "../core/definition-mixed-view.js";
 
-type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" | "definition-joint-review" | "definition-scope-review"; jobID?: string };
+type Work = { controller: AbortController; promise: Promise<void>; kind?: "definition" | "definition-joint-review" | "definition-scope-review" | "definition-mixed-review"; jobID?: string };
 
 function submissionEpic(project: Project, item: Submission) {
   const input = item.input;
@@ -146,6 +148,31 @@ export class DiscoveryQueue {
     return { status: "accepted", jobID, action: this.service.store.definitionScopeReview(jobID)?.sourceJobID ? "saved-response-recovery" : "new-attempt" };
   }
   ownsDefinitionScope(id: string, jobID: string) { const work = this.active.get(id); return work?.kind === "definition-scope-review" && work.jobID === jobID; }
+  async reviewDefinitionMixed(id: string, input: unknown, mixed: DefinitionMixedReviewService): Promise<DefinitionMixedStart> {
+    if (this.coordinator) throw new OperationConflictError("Mixed review requires a separate explicit action.");
+    if (this.closing || this.isActive(id)) throw new OperationConflictError("Wait for active work before starting a mixed review.");
+    const controller = new AbortController(); let jobID: string | undefined;
+    const progress: string[] = [];
+    const operation = mixed.review(id, input, { signal: controller.signal, onJob: (job) => {
+      jobID = job.id; this.messages.set(id, progress); this.refinementRuns.delete(id);
+      progress.push("Checking nine selected original findings against complete project evidence. No publication or automatic follow-up.");
+    } });
+    if (!jobID) {
+      const result = await operation;
+      return { status: "accepted", jobID: result.job.id, action: result.reused && result.job.status === "completed" ? "completed-reuse"
+        : result.run.sourceJobID ? "saved-response-recovery" : "new-attempt" };
+    }
+    const promise = operation.then((result) => { progress.push(result.job.status === "completed" ? "Mixed judgment saved locally. Scores, decisions and implementation are unchanged."
+      : "Mixed review stopped or failed. Inspect saved evidence; continue explicitly."); })
+      .catch(() => { progress.push("Mixed review could not complete. Inspect saved status; no automatic retry."); }).finally(() => this.active.delete(id));
+    this.active.set(id, { controller, promise, kind: "definition-mixed-review", jobID });
+    return { status: "accepted", jobID, action: this.service.store.definitionMixedReview(jobID)?.sourceJobID ? "saved-response-recovery" : "new-attempt" };
+  }
+  ownsDefinitionMixed(id: string, jobID: string) { const work = this.active.get(id); return work?.kind === "definition-mixed-review" && work.jobID === jobID; }
+  stopDefinitionMixed(id: string, jobID: string) {
+    if (!this.ownsDefinitionMixed(id, jobID)) throw new OperationConflictError("This app does not own that exact mixed review. No other task was stopped.");
+    this.active.get(id)!.controller.abort();
+  }
   stopDefinitionScope(id: string, jobID: string) {
     if (!this.ownsDefinitionScope(id, jobID)) throw new OperationConflictError("This app does not own that exact scoped review. No other task was stopped.");
     this.active.get(id)!.controller.abort();

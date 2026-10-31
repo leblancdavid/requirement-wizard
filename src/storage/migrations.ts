@@ -18,8 +18,10 @@ import { projectSchema } from "../core/model.js";
 import { readCombinationPublication } from "./definition-combination-apply.js";
 import { definitionScopeRunBytes, readDefinitionScopeRun } from "./definition-scope-review.js";
 import { definitionReviewScopeMarkerSchema } from "../core/definition-review-scope.js";
+import { definitionMixedRunBytes, readDefinitionMixedRun } from "./definition-mixed-review.js";
+import { definitionMixedReviewMarkerSchema } from "../core/definition-mixed-review.js";
 
-export const databaseSchemaVersion = 20;
+export const databaseSchemaVersion = 22;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -184,6 +186,13 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   db.exec(`CREATE TABLE IF NOT EXISTS definition_scope_reviews (project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT PRIMARY KEY REFERENCES jobs(id),
     scope_key TEXT NOT NULL, payload TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS definition_scope_candidate ON definition_scope_reviews(project_id, scope_key);`);
+} }, { version: 21, name: "mixed-assessment-provenance-format-v1", apply() {
+  // Reader boundary only. No old row, key, assessment, grant or saved scope result
+  // is converted. A publisher/consistency task is not registered by this upgrade.
+} }, { version: 22, name: "explicit-mixed-review-pilot-v1", apply(db: Database.Database) {
+  db.exec(`CREATE TABLE IF NOT EXISTS definition_mixed_reviews (project_id TEXT NOT NULL REFERENCES projects(id),
+    job_id TEXT PRIMARY KEY REFERENCES jobs(id), request_key TEXT NOT NULL, payload TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS definition_mixed_request ON definition_mixed_reviews(project_id, request_key);`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -199,6 +208,23 @@ export function migrateDatabase(db: Database.Database) {
       version = migration.version;
     }
     // Refuse future/corrupt payloads even when the database schema is supported.
+    for (const row of db.prepare("SELECT project_id, job_id FROM definition_mixed_reviews").iterate() as Iterable<{ project_id: string; job_id: string }>) {
+      const run = readDefinitionMixedRun(db, row.job_id);
+      const job = db.prepare(`SELECT project_id, json_extract(payload, '$.id') AS id, json_extract(payload, '$.projectID') AS payload_project,
+        json_extract(payload, '$.kind') AS kind, json_extract(payload, '$.status') AS status, json_extract(payload, '$.expectedRevision') AS revision,
+        CASE WHEN length(CAST(json_extract(payload, '$.context.definitionMixedReview') AS BLOB)) <= ? THEN json_extract(payload, '$.context.definitionMixedReview') END AS marker
+        FROM jobs WHERE id = ?`).get(definitionMixedRunBytes, row.job_id) as { project_id: string; id: string; payload_project: string; kind: string; status: string; revision: number; marker: string | null } | undefined;
+      if (!run || !job?.marker || run.projectID !== row.project_id || job.project_id !== row.project_id || job.id !== row.job_id
+        || job.payload_project !== row.project_id || job.kind !== "definition-mixed-review" || job.revision !== run.request.revision
+        || !["pending", "running", "completed", "failed", "cancelled", "interrupted", "stale"].includes(job.status) || (job.status === "completed") !== !!run.completedAt)
+        throw new Error("Mixed checkpoint/job identity mismatch. Saved evidence was not overwritten.");
+      const marker = definitionMixedReviewMarkerSchema.parse(JSON.parse(job.marker));
+      if (marker.requestKey !== run.requestKey || marker.assemblyKey !== run.assemblyKey || marker.contextKey !== run.contextKey || marker.snapshotKey !== run.request.snapshotKey)
+        throw new Error("Mixed review marker changed. Saved evidence was not overwritten.");
+    }
+    if (db.prepare(`SELECT 1 FROM jobs j LEFT JOIN definition_mixed_reviews r ON r.job_id = j.id WHERE
+      (json_extract(j.payload, '$.kind') = 'definition-mixed-review' OR json_type(j.payload, '$.context.definitionMixedReview') IS NOT NULL)
+      AND r.job_id IS NULL LIMIT 1`).get()) throw new Error("Mixed review job is missing its checkpoint. Saved evidence was not overwritten.");
     for (const row of db.prepare("SELECT project_id, job_id FROM definition_scope_reviews").iterate() as Iterable<{ project_id: string; job_id: string }>) {
       const run = readDefinitionScopeRun(db, row.job_id);
       const job = db.prepare(`SELECT project_id, json_extract(payload, '$.id') AS id, json_extract(payload, '$.kind') AS kind,
@@ -222,7 +248,8 @@ export function migrateDatabase(db: Database.Database) {
       if (readCombinationPublication(db, row.project_id, row.review_id).status !== "recorded") throw new Error("Combined publication receipt is unsupported or inconsistent. Saved evidence was not overwritten.");
     }
     for (const row of db.prepare(`SELECT id, revision, CASE WHEN length(CAST(payload AS BLOB)) <= 16777216 THEN payload END AS payload FROM projects
-      WHERE EXISTS (SELECT 1 FROM json_each(projects.payload, '$.assessments') a WHERE json_type(a.value, '$.combinedReview') IS NOT NULL)`)
+      WHERE EXISTS (SELECT 1 FROM json_each(projects.payload, '$.assessments') a WHERE json_type(a.value, '$.combinedReview') IS NOT NULL
+        OR json_type(a.value, '$.mixedReview') IS NOT NULL)`)
       .iterate() as Iterable<{ id: string; revision: number; payload: string | null }>) {
       if (!row.payload) throw new Error("Combined assessment project exceeds its supported read bound. Saved data was not overwritten.");
       const project = projectSchema.parse(JSON.parse(row.payload));

@@ -1,5 +1,49 @@
 # Browser workspace, epics, and estimated completeness
 
+## Mixed-review browser workflow (2026-10-31)
+
+**Overall progress → Check mixed original findings (pilot)** now provides explicit bounded
+ordinary/scoped source pages, one exact selection per dimension, complete nine-finding preview,
+status-first fresh one-request consent, selected-provider start, reload/status, exact-owned Stop
+and ambiguous-response inspection without write replay. Completed judgments and explicit original
+witness inspection retain separate original dates, complete concerns and conflicts. No assessment
+save/apply or implementation mutation is available. See [controls, compatibility and tests](definition-mixed-browser.md).
+
+Verification: 1,400 deterministic tests, type checking, UI build and all 16 browser runners
+passed; the dedicated mixed browser rerun passed after final source-preview/saved-selection
+hardening. No live calls. The existing bundle-size warning remains non-blocking.
+
+## In-process mixed task boundary (2026-10-30)
+
+At this earlier task boundary the durable mixed pilot was implemented under SQLite 22, with no browser
+start/status/Stop/apply route. Browser snapshots keep ordinary coverage baselines, Logs label
+its jobs **Mixed finding check**, and generic discovery Resume excludes them. Opening a
+workspace never dispatches it. Provider/browser integration and explicit apply remain separate.
+The later [provider bridge](definition-mixed-providers.md) enables explicit in-process selected
+OpenCode/direct dispatch, not automatic browser work. See [verified task versus future controls](definition-mixed-execution.md).
+
+Task-slice regressions: type check, 1,374 deterministic tests, UI build and all fifteen default
+browser runners passed. New API checks preserve the ordinary coverage baseline while a
+completed mixed task stays local evidence. No new controls or live model calls were exercised.
+
+## Mixed-source assessment reader (2026-10-30)
+
+Overall progress can display the new mixed-source assessment representation, distinguishing
+ordinary publication dates, original scoped reply/input dates, recovery completion dates,
+wrapper revision and consistency response date. It retains full original scoped concerns,
+escaped output, conservative low confidence and an explicit no-independent-authentication/
+approval warning. This earlier reader slice did not enable mixed task/start/apply controls. The reader is qualified
+with a curated fixture and zero inference, not a real publication.
+
+SQLite 20→21 is a reader-only forward boundary; conditional portable state format 3 protects
+current/historical mixed origins. Existing unmarked and combined data remain unchanged.
+`npm run test:browser:mixed-reader` covers reader dates/concerns/freshness/reload/mobile; it
+is now the fifteenth default browser runner. See [format and unfinished apply gates](definition-mixed-assessment.md).
+
+Verification: type check, 1,359 deterministic tests, UI build, the focused reader browser and
+all fifteen default browser runners passed. This verifies display/compatibility with curated
+declarations, not a mixed publisher or authenticated source worker. No live calls in this slice.
+
 ## Scoped review browser pilot (2026-10-30)
 
 **Overall progress → Review selected definition dimensions (pilot)** exposes a separate
@@ -18,7 +62,8 @@ stops polling, not work. An uncertain start response locks out further starts un
 Repeating a confirmed exact request can reuse completed work or a saved valid reply without
 another AI call; a failed attempt without a reply requires fresh consent.
 
-SQLite stays 20; browser views are transport-only format 1. Jobs never replace the ordinary
+This browser pilot introduced no saved format; views stay transport-only format 1. The later
+mixed-source reader uses SQLite 21. Jobs never replace the ordinary
 coverage baseline or appear as generic discovery Resume. Results cannot publish assessments,
 approve product choices or authorize skips/coding; portable continuation excludes them.
 See [pilot boundaries and qualification limits](definition-scope-pilot.md).

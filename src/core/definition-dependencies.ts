@@ -107,7 +107,7 @@ function inputs(p: Project, records: Record[], epicID: string, citations: string
 }
 function manifest(p: Project, records: Record[], epicID: string): DefinitionDependencyManifest {
   const assessment = p.assessments.find((a) => a.epicID === epicID);
-  if (!assessment?.inputBasis || assessment.combinedReview || assessment.atRevision !== p.revision || !assessment.checks.length) fail("invalid-origin");
+  if (!assessment?.inputBasis || assessment.combinedReview || assessment.mixedReview || assessment.atRevision !== p.revision || !assessment.checks.length) fail("invalid-origin");
   const citations = assessment.checks.flatMap((c) => c.evidenceIDs);
   if (assessment.inputBasis.key !== definitionInputKey(p, epicID, citations)) fail("invalid-origin");
   const result = { format: 1 as const, policy: "definition-dependencies-v1" as const, authority: "inspection-only" as const,
