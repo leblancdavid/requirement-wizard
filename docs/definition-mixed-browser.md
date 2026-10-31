@@ -1,8 +1,9 @@
 # Explicit mixed-review browser workflow
 
 Status, 2026-10-31: **browser source selection, preview, consent, execution/status and
-saved-evidence inspection implemented**. **Assessment save/apply and automatic finding-level
-reuse remain disabled.** This connects the [durable task](definition-mixed-execution.md)
+saved-evidence inspection implemented**. A later [separate review/publication slice](definition-mixed-publication.md)
+adds local content review and confirmed assessment apply; automatic finding-level reuse remains
+disabled. This connects the [durable task](definition-mixed-execution.md)
 and [provider bridge](definition-mixed-providers.md), not a new discovery or coding grant.
 No live model calls were used to implement or test these controls.
 
@@ -76,7 +77,8 @@ completeness, readiness, product approval, effective permission enforcement or s
 The workflow preserves assessments/confidence, requirements/choices, history, implementation
 assessment/plan/build evidence, grants and otherwise valid implementation reuse. Queue admission
 can pause automatic input processing as in the existing mixed task. There is no assessment
-save/apply endpoint in this slice; separately confirmed atomic apply remains later work.
+save/apply endpoint in this earlier slice; the later publication slice adds separate endpoints
+and fresh confirmation without changing this task's evidence-only authority.
 
 ## Compatibility and verification
 

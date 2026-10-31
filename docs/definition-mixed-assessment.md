@@ -2,8 +2,9 @@
 
 Status, 2026-10-30: **persisted reader/schema foundation and pure consistency contract
 implemented**. A later [in-process durable pilot](definition-mixed-execution.md) now verifies
-actual sources and retains task/reply/root witnesses under SQLite 22; automatic dispatch,
-save/apply endpoints and publication remain unwired. Later [browser controls](definition-mixed-browser.md)
+actual sources and retains task/reply/root witnesses under SQLite 22. Automatic dispatch remains
+disabled; later [saved-review/apply endpoints](definition-mixed-publication.md) now publish only after
+separate explicit confirmation. Later [browser controls](definition-mixed-browser.md)
 provide separately confirmed requests and read-only selection previews. A later
 [explicit provider bridge](definition-mixed-providers.md) now supports dedicated selected
 OpenCode/direct requests, with mocked transport checks rather than live qualification.

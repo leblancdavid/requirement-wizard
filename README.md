@@ -102,8 +102,10 @@ Its [explicit provider bridge](docs/definition-mixed-providers.md) now supports 
 OpenCode/direct connections with mocked no-tools/exact-model checks.
 **Overall progress → Check mixed original findings (pilot)** now provides
 [explicit source selection/preview, consent, status, owned Stop and saved judgments](docs/definition-mixed-browser.md),
-including lost-response inspection without replay. Live mixed qualification, assessment save/apply
-and automatic reuse remain gated.
+including lost-response inspection without replay. It also supports
+[local reviewed-content history and separately confirmed assessment apply](docs/definition-mixed-publication.md)
+under SQLite 23, preserving original findings/concerns at low confidence and valid implementation
+reuse. Live mixed qualification, automatic reuse and narrower evidence boundaries remain gated.
 Definition reviews no longer become outdated merely because saving reordered object
 properties. SQLite 12→13 repairs older keys only with proof from their original raw
 snapshot, preserving evidence, history, revisions and spent attempts; real changes

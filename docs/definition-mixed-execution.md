@@ -4,8 +4,9 @@ Status, 2026-10-30: **explicit in-process injected-adapter pilot implemented**. 
 actual ordinary/scoped source witnesses and executes the [mixed consistency contract](definition-mixed-assessment.md)
 with a durable one-request ledger. A later [explicit provider bridge](definition-mixed-providers.md)
 supports existing selected OpenCode/direct adapters; later [explicit browser controls](definition-mixed-browser.md)
-add confirmed start/status/Stop and saved-evidence display. Automatic coordinator dispatch,
-saved-review/apply controls and assessment publication remain disabled. No live mixed calls
+add confirmed start/status/Stop and saved-evidence display. Automatic coordinator dispatch
+remains disabled; later [saved-review/apply controls](definition-mixed-publication.md) provide
+separate explicit assessment publication. No live mixed calls
 have been run; injected/mocked adapters are not effective provider/tool qualification.
 
 ## Exact selected sources, not caller-issued assemblies
@@ -132,9 +133,9 @@ See [migration details](migrations.md#durable-mixed-consistency-pilot-2026-10-30
   coverage. Live mixed semantics/account support and effective permissions remain unqualified.
 - Explicit browser start/status/owned Stop and ambiguous-response inspection are now implemented;
   see their separate deterministic verification record.
-- Saved-review/preview and separately confirmed atomic apply with original provenance,
-  low confidence, history/idempotent publication receipts, source/current-token revalidation
-  and preservation of otherwise-valid implementation reuse.
+- Saved-review/preview and separately confirmed atomic apply now preserve original provenance,
+  low confidence, history/idempotent receipts and otherwise-valid implementation reuse;
+  see their separate deterministic verification record.
 - Human semantic review, larger projects and sound narrower evidence contracts before any
   automatic finding-level skips or savings claims. Prior small live scope tests do not
   qualify the new mixed task.
@@ -158,5 +159,5 @@ original reports and saved-row digests without migration or adapter calls. The b
 aggregate protects existing controls/reader behavior; it does not qualify new mixed controls
 or provider dispatch. No live inference/authentication/permission probe, personal-project write,
 assessment apply, automatic skip, commit or push occurred. The existing UI bundle-size warning
-remains. Later provider/browser slices have their own verification records; apply,
+remains. Later provider/browser/publication slices have their own verification records;
 live semantics, effective permissions and performance gates remain unfinished.

@@ -115,7 +115,7 @@ export async function inspectScopeQualification(runDirectory: string) {
   try {
     view = db.transaction(() => {
       const version = db.pragma("user_version", { simple: true });
-      if (version !== 20 && version !== 21 && version !== 22) throw new Error("Unsupported qualification database version; no data was changed.");
+      if (version !== 20 && version !== 21 && version !== 22 && version !== 23) throw new Error("Unsupported qualification database version; no data was changed.");
       let saved = inspectDefinitionScopeRun(db, manifest.request.projectID, { epicID: manifest.request.epicID, request: manifest.request });
       if (saved.status === "recorded") {
         const row = db.prepare("SELECT CASE WHEN length(CAST(json_extract(payload, '$.model') AS BLOB)) <= 1024 THEN json_extract(payload, '$.model') END AS model FROM jobs WHERE id = ?").get(saved.jobID) as { model: string };

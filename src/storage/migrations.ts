@@ -20,8 +20,10 @@ import { definitionScopeRunBytes, readDefinitionScopeRun } from "./definition-sc
 import { definitionReviewScopeMarkerSchema } from "../core/definition-review-scope.js";
 import { definitionMixedRunBytes, readDefinitionMixedRun } from "./definition-mixed-review.js";
 import { definitionMixedReviewMarkerSchema } from "../core/definition-mixed-review.js";
+import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-publication.js";
+import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 
-export const databaseSchemaVersion = 22;
+export const databaseSchemaVersion = 23;
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -193,6 +195,12 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   db.exec(`CREATE TABLE IF NOT EXISTS definition_mixed_reviews (project_id TEXT NOT NULL REFERENCES projects(id),
     job_id TEXT PRIMARY KEY REFERENCES jobs(id), request_key TEXT NOT NULL, payload TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS definition_mixed_request ON definition_mixed_reviews(project_id, request_key);`);
+} }, { version: 23, name: "explicit-reviewed-mixed-publication-v1", apply(db: Database.Database) {
+  db.exec(`CREATE TABLE IF NOT EXISTS definition_mixed_saved_reviews (project_id TEXT NOT NULL REFERENCES projects(id), review_id TEXT PRIMARY KEY,
+    epic_id TEXT NOT NULL, preview_key TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(project_id, preview_key));
+    CREATE INDEX IF NOT EXISTS definition_mixed_saved_area ON definition_mixed_saved_reviews(project_id, epic_id);
+    CREATE TABLE IF NOT EXISTS definition_mixed_publications (project_id TEXT NOT NULL REFERENCES projects(id), review_id TEXT PRIMARY KEY REFERENCES definition_mixed_saved_reviews(review_id),
+    payload TEXT NOT NULL);`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -208,6 +216,12 @@ export function migrateDatabase(db: Database.Database) {
       version = migration.version;
     }
     // Refuse future/corrupt payloads even when the database schema is supported.
+    for (const row of db.prepare("SELECT project_id, review_id FROM definition_mixed_saved_reviews").iterate() as Iterable<{ project_id: string; review_id: string }>) {
+      if (readMixedSavedReview(db, row.project_id, row.review_id).status !== "recorded") throw new Error(`Saved mixed review is unsupported or exceeds ${definitionMixedSavedReviewBytes} bytes. Saved evidence was not overwritten.`);
+    }
+    for (const row of db.prepare("SELECT project_id, review_id FROM definition_mixed_publications").iterate() as Iterable<{ project_id: string; review_id: string }>) {
+      if (readMixedPublication(db, row.project_id, row.review_id).status !== "recorded") throw new Error("Mixed publication receipt is unsupported or inconsistent. Saved evidence was not overwritten.");
+    }
     for (const row of db.prepare("SELECT project_id, job_id FROM definition_mixed_reviews").iterate() as Iterable<{ project_id: string; job_id: string }>) {
       const run = readDefinitionMixedRun(db, row.job_id);
       const job = db.prepare(`SELECT project_id, json_extract(payload, '$.id') AS id, json_extract(payload, '$.projectID') AS payload_project,

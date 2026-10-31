@@ -7,6 +7,8 @@ import { definitionMixedRequestForAssembly, definitionMixedReviewRequestSchema, 
 import { definitionFindingIdentityKey as digest } from "../core/definition-finding-identity.js";
 import { definitionMixedStartAckSchema, definitionMixedViewSchema, type DefinitionMixedActions, type DefinitionMixedCatalog, type DefinitionMixedPreview, type DefinitionMixedView } from "../core/definition-mixed-view.js";
 import { LogLink } from "./log-access.js";
+import { MixedOriginalFindings as OriginalFindings } from "./definition-mixed-findings.js";
+import { MixedPublicationControls } from "./definition-mixed-publication.js";
 
 type View = Extract<DefinitionMixedView, { status: "recorded" }>;
 type Selection = DefinitionMixedReviewRequest["selections"][number];
@@ -18,19 +20,6 @@ export function DefinitionMixedInspector(props: { project: Project; actions: Def
   return <details aria-label="Mixed definition review pilot" onToggle={(e) => setOpen(e.currentTarget.open)}>
     <summary>Check mixed original findings (pilot)</summary>{open && <DefinitionMixedControls {...props} />}
   </details>;
-}
-function OriginalFindings({ assembly }: { assembly: DefinitionMixedAssembly }) {
-  return <section aria-label="Selected original mixed findings">
-    {assembly.findings.map(({ origin, originalFinding }) => <details key={origin.dimension}><summary>{dimensionLabels[origin.dimension]} · {originalFinding.status}</summary>
-      <p style={{ whiteSpace: "pre-wrap" }}>{originalFinding.explanation}</p><p>Evidence: {originalFinding.evidenceIDs.join(", ") || "None cited"}</p>
-      {origin.policy === "definition-finding-origin-v1" ? <p>Original publication: version {origin.assessmentRevision} · {origin.publishedAt}</p>
-        : <p>Original scoped observation: version {origin.inputRevision} · response observed {origin.respondedAt} · completion {origin.completedAt}. Recovery completion is not a new observation.</p>}
-    </details>)}
-    <h4>Complete original scoped concerns</h4>
-    {assembly.scopedSources.map((s) => <div key={s.provenanceKey}><p>Original response {s.origins[0]!.respondedAt} · completed {s.origins[0]!.completedAt}</p>
-      {s.result.crossDimensionConcerns.length ? <ul>{s.result.crossDimensionConcerns.map((c, i) => <li key={i}>{c.dimensions.map((d) => dimensionLabels[d]).join(" / ")}: {c.explanation}<p>Evidence: {c.evidenceIDs.join(", ")}</p></li>)}</ul> : <p>No concerns reported by this source; this does not prove independence.</p>}
-    </div>)}
-  </section>;
 }
 function DefinitionMixedControls({ project, actions, disabled }: { project: Project; actions: DefinitionMixedActions; disabled?: boolean }) {
   const [epicID, setEpicID] = useState(project.epics.find((e) => !e.archived && e.id !== "project")?.id ?? "project");
@@ -135,7 +124,7 @@ function DefinitionMixedControls({ project, actions, disabled }: { project: Proj
     finally { setBusy(false); }
   };
   return <section aria-label="Mixed review controls" style={{ overflowWrap: "anywhere" }}>
-    <p>Pilot: check nine unchanged original findings together against all captured project evidence and every original scoped concern. Nothing here publishes assessments, updates scores, approves choices or changes implementation.</p>
+    <p>Pilot: check nine unchanged original findings together against all captured project evidence and every original scoped concern. Starting a check never publishes assessments, updates scores, approves choices or changes implementation. Applying findings requires a separate saved review and fresh confirmation below.</p>
     <p>Uses selected {project.model.providerID}/{project.model.modelID} connection; two minutes, at most one AI request. Completed results and valid saved replies reuse without a new request. Failed spent attempts need fresh consent. No research/tools or automatic follow-up. Live quality and effective tool restrictions remain unqualified.</p>
     <label>Mixed review area<select aria-label="Mixed review area" value={epicID} disabled={busy || uncertain} onChange={(e) => { setEpicID(e.target.value); setConsentKey(""); setCheckedKey(""); setSelected({}); }}>{project.epics.filter((e) => !e.archived).map((e) => <option key={e.id} value={e.id}>{e.title}</option>)}</select></label>
     <button type="button" className="secondary progress-action" disabled={busy || uncertain} onClick={() => void load()}>Load mixed finding sources</button>
@@ -172,5 +161,6 @@ function DefinitionMixedControls({ project, actions, disabled }: { project: Proj
       {evidence?.jobID === view.jobID && <OriginalFindings assembly={evidence.assembly} />}
       <p>Review evidence only. Assessment publication, automatic skips and product approvals are disabled here; scores and implementation evidence are unchanged.</p><LogLink target={view.jobID} />
     </section>}
+    {actions.publication && <MixedPublicationControls project={project} epicID={epicID} jobID={view?.jobStatus === "completed" ? view.jobID : undefined} actions={actions.publication} disabled={disabled || busy || uncertain || running} />}
   </section>;
 }

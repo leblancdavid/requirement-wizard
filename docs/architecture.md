@@ -1,11 +1,20 @@
 # Architecture outline
 
+`definition-mixed-publication.ts` in core/storage and its UI component add exact supported-source
+publication previews, immutable local review history, separate eligibility/consent and idempotent
+atomic apply. SQLite 23 adds only local saved-review/receipt tables. `ProjectStore` commits
+assessment/history, the existing definition-only implementation compatibility certificate,
+receipt and activity together; original task/source/origin/reader/portable/fingerprint formats
+are unchanged. No provider/coordinator execution authority is added. See
+[saved reviews versus separate assessment publication](definition-mixed-publication.md).
+
 `src/core/definition-mixed-view.ts`, `src/storage/definition-mixed-view.ts` and
 `src/ui/definition-mixed-controls.tsx` add explicit bounded source pages, exact candidate preview,
 lightweight dated status and separately requested original-witness display. The web server now
 constructs the mixed bridge/service for explicit consented starts through the discovery queue;
 exact job/kind ownership gates Stop. Reload and uncertain responses require reads, not write
-replay. No automatic coordinator, assessment publisher or persisted-format change is introduced.
+replay. That browser slice itself added no automatic coordinator, publisher or persisted-format
+change; later separate publication controls add assessment-only apply.
 See [browser workflow boundaries](definition-mixed-browser.md).
 
 `src/service/definition-mixed-adapter.ts` explicitly bridges store-verified mixed tasks to
@@ -20,7 +29,8 @@ The bridge itself introduces no API/task scheduling/publication authority or per
 actual ordinary/scoped witness reconstruction and a separately authorized in-process task.
 SQLite 22 records one-request reservation, validated replies, atomic completion and explicit
 no-call recovery, with bounded dated/verified inspection. Explicit browser dispatch now exists;
-automatic coordinator dispatch and apply remain absent. The provider bridge rejects malformed/alternate profiles before startup;
+automatic coordinator dispatch remains absent. Separately confirmed assessment apply now exists.
+The provider bridge rejects malformed/alternate profiles before startup;
 portable/generic discovery/resume/coverage-baseline paths exclude it. See
 [durable mixed pilot boundaries](definition-mixed-execution.md).
 

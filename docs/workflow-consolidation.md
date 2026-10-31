@@ -15,6 +15,14 @@ and [implementation workspace](implementation-workspace.md).
 
 ## Progress
 
+- **Reviewed mixed publication implemented (2026-10-31):** supported/current original-witness
+  preview, immutable local content review/history, separate current eligibility/fresh consent
+  and atomic low-confidence assessment-only apply with durable idempotent receipts. Original
+  ordinary/scoped dates, full concerns, findings and valid implementation reuse are retained;
+  concurrent edits/failures reject without replay or broader authority. SQLite 22→23 adds
+  local review/receipt tables without converting old evidence or changing fingerprints.
+  See [publication boundary and verification](definition-mixed-publication.md).
+
 - **Mixed browser workflow implemented (2026-10-31):** bounded explicit ordinary/scoped source
   selection, unchanged nine-finding preview/full concerns, status-first fresh consent, selected
   provider start, reload/status, exact-owned Stop and ambiguous-ack inspection without write replay.
@@ -27,7 +35,7 @@ and [implementation workspace](implementation-workspace.md).
   observations and existing deny-tool/direct strict-inventory paths. Mocked transports cover
   rejection, cancellation/cleanup and no-call old-result/reply reuse; no live mixed call or
   schema/key/backfill change. Browser source/start/status/owned Stop are now implemented;
-  atomic apply remains next. See [provider restrictions and limits](definition-mixed-providers.md).
+  separately confirmed atomic apply is now implemented. See [provider restrictions and limits](definition-mixed-providers.md).
 
 - **Durable mixed-consistency pilot implemented (2026-10-30):** exact ordinary certificate/
   scoped completed-source selection, complete-context rebuilding, one reserved invocation,

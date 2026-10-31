@@ -1,5 +1,45 @@
 # Data migrations and upgrade compatibility
 
+## Reviewed mixed-assessment publication (2026-10-31)
+
+**SQLite 22 → 23**, `explicit-reviewed-mixed-publication-v1`, adds local
+`definition_mixed_saved_reviews` (format-1 `definition-mixed-saved-review-v1`) and
+`definition_mixed_publications` (format-1 `definition-mixed-publication-v1`). The first
+retains exact supported/current source preview and content acknowledgement; the second binds
+a separately confirmed assessment-only apply to one immutable idempotent receipt per review.
+Saved reviews cap at 3 MiB, receipts at 16 KiB, history pages at ten bounded entries.
+
+The ordered additive migration and ledger advancement are transactional. No old snapshot,
+history, task/checkpoint, original origin/date, frozen request/assembly/context key, grant,
+fingerprint or valid completed work is rewritten. No backfill/reset/requalification request
+or backup is necessary. Unsupported/future/malformed records reject startup without overwrite;
+upgrade advancement rolls back and retry after supported data restoration is safe. Live leases
+are not claimed/recovered by upgrade. Older apps reject SQLite 23.
+
+Published content uses the **existing** mixed-assessment format 1 and conditional portable
+envelope 3. Portable 1/2/3, execution **2**, usage export **2**, original finding/scoped/mixed
+policies and freshness semantics remain unchanged. Raw reviews/receipts/tasks remain local-only;
+portable import does not manufacture local review/apply authority. Readonly qualification
+inspection now recognizes SQLite 20/21/22/23 without startup migration or model calls.
+
+Apply revalidates current snapshot/assessment and original source/root witnesses in one immediate
+transaction. Assessment revision/history, the existing exact definition-only compatibility
+certificate, receipt and activity commit or roll back together. Original implementation
+evidence/sessions/dates/revisions remain; only the CAS version and assessment-only certificate
+advance. Existing valid legacy/modern assessment/plan/delivery reuse stays valid; real changes
+or already stale work do not become current. Completed receipt reuse writes nothing and does
+not requalify sources/providers. Later edits retain dated receipts instead of republishing.
+See [apply boundary, recovery and tests](definition-mixed-publication.md).
+
+Verification: full `npm test` passed **1,416 tests** (712 + 704), type checking/UI build,
+all **17 browser runners** and diff check passed. The final focused 16-test publication
+rerun adds explicit plan/code/run/session/delivery preservation checks. A true older-22 table
+layout upgrades without changing original snapshots, saved replies, execution evidence or
+another owner's live lease; future saved-review data rolls 23 ledger advancement back without
+overwrite and reopens after restoration. Atomic revision/activity/execution/receipt failures
+roll back together, and browser lost acknowledgements recover through explicit reads without
+write replay. No model calls or data reset are needed to reuse saved valid work.
+
 ## Mixed-review browser workflow (2026-10-31)
 
 **No persisted migration.** Source/target SQLite **22**, execution **2**, usage export **2**,

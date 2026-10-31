@@ -6,7 +6,8 @@ credential access and no ordinary-profile fallback. It reuses `scoped-no-tools-v
 no-tools/output-inventory semantics; ordinary direct discovery/help/probe behavior and
 authentication/refresh ownership are unchanged. Tests use mocked HTTP and synthetic accounts,
 not live sign-in/inference. Later [browser controls](definition-mixed-browser.md) support
-explicit mixed starts; assessment apply remains unwired.
+explicit mixed starts; later [assessment-only apply](definition-mixed-publication.md) makes no
+provider request and grants no further work.
 
 ## Scoped-review transport profile (2026-10-30)
 

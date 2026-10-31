@@ -51,6 +51,7 @@ import { DefinitionMixedReviewService } from "../service/definition-mixed-review
 import { definitionMixedDiscoveryAdapter } from "../service/definition-mixed-adapter.js";
 import { definitionMixedReviewRequestSchema, definitionMixedReviewStartSchema, definitionMixedReviewInspectSchema } from "../core/definition-mixed-review.js";
 import { definitionMixedCatalogQuerySchema, definitionMixedStatusQuerySchema } from "../core/definition-mixed-view.js";
+import { definitionMixedPublicationPreviewQuerySchema, definitionMixedSaveReviewSchema, definitionMixedHistoryQuerySchema, definitionMixedApplyQuerySchema, definitionMixedApplySchema } from "../core/definition-mixed-publication.js";
 
 const revision = z.number().int().positive();
 const text = z.string().min(1).max(12000);
@@ -270,6 +271,19 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const input = definitionMixedReviewStartSchema.parse(raw);
         if (implementation.isActive(id) || workflow.active(id)) throw new OperationConflictError("Stop active work before starting a mixed review.");
         json(res, 202, await queue.reviewDefinitionMixed(id, input, mixed)); return;
+      }
+      if (["definition-mixed-publication-preview", "definition-mixed-save", "definition-mixed-history", "definition-mixed-read", "definition-mixed-apply-preview", "definition-mixed-apply"].includes(action ?? "")) {
+        if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
+        const raw = await body(req);
+        if (action === "definition-mixed-publication-preview") { json(res, 200, options.store.previewMixedPublication(id, definitionMixedPublicationPreviewQuerySchema.parse(raw))); return; }
+        if (action === "definition-mixed-history") { json(res, 200, options.store.mixedReviewHistory(id, definitionMixedHistoryQuerySchema.parse(raw))); return; }
+        if (action === "definition-mixed-read") {
+          const query = z.object({ reviewID: z.string().uuid() }).strict().parse(raw); json(res, 200, options.store.readMixedReview(id, query.reviewID)); return;
+        }
+        if (action === "definition-mixed-apply-preview") { json(res, 200, options.store.previewMixedApply(id, definitionMixedApplyQuerySchema.parse(raw))); return; }
+        if (queue.isActive(id) || implementation.isActive(id) || workflow.active(id)) throw new OperationConflictError("Stop active work before saving or applying reviewed mixed findings.");
+        if (action === "definition-mixed-save") { json(res, 200, options.store.saveMixedReview(id, definitionMixedSaveReviewSchema.parse(raw))); return; }
+        json(res, 200, options.store.applyMixedReview(id, definitionMixedApplySchema.parse(raw))); return;
       }
       if (action === "definition-combination-preview") {
         if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }

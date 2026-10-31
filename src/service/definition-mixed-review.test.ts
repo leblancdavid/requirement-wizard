@@ -364,7 +364,7 @@ test("21 to 22 migration preserves old results/leases and future mixed formats r
     assert.equal(f.store.executionActive(other.id), true); f.close(); db = new Database(f.path);
     assert.deepEqual(tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()), before); db.close(); f.reopen();
     const completed = await new DefinitionMixedReviewService(f.store, { async review(p) { calls++; return reply(p); } }).review(f.p.id, f.input);
-    f.close(); db = new Database(f.path); assert.equal(db.pragma("user_version", { simple: true }), 22); assert.deepEqual(db.prepare("SELECT * FROM projects ORDER BY rowid").all(), before[0]);
+    f.close(); db = new Database(f.path); assert.equal(db.pragma("user_version", { simple: true }), 23); assert.deepEqual(db.prepare("SELECT * FROM projects ORDER BY rowid").all(), before[0]);
     const future = JSON.stringify({ ...completed.run, format: 99 }); db.prepare("UPDATE definition_mixed_reviews SET payload = ? WHERE job_id = ?").run(future, completed.job.id);
     db.exec("DELETE FROM migration_history WHERE version >= 22; PRAGMA user_version = 21;"); db.close();
     assert.throws(() => f.reopen()); db = new Database(f.path);

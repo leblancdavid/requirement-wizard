@@ -1,5 +1,21 @@
 # Browser workspace, epics, and estimated completeness
 
+## Reviewed mixed findings and explicit apply (2026-10-31)
+
+The mixed inspector now offers **Preview mixed findings for review**, a separate content
+acknowledgement and **Save reviewed mixed findings**. **Load saved mixed reviews** reads bounded
+immutable history. A saved review separately offers **Check mixed apply eligibility**, fresh
+unchecked consent and **Apply reviewed mixed findings**. Apply updates only the area's assessment
+with low confidence, exact original findings/dates and complete scoped concerns; valid
+implementation reuse is retained. It starts no AI, approvals, planning or coding. Failed/lost
+responses require explicit history/receipt inspection, not write replay; concurrent edits
+invalidate the old plan. See [publication, upgrade and test boundaries](definition-mixed-publication.md).
+
+Verification: 1,416 deterministic tests, type checking/UI build and all 17 browser runners
+passed, including normal mixed publication, pre/post-commit response loss and concurrent edits.
+No live inference was used; semantic quality, effective tool enforcement and automatic skips
+remain unqualified.
+
 ## Mixed-review browser workflow (2026-10-31)
 
 **Overall progress → Check mixed original findings (pilot)** now provides explicit bounded
@@ -7,7 +23,8 @@ ordinary/scoped source pages, one exact selection per dimension, complete nine-f
 status-first fresh one-request consent, selected-provider start, reload/status, exact-owned Stop
 and ambiguous-response inspection without write replay. Completed judgments and explicit original
 witness inspection retain separate original dates, complete concerns and conflicts. No assessment
-save/apply or implementation mutation is available. See [controls, compatibility and tests](definition-mixed-browser.md).
+save/apply was available in this earlier browser slice; later separate controls now provide
+reviewed-content history and explicit assessment-only apply. See [controls, compatibility and tests](definition-mixed-browser.md).
 
 Verification: 1,400 deterministic tests, type checking, UI build and all 16 browser runners
 passed; the dedicated mixed browser rerun passed after final source-preview/saved-selection

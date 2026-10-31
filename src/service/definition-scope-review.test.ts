@@ -403,7 +403,7 @@ test("older completed scope results and saved-reply recovery gain no-call proven
     f.reopen(); assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id }), before);
     const reused = await new DefinitionScopeReviewService(f.store, { async review() { assert.fail("No requalification calls for provenance"); } }).review(f.p.id, f.input);
     assert.equal(reused.job.id, completed.job.id); assert.equal(calls, 1);
-    assert.equal(databaseSchemaVersion, 22); assert.deepEqual(f.store.get(f.p.id), f.p);
+    assert.equal(databaseSchemaVersion, 23); assert.deepEqual(f.store.get(f.p.id), f.p);
   } finally { f.cleanup(); }
 });
 

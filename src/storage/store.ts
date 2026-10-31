@@ -45,6 +45,9 @@ import { DefinitionScopeReviewStore, readDefinitionScopeRun, inspectDefinitionSc
 import { DefinitionMixedReviewStore, readDefinitionMixedRun } from "./definition-mixed-review.js";
 import { definitionMixedReviewMarkerSchema } from "../core/definition-mixed-review.js";
 import { inspectDefinitionMixedCatalog, inspectDefinitionMixedStatus } from "./definition-mixed-view.js";
+import { DefinitionMixedPublicationStore, readMixedSavedReview, readMixedPublication, mixedAssessment } from "./definition-mixed-publication.js";
+import { definitionMixedApplySchema, definitionMixedApplyQuerySchema, definitionMixedPublicationReceiptSchema,
+  type DefinitionMixedApplyPreview, type DefinitionMixedApplyResult } from "../core/definition-mixed-publication.js";
 import { definitionReviewScopeMarkerSchema } from "../core/definition-review-scope.js";
 import { previewDefinitionCombination } from "./definition-combination-preview.js";
 import { definitionCombinationReviewSchema, definitionCombinationReviewBytes } from "../core/definition-combination-review.js";
@@ -1569,6 +1572,72 @@ export class ProjectStore {
   inspectDefinitionMixedReview(projectID: string, query: unknown) { return this.db.transaction(() => this.mixedReviews().inspect(projectID, query)).deferred(); }
   definitionMixedCatalog(projectID: string, query: unknown) { return this.db.transaction(() => inspectDefinitionMixedCatalog(this.db, this.scopedReviews(), projectID, query)).deferred(); }
   definitionMixedStatus(projectID: string, query: unknown) { return this.db.transaction(() => inspectDefinitionMixedStatus(this.db, projectID, query)).deferred(); }
+  private mixedPublications() { return new DefinitionMixedPublicationStore(this.db, this.mixedReviews()); }
+  previewMixedPublication(projectID: string, query: unknown) { return this.db.transaction(() => this.mixedPublications().preview(projectID, query)).deferred(); }
+  saveMixedReview(projectID: string, input: unknown) {
+    return this.db.transaction(() => {
+      this.assertNoExecution(projectID);
+      if (this.workflowBusy(projectID) || this.discoveryActive(projectID)) throw new OperationConflictError("Stop active work before saving a mixed review.");
+      const result = this.mixedPublications().save(projectID, input);
+      if (result.status === "recorded" && !result.reused) saveActivity(this.db, projectID, { id: `mixed-review:${result.review.id}`, type: "discovery", title: "Mixed finding review saved",
+        summary: "Exact original findings and complete scoped concerns reviewed locally. No assessment, score, product approval or implementation changed.",
+        reason: "Content acknowledgement only; applying findings requires separate consent.", highlight: true, features: [], changes: [], at: result.review.savedAt, atLabel: "Recorded" });
+      return result;
+    }).immediate();
+  }
+  mixedReviewHistory(projectID: string, input: unknown) { return this.db.transaction(() => this.mixedPublications().history(projectID, input)).deferred(); }
+  readMixedReview(projectID: string, reviewID: string) { return this.db.transaction(() => readMixedSavedReview(this.db, projectID, reviewID)).deferred(); }
+  previewMixedApply(projectID: string, input: unknown): DefinitionMixedApplyPreview {
+    const query = definitionMixedApplyQuerySchema.parse(input);
+    return this.db.transaction((): DefinitionMixedApplyPreview => {
+      const previous = readMixedPublication(this.db, projectID, query.reviewID);
+      if (previous.status === "recorded") {
+        const r = previous.receipt;
+        if (r.reviewKey !== query.reviewKey || r.inputRevision !== query.revision || r.inputSnapshotKey !== query.snapshotKey) return { status: "unavailable", reason: "review-changed" };
+        const current = publicationProject(this.db, projectID);
+        return { status: "applied", receipt: r, current: !!current && jointKey(current) === r.publishedSnapshotKey };
+      }
+      if (previous.reason !== "not-recorded") return previous;
+      const prepared = this.mixedPublications().prepareApply(projectID, query); if (prepared.status !== "prepared") return prepared;
+      const blocker = this.assessmentRecoveryBlocker(projectID, prepared.project);
+      return blocker ? { status: "unavailable", reason: blocker } : { status: "eligible", plan: prepared.plan };
+    }).deferred();
+  }
+  applyMixedReview(projectID: string, input: unknown): DefinitionMixedApplyResult {
+    const { applyKey, confirmApply: _, ...query } = definitionMixedApplySchema.parse(input);
+    return this.db.transaction((): DefinitionMixedApplyResult => {
+      const previous = readMixedPublication(this.db, projectID, query.reviewID);
+      if (previous.status === "recorded") {
+        const r = previous.receipt, project = publicationProject(this.db, projectID);
+        if (r.reviewKey !== query.reviewKey || r.applyKey !== applyKey || r.inputRevision !== query.revision || r.inputSnapshotKey !== query.snapshotKey) return { status: "unavailable", reason: "apply-plan-changed" };
+        return project && jointKey(project) === r.publishedSnapshotKey ? { status: "applied", receipt: r, project, reused: true } : { status: "unavailable", reason: "publication-not-current" };
+      }
+      if (previous.reason !== "not-recorded") return previous;
+      const prepared = this.mixedPublications().prepareApply(projectID, query); if (prepared.status !== "prepared") return prepared;
+      const blocker = this.assessmentRecoveryBlocker(projectID, prepared.project); if (blocker) throw new OperationConflictError(blocker);
+      if (prepared.plan.applyKey !== applyKey) return { status: "unavailable", reason: "apply-plan-changed" };
+      const publicationID = randomUUID(), publishedAt = new Date().toISOString(), assessment = mixedAssessment(prepared.project, prepared.review, publicationID, publishedAt);
+      const project = this.mutate(projectID, query.revision, "Reviewed mixed definition assessment applied", (project) => {
+        const before = structuredClone(project);
+        project.assessments = [...project.assessments.filter((a) => a.epicID !== prepared.review.epicID), assessment];
+        project.roundChanges = ["Applied reviewed mixed original findings. Original dates, statuses, evidence, uncertainty and complete scoped concerns remain. Confidence is conservatively low; product choices and implementation are unchanged."];
+        const execution = this.execution(projectID);
+        execution.definitionRevision = extendDefinitionRevision(before, { ...project, revision: project.revision + 1 }, execution);
+        this.saveExecution(projectID, execution, undefined, { revision: query.revision });
+      });
+      const fields = { format: 1 as const, policy: "definition-mixed-publication-v1" as const, authority: "publication-evidence-only" as const, canAuthorizeFurtherWork: false as const,
+        publicationID, projectID, epicID: prepared.review.epicID, reviewID: prepared.review.id, reviewKey: prepared.review.reviewKey, previewKey: prepared.review.preview.previewKey,
+        applyKey, inputRevision: query.revision, publishedRevision: project.revision, inputSnapshotKey: query.snapshotKey, publishedSnapshotKey: jointKey(project),
+        assessmentKey: jointKey(assessment), metadataKey: assessment.mixedReview.publicationKey, publishedAt, authorization: "explicit-reviewed-mixed-findings-apply" as const, confidencePolicy: "conservative-low-v1" as const };
+      const receipt = definitionMixedPublicationReceiptSchema.parse({ ...fields, receiptKey: jointKey(fields) });
+      this.db.prepare("INSERT INTO definition_mixed_publications VALUES (?, ?, ?)").run(projectID, query.reviewID, JSON.stringify(receipt));
+      saveActivity(this.db, projectID, { id: `mixed-publication:${query.reviewID}`, revision: project.revision, type: "discovery", title: "Reviewed mixed findings applied",
+        summary: "Current definition assessment updated from exact original findings. Original scoped concerns and dates retained with low confidence; no product decisions or implementation evidence changed.",
+        reason: "Separate explicit assessment-only apply. No AI requests, approvals, planning, coding or automatic skips authorized.", highlight: true,
+        features: [{ id: prepared.review.epicID, title: project.epics.find((e) => e.id === prepared.review.epicID)!.title }], changes: [], at: publishedAt, atLabel: "Recorded" });
+      return { status: "applied", project, receipt, reused: false };
+    }).immediate();
+  }
   previewDefinitionCombination(projectID: string, input: unknown) {
     return this.db.transaction(() => previewDefinitionCombination(this.db, projectID, input)).deferred();
   }

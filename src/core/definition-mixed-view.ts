@@ -4,6 +4,7 @@ import { definitionMixedConsistencyResponseSchema, type DefinitionMixedAssembly 
 import type { DefinitionSourcePage } from "./definition-source-inspection.js";
 import type { DefinitionScopeProvenance } from "./definition-scope-provenance.js";
 import { definitionFindingIdentityKey as digest } from "./definition-finding-identity.js";
+import type { DefinitionMixedPublicationActions } from "./definition-mixed-publication.js";
 
 export const definitionMixedCatalogQuerySchema = z.object({ epicID: z.string().min(1).max(500), revision: z.number().int().positive(),
   snapshotKey: z.string().regex(/^[a-f0-9]{64}$/), beforeRevision: z.number().int().positive().optional(), beforeScope: z.number().int().positive().optional() }).strict();
@@ -34,6 +35,7 @@ export type DefinitionMixedPreview = { status: "recorded"; projectID: string; re
   requestKey: string; contextKey: string; characters: number; assembly: DefinitionMixedAssembly };
 export type DefinitionMixedEvidence = { status: "recorded"; assembly: DefinitionMixedAssembly; requestJobID: string } | { status: "unavailable"; reason: string };
 export type DefinitionMixedActions = {
+  publication?: DefinitionMixedPublicationActions;
   catalog: (query: z.infer<typeof definitionMixedCatalogQuerySchema>) => Promise<DefinitionMixedCatalog>;
   preview: (request: z.infer<typeof definitionMixedReviewRequestSchema>) => Promise<DefinitionMixedPreview>;
   inspect: (query: z.infer<typeof definitionMixedStatusQuerySchema>) => Promise<DefinitionMixedView>;

@@ -103,6 +103,6 @@ Reference inspection used the current [V2 client guide](https://opencode.ai/v2/d
 
 The later browser slice now implements explicit source selection/start/status/owned Stop,
 ambiguous-response recovery and read-only candidate preview. Separately bounded live mixed
-qualification requires authorization. Saved-review/publication eligibility and
-atomic separately confirmed apply remain separate work; effective tool enforcement, broader
+qualification requires authorization. Later [saved-review/publication controls](definition-mixed-publication.md)
+now provide separately confirmed atomic apply; effective tool enforcement, broader
 semantics/performance and automatic finding-level reuse remain unqualified.

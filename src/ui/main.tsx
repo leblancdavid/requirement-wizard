@@ -542,7 +542,10 @@ function App() {
            inspectDefinitionImpact={(epicID, revision) => api(`projects/${project.id}/definition-impact`, { revision, epicID })}
            definitionScope={{ start: (request) => api(`projects/${project.id}/definition-scope-start`, { request, confirmAIUsage: true }),
              inspect: (query) => api(`projects/${project.id}/definition-scope-status`, query), stop: (jobID) => api(`projects/${project.id}/definition-scope-stop`, { jobID }) }}
-           definitionMixed={{ catalog: (query) => api(`projects/${project.id}/definition-mixed-catalog`, query),
+           definitionMixed={{ publication: { preview: (query) => api(`projects/${project.id}/definition-mixed-publication-preview`, query),
+             save: (query) => api(`projects/${project.id}/definition-mixed-save`, query), history: (query) => api(`projects/${project.id}/definition-mixed-history`, query),
+             read: (reviewID) => api(`projects/${project.id}/definition-mixed-read`, { reviewID }), eligibility: (query) => api(`projects/${project.id}/definition-mixed-apply-preview`, query),
+             apply: (query) => api(`projects/${project.id}/definition-mixed-apply`, query) }, catalog: (query) => api(`projects/${project.id}/definition-mixed-catalog`, query),
              preview: (request) => api(`projects/${project.id}/definition-mixed-preview`, request),
              inspect: (query) => api(`projects/${project.id}/definition-mixed-status`, query),
              evidence: (jobID) => api(`projects/${project.id}/definition-mixed-evidence`, { jobID }),

@@ -109,8 +109,8 @@ printed reports use `definition-scope-qualification-report-v1`. These are not pr
 records, portable authority or implementation evidence. No existing app data is migrated,
 backfilled or invalidated. See the [migration ledger](migrations.md#scoped-review-qualification-harness-2026-10-30).
 
-The later mixed reader/pilot moves new application databases through SQLite **21** to **22**.
-Qualification inspection explicitly supports 20/21/22 readonly, without migrating old evidence or
+The later mixed reader/pilot/publication slices move new application databases through SQLite **21**, **22** and **23**.
+Qualification inspection explicitly supports 20/21/22/23 readonly, without migrating old evidence or
 changing any original manifest/result/key. It does not acquire mixed consistency or apply authority.
 
 Focused checks:

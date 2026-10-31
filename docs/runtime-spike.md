@@ -11,7 +11,8 @@ Existing owned lifecycle, deny-all/non-research permissions, tool-disable projec
 client 2.1.4 remain unchanged. Mocked transports exercise identity/tool/JSON/cancellation/
 cleanup paths; no live mixed request or permission probe was run. Prior scoped observations
 do not qualify mixed semantics/effective permissions. Later [browser controls](definition-mixed-browser.md)
-enable explicit mixed requests; assessment apply remains unwired.
+enable explicit mixed requests; later separately confirmed assessment apply makes no runtime
+request and grants no planning/coding authority.
 
 ## Scoped-review live observation (2026-10-30)
 
