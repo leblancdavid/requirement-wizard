@@ -25,7 +25,8 @@ export function beginWorkflowRun(db: Database.Database, id: string, state: Workf
   const current = db.prepare("SELECT payload FROM projects WHERE id = ?").get(id) as { payload: string };
   write(db, id, { format: 1, id: state.owner!, grantID: state.grant!.id, fromRevision: revision,
     fromSnapshotKey: snapshotKey(before), retentionStartKey: snapshotKey(projectSchema.parse(JSON.parse(current.payload))),
-    startedAt: new Date().toISOString(), initialUsed: state.grant!.used, requests: 0, jobIDs: [] });
+    startedAt: new Date().toISOString(), initialUsed: state.grant!.used, requests: 0, jobIDs: [],
+    ...(state.grant!.continuous ? { continuous: state.grant!.continuous } : {}) });
 }
 /** Called in the same transaction that spends the allowance, before dispatch. */
 export function recordWorkflowRunRequest(db: Database.Database, id: string, state: WorkflowState, jobID: string) {

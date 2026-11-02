@@ -20,8 +20,10 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
   phase: z.enum(["idle", "working", "needs-decision", "blocked", "paused", "ready-to-plan"]),
   message: z.string().max(1600), waitKey: key.optional(),
   owner: z.string().optional(), leaseUntil: z.number().int().nonnegative().optional(),
-  grant: z.object({ id: z.string(), used: z.number().int().min(0).max(workflowLimits.requests),
-    remainingMs: z.number().int().min(0).max(workflowLimits.durationMs), submissionIDs: z.array(z.string()).max(10000) }).strict().optional(),
+  grant: z.object({ id: z.string(), used: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    continuous: z.object({ format: z.literal(1) }).strict().optional(),
+    remainingMs: z.number().int().min(0).max(workflowLimits.durationMs), submissionIDs: z.array(z.string()).max(10000) }).strict()
+    .refine((grant) => !!grant.continuous || grant.used <= workflowLimits.requests, "Expanded workflow spending requires continuous consent.").optional(),
   current: z.object({ kind: z.enum(["input", "interpret", "refine", "conflicts", "discover", "definition", "readiness-questions"]),
     key, target: z.string().optional(), jobIDs: z.array(z.string()).max(200), completed: z.boolean().optional() }).strict().optional(),
   discovery: z.object({ inputKey: key, jobID: z.string() }).strict().optional(),

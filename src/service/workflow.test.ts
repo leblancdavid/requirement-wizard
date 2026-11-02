@@ -11,7 +11,7 @@ import { DiscoveryService, type DiscoveryAdapter } from "./discovery.js";
 import { dimensions } from "../core/epics.js";
 import { emptyExecution, executionConfigSchema } from "../core/execution.js";
 import { planningConfigFingerprint } from "../core/implementation-planning.js";
-import { workflowInputKey, workflowReadiness, workflowLimits, emptyWorkflow } from "../core/workflow.js";
+import { workflowInputKey, workflowReadiness, workflowLimits, emptyWorkflow, workflowSchema } from "../core/workflow.js";
 import type { Analysis, Project } from "../core/model.js";
 import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } from "../core/follow-through.js";
 import { coverage } from "../core/coverage.js";
@@ -23,6 +23,35 @@ import { upgradeDefinitionAllowance } from "../core/definition-budget.js";
 import { definitionLabelDrift } from "../core/definition-evidence-issue.js";
 
 const empty = (): Analysis => ({ summary: "Checked existing decisions", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+
+test("continuous workflow consent is additive, rejects future formats, and never arms after repeated reopen", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "workflow-continuous-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path); let workflow: ProjectWorkflow | undefined;
+  try {
+    const p = store.create("Saved workflow", "Retain exact evidence", { providerID: "openai", modelID: "fixture" });
+    const legacy = store.workflow(p.id); legacy.enabled = true; legacy.paused = false;
+    legacy.grant = { id: "original-bounded-consent", used: 7, remainingMs: 1234, submissionIDs: [] };
+    store.saveWorkflow(p.id, legacy); const saved = store.workflow(p.id);
+    store.close(); store = new ProjectStore(path); assert.deepEqual(store.workflow(p.id), saved);
+    assert.equal(workflowSchema.safeParse({ ...saved, grant: { ...saved.grant, used: 9 } }).success, false);
+    const next = { ...saved, grant: { ...saved.grant!, continuous: { format: 1 as const }, used: 12 } };
+    store.saveWorkflow(p.id, next); const continuous = store.workflow(p.id);
+    assert.equal(workflowSchema.safeParse({ ...continuous, grant: { ...continuous.grant, continuous: { format: 2 } } }).success, false);
+    const receipt = { format: 1, id: randomUUID(), grantID: next.grant.id, fromRevision: p.revision,
+      fromSnapshotKey: "a".repeat(64), startedAt: new Date().toISOString(), initialUsed: 12, requests: 3, jobIDs: [randomUUID()] };
+    assert.equal(workflowRunSchema.safeParse(receipt).success, false);
+    assert.equal(workflowRunSchema.safeParse({ ...receipt, continuous: { format: 1 } }).success, true);
+    assert.equal(workflowRunSchema.safeParse({ ...receipt, continuous: { format: 2 } }).success, false);
+    for (let startup = 0; startup < 2; startup++) {
+      store.close(); store = new ProjectStore(path); assert.deepEqual(store.workflow(p.id), continuous);
+      workflow = new ProjectWorkflow(store, { async analyze() { assert.fail("Reopen/poll cannot authorize inference"); } });
+      workflow.tick(p.id); await workflow.wait(p.id); assert.equal(workflow.view(p.id).suspended, true);
+      assert.deepEqual(store.workflow(p.id), continuous); await workflow.close(); workflow = undefined;
+    }
+    assert.equal(store.jobs(p.id).length, 0); assert.deepEqual(store.get(p.id), p);
+  } finally { await workflow?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 function mode(store: ProjectStore, id: string, next: "manual" | "legacy" | "guided") {
   return store.configureProcessingPolicy(id, store.projectRevision(id), { mode: next, version: store.processingPolicy(id).version,
     workflowVersion: store.workflow(id).settingsVersion, maintenanceVersion: store.maintenance(id).settingsVersion });

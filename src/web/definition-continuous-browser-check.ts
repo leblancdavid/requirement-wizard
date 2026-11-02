@@ -19,6 +19,7 @@ project = store.organize(project.id, project.revision, Array.from({ length: 12 }
 for (let i = 0; i < 12; i++) project = store.note(project.id, project.revision,
   `Original decision ${i}\r\n` + Array.from({ length: 160 }, (_, n) => createHash("sha256").update(`continuous-${i}-${n}`).digest("hex")).join(""), "project");
 let calls = 0, waiting = false, pauseOnce = true;
+let invalidLookupOnce = true, rejectedValidID = "";
 const contexts: string[] = [];
 const app = await startApp({ store, port: 0,
   catalog: new OpenCodeCatalog("unused", async () => ({ connected: ["openai"], all: [{ id: "openai", name: "OpenAI", models: { fixture: { name: "Fixture" } } }] })),
@@ -26,7 +27,15 @@ const app = await startApp({ store, port: 0,
     calls++; contexts.push(createHash("sha256").update(JSON.stringify(context.data)).digest("hex"));
     const epicID = context.manifest.definitionAssessment!.epicID;
      const stage = (context.data as { definitionStage: { phase: string; batch: number; citationLabels?: Record<string, string> } }).definitionStage;
-     const label = Object.keys(stage.citationLabels ?? {})[0]!; assert.ok(label, "Staged review supplies short citation labels");
+      const label = Object.keys(stage.citationLabels ?? {})[0]!; assert.ok(label, "Staged review supplies short citation labels");
+    if (invalidLookupOnce) {
+      invalidLookupOnce = false; rejectedValidID = context.manifest.omittedIDs[0]!;
+      return { definitionEvidence: { recordIDs: [rejectedValidID, "S99999"], reason: "Synthetic lookup that needs correction" } };
+    }
+    if (calls === 2) {
+      assert.ok("evidenceCorrection" in stage, "Invalid references receive validation feedback within the same failed-attempt limit");
+      assert.ok(!context.manifest.includedIDs.includes(rejectedValidID), "Rejected mixed lookup loads no partial evidence");
+    }
     if (pauseOnce && epicID === "project" && stage.phase === "collect" && stage.batch === 2) {
       pauseOnce = false; waiting = true; signal.throwIfAborted();
       return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
@@ -47,14 +56,18 @@ try {
   await expect(overview).toContainText("until finished or you pause");
   await overview.getByText("Review limits and AI usage", { exact: true }).click();
   await expect(overview).toContainText("No overall time or area-count cutoff");
+  await expect(overview).toContainText("64 evidence partitions and 64 linked-answer pages");
+  await expect(overview).toContainText("2,304 steps under the compatible continuation policy—not unlimited retries");
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect.poll(() => waiting).toBe(true);
   await overview.getByRole("button", { name: "Close progress", exact: true }).click();
+  await expect(page.locator(".queue-header")).toContainText(`Checking how clearly “${project.epics.find((area) => area.id === "project")!.title}” is defined…`);
   await page.getByRole("button", { name: /Processing & queue:/ }).click();
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
-  await expect(queue.getByRole("region", { name: "Definition refresh progress", exact: true })).toContainText("2 model requests this refresh");
+  await expect(queue.getByRole("region", { name: "Definition refresh progress", exact: true })).toContainText("3 model requests this refresh");
   await expect(queue.getByRole("region", { name: "Definition refresh progress", exact: true })).toContainText("area 1 of 13");
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".queue-header")).toContainText(`Checking how clearly “${project.epics.find((area) => area.id === "project")!.title}” is defined…`);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-definition-refresh-progress-mobile.png", fullPage: true });
   await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
@@ -63,8 +76,9 @@ try {
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("cancelled");
   const paused = store.jobs(project.id).at(-1)!;
   assert.equal(paused.definitionWork!.receipts.length, 1); assert.equal(paused.definitionWork!.attempts, 1);
+  assert.equal(paused.definitionWork!.evidenceFailures!.length, 1); assert.equal(paused.definitionWork!.receipts[0]!.attempts, 2);
   assert.equal(paused.definitionInterruption!.cause, "user-stop"); assert.equal(store.get(project.id).assessments.length, 0);
-  await page.reload(); assert.equal(calls, 2, "Reload must not automatically resume calls");
+  await page.reload(); assert.equal(calls, 3, "Reload must not automatically resume calls");
   await page.locator(".progress-trigger").click();
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect.poll(() => coverage(store.get(project.id)).stale, { timeout: 60000 }).toBe(false);
@@ -80,5 +94,5 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-definition-continuous-mobile.png", fullPage: true });
   assert.deepEqual(errors, []);
-  console.log("Continuous definition browser passed: usage explanation, Pause assessment, saved partial work, reload without auto-resume, more than ten areas, exact stage reuse and mobile. Fixture adapter only; no live calls.");
+  console.log("Continuous definition browser passed: bounded atomic lookup correction, usage explanation, Pause assessment, saved partial work, reload without auto-resume, more than ten areas, exact stage reuse and mobile. Fixture adapter only; no live calls.");
 } finally { await browser.close(); await app.close(); store.close(); }

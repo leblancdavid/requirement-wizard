@@ -4,8 +4,9 @@ import { definitionRetentionSchema } from "./definition-retention.js";
 
 const count = z.number().int().nonnegative();
 export const workflowRunSchema = z.object({ format: z.literal(1), id: z.string().uuid(), grantID: z.string(),
-  fromRevision: z.number().int().positive(), fromSnapshotKey: z.string().regex(/^[a-f0-9]{64}$/), startedAt: z.string().datetime(), initialUsed: count.max(8),
-  requests: count.max(8), jobIDs: z.array(z.string()).max(8),
+  fromRevision: z.number().int().positive(), fromSnapshotKey: z.string().regex(/^[a-f0-9]{64}$/), startedAt: z.string().datetime(), initialUsed: count.max(Number.MAX_SAFE_INTEGER),
+  continuous: z.object({ format: z.literal(1) }).strict().optional(),
+  requests: count.max(Number.MAX_SAFE_INTEGER), jobIDs: z.array(z.string()).max(10000),
   retentionStartKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   result: z.object({ throughRevision: z.number().int().positive(), endedAt: z.string().datetime(),
     phase: z.enum(["idle", "working", "needs-decision", "blocked", "paused", "ready-to-plan"]),
@@ -15,7 +16,7 @@ export const workflowRunSchema = z.object({ format: z.literal(1), id: z.string()
     retainedDefinitions: definitionRetentionSchema.optional(),
   }).strict().optional(),
 }).strict().superRefine((run, context) => {
-  if (run.initialUsed + run.requests > 8 || new Set(run.jobIDs).size !== run.jobIDs.length || run.jobIDs.length > run.requests
+  if ((!run.continuous && (run.initialUsed + run.requests > 8 || run.jobIDs.length > 8)) || new Set(run.jobIDs).size !== run.jobIDs.length || run.jobIDs.length > run.requests
     || run.result && (run.result.throughRevision < run.fromRevision || Date.parse(run.result.endedAt) < Date.parse(run.startedAt)
       || run.result.jobs.completed + run.result.jobs.unfinished + run.result.jobs.stopped !== run.jobIDs.length
       || run.result.retainedDefinitions && !run.retentionStartKey

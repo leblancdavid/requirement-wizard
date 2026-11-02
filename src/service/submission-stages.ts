@@ -7,7 +7,7 @@ import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 
 export async function runSubmissionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, item: Submission, task: ContextTask,
-  options: { signal: AbortSignal; research: boolean; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number };
+  options: { signal: AbortSignal; continuous?: boolean; research: boolean; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number };
     onProgress?: (message: string) => void; measurement?: DiscoveryMeasurement }) {
   if (options.research) throw new Error("Large saved-response follow-up requires research disabled. No permission was silently changed and no request was made.");
   const previous = [...store.jobs(project.id)].reverse().find((j) => j.id !== job.id && j.submissionWork?.submissionID === item.id);
@@ -62,7 +62,7 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
       return store.finishJob(job.id, publication);
     }
     if (blocked) throw new Error(`Saved-response follow-up blocked: ${blocked} Original input and completed steps remain saved.`);
-    if (calls >= limits.requests || Date.now() >= deadline) return store.pauseSubmission(job.id,
+    if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline)) return store.pauseSubmission(job.id,
       `Saved-response follow-up paused: ${submissionStep(w)} / ${submissionTotalSteps(w)} steps saved. Continue processing explicitly; completed requests will not repeat.`);
     if (w.attempts >= submissionRequestLimit(w)) throw new Error(w.draftRepair
       ? "Corrective saved-response review exhausted its finite request allowance. Earlier work remains saved; unchanged retry cannot grant another corrective pass."
@@ -72,7 +72,7 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
     if (!calls) options.measurement?.planned(context);
     w.attempts++; calls++; store.checkpointSubmission(job.id, w, context.manifest);
     options.onProgress?.(`Following up on saved input · ${submissionStep(w)} / ${submissionTotalSteps(w)} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial changes published.`);
-    const timeout = AbortSignal.timeout(Math.max(1, Math.min(300000, deadline - Date.now())));
+    const timeout = AbortSignal.timeout(options.continuous ? 300000 : Math.max(1, Math.min(300000, deadline - Date.now())));
     const signal = AbortSignal.any([options.signal, timeout]);
     let abort: () => void = () => {};
     try {

@@ -1,23 +1,42 @@
 import type { DefinitionWork } from "./definition-stages.js";
+import { dimensions } from "./definition-dimensions.js";
 
 export const definitionStageLimit = 64;
 /** Legacy work retains its combined 64-step ceiling. A validated dimension
  * ledger separates record partitions (64 per phase) from auxiliary review work,
  * with at most 128 total execution steps. Neither cap grants model requests. */
 export const definitionExecutionStageLimit = 128;
+/** Two phases, each with at most 64 evidence partitions and 64 linked pages;
+ * each work unit can require all nine complete dimension checks. */
+export const definitionCellExecutionStageLimit = 2 * definitionStageLimit * 2 * dimensions.length;
+export const definitionExecutionPolicyEnabled = (work: DefinitionWork) => {
+  const policy = work.executionPolicy, through = work.receipts.length;
+  return !!policy && (through > policy.fromStage || through === policy.fromStage
+    && (work.evidenceRequests?.filter((r) => r.stage <= through).length ?? 0) >= policy.priorRequests
+    && (work.evidenceFollowups?.filter((r) => r.stage <= through).length ?? 0) >= policy.priorFollowups
+    && (work.continuation?.splits.length ?? 0) >= policy.splitCount
+    && (work.linkedAnswerReviews?.length ?? 0) >= policy.linkedReviewCount
+    && (work.dimensionReviews?.length ?? 0) >= policy.dimensionReviewCount);
+};
 export const dimensionReviewEnabled = (work: DefinitionWork) => {
   const event = work.dimensionReviews?.[0], through = work.receipts.length;
   return !!event && (through > event.fromStage || through === event.fromStage
     && (work.evidenceRequests?.filter((r) => r.stage <= through).length ?? 0) >= event.priorRequests
     && (work.evidenceFollowups?.filter((r) => r.stage <= through).length ?? 0) >= event.priorFollowups);
 };
-export const definitionExecutionLimit = (work: DefinitionWork) => dimensionReviewEnabled(work) ? definitionExecutionStageLimit : definitionStageLimit;
+export const definitionExecutionLimit = (work: DefinitionWork) => definitionExecutionPolicyEnabled(work) ? definitionCellExecutionStageLimit
+  : dimensionReviewEnabled(work) ? definitionExecutionStageLimit : definitionStageLimit;
 export function definitionEvidenceStages(work: DefinitionWork, phase?: "collect" | "verify") {
   if (!dimensionReviewEnabled(work)) return work.batches.length * 2 + (work.continuation?.splits.length ?? 0)
     + (work.linkedAnswerReviews?.reduce((sum, review) => sum + review.pages.length, 0) ?? 0);
   const steps = definitionSteps(work), partitions = { collect: work.batches.length, verify: work.batches.length };
   for (const split of work.continuation?.splits ?? []) partitions[steps[split.fromStage]!.phase]++;
   return phase ? partitions[phase] : Math.max(partitions.collect, partitions.verify);
+}
+
+export function definitionLinkedPagePartitions(work: DefinitionWork, phase: "collect" | "verify") {
+  return new Set(definitionSteps(work).filter((step) => step.phase === phase && step.linkedReview !== undefined)
+    .map((step) => JSON.stringify([step.linkedReview, step.ids]))).size;
 }
 
 /** Browser-safe schedule projection. Apply subdivisions only at their original
@@ -34,12 +53,13 @@ export function definitionSteps(work: DefinitionWork, through = work.receipts.le
   let previous = -1;
   let evidenceStages = steps.length;
   const partitions = { collect: work.batches.length, verify: work.batches.length };
+  const linkedPages = { collect: 0, verify: 0 };
   for (let splitIndex = 0; splitIndex <= splits.length; splitIndex++) {
     for (let index = 0; index <= reviews.length; index++) {
       for (const scope of scopes) {
         if (scope.splitCount !== splitIndex || scope.linkedReviewCount !== index || !enabled(scope)) continue;
         const step = steps[scope.fromStage];
-        if (!step || steps.length + scope.groups.length - 1 > definitionExecutionStageLimit) throw new Error("Invalid bounded dimension-review schedule or execution limit.");
+        if (!step || steps.length + scope.groups.length - 1 > definitionExecutionLimit(work)) throw new Error("Invalid bounded dimension-review schedule or execution limit.");
         const owner = step.evidenceStage ?? scope.fromStage;
         steps.splice(scope.fromStage, 1, ...scope.groups.map((dimensions) => ({ ...step, dimensions,
           ...(work.evidenceRequests?.some((r) => r.stage === owner) ? { evidenceStage: owner } : {}) })));
@@ -51,6 +71,8 @@ export function definitionSteps(work: DefinitionWork, through = work.receipts.le
       if (!step || step.dimensions || step.linkedReview !== undefined || step.linkedReviewed !== undefined
         || !dimensionReviewEnabled(work) && evidenceStages + addedPartitions > definitionStageLimit
         || steps.length + review.pages.length > definitionExecutionLimit(work)) throw new Error("Invalid bounded linked-answer review boundary or stage limit.");
+      linkedPages[step.phase] += review.pages.length;
+      if (definitionExecutionPolicyEnabled(work) && linkedPages[step.phase] > definitionStageLimit) throw new Error("Linked-answer page partitions exceed their per-phase limit.");
       evidenceStages += addedPartitions;
       const owner = step.evidenceStage ?? review.fromStage;
       const original = { ...step, linkedReviewed: index,
@@ -66,6 +88,7 @@ export function definitionSteps(work: DefinitionWork, through = work.receipts.le
       || steps.length >= definitionExecutionLimit(work)) throw new Error("Invalid exact definition subdivision or stage limit.");
     evidenceStages++;
     partitions[step.phase]++;
+    if (step.linkedReview !== undefined && definitionExecutionPolicyEnabled(work) && ++linkedPages[step.phase] > definitionStageLimit) throw new Error("Linked-answer page partitions exceed their per-phase limit.");
     if (step.linkedReview !== undefined && split.at % 2) throw new Error("Linked-answer subdivision must preserve complete question/answer pairs.");
     if (split.evidenceRequestStage !== undefined && (split.evidenceRequestStage > split.fromStage
       || (step.evidenceStage ?? split.fromStage) !== split.evidenceRequestStage
@@ -80,6 +103,7 @@ export function definitionSteps(work: DefinitionWork, through = work.receipts.le
 export function splitDefinitionStage(work: DefinitionWork): boolean {
   const steps = definitionSteps(work), step = steps[work.receipts.length];
   if (!step || step.ids.length < (step.linkedReview === undefined ? 2 : 4) || definitionEvidenceStages(work, step.phase) >= definitionStageLimit
+    || step.linkedReview !== undefined && definitionExecutionPolicyEnabled(work) && definitionLinkedPagePartitions(work, step.phase) >= definitionStageLimit
     || steps.length >= definitionExecutionLimit(work) || (work.continuation?.splits.length ?? 0) >= definitionStageLimit - 2) return false;
   work.continuation ??= { format: 1, splits: [] };
   const evidenceStage = step.evidenceStage ?? work.receipts.length;

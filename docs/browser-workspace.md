@@ -1,5 +1,25 @@
 # Browser workspace, epics, and estimated completeness
 
+The live Processing & queue summary names the area from the running definition
+assessment (for example, “Checking how clearly ‘Awards & achievements’ is defined…”),
+not the area currently browsed. If its title is unavailable, the saved area ID remains
+visible. This is display-only; saved evidence, work and compatibility are unchanged.
+The queue-header Continue shortcut also uses the same continuous consent as the main
+button. Type checking, 13 queue tests, all 18 default browser runners, a focused
+desktop/mobile area-label check and Windows desktop checks passed. The desktop build
+was retried successfully after the still-running app was fully quit; no live inference
+or real project writes were used for verification.
+
+## Continuous specification runs (2026-11-01)
+
+**Continue specification** now explicitly runs without an overall eight-request or
+five-minute cutoff. Ongoing requests consume AI-plan usage; Pause specification workflow
+stops and saves progress. Completion, decisions, genuine blockers, failed attempts and
+per-request timeouts still stop/wait normally. Saved assessment calls are reused, not
+repeated. Earlier bounded grants retain their old limits until the next Continue;
+restarting the app does not automatically resume either kind of grant. See
+[workflow consent](coordinated-workflow.md#continuous-continue-specification-2026-11-01).
+
 ## Continue specification and saved label-loop recovery (2026-11-01)
 
 **Continue specification** now reaches the compatible reference-policy upgrade instead

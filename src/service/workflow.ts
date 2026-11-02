@@ -69,17 +69,17 @@ export class ProjectWorkflow {
       phase: !state.enabled && state.phase === "idle" ? "idle" : suspended ? "paused" : state.phase === "blocked" ? "blocked" : state.paused ? "paused" : readiness.readyToImplement ? "ready-to-implement" : changed ? "working" : state.phase,
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
       current: state.current && { kind: state.current.kind, target: state.current.target },
-      grant: state.grant && { used: state.grant.used, remainingMs: remainingMs! }, limits: workflowLimits,
+      grant: state.grant && { used: state.grant.used, remainingMs: remainingMs!, continuous: !!state.grant.continuous }, limits: workflowLimits,
       decisions: enabled ? decisions : [], readiness, active, outcome,
       definitionReviews: definitions.map((area) => ({ ...area,
         title: project.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID })),
       artifacts, lastRun: this.store.latestWorkflowRun(id) };
   }
-  configure(id: string, revision: number, version: number, action: "continue" | "pause" | "disable") {
+  configure(id: string, revision: number, version: number, action: "continue" | "continue-continuous" | "pause" | "disable") {
     let state = this.store.workflow(id);
     if (state.settingsVersion !== version) throw new OperationConflictError("Project workflow settings changed. Refresh before continuing.");
     if (action === "disable" && this.store.processingPolicy(id).mode === "guided") throw new OperationConflictError("Guided processing is selected. Choose another processing mode before using separate task settings.");
-    if (action === "continue") {
+    if (action === "continue" || action === "continue-continuous") {
       if (this.closing || this.active(id) || this.store.discoveryActive(id)) throw new OperationConflictError("Wait for the active task before continuing the project.");
       this.store.assertNoExecution(id);
       const project = this.store.get(id); if (project.revision !== revision) throw new OperationConflictError("Project changed. Refresh before continuing.");
@@ -96,6 +96,7 @@ export class ProjectWorkflow {
       state.enabled = true; state.paused = false; state.phase = "working";
       state.message = "Coordinating saved input and specification checks. Product choices still require your decision.";
       state.grant = { id: randomUUID(), used: 0, remainingMs: workflowLimits.durationMs,
+        ...(action === "continue-continuous" ? { continuous: { format: 1 as const } } : {}),
         submissionIDs: this.store.submissions(id).filter((s) => !s.archivedAt && ["queued", "saved"].includes(s.status)).map((s) => s.id) };
       delete state.waitKey; delete state.owner; delete state.leaseUntil;
     } else {
@@ -104,7 +105,7 @@ export class ProjectWorkflow {
       if (action === "disable") state.enabled = false;
     }
     state.settingsVersion++; this.store.saveWorkflow(id, state);
-    if (action === "continue") { this.armed.add(id); this.tick(id); }
+    if (action === "continue" || action === "continue-continuous") { this.armed.add(id); this.tick(id); }
     else { this.armed.delete(id); this.runs.get(id)?.controller.abort(definitionAbortReason("user-stop")); }
     return this.view(id);
   }
@@ -115,7 +116,7 @@ export class ProjectWorkflow {
       if (!state.enabled || state.paused || !state.grant) return;
       const project = this.project(id), wake = workflowWakeKey(project, this.store.submissions(id));
       if (state.waitKey === wake) return;
-      if (state.grant.used >= workflowLimits.requests || state.grant.remainingMs <= 0) {
+      if (!state.grant.continuous && (state.grant.used >= workflowLimits.requests || state.grant.remainingMs <= 0)) {
         state.paused = true; state.phase = "paused"; state.message = "Workflow allowance reached. Continue specification explicitly for another bounded burst.";
         this.store.saveWorkflow(id, state); return;
       }
@@ -141,27 +142,37 @@ export class ProjectWorkflow {
   }
   private async run(id: string, owner: string, controller: AbortController) {
     const started = Date.now(), initial = this.store.workflow(id), deadline = started + initial.grant!.remainingMs;
-    const timer = setTimeout(() => controller.abort(new DOMException("Workflow active-time allowance reached", "TimeoutError")), Math.max(1, deadline - started));
+    const continuous = !!initial.grant!.continuous;
+    const timer = continuous ? undefined : setTimeout(() => controller.abort(new DOMException("Workflow active-time allowance reached", "TimeoutError")), Math.max(1, deadline - started));
     const owned = () => {
       const state = this.store.workflow(id);
       if (state.owner !== owner || (state.leaseUntil ?? 0) <= Date.now()) throw new OperationConflictError("The workflow worker lease changed. Saved work was retained.");
       return state;
     };
+    const heartbeat = continuous ? setInterval(() => {
+      try {
+        const state = owned();
+        if (state.paused || !state.enabled) { controller.abort(definitionAbortReason("user-stop")); return; }
+        state.leaseUntil = Date.now() + 360000; this.store.saveWorkflow(id, state);
+      } catch (error) { controller.abort(error); }
+    }, 30000) : undefined;
+    let yielded = false;
     const stop = (phase: WorkflowState["phase"], message: string, pause = false) => {
       const state = owned(); state.phase = phase; state.message = message.slice(0, 1600); state.paused ||= pause;
       state.waitKey = workflowWakeKey(this.project(id), this.store.submissions(id)); this.store.saveWorkflow(id, state);
     };
-    const service = new DiscoveryService(this.store, this.adapter, { workflow: { owner,
+    const service = new DiscoveryService(this.store, this.adapter, { workflow: { owner, continuous,
       beforeJob: () => {
         controller.signal.throwIfAborted(); const state = owned(), remaining = workflowLimits.requests - state.grant!.used;
         // Ordinary retrieval can require three calls. Reserve its upper bound;
         // staging uses the actual remaining allowance. Unused slots are visible.
-        if (state.paused || !state.enabled || remaining < 3 || Date.now() >= deadline) throw new WorkflowBudgetPause("Workflow burst limit reached. Continue specification for another bounded allowance; completed calls are retained.");
-        return { requests: remaining, durationMs: Math.max(1, deadline - Date.now()) };
+        if (state.paused || !state.enabled || !continuous && (remaining < 3 || Date.now() >= deadline)) throw new WorkflowBudgetPause("Workflow burst limit reached. Continue specification for another bounded allowance; completed calls are retained.");
+        return continuous ? { requests: 32, durationMs: 900000 } : { requests: remaining, durationMs: Math.max(1, deadline - Date.now()) };
       },
       beforeRequest: (jobID) => {
         controller.signal.throwIfAborted(); const state = owned();
-        if (state.paused || !state.enabled || state.grant!.used >= workflowLimits.requests || Date.now() >= deadline) throw new WorkflowBudgetPause("Project workflow paused before model dispatch.");
+        if (state.paused || !state.enabled || !continuous && (state.grant!.used >= workflowLimits.requests || Date.now() >= deadline)) throw new WorkflowBudgetPause("Project workflow paused before model dispatch.");
+        state.leaseUntil = Date.now() + 360000;
         state.grant!.used++;
         if (state.current && !state.current.jobIDs.includes(jobID)) state.current.jobIDs.push(jobID);
         this.store.saveWorkflow(id, state, jobID);
@@ -197,7 +208,7 @@ export class ProjectWorkflow {
           if (!permitted.length) { stop("paused", "Saved-only input is waiting for processing permission. Continue specification to authorize its processing.", true); return; }
           record("input", project, permitted.map((s) => s.id).sort().join(","));
           queue.resume(id, { processOnly: true, research: false, submissionIDs: permitted.map((s) => s.id) }); await queue.wait(id);
-          if (owned().grant!.used > workflowLimits.requests - 3) throw new WorkflowBudgetPause("Workflow burst allowance reached; saved input and follow-up checkpoints are retained.");
+          if (!continuous && owned().grant!.used > workflowLimits.requests - 3) throw new WorkflowBudgetPause("Workflow burst allowance reached; saved input and follow-up checkpoints are retained.");
         } else {
           const stale = project.refinements.find((p) => p.status === "pending" && refinementIsStale(project, p));
           if (stale) {
@@ -275,15 +286,20 @@ export class ProjectWorkflow {
         }
         const latest = owned(); if (latest.current) latest.current.completed = true; this.store.saveWorkflow(id, latest);
       }
-      stop("paused", "Workflow step limit reached. Completed checks are saved; Continue specification grants another bounded burst.", true);
+      if (continuous) {
+        // Yield the worker without exhausting session consent or repeating a completed
+        // task. The armed scheduler claims a fresh run receipt on its next tick.
+        const state = owned(); delete state.waitKey; this.store.saveWorkflow(id, state);
+        yielded = true;
+      } else stop("paused", "Workflow step limit reached. Completed checks are saved; Continue specification grants another bounded burst.", true);
     } catch (error) {
       stop(error instanceof WorkflowBudgetPause || controller.signal.aborted ? "paused" : "blocked", safeMessage(error instanceof Error ? error.message : error), true);
     } finally {
-      clearTimeout(timer); controller.signal.removeEventListener("abort", abort); await queue.close();
+      clearTimeout(timer); clearInterval(heartbeat); controller.signal.removeEventListener("abort", abort); await queue.close();
       const state = this.store.workflow(id);
       if (state.owner === owner) {
-        state.grant!.remainingMs = Math.max(0, state.grant!.remainingMs - (Date.now() - started));
-        if (this.store.processingPolicy(id).mode === "manual") {
+        if (!continuous) state.grant!.remainingMs = Math.max(0, state.grant!.remainingMs - (Date.now() - started));
+        if (this.store.processingPolicy(id).mode === "manual" && !yielded) {
           state.paused = true;
           state.message = `${state.message} Manual processing is on; continue explicitly for more work.`.slice(0, 1600);
           this.armed.delete(id);

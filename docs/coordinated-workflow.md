@@ -1,5 +1,69 @@
 # Coordinated workflow preview (DEC-032)
 
+## Bounded invalid-lookup correction (2026-11-02)
+
+The user approved letting a definition step correct invalid evidence references using
+precise validation feedback, within its existing three-failure limit and live action
+consent. Rejected batches load nothing; even valid references in a mixed invalid batch
+must be resubmitted completely. Every rejected attempt is charged, not credited as a
+successful load. Unknown IDs/labels are never guessed or silently dropped. Exhaustion
+still stops and the separate one-request recovery remains explicit; ordinary Continue
+cannot reset it. Other failures/blockers retain their existing stops. Saved checks and
+accepted loads replay unchanged through reopen/portable continuation. See
+[compatibility ledger](migrations.md#bounded-correction-of-invalid-evidence-lookups-2026-11-02).
+
+Verification: **1,469** full-suite tests, all 18 default browser runners, five final
+focused correction tests, a focused correction/Pause/reload browser flow, type checks
+and UI/desktop/Windows Electron checks passed. No live inference or real-project writes.
+
+## Task-derived dimension scheduling (2026-11-02)
+
+Continue/Refresh can resume a compatible saved review whose auxiliary dimension work
+filled the old 128-step schedule. After replay, an optional policy budgets the complete
+bounded task grid: two phases × (64 evidence partitions + 64 linked-page partitions)
+× nine dimensions, up to 2,304 steps. All completed responses, exact evidence, selected
+checks, lookup hashes and failed attempts remain saved; no new action/recovery grant
+is inferred. Legacy work retains its previous bounds until activation; restart alone
+does not dispatch. Metrics can retain the associated bounded request ledger. See
+[migration details](migrations.md#task-derived-definition-dimension-execution-2026-11-02).
+
+A read-only unchanged-findings simulation of the real checkpoint completed at 173
+steps (55 simulated new checks), preserving all 118 saved stages and accepted loads.
+Its largest request was 95,929 characters. No live model calls or project writes were
+used; future live interpretation remains unverified.
+
+Verification: **1,464** full-suite tests, all 18 default browser runners, focused
+continuous/limit browser checks, type checking, UI/desktop builds and Windows Electron
+checks passed. Upgrade tests retain an unfinished portable/SQLite checkpoint and
+independently enforce per-phase evidence/page limits.
+
+## Continuous Continue specification (2026-11-01)
+
+The browser's Continue button now sends explicit `continue-continuous` consent rather
+than the legacy bounded `continue` action. It no longer pauses just because eight
+requests or five active minutes have elapsed. Large definition reviews use the existing
+continuous staged runner, reusing saved receipts/evidence loads and preserving every
+failed attempt. Staged question preparation, refinement, saved-input review and gap
+packages also retain their per-step limits while removing this coordinator's action
+cutoff. Requests are counted durably before dispatch; worker/job leases stay finite
+and renew only while their owner is live. Twenty coordinator steps yield to another
+worker pass without requiring a button click or resetting the grant's cumulative count.
+
+Pause/Stop, model/connection errors, stale edits, exhausted steps, evidence/product
+blockers and decisions still stop or wait for attention. Individual requests still
+time out. Continuous consent does not renew exhausted-step recovery or authorize
+research, coding or approvals. Manual mode still includes only saved input authorized
+at the start and disarms at a real waiting/stopping boundary. Reopen/poll never arms a
+saved continuous grant. Click Continue again after restarting; old bounded grants
+remain bounded until a new explicit action. Earlier dated burst limits below describe
+legacy behavior. See [migration ledger](migrations.md#continuous-specification-consent-2026-11-01).
+
+Verification: **1,460** tests (754 pretests + 706 main), all 18 default browser
+runners, type checking, UI/desktop builds, Windows Electron continuity/relaunch and
+diff checks passed. New deterministic tests cross the former allowance using twelve
+requests over twelve simulated minutes, then preserve accounting on Stop, failure and
+technical block. No live-model qualification or real-project writes were performed.
+
 ## Compact saved-lookup metadata (2026-11-01)
 
 Ordinary Continue/Refresh adopts compact context metadata after replay: canonical

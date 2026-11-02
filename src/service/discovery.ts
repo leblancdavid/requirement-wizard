@@ -69,7 +69,7 @@ function schemaDiagnostic(error: z.ZodError): string {
 export class DiscoveryService {
   constructor(readonly store: ProjectStore, private readonly adapter: DiscoveryAdapter,
     private readonly navigation: { searchEvidence?: typeof searchSavedEvidence; stagedLimits?: { requests: number; durationMs: number }; definitionRequestMs?: number;
-      workflow?: { owner: string; beforeJob: () => { requests: number; durationMs: number }; beforeRequest: (jobID: string) => void } } = {}) {
+      workflow?: { owner: string; continuous?: boolean; beforeJob: () => { requests: number; durationMs: number }; beforeRequest: (jobID: string) => void } } = {}) {
     if (navigation.stagedLimits) z.object({ requests: z.number().int().min(1).max(stagedRunRequestLimit),
       durationMs: z.number().int().min(1).max(stagedRunDurationMs) }).strict().parse(navigation.stagedLimits);
     if (navigation.definitionRequestMs !== undefined) z.number().int().min(1).max(300000).parse(navigation.definitionRequestMs);
@@ -281,6 +281,7 @@ export class DiscoveryService {
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
     const workflowLimits = this.navigation.workflow?.beforeJob();
+    const continuousDefinition = options.continuousDefinition || !!(options.definitionEpicID && this.navigation.workflow?.continuous);
     if (options.readinessQuestions !== undefined) {
       readinessQuestionTaskSchema.parse(options.readinessQuestions);
       if (options.definitionEpicID || options.definitionLimits || options.gapMode || options.helpRequest || options.refinementOnly
@@ -352,9 +353,9 @@ export class DiscoveryService {
       if (witness) this.store.finishDefinitionRequest(job.id, witness, response);
       return response;
     } };
-    // Continuous manual assessments renew a finite lease at each staged dispatch.
+    // Continuous assessments renew a finite lease at each staged dispatch.
     // Ordinary requests retain five minutes; bounded workflows keep their own lease.
-    this.store.claimJob(job.id, Date.now() + (options.continuousDefinition ? 360_000 : options.gapMode || options.definitionEpicID ? stagedRunLeaseMs : 360_000));
+    this.store.claimJob(job.id, Date.now() + (continuousDefinition ? 360_000 : options.gapMode || options.definitionEpicID ? stagedRunLeaseMs : 360_000));
     const measurement = !options.helpRequest && !options.refinementOnly
       ? new DiscoveryMeasurement((value) => this.store.saveDiscoveryMetrics(job.id, value)) : undefined;
     const completeMeasurement = (result: Job): Job => {
@@ -378,9 +379,9 @@ export class DiscoveryService {
         options.onProgress?.(`Preparing definition evidence for ${project.epics.find((e) => e.id === options.definitionEpicID)?.title ?? options.definitionEpicID}\nGathering exact current area records and linked project/dependency evidence. Local preparation only; no model request is running yet.`);
         if (this.store.definitionHistory(project.id, options.definitionEpicID, definitionInputKey(project, options.definitionEpicID)).length) {
           clearTimeout(timer);
-          if (!options.continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
+          if (!continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition,
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: continuousDefinition,
               protocolRecovery: !!this.navigation.workflow, recoveryJobID: options.definitionRecoveryJobID, onRequest: options.onDefinitionRequest }));
         }
         try { definition = definitionContext(project, options.definitionEpicID); }
@@ -389,9 +390,9 @@ export class DiscoveryService {
           this.store.attachContext(job.id, error.manifest);
           options.onProgress?.("The complete area exceeds one request. Preparing exact evidence batches; no assessment has been published and no evidence will be truncated.");
           clearTimeout(timer);
-          if (!options.continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
+          if (!continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition,
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: continuousDefinition,
               protocolRecovery: !!this.navigation.workflow, onRequest: options.onDefinitionRequest }));
         }
         if (options.definitionSchedule && options.definitionSchedule.deadline - Date.now() < definitionRequestReserve(options.definitionSchedule, "collect")) {
@@ -445,9 +446,9 @@ export class DiscoveryService {
         const staged = this.store.jobs(projectID).some((j) => j.id !== job.id && j.readinessWork && JSON.stringify(j.readinessWork.task) === JSON.stringify(task));
         const run = async (overflow?: ContextBudgetError) => {
           clearTimeout(timer);
-          // Ordinary question preparation runs to completion. Coordinated work and
-          // explicit bounded callers retain their own shared allowances.
-          const continuous = !workflowLimits && !this.navigation.stagedLimits;
+          // Ordinary/explicitly continuous question preparation runs to completion;
+          // legacy bounded callers retain their own shared allowances.
+          const continuous = this.navigation.workflow?.continuous || !workflowLimits && !this.navigation.stagedLimits;
           if (!continuous) timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
           return completeMeasurement(await runReadinessStages(this.store, inferenceAdapter, project, job, task, {
             signal: controller.signal, blockedJob: source, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, continuous,
@@ -477,9 +478,9 @@ export class DiscoveryService {
         const previous = [...this.store.jobs(projectID)].reverse().find((j) => j.id !== job.id && sameRefinementTask(j, requirementID, stagedPair));
         const run = async (overflow?: ContextBudgetError) => {
           clearTimeout(timer);
-          timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
+          if (!this.navigation.workflow?.continuous) timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
           return await runRefinementStages(this.store, inferenceAdapter, project, job, requirementID,
-            { signal: controller.signal, pair: stagedPair, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, onProgress: options.onProgress, onRequest: options.onRefinementRequest });
+            { signal: controller.signal, continuous: this.navigation.workflow?.continuous, pair: stagedPair, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, onProgress: options.onProgress, onRequest: options.onRefinementRequest });
         };
         if (previous?.refinementWork && previous.status !== "completed") return await run();
         try { ordinaryContext = taskPlanner(project, ordinaryTask); }
@@ -489,9 +490,9 @@ export class DiscoveryService {
         const previous = this.store.jobs(projectID).some((j) => j.id !== job.id && j.submissionWork?.submissionID === stagedItem.id);
         const run = async (overflow?: ContextBudgetError) => {
           clearTimeout(timer);
-          timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
+          if (!this.navigation.workflow?.continuous) timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
           return completeMeasurement(await runSubmissionStages(this.store, inferenceAdapter, project, job, stagedItem, ordinaryTask,
-            { signal: controller.signal, research: options.research ?? false, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, onProgress: options.onProgress, measurement }));
+            { signal: controller.signal, continuous: this.navigation.workflow?.continuous, research: options.research ?? false, overflow, limits: workflowLimits ?? this.navigation.stagedLimits, onProgress: options.onProgress, measurement }));
         };
         if (previous) return await run();
         try { ordinaryContext = taskPlanner(project, ordinaryTask); }
@@ -558,6 +559,9 @@ export class DiscoveryService {
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
       const requestModel = async (context: ContextPack) => {
+        if (this.navigation.workflow?.continuous) {
+          clearTimeout(timer); timer = setTimeout(timeout, 300000);
+        }
         if (options.definitionEpicID) options.onDefinitionRequest?.();
         if (options.refinementOnly) { this.store.recordRefinementRequest(job.id); options.onRefinementRequest?.(); }
         const requestStarted = Date.now();
@@ -583,7 +587,7 @@ export class DiscoveryService {
           reviewReport.modelCalls = work.attempts;
           if (work.epicStages) reviewReport.stagedProgress = { phase: work.epicStages.phase, completed: work.epicStages.receipts.length,
             batches: work.epicStages.batches, totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts) };
-          this.store.checkpointRetrieval(job.id, work, context.manifest);
+          this.store.checkpointRetrieval(job.id, work, context.manifest, this.navigation.workflow?.continuous ? Date.now() + 360000 : undefined);
           this.store.attachEpicReviewReport(job.id, reviewReport);
         };
         const block = (reason: string, finish = false): Job => {
@@ -609,7 +613,7 @@ export class DiscoveryService {
           const limits = workflowLimits ?? this.navigation.stagedLimits ?? { requests: stagedRunRequestLimit, durationMs: stagedRunDurationMs };
           work.stagedRun = { format: 1, requestLimit: limits.requests, durationMs: limits.durationMs };
           clearTimeout(timer);
-          timer = setTimeout(timeout, Math.max(0, started + limits.durationMs - Date.now()));
+          if (!this.navigation.workflow?.continuous) timer = setTimeout(timeout, Math.max(0, started + limits.durationMs - Date.now()));
           if (work.stages.length || work.continuation) throw new Error("Staged decision review cannot reuse ordinary navigation work.");
           let callsThisRun = 0;
           while (staged.phase !== "complete") {
@@ -620,7 +624,7 @@ export class DiscoveryService {
             if (review.contextPolicy === "staged-records-v4") report("Questions-only exact-record fallback: linked evidence is distributed across saved batches, not dropped. All records must be read and every surviving question checked against every batch before publication. No new requirements, approvals or completeness claims are authorized. Unsafe comparisons still block.");
             checkpoint();
             if (work.attempts >= 3) return block("Three attempts spent on this exact decision stage. Earlier completed stages remain saved; unchanged work will not retry automatically.");
-            if (callsThisRun >= limits.requests || Date.now() - started >= limits.durationMs) {
+            if (!this.navigation.workflow?.continuous && (callsThisRun >= limits.requests || Date.now() - started >= limits.durationMs)) {
               const reason = callsThisRun >= limits.requests ? "request-limit" : "time-limit";
               return completeMeasurement(this.store.pauseEpicReview(job.id, reason));
             }

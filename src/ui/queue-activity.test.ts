@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyExecution } from "../core/execution.js";
 import { projectSchema, type Job, type Submission } from "../core/model.js";
-import { queueActivities, discoveryResumeJob } from "./queue-activity.js";
+import { definitionActivityLabel, queueActivities, discoveryResumeJob } from "./queue-activity.js";
 import { refinementActivity, pausedRefinement } from "./refinement-progress.js";
 import { mayContinueProject, WorkflowControls } from "./workflow-controls.js";
 import type { WorkflowView } from "../service/workflow.js";
@@ -13,6 +13,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { followThroughOutcome } from "../core/follow-through.js";
 import { ProcessingSettings } from "./processing-settings.js";
 import { emptyMaintenance, maintenanceLimits } from "../core/maintenance.js";
+
+test("definition activity names the saved assessment area rather than the browsed area", () => {
+  const snapshot = { ...project, epics: [{ ...project.epics[0]!, id: "awards", title: "Awards & achievements" },
+    { ...project.epics[0]!, id: "other", title: "Currently browsed area" }] };
+  const job = { context: { definitionAssessment: { epicID: "awards" } } } as Job;
+  assert.equal(definitionActivityLabel(snapshot, job), "Checking how clearly “Awards & achievements” is defined…");
+  assert.equal(definitionActivityLabel(snapshot, { definitionWork: { epicID: "awards" } } as Job), definitionActivityLabel(snapshot, job));
+  assert.equal(definitionActivityLabel({ ...snapshot, epics: [] }, job), "Checking how clearly “awards” is defined…");
+  assert.equal(definitionActivityLabel(snapshot), undefined);
+  assert.equal(definitionActivityLabel(snapshot, { ...job, context: undefined }), undefined);
+});
 
 test("Continue specification consistently distinguishes consent, waiting decisions, active work and resumable allowances", () => {
   const workflow: WorkflowView = { lastRun: null, version: 0, enabled: false, paused: true, suspended: false, phase: "idle", message: "Not started",

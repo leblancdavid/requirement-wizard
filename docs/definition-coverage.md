@@ -5,6 +5,53 @@ decisions; it is not readiness, code completeness, or verified delivery to main.
 
 ## Refresh the overall view
 
+### Invalid lookup correction stays within the failed-attempt limit (2026-11-02)
+
+An unknown reference in a mixed evidence lookup still rejects the **entire** request;
+the app never guesses an ID or loads the valid subset silently. With the user-approved
+versioned correction policy, the next permitted request receives validation feedback
+and may correct its lookup without losing completed checks. The rejected attempt stays
+spent; three failures stop the step and ordinary Refresh cannot grant more. Cancellation,
+stale output, other errors and genuine product/evidence blockers retain their stop rules.
+
+New rejected requests are stored as failed attempts, separate from successful evidence
+loads. Older failures retain their dated diagnostic and unknown raw details honestly.
+The reported checkpoint replays read-only with two saved checks, one spent attempt and
+all 71 records unchanged; feedback fits at 91,935 / 96,000 characters. No model call or
+real-project write was used for qualification. See
+[upgrade and replay compatibility](migrations.md#bounded-correction-of-invalid-evidence-lookups-2026-11-02).
+
+Verification: **1,469** full-suite tests, all 18 default browser runners, five final
+focused correction regressions, a focused atomic correction/Pause/reload browser flow,
+type checking, UI/desktop builds and Windows Electron checks passed. Live model
+correction remains unqualified; the real checkpoint was replayed read-only.
+
+### Dimension scheduling follows the bounded task grid (2026-11-02)
+
+The reported 128-step blocker was a scheduling limit, not proof of missing product
+decisions or indivisible evidence: 118 stages were saved, including 38 verification
+steps, while evidence partitions were only 39 collection / 24 verification. Compatible
+Refresh/Continue now adopts a versioned bound derived from two phases, 64 evidence
+and 64 linked-page partitions per phase, and nine dimensions (2,304 maximum steps).
+Existing records, complete selected checks, request hashes and failed attempts remain
+unchanged. Legacy work retains its old bounds until this additive upgrade after replay.
+Context, partition, per-step failure, recovery and consent limits still apply.
+
+Read-only replay preserves all 118 saved stages; the current 20-record step becomes
+bounded at 83,565 characters after scheduling complete dimension groups. No live AI
+calls or real-project writes were used. See
+[compatibility and limits](migrations.md#task-derived-definition-dimension-execution-2026-11-02).
+
+The full read-only continuation simulation completed with unchanged simulated findings:
+**173** total steps, **55** new simulated checks, maximum **95,929** characters,
+39/30 collection/verification evidence partitions and 19/22 linked-page partitions.
+All 118 original receipts and accepted loads remain unchanged. This is not live-model
+qualification or a guarantee against genuinely new evidence/blockers.
+
+Verification: **1,464** full-suite tests (757 pretests + 707 main), all 18 default
+browser runners, focused continuous/limit browser checks, type checking, UI/desktop
+builds, Windows Electron continuity/relaunch and diff checks passed.
+
 ### Compact navigation metadata without dropping evidence (2026-11-01)
 
 Two further accepted lookups exposed avoidable overhead even with a single selected

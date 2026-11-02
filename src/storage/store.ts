@@ -1378,13 +1378,14 @@ export class ProjectStore {
   }
 
   /** A checkpoint is evidence of a completed navigation call, never a gap check. */
-  checkpointRetrieval(id: string, input: RetrievalWork, context: NonNullable<Job["context"]>) {
+  checkpointRetrieval(id: string, input: RetrievalWork, context: NonNullable<Job["context"]>, leaseUntil?: number) {
     this.db.transaction(() => {
       const job = this.getJob(id);
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Retrieval worker is no longer live.");
       if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
       job.retrievalWork = retrievalWorkSchema.parse(input);
       job.context = context;
+      if (leaseUntil !== undefined) job.leaseUntil = Math.max(job.leaseUntil!, z.number().int().min(Date.now() + 1).max(Date.now() + 360000).parse(leaseUntil));
       this.saveJob(job);
     }).immediate();
   }

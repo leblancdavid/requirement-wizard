@@ -14,9 +14,22 @@ import { definitionQuestionTask } from "../core/readiness-questions.js";
 import { runReadinessStages } from "./readiness-stages.js";
 import { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionCellExecutionStageLimit } from "../core/definition-continuation.js";
+import { definitionRequestLimit } from "../core/definition-budget.js";
 
 const empty = (): Analysis => ({ summary: "PRIVATE model output", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 const create = (store: ProjectStore) => store.create("PRIVATE project name", "PRIVATE initial human input", { providerID: "openai", modelID: "PRIVATE-model" });
+
+test("cell execution metrics remain bounded while preserving measurements beyond the former 128-step envelope", () => {
+  const measurement = new DiscoveryMeasurement(() => {}), base = structuredClone(measurement.value);
+  const request = { durationMs: null, outcome: "in-flight" as const, response: null, context: {
+    characters: 100, budget: 96000, includedRecords: 1, omittedRecords: 0, areas: 1, sections: {}, traversal: null } };
+  const expanded = { ...base, requests: Array.from({ length: 1537 }, () => request) };
+  assert.equal(discoveryMetricsSchema.parse(expanded).requests.length, 1537);
+  const maximum = definitionCellExecutionStageLimit * definitionRequestLimit;
+  assert.equal(discoveryMetricsSchema.safeParse({ ...base, requests: Array.from({ length: maximum + 1 }, () => request) }).success, false);
+  assert.deepEqual(measurement.value, base, "No measurements or calls are manufactured by schema support");
+});
 
 test("definition local timings allowlist phase names, retain exception time and leave older timings unknown", () => {
   const measurement = new DiscoveryMeasurement(() => {});

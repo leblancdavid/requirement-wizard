@@ -7,7 +7,7 @@ import type { WorkflowDecision } from "../core/workflow.js";
 import { Modal } from "./modal.js";
 import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
-import { discoveryResumeJob, type QueueActivity } from "./queue-activity.js";
+import { definitionActivityLabel, discoveryResumeJob, type QueueActivity } from "./queue-activity.js";
 import { ActivityBar, ActivityFeedback, Spinner } from "./activity.js";
 import "./processing-queue.css";
 import { ActionScope } from "./action-button.js";
@@ -75,7 +75,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
       : blocked.length ? "Some responses need attention" : actionablePause ? "Processing paused" : attention.length ? "Needs attention"
       : waiting.length ? "Ready to process" : saved.length ? "Saved · awaiting follow-up" : "Ready when you are";
     const headline = reuse && !hasUnfinishedInput ? "Clarification complete · saved result reused" : taskCount > 1 ? `${taskCount} tasks processing` : running[0]?.title ?? (workflow?.enabled ? `Project workflow · ${workflowLabels[workflow.phase]}` : discoveryHeadline);
-    const liveStage = running[0]?.title ?? (active ? refinement?.label ?? (lastJob?.kind === "definition-scope-review" ? "Reviewing assigned dimensions against complete project evidence…" : lastJob?.kind === "definition-joint-review" ? "Checking all nine original findings together…" : lastJob?.context?.definitionAssessment ? "Checking how clearly this area is defined…" : processing.length ? "Reviewing saved responses…" : "Reviewing your project information…") : undefined);
+    const liveStage = running[0]?.title ?? (active ? refinement?.label ?? (lastJob?.kind === "definition-scope-review" ? "Reviewing assigned dimensions against complete project evidence…" : lastJob?.kind === "definition-joint-review" ? "Checking all nine original findings together…" : definitionActivityLabel(project, lastJob) ?? (processing.length ? "Reviewing saved responses…" : "Reviewing your project information…")) : undefined);
        const clarificationResume = !!clarificationJob?.readinessProgress && !!continueClarification && !clarificationBlockedInput;
       const refinementResume = !!refinementJob && !!continueRefinement && !hasUnfinishedInput;
        const canResume = !active && !refinementResume && !clarificationResume && !processingFirst && (actionablePause || waiting.length > 0 || saved.length > 0)
@@ -111,7 +111,7 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
       {!working && clarificationResume && <button className="primary queue-header-action" disabled={disabled} onClick={continueClarification}>Continue clarification</button>}
       {!working && refinementResume && !clarificationResume && <button className="primary queue-header-action" disabled={disabled} onClick={() => continueRefinement!(refinementJob!.id)}>Continue refinement</button>}
       {!working && processingFirst && <button className="primary queue-header-action" disabled={disabled} onClick={exhausted && extendSavedResponse ? () => setOpen(true) : processSavedResponses}>{exhausted && extendSavedResponse ? "Review additional allowance" : "Process saved responses only"}</button>}
-      {workflow && configureWorkflow && !working && !processingFirst && !clarificationResume && !refinementResume && mayContinueProject(workflow) && <button key="continue-project" className="primary queue-header-action" disabled={disabled} title={workflow.enabled ? "Continue specification checks with up to 8 model requests and 5 active minutes. Planning and coding remain explicit." : "Review specification workflow scope and allowance before enabling it."} onClick={() => workflow.enabled ? configureWorkflow("continue") : setOpen(true)}>Continue specification</button>}
+      {workflow && configureWorkflow && !working && !processingFirst && !clarificationResume && !refinementResume && mayContinueProject(workflow) && <button key="continue-project" className="primary queue-header-action" disabled={disabled} title={workflow.enabled ? "Continue specification until checks finish, a decision or blocker needs attention, or you pause. Requests consume your AI plan’s usage. Planning and coding remain explicit." : "Review specification workflow scope and allowance before enabling it."} onClick={() => workflow.enabled ? configureWorkflow("continue-continuous") : setOpen(true)}>Continue specification</button>}
     </div>
     {open && <ActionScope><Modal id="processing-queue" className="queue-drawer" titleID="queue-title" title="Processing & queue" close={() => setOpen(false)} closeLabel="Close processing queue" headerClassName="queue-drawer-heading" bodyClassName="queue-panel"
       description={<p role="status">{taskCount} active {taskCount === 1 ? "task" : "tasks"} · Responses: {processing.length} processing · {waiting.length} waiting{attentionCount ? ` · ${attentionCount} need attention` : ""}{actionablePause && !active ? lastJob?.context?.definitionAssessment ? " · Definition processing paused" : " · Discovery paused" : ""}</p>}>

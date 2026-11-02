@@ -6,7 +6,7 @@ import type { ProjectStore } from "../storage/store.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 
 export async function runRefinementStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, requirementID: string,
-  options: { signal: AbortSignal; pair?: ResolutionStageTask; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number }; onProgress?: (message: string) => void; onRequest?: () => void }) {
+  options: { signal: AbortSignal; continuous?: boolean; pair?: ResolutionStageTask; overflow?: ContextBudgetError; limits?: { requests: number; durationMs: number }; onProgress?: (message: string) => void; onRequest?: () => void }) {
   const previous = [...store.jobs(project.id)].reverse().find((j) => j.id !== job.id && sameRefinementTask(j, requirementID, options.pair));
   const m = refinementMaterials(project, requirementID, previous ? undefined : options.overflow, options.pair);
   // Explicit new refinement after genuinely changed evidence starts a new plan;
@@ -45,14 +45,14 @@ export async function runRefinementStages(store: ProjectStore, adapter: Discover
       return store.finishJob(job.id, draft);
     }
     if (blocked) throw new Error(`Refinement blocked: ${blocked} Completed steps and spent attempts remain saved.`);
-    if (calls >= limits.requests || Date.now() >= deadline) return store.pauseRefinement(job.id,
+    if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline)) return store.pauseRefinement(job.id,
       `Refinement paused: ${refinementStep(w)} / ${w.batches.length * 2} steps saved. Run Refine again explicitly to continue; completed requests will not repeat.`);
     if (w.attempts >= 4) throw new Error("Refinement step exhausted its four-request allowance. Completed steps and spent attempts remain saved; retrying does not reset the allowance.");
     w.attempts++; calls++; store.checkpointRefinement(job.id, w, context.manifest, true);
     options.onRequest?.();
     const step = refinementStep(w), reading = step < w.batches.length;
     options.onProgress?.(`${reading ? "Reading evidence" : "Checking proposed wording"} ${step % w.batches.length + 1} of ${w.batches.length} · ${step} / ${w.batches.length * 2} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial proposals published.`);
-    const timeout = AbortSignal.timeout(Math.max(1, Math.min(300000, deadline - Date.now()))), signal = AbortSignal.any([options.signal, timeout]);
+    const timeout = AbortSignal.timeout(options.continuous ? 300000 : Math.max(1, Math.min(300000, deadline - Date.now()))), signal = AbortSignal.any([options.signal, timeout]);
     let abort: () => void = () => {};
     try {
       const interrupted = new Promise<never>((_resolve, reject) => { abort = () => reject(signal.reason); signal.addEventListener("abort", abort, { once: true }); });

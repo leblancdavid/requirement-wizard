@@ -47,6 +47,21 @@ every technical detail proposed in the planning documents.
 
 ## Coordinated project workflow (DEC-032)
 
+Confirmed follow-up (2026-11-02): the user selected **bounded correction** for invalid
+definition evidence lookups. Give validation feedback and permit correction within the
+existing three-failure/action allowance; preserve progress and charge every attempt.
+Never guess IDs, silently drop an invalid reference or apply part of an invalid batch.
+Other errors, genuine blockers and explicit exhausted-step recovery retain their rules.
+
+Confirmed follow-up (2026-11-01): repeated eight-request/five-minute pauses are
+unwanted. The browser's **Continue specification** now explicitly authorizes continuous
+specification work until completion, a decision/blocker, Stop or shutdown. It consumes
+AI-plan usage without an overall action-time/request cutoff. Per-request timeouts,
+failed-attempt/context/schedule bounds and separate recovery consent remain. Previously
+saved bounded grants are not silently widened; restart still requires explicit Continue.
+No new research, coding, approval or delivery authority is granted. See
+[continuous workflow compatibility](migrations.md#continuous-specification-consent-2026-11-01).
+
 Confirmed continuation-control follow-up: the user approved consolidating normal
 continuation into **Continue project**, with clear first-entry scope/allowance
 explanation and narrow manual recovery under **Advanced actions**. Do not silently

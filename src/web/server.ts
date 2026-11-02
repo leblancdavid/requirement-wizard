@@ -501,7 +501,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, options.store.configureProcessingPolicy(id, expectedRevision, change)); return;
       }
       if (action === "workflow") {
-        const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["continue", "pause", "disable"]) }).strict().parse(raw);
+        const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["continue", "continue-continuous", "pause", "disable"]) }).strict().parse(raw);
         json(res, 200, workflow.configure(id, input.revision, input.version, input.action)); return;
       }
       if (action === "analyze") {

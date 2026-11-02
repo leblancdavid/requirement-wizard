@@ -1,5 +1,160 @@
 # Data migrations and upgrade compatibility
 
+## Bounded correction of invalid evidence lookups (2026-11-02)
+
+**Additive forward protocol policy:** SQLite remains **23**, definition work **1**.
+Optional strict `evidenceCorrectionPolicy` format **1** records the activation stage
+and prior accepted lookup counts. New `evidenceFailures` preserve each rejected parsed
+lookup, generated validation reason, exact context hash, stage/attempt, source job/model
+and subdivision/linked/dimension-event counts. No invalid request partially loads its
+otherwise valid IDs, earns successful-load credit, changes findings or grants citations.
+The next permitted request receives quoted rejected references plus validation feedback
+and can correct its lookup or proceed without it. Unknown labels are never guessed,
+mapped through a global ordinal, coerced from identifier-table indexes or silently dropped.
+
+The user explicitly approved bounded correction. Each rejected response remains spent
+within the existing **three-failure** limit, 12-request/eight-load step envelope and
+live workflow/action consent. Ordinary Refresh cannot reset exhaustion. A separate
+explicit exhausted-step grant remains one additional request, charged before dispatch.
+Other malformed responses, semantic blockers, transport/model failures, timeouts,
+cancellation and stale output keep their existing stop/rejection behavior. Feedback
+is not a product decision and cannot generate clarification questions.
+
+Activation occurs only after historical replay for unfinished, compatible, unblocked
+work. Existing requests/receipts, raw accepted evidence, input/plan keys, completed
+checks and attempts remain unchanged. Stage/request/event boundaries reconstruct each
+rejected request before later loads, feedback or repacking; accepted lookup replay
+excludes failures that happened afterward. A later same-stage follow-up-policy upgrade
+also retains its pre-upgrade context. Failures and accepted loads are distinct ledgers,
+never credited twice. Unsupported policy formats, forged contexts, invalid boundaries
+and fabricated failure records reject without overwriting saved work.
+
+Older saved technical failures matching the exact invalid-reference diagnostic retain
+their original dated job/reason and spent attempt. A `legacyRejection` supplies those
+known counts, explicitly discloses that the old app did not save the rejected IDs/raw
+response, and binds the newly prepared continuation context after compatible upgrades.
+No missing raw response or intended reference is manufactured. Genuine product/other
+blocks are not cleared. Reopen alone runs no calls. Portable continuation carries this
+optional policy/ledger; older apps cannot read it (no downgrade support). No SQL
+migration, reset, reassessment of completed work or assessment-fingerprint change occurs.
+
+Read-only diagnosis of the reported revision-3031 case found one unavailable label
+among five requested references. Its global meaning was unrelated, so it was not a safe
+substitute. In-memory upgrade preserves both saved checks, the spent attempt and all
+71 supplied records; the continuation including feedback is **91,935 / 96,000**
+characters (previously 90,899). Stored OpenCode messages were inspected through a
+separate owned server without inference; no project writes or provider credential
+inspection occurred. This does not qualify future live model correction.
+
+Synthetic tests cover atomic mixed-request rejection/correction, three-failure stop,
+no ordinary retry/recovery refund, a separately spent one-request recovery, cancelled/
+stale correction output, legacy continuation, same-stage accepted-load/failure hashes,
+repeated SQLite reopen, portable decoding and future/tampered-ledger rejection.
+
+Verification: **1,469** full-suite tests (**762** pretests + **707** main), all 18
+default browser runners, five final focused correction regressions, a focused browser
+flow with atomic rejected lookup → correction → Pause/reload → exact continuation,
+type checking, UI/desktop builds, Windows Electron continuity/relaunch and diff checks
+passed. Fixtures qualify protocol/accounting, not live model correction. No live
+inference or real-project data writes were performed.
+
+## Task-derived definition dimension execution (2026-11-02)
+
+**Additive forward scheduling policy:** SQLite remains **23**, definition work **1**.
+Optional strict `executionPolicy` format **1** records the activation receipt boundary,
+prior accepted request/follow-up counts, subdivision count, linked-review count and
+dimension-review count. Ordinary Refresh/Continue adopts it only after successful
+historical replay for unfinished, unblocked dimension work. No startup rewrite or
+inference occurs. Original batches, input/plan keys, exact evidence, draft checks,
+loaded IDs, context hashes, raw responses, dated jobs and spent attempts stay intact.
+Completed work is not upgraded, invalidated or reassessed.
+
+The legacy 128-step envelope could be exhausted by auxiliary dimension groups while
+many evidence partitions remained below their limits. New work uses a bound derived
+from the complete permitted task grid: **two phases × (64 evidence partitions + 64
+linked-answer page partitions) × nine dimensions = 2,304 execution steps**. Linked
+pages have an explicit separate per-phase bound; dimension groups do not consume new
+evidence partitions. Pair-preserving subdivisions of linked pages retain their existing
+evidence-subdivision charge as well. The existing 62-event subdivision ledger, 96,000-
+character request limit, unchanged evidence/citation authority, per-step request/load/
+failure limits, recovery consent and workflow authorization remain authoritative.
+This is not an unlimited retry allowance or permission to waive an indivisible check.
+
+Without the new policy, legacy work retains its original 64/128-step bounds. Larger
+indices/receipts require the marker; impossible boundaries and unsupported future
+formats reject without overwriting saved work. Stage plus same-stage request/event
+counts preserve pre-upgrade receipt/lookup contexts. Policy activation is idempotent
+and interruption-safe: its next checkpoint contains either the previous valid ledger
+or the additive marker and schedule. Reopen alone cannot dispatch. Portable continuation
+carries the policy; older apps cannot read it (no downgrade support).
+
+Discovery metrics format **1** now allows up to **27,648** request entries (2,304 ×
+the existing 12-request stage maximum), preventing telemetry storage from becoming a
+smaller execution ceiling. Old measurements stay unchanged; no timings, calls or
+missing historical provenance are invented. Saved assessment semantics/fingerprints
+and privacy allowlists are unchanged.
+
+The reported revision-3028 checkpoint was read directly through a read-only SQLite
+connection: **118** saved stages (80 collection/38 verification), a 128-step schedule,
+and **39 collection / 24 verification** evidence partitions. Historical replay and an
+in-memory policy activation preserve every saved response and lookup. The blocked
+20-record step can schedule its complete checks at **83,565 / 96,000** characters
+without repeating earlier calls. This is a scheduling reproduction, not live semantic
+qualification. Synthetic upgrade tests also cover >128-step completion, retained
+failed attempts, repeated reopen, portable continuation and future/unmarked rejection.
+
+The complete read-only continuation simulation subsequently finished at **173** total
+steps (**55** simulated new checks), retaining all 118 original receipts and every
+accepted lookup with unchanged simulated findings. Maximum context was **95,929**
+characters; evidence partitions ended at **39 collection / 30 verification**, linked
+page partitions at **19 collection / 22 verification**. This proves the unchanged-
+findings schedule fits, not that future live responses will agree or add no evidence.
+
+Verification completed: **1,464** full-suite tests (**757** pretests + **707** main),
+all 18 default browser runners, focused continuous/limit browser checks, type checking,
+UI/desktop builds, Windows Electron continuity/relaunch and diff checks passed. The
+final regression rerun includes an unfinished upgraded checkpoint carried through
+portable decoding and SQLite reopen, and independent evidence/page ceiling checks.
+
+## Continuous specification consent (2026-11-01)
+
+**Additive opt-in execution metadata:** SQLite remains **23**, workflow-state/run
+formats remain **1**. An optional strict `continuous: { format: 1 }` marker on the
+grant and its newly created run receipts permits cumulative spending above the legacy
+eight-request bound. Without the marker, validation still enforces the old bound.
+Unknown future marker formats reject without overwriting data. New run receipts allow
+up to 10,000 distinct job references; counter values remain safe nonnegative integers.
+Neither the marker nor a larger counter is added to existing saved grants or receipts
+on startup. Old app versions cannot read the new marker (no downgrade support).
+
+The authenticated, revision/settings-version checked `continue-continuous` action is
+explicit new consent; the browser explains ongoing AI-plan usage and Stop before the
+button. Legacy `continue` retains its bounded semantics for existing callers/tests.
+Older grants, project revisions, input/spec/assessment identities, checkpoints, raw
+responses, failures and spent recovery grants are not migrated, reset or invalidated.
+Existing same-input work replays before continuous dispatch. No reassessment or model
+call is required just to reopen equivalent saved work. Workflow authority remains
+machine-local and is not exported through portable project continuation.
+
+Continuous runs remove the coordinator's overall request/time cutoff, not per-request
+timeouts, failed-attempt/context/partition limits or separate recovery consent. Live
+owned workflow leases renew; retrieval checkpoints can renew only an already-live job
+by at most six minutes. Stop/shutdown/failure never rearm saved consent. Twenty-step
+worker yields retain cumulative spending and create a new ordinary run receipt on the
+next armed tick. Restart remains suspended until an explicit Continue; old/future data
+is never silently reinterpreted as permission for automatic calls.
+
+Synthetic regressions exercise twelve requests over twelve simulated minutes, Stop,
+failure and technical block, preserving all earlier receipts/loads and charging the
+interrupted request before dispatch. Compatibility tests cover unchanged legacy grants,
+expanded counters requiring the marker, future-format rejection and repeated SQLite
+reopen without calls. No live model or real-project writes are used for verification.
+
+Verification: full `npm test` passed **1,460** tests (754 pretests + 706 main), all
+18 default browser runners passed, and type/UI/desktop/diff checks passed. Windows
+Electron checks included SQLite continuity/relaunch and saved-project retention after
+the user confirmed the app was closed. Live provider behavior was not exercised.
+
 ## Compact definition navigation metadata (2026-11-01)
 
 **Metadata-only forward upgrade:** SQLite remains **23**, execution **2**, and

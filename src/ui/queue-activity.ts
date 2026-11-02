@@ -14,6 +14,13 @@ export function discoveryResumeJob(job?: Job) {
     || job?.kind === "definition-mixed-review" || job?.context?.definitionMixedReview ? undefined : job;
 }
 
+export function definitionActivityLabel(project: Project, job?: Job) {
+  const epicID = job?.context?.definitionAssessment?.epicID ?? job?.definitionWork?.epicID;
+  if (!epicID) return undefined;
+  const title = project.epics.find((area) => area.id === epicID)?.title ?? epicID;
+  return `Checking how clearly “${title}” is defined…`;
+}
+
 export function queueActivities(project: Project, execution: ExecutionState, implementationActive: boolean, helpJobs: Job[], operation?: string): QueueActivity[] {
   const activities: QueueActivity[] = [];
   const assessment = execution.assessmentRuns?.at(-1), run = execution.run;
