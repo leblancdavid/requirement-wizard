@@ -1,10 +1,11 @@
 import React, { useId, useMemo, useState } from "react";
-import { definitionDecisionPrefix, type DefinitionDecision } from "../core/definition-decisions.js";
-import type { Project, Submission } from "../core/model.js";
+import { definitionDecisionPrefix, definitionDecisions, type DefinitionDecision } from "../core/definition-decisions.js";
+import type { Job, Project, Submission } from "../core/model.js";
 import { ActionButton } from "./action-button.js";
 import { ItemProcessingNotice } from "./decision-recovery.js";
 import { coverage } from "../core/coverage.js";
 import { definitionClarificationInputs } from "../core/definition-clarification-inputs.js";
+import { openLogs } from "./log-access.js";
 
 export function ClarifyDefinitionAction({ epicID, disabled, clarify }: {
   epicID: string; disabled: boolean; clarify: (epicID: string) => Promise<void>;
@@ -26,14 +27,18 @@ export function ClarifyDefinitionAction({ epicID, disabled, clarify }: {
   </div>;
 }
 
-export function DefinitionReviewSuggestions({ project, submissions, epicID, disabled, clarify }: {
-  project: Project; submissions: Submission[]; epicID: string; disabled: boolean; clarify: (epicID: string) => Promise<void>;
+export function DefinitionReviewSuggestions({ project, submissions, jobs = [], epicID, disabled, clarify }: {
+  project: Project; submissions: Submission[]; jobs?: Job[]; epicID: string; disabled: boolean; clarify: (epicID: string) => Promise<void>;
 }) {
-  const areas = useMemo(() => coverage(project).epics.filter((a) => {
-    if (!a.assessed || epicID !== "all" && epicID !== a.epicID || !a.checks.some((c) => !["defined", "not-applicable"].includes(c.status))) return false;
-    const inputs = definitionClarificationInputs(project, a.epicID, submissions);
-    return !a.stale || inputs.sourceIDs.length > 0 && !inputs.blocked.length;
-  }), [project, submissions, epicID]);
+  const areas = useMemo(() => {
+    const evidenceIssues = new Set(definitionDecisions(project, jobs).filter((f) => f.evidenceIssue).map((f) => f.epicID));
+    return coverage(project).epics.filter((a) => {
+      if (evidenceIssues.has(a.epicID)) return false;
+      if (!a.assessed || epicID !== "all" && epicID !== a.epicID || !a.checks.some((c) => !["defined", "not-applicable"].includes(c.status))) return false;
+      const inputs = definitionClarificationInputs(project, a.epicID, submissions);
+      return !a.stale || inputs.sourceIDs.length > 0 && !inputs.blocked.length;
+    });
+  }, [project, submissions, jobs, epicID]);
   if (!areas.length) return null;
   return <details className="save-notice"><summary>Let AI turn definition findings into Design questions</summary>
     <p>Definition reviews automatically prepare questions for unresolved choices. Assessment categories are not a to-do list for you; some describe already settled scope. You can also prepare or retry clarification for an area here. Answer resulting questions in Design. No question is needed when the evidence already settles the behavior.</p>
@@ -64,9 +69,10 @@ export function DefinitionDecisionCard({ finding, project, submissions, submit, 
     <span className="badge needs-review">{finding.stale ? "Earlier finding — needs rechecking" : finding.label}</span>
     <h3>{project.epics.find((e) => e.id === finding.epicID)?.title ?? finding.epicID}</h3>
     <p className="source-excerpt">{finding.explanation}</p>
-    <p>This is a review finding, not proof of a missing feature or unfinished implementation. You do not need to interpret this prose or type a correction. Definition reviews automatically prepare Design questions for actual unresolved choices. Use Clarify in Design for manual preparation or recovery. Technical/evidence problems and settled scope do not need invented product decisions.</p>
+    {finding.evidenceIssue ? <><p role="status">The review could not identify or load its saved evidence reliably. This is not a request for a new product decision. Your earlier answers and approvals remain saved. Use Continue specification or Overall progress → Refresh definition coverage to resume the saved review; completed steps and spent attempts are kept. Existing retry limits still apply. No Design question is needed to repair an evidence lookup.</p><button type="button" className="secondary" onClick={() => openLogs()}>View review logs</button>{saved && <><p>Your previously saved clarification is retained, not replaced or treated as a repair for this lookup problem.</p><p className="source-excerpt">{saved.input.type === "note" ? saved.input.text.slice(prefix.length) : ""}</p></>}</>
+      : <p>This is a review finding, not proof of a missing feature or unfinished implementation. You do not need to interpret this prose or type a correction. Definition reviews automatically prepare Design questions for actual unresolved choices. Use Clarify in Design for manual preparation or recovery. Technical/evidence problems and settled scope do not need invented product decisions.</p>}
     <details><summary>Linked evidence</summary>{finding.evidenceIDs.map((id) => <blockquote key={id}><small>{id}</small><p>{project.sources.find((r) => r.id === id)?.text ?? project.questions.find((r) => r.id === id)?.text ?? project.requirements.find((r) => r.id === id)?.statement ?? project.research.find((r) => r.id === id)?.finding ?? "Evidence unavailable"}</p></blockquote>)}</details>
-    {saved ? <><p role="status">Your clarification is saved. {saved.status === "completed" ? "Review the updated specification, then refresh definition coverage to check whether this finding is resolved." : "Process its follow-up using Continue specification or Process saved responses. Saving alone does not resolve this finding."}</p><p className="source-excerpt">{saved.input.type === "note" ? saved.input.text.slice(prefix.length) : ""}</p><ItemProcessingNotice submission={saved} disabled={disabled} resume={processBlocking ? () => processBlocking([saved.id]) : undefined} />{clarify && readablePending && <ClarifyDefinitionAction epicID={finding.epicID} disabled={disabled} clarify={clarify} />}</>
+    {!finding.evidenceIssue && <>{saved ? <><p role="status">Your clarification is saved. {saved.status === "completed" ? "Review the updated specification, then refresh definition coverage to check whether this finding is resolved." : "Process its follow-up using Continue specification or Process saved responses. Saving alone does not resolve this finding."}</p><p className="source-excerpt">{saved.input.type === "note" ? saved.input.text.slice(prefix.length) : ""}</p><ItemProcessingNotice submission={saved} disabled={disabled} resume={processBlocking ? () => processBlocking([saved.id]) : undefined} />{clarify && readablePending && <ClarifyDefinitionAction epicID={finding.epicID} disabled={disabled} clarify={clarify} />}</>
       : finding.stale ? <><p>Project information has changed. Refresh definition coverage before making a decision from this earlier finding.</p>{clarify && readablePending && <><p>You can still ask a read-only clarification using your exact recorded responses. This earlier finding remains a hypothesis; unfinished processing is not marked complete.</p><ClarifyDefinitionAction epicID={finding.epicID} disabled={disabled} clarify={clarify} /></>}</>
       : <>{clarify && <ClarifyDefinitionAction epicID={finding.epicID} disabled={disabled} clarify={clarify} />}<details><summary>I already know the correction</summary><p>If your earlier answers conflict, state which rule governs and whether it replaces another rule or is an exception. For technical or unavailable-evidence problems, check Logs instead.</p><form onSubmit={(event) => {
         event.preventDefault();
@@ -81,6 +87,6 @@ export function DefinitionDecisionCard({ finding, project, submissions, submit, 
         <p>Earlier answers and review history are preserved. This uses the normal saved-response process; it does not approve a requirement or start coding.</p>
         {error && <p role="alert">{error}</p>}
         <ActionButton className="primary" disabled={disabled || saving || !text.trim() || text.length > available} reason="Write an explicit decision or correction first.">{saving ? "Saving…" : "Save clarification"}</ActionButton>
-      </form></details></>}
+      </form></details></>}</>}
   </article>;
 }

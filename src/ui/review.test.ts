@@ -81,6 +81,29 @@ test("technical blockers stay neutral; partial assessment categories are not hum
   assert.ok(definitionDecisionPrefix({ ...finding, evidenceIDs: Array(2000).fill("long-evidence-id") }).length < 12000, "Notes reference the retained finding without copying an unbounded evidence list");
 });
 
+test("typed evidence lookup blockers stay outside product-decision counts and cannot invite clarification or correction", () => {
+  const p = fixture(); p.requirements = []; p.refinements = [];
+  const job: Job = { id: "lookup", projectID: p.id, expectedRevision: p.revision, model: p.model, status: "failed", leaseUntil: null,
+    context: { revision: p.revision, focusEpicID: "inbox", includedIDs: ["idea"], omittedIDs: [], characters: 0, budget: 48000,
+      definitionAssessment: { format: 1, epicID: "inbox", inputKey: definitionInputKey(p, "inbox") } },
+    definitionBlock: { format: 1, kind: "evidence-lookup", reason: "The original saved death decision could not be identified safely." } };
+  const props = { project: p, jobs: [job], submissions: [], epicID: "all", sending: [], disabled: false,
+    refine: () => assert.fail("No inference"), submit: async () => { assert.fail("No automatic correction"); }, reviewRefinement: async () => true,
+    clarifyDefinition: async () => { assert.fail("Do not turn lookup failures into human questions"); } };
+  const before = JSON.stringify({ p, job });
+  const html = renderToStaticMarkup(createElement(ReviewQueue, props));
+  assert.match(html, /Needs your decision <span>0/);
+  assert.match(html, /Review evidence problems — not product decisions/);
+  assert.match(html, /Review blocked by evidence lookup/);
+  assert.match(html, /Refresh definition coverage/);
+  assert.doesNotMatch(html, /Clarify in Design|Save clarification|Your decision or correction|<textarea/);
+  assert.equal(JSON.stringify({ p, job }), before);
+  const product = { ...job, definitionBlock: { ...job.definitionBlock!, kind: "product-decision" as const } };
+  const productHTML = renderToStaticMarkup(createElement(ReviewQueue, { ...props, jobs: [product] }));
+  assert.match(productHTML, /Needs your decision <span>1/);
+  assert.match(productHTML, /Clarify in Design/);
+});
+
 test("large assessment summaries never become hundreds of correction forms or decision counts", () => {
   const p = fixture(); p.requirements = []; p.refinements = [];
   p.epics = Array.from({ length: 20 }, (_, i) => ({ ...p.epics[0]!, id: `area-${i}`, title: `Area ${i}` }));

@@ -9,6 +9,8 @@ import { workspaceMenu } from "./menu-check-helpers.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
+const scoped = process.argv.includes("--scoped");
+const allowLabel = "Allow one request and refresh";
 const store = new ProjectStore(":memory:");
 let project = store.create("Recovery fixture", "Keep original decisions", { providerID: "openai", modelID: "fixture" });
 project = store.organize(project.id, project.revision, [
@@ -16,7 +18,7 @@ project = store.organize(project.id, project.revision, [
   { type: "upsert", epicID: "missions", title: "Destination discovery and mission-run generation with saved progression", purpose: "Saved behavior", dependencies: [] },
 ]);
 project = store.note(project.id, project.revision, "Preserve the exact earlier project-wide decision.", "project");
-const work = planDefinitionStages(project, "runtime"); delete work.citationPolicy; work.attempts = 3;
+const work = planDefinitionStages(project, "runtime"); delete work.citationPolicy; delete work.stableCitationPolicy; delete work.linkedAnswerPolicy; work.attempts = 3;
 const old = store.beginJob(project.id, project.revision).job; store.claimJob(old.id, Date.now() + 60000);
 store.checkpointDefinition(old.id, work, definitionStageContext(project, work).manifest);
 store.failJob(old.id, "failed", "Definition assessment cites missing evidence or evidence outside its detailed context.");
@@ -42,10 +44,10 @@ const app = await startApp({ store, port: 0,
     if (!stage) return { summary: "Exact whole-area assessment", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
       assessments: [{ epicID: context.manifest.definitionAssessment!.epicID, confidence: "medium", explanation: "Recorded evidence.",
         checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "defined", explanation: "Recorded evidence.", evidenceIDs: [context.manifest.includedIDs[0]!] })) }] };
-    assert.ok(stage.citationLabels.E1);
+    const label = Object.keys(stage.citationLabels)[0]!; assert.ok(label);
     if (stage.phase === "collect" && stage.draft) return { definitionUpdate: { checks: [] } };
     return stage.phase === "verify" ? { definitionVerdict: [] } : { definitionAssessment: { epicID: context.manifest.focusEpicID, confidence: "medium", explanation: "Recorded decision, not readiness.",
-      checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "defined", explanation: "Recorded evidence.", evidenceIDs: ["E1"] })) } };
+      checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "defined", explanation: "Recorded evidence.", evidenceIDs: [label] })) } };
   } },
 });
 const browser = await chromium.launch();
@@ -75,41 +77,103 @@ try {
   await page.locator(".progress-trigger").click();
   const overview = page.getByRole("dialog", { name: "Project progress", exact: true });
   await expect(overview.getByRole("button", { name: /^Recover assessment:/ })).toHaveCount(0);
-  await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
+  await overview.locator("details.progress-stage").first().locator("summary").first().click();
+  const missionRefresh = overview.getByRole("button", { name: "Refresh definition: Destination discovery and mission-run generation with saved progression", exact: true });
+  const runtimeRefresh = overview.getByRole("button", { name: "Refresh definition: Runtime", exact: true });
   const confirmation = overview.getByRole("group", { name: "Confirm refresh allowance", exact: true });
+  for (const width of [1280, 390]) {
+    const height = width === 390 ? 844 : 960;
+    await page.setViewportSize({ width, height });
+    await missionRefresh.click();
+    await expect(confirmation).toHaveCount(1);
+    await expect(confirmation).toBeFocused();
+    await expect(missionRefresh).toHaveAttribute("aria-expanded", "true");
+    assert.equal(await missionRefresh.evaluate((button) => button.nextElementSibling?.getAttribute("role")), "group", "Consent must immediately follow the clicked epic button");
+    await expect(confirmation.getByRole("listitem")).toHaveCount(1);
+    await expect(confirmation).toContainText("Destination discovery");
+    const bounds = await confirmation.boundingBox();
+    assert.ok(bounds && bounds.y >= 0 && bounds.y + bounds.height <= height, "Confirmation scrolls into view, including on mobile");
+    assert.equal(calls, 0);
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(missionRefresh).toBeFocused();
+    await expect(confirmation).toHaveCount(0);
+  }
+  await page.setViewportSize({ width: 1280, height: 960 });
+  await missionRefresh.click();
+  await runtimeRefresh.click();
+  await expect(confirmation).toHaveCount(1);
+  await expect(confirmation.getByRole("listitem")).toHaveText(["Runtime"]);
+  assert.equal(calls, 0, "Changing the selected area cannot dispatch or grant an extra request");
+  await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect(confirmation).toContainText("uses your AI allowance");
   await expect(confirmation.getByRole("listitem")).toHaveCount(2);
   await expect(confirmation.getByRole("listitem").filter({ hasText: "Project-wide" })).toHaveCount(0);
   assert.equal(calls, 0, "Refresh cannot extend a failed-request allowance without confirmation");
   await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(calls, 0);
+  await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
+  await overview.getByRole("button", { name: "Close progress", exact: true }).click();
+  await page.locator(".progress-trigger").click();
+  await expect(confirmation).toHaveCount(0);
+  assert.equal(calls, 0, "Closing the dialog cannot confirm a pending request");
+  await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await page.reload(); assert.equal(calls, 0, "Reload cannot grant or dispatch recovery");
   await page.locator(".progress-trigger").click();
-  await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
-  const allowDesktop = await confirmation.getByRole("button", { name: "Continue refresh", exact: true }).boundingBox();
+  if (scoped) {
+    await overview.locator("details.progress-stage").first().locator("summary").first().click();
+    await missionRefresh.focus(); await missionRefresh.press("Enter");
+    await expect(confirmation).toBeFocused();
+    await expect(confirmation.getByRole("listitem")).toHaveCount(1);
+  } else await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
+  const allowDesktop = await confirmation.getByRole("button", { name: allowLabel, exact: true }).boundingBox();
   const cancelDesktop = await confirmation.getByRole("button", { name: "Cancel", exact: true }).boundingBox();
   assert.equal(allowDesktop!.y, cancelDesktop!.y); assert.equal(allowDesktop!.height, cancelDesktop!.height);
-  await page.screenshot({ path: ".reqwizit-state/browser-definition-recovery-desktop.png", fullPage: true });
+  await page.screenshot({ path: `.reqwizit-state/browser-definition-recovery${scoped ? "-scoped" : ""}-desktop.png`, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
-  const allowMobile = await confirmation.getByRole("button", { name: "Continue refresh", exact: true }).boundingBox();
+  await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await (scoped ? missionRefresh : overview.getByRole("button", { name: "Refresh definition coverage", exact: true })).click();
+  const allowMobile = await confirmation.getByRole("button", { name: allowLabel, exact: true }).boundingBox();
   const cancelMobile = await confirmation.getByRole("button", { name: "Cancel", exact: true }).boundingBox();
   assert.equal(allowMobile!.x, cancelMobile!.x); assert.equal(allowMobile!.width, cancelMobile!.width);
   assert.ok(cancelMobile!.y >= allowMobile!.y + allowMobile!.height + 9);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  await page.screenshot({ path: ".reqwizit-state/browser-definition-recovery-mobile.png", fullPage: true });
+  await page.screenshot({ path: `.reqwizit-state/browser-definition-recovery${scoped ? "-scoped" : ""}-mobile.png`, fullPage: true });
   const refreshResponse = page.waitForResponse((response) => response.url().endsWith("/refresh-definition"));
-  await confirmation.getByRole("button", { name: "Continue refresh", exact: true }).click();
+  await confirmation.getByRole("button", { name: allowLabel, exact: true }).click();
   const accepted = await refreshResponse; assert.equal(accepted.status(), 202, await accepted.text());
+  const submitted = accepted.request().postDataJSON();
+  if (scoped) {
+    assert.equal(submitted.focusEpicID, "missions");
+    assert.deepEqual(submitted.additionalRequests, [{ epicID: "missions", jobID: second.id }]);
+  }
   await expect.poll(() => {
     const latest = store.jobs(project.id).at(-1)!;
     if (![old.id, second.id, credit.id].includes(latest.id) && latest.status === "failed") throw new Error(latest.diagnostic);
     return store.get(project.id).assessments.length;
-  }).toBe(3);
-  assert.equal(calls, 7, "Refresh automatically resumes credited evidence gathering and finishes both confirmed areas"); assert.deepEqual(store.getJob(old.id), historical);
+  }).toBe(scoped ? 1 : 3);
+  const expectedCalls = scoped ? 2 : 7;
+  assert.equal(calls, expectedCalls, "Confirming starts refresh immediately, resuming only the requested scope"); assert.deepEqual(store.getJob(old.id), historical);
   assert.deepEqual(store.getJob(credit.id), creditHistory);
   const current = store.get(project.id);
   assert.equal((await refreshPost({ ...refreshInput, revision: current.revision })).status, 400, "Old authorization cannot be replayed");
-  await page.reload(); assert.equal(calls, 7);
+  await page.reload(); assert.equal(calls, expectedCalls);
+  if (scoped) {
+    await page.locator(".progress-trigger").click();
+    await overview.locator("details.progress-stage").first().locator("summary").first().click();
+    await runtimeRefresh.click();
+    await expect(confirmation).toHaveCount(1);
+    const ordinaryResponse = page.waitForResponse((response) => response.url().endsWith("/refresh-definition"));
+    await overview.getByRole("button", { name: "Refresh definition: Project-wide", exact: true }).click();
+    const ordinary = await ordinaryResponse;
+    assert.equal(ordinary.status(), 202, await ordinary.text());
+    assert.equal(ordinary.request().postDataJSON().focusEpicID, "project");
+    assert.equal(ordinary.request().postDataJSON().additionalRequests, undefined, "Ordinary refresh cannot carry a hidden grant from another feature");
+    await expect(confirmation).toHaveCount(0);
+    await expect.poll(() => store.get(project.id).assessments.length).toBe(2);
+    assert.equal(calls, expectedCalls + 3, "Ordinary Refresh resumes saved evidence immediately, with no separate confirmation or repeated completed load");
+    assert.deepEqual(store.getJob(old.id), historical);
+    assert.deepEqual(store.getJob(credit.id), creditHistory);
+  }
   assert.deepEqual(errors, []);
-  console.log("Definition refresh allowance browser passed: inline multi-area consent, authenticated revision/area/job-bound grants, cancel/reload without calls, automatic continuation, stale consent rejection, history preservation and mobile. Fixture only; no live calls.");
+  console.log(`Definition refresh allowance browser passed (${scoped ? "feature-specific" : "whole-project"}): adjacent focused consent, cancel/reload without calls, authenticated scope-bound immediate refresh, stale consent rejection, history preservation and mobile. Fixture only; no live calls.`);
 } finally { await browser.close(); await app.close(); store.close(); }

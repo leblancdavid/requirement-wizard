@@ -313,6 +313,34 @@ try {
     assert.equal(calls, before + 1);
     assert.deepEqual(store.submissions(review.id).find((s) => s.id === blockedInput.id), blockedInput, "Read-only clarification does not complete or replay blocked saved follow-up");
   }
+  // Evidence lookup trouble is not another human decision or permission to
+  // repeatedly run question generation, even through the authenticated API.
+  const lookup = store.create("Evidence lookup problem", "Keep the approved death rules unchanged", p.model);
+  const lookupJob = store.beginJob(lookup.id, lookup.revision).job; store.claimJob(lookupJob.id, Date.now() + 60000);
+  store.attachContext(lookupJob.id, { revision: lookup.revision, focusEpicID: "project", includedIDs: [lookup.sources[0]!.id], omittedIDs: [], characters: 0, budget: 48000,
+    definitionAssessment: { format: 1, epicID: "project", inputKey: definitionInputKey(lookup, "project") } });
+  const lookupHistory = store.blockDefinition(lookupJob.id, "The exact saved death decision could not be identified safely.", "evidence-lookup");
+  const beforeLookupCalls = calls, beforeLookupJobs = store.jobs(lookup.id);
+  await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: lookup.name, exact: true }).click();
+  await page.getByRole("tab", { name: /^Specification/ }).click();
+  await expect(panel.getByRole("button", { name: /^Needs your decision/ })).toContainText("0");
+  const lookupNotice = panel.getByLabel("Review evidence problems", { exact: true });
+  await lookupNotice.getByText("Review evidence problems — not product decisions", { exact: true }).click();
+  await expect(lookupNotice).toContainText("Review blocked by evidence lookup");
+  await expect(lookupNotice).toContainText("Refresh definition coverage");
+  await expect(lookupNotice.getByRole("button", { name: "Clarify in Design", exact: true })).toHaveCount(0);
+  await expect(lookupNotice.locator("textarea")).toHaveCount(0);
+  const lookupRefusal = await page.request.post(`${app.origin}/api/projects/${lookup.id}/clarify-definition`, {
+    headers: { "X-Reqwizit-Token": app.token, Origin: app.origin }, data: { revision: lookup.revision, epicID: "project", confirmAIUsage: true },
+  });
+  assert.equal(lookupRefusal.status(), 409); assert.match(await lookupRefusal.text(), /blocked by evidence lookup/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-definition-evidence-lookup-mobile.png", fullPage: true });
+  await page.reload(); await page.getByRole("tab", { name: /^Specification/ }).click();
+  await expect(panel.getByLabel("Review evidence problems", { exact: true })).toBeVisible();
+  assert.equal(calls, beforeLookupCalls); assert.deepEqual(store.jobs(lookup.id), beforeLookupJobs);
+  assert.deepEqual(store.getJob(lookupJob.id), lookupHistory); assert.deepEqual(store.get(lookup.id), lookup);
   // Reload restores staged clarification progress without exposing full saved model responses.
   let staged = store.create("Staged Design continuation", "Preserve original decisions", p.model);
   const blockedJob = store.beginJob(staged.id, staged.revision).job; store.claimJob(blockedJob.id, Date.now() + 60000);

@@ -26,14 +26,14 @@ const app = await startApp({ store, port: 0,
     calls++; contexts.push(createHash("sha256").update(JSON.stringify(context.data)).digest("hex"));
     const epicID = context.manifest.definitionAssessment!.epicID;
      const stage = (context.data as { definitionStage: { phase: string; batch: number; citationLabels?: Record<string, string> } }).definitionStage;
-     assert.ok(stage.citationLabels?.E1, "Staged review supplies short citation labels");
+     const label = Object.keys(stage.citationLabels ?? {})[0]!; assert.ok(label, "Staged review supplies short citation labels");
     if (pauseOnce && epicID === "project" && stage.phase === "collect" && stage.batch === 2) {
       pauseOnce = false; waiting = true; signal.throwIfAborted();
       return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
     }
     return stage.phase === "verify" ? { definitionVerdict: [] } : { summary: "Recorded decisions", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
       assessments: [{ epicID, confidence: "medium", explanation: "Evidence-backed definition estimate, not readiness.", checks: dimensions.map((dimension) => ({ dimension,
-         importance: "important", status: "defined", explanation: "Recorded human decision.", evidenceIDs: ["E1"] })) }] };
+          importance: "important", status: "defined", explanation: "Recorded human decision.", evidenceIDs: [label] })) }] };
   } },
 });
 const browser = await chromium.launch();

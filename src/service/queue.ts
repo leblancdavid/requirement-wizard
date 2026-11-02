@@ -23,6 +23,7 @@ import { canRecoverDefinition } from "../core/definition-recovery.js";
 import { definitionFailedAttempts, type DefinitionAdditionalRequest } from "../core/definition-budget.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionQuestionTask, readinessQuestionContext, readinessQuestionTask, submissionQuestionBlock, submissionQuestionTask, submissionClarificationQuestions, type ReadinessQuestionTask } from "../core/readiness-questions.js";
+import { definitionEvidenceIssue } from "../core/definition-evidence-issue.js";
 import { definitionClarificationInputs } from "../core/definition-clarification-inputs.js";
 import { refinementMaterials, replayRefinementStages, sameRefinementTask } from "../core/refinement-stages.js";
 import type { DefinitionFindingPreviewRequest } from "../core/definition-finding-origin.js";
@@ -414,6 +415,10 @@ export class DiscoveryQueue {
       const latest = history.find((j) => j.context?.definitionAssessment?.epicID === epicID);
       const blocker = latest && (latest.definitionBlock || latest.definitionWork?.blocked) && latest.status !== "completed"
         && latest.context!.definitionAssessment!.inputKey === definitionInputKey(project, epicID) ? latest : undefined;
+      if (blocker && definitionEvidenceIssue(blocker)) {
+        report(`Review blocked by evidence lookup: ${project.epics.find((e) => e.id === epicID)?.title ?? epicID}. No Design question request was started. Saved decisions are unchanged; use Continue specification or Refresh definition coverage after addressing the lookup problem.`);
+        continue;
+      }
       // Exhausted model requests are an operational blocker, not a new product
       // choice or authorization to spend a separate clarification allowance.
       if (blocker?.definitionWork && definitionFailedAttempts(blocker.definitionWork) >= 3) continue;
@@ -502,6 +507,7 @@ export class DiscoveryQueue {
     const blocker = latest && (latest.definitionBlock || latest.definitionWork?.blocked) && latest.status !== "completed"
       && (latest.context!.definitionAssessment!.inputKey === inputKey || inputs.sourceIDs.length) ? latest : undefined;
     const task = definitionQuestionTask(project, epicID, blocker, inputs.sourceIDs);
+    if (blocker && definitionEvidenceIssue(blocker)) throw new OperationConflictError("This review is blocked by evidence lookup, not an established product choice. Use Continue specification or Overall progress → Refresh definition coverage to resume the saved review. Existing retry limits apply. No clarification request was started; existing questions and decisions are unchanged.");
     if (resumeJobID) {
       const saved = history.find((j) => j.id === resumeJobID)!;
       if (JSON.stringify(saved.context?.readinessQuestions) !== JSON.stringify(task))

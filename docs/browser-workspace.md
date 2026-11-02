@@ -1,5 +1,64 @@
 # Browser workspace, epics, and estimated completeness
 
+## Continue specification and saved label-loop recovery (2026-11-01)
+
+**Continue specification** now reaches the compatible reference-policy upgrade instead
+of merely repeating an eligible old saved evidence blocker. The review still uses its
+saved stages and attempts and the coordinator's existing bounded AI grant. It does not
+silently authorize an extra failed-step request. Evidence-problem guidance now names
+both Continue specification and ordinary Refresh; use Refresh's existing confirmation
+if an exhausted step needs one additional request. This is shared-engine routing, not
+a new UI control, setting or stored format. See [the coordinator guide](coordinated-workflow.md).
+
+## Evidence problems are not clarification decisions (2026-10-31)
+
+Specification separates **Review evidence problems — not product decisions** from
+**Needs your decision**. A typed evidence/technical failure, or a proven saved
+request-local label loop, explains that original answers remain saved and directs
+the user to Overall progress's ordinary Refresh action. It does not offer another
+Clarify in Design action or a form asking the user to resupply an app-owned record.
+Older unclassified findings are not silently reclassified from their prose alone;
+explicit product-decision blockers still support normal clarification.
+
+Manual and automatic question preparation refuse recognized evidence issues without
+a model call or another job. Saved clarification results, including zero-question
+results, remain historical evidence, not proof that the underlying lookup was fixed.
+Staged assessment's new stable-label protocol and narrow explicit upgrade path are
+documented in [definition coverage](definition-coverage.md).
+
+Verification: 1,429 deterministic tests, all 18 default browser runners, final focused
+Specification and both refresh-scope runners, continuous-definition browser checks,
+type checking, UI/desktop build and Windows Electron checks passed. The technical
+lookup fixture verifies a zero decision count, retained evidence, reload/mobile
+display and authenticated refusal with no new job or AI request. Screenshot reviewed;
+no live project writes or model calls. See definition coverage for the transient
+concurrent-build geometry rerun and remaining live-qualification boundary.
+
+## Refresh resumes saved work in place (2026-10-31)
+
+Feature-specific **Refresh definition** and whole-project **Refresh definition coverage**
+both resume saved assessment work; there is no separate Continue workflow. If a review
+has exhausted its failed-request allowance, its permission prompt appears immediately
+below the button clicked, not elsewhere in Overall progress. The prompt scrolls into
+view and receives keyboard focus. **Allow one request and refresh** confirms the usage
+and starts the selected scope immediately. **Cancel** returns focus to that Refresh
+button; closing or reloading does not grant permission or start work. Selecting another
+scope replaces the prompt, never accumulating hidden grants.
+
+The existing one-extra-request limit, server-side revision/area/job checks and saved
+attempt accounting are unchanged. This is transient UI only; no data migration or
+automatic retries on startup. Browser fixtures cover desktop/mobile adjacency and
+visibility, keyboard focus, cancellation, scope switching and both feature-specific
+and whole-project dispatch without live AI calls. They also verify ordinary Refresh
+immediately resumes a non-exhausted feature without inheriting another feature's
+pending permission prompt.
+
+Verification: all 1,421 deterministic tests, type checking, UI build and both focused
+refresh browser modes passed; desktop/mobile screenshots were inspected. The first
+default-browser-suite run hit the command harness's two-minute timeout; the uncapped
+rerun passed all 18 default runners. No live model calls or writes to the user's
+project were made. Desktop packaging was not rerun for this renderer-only follow-up.
+
 ## Simpler progress and optional assessment tools (2026-10-31)
 
 Layout follow-up: all progress/advanced-tool accordions, including section-wrapped inspectors,

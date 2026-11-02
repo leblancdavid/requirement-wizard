@@ -1,5 +1,6 @@
 import { definitionInputKey } from "./definition-identity.js";
 import type { Job, Project } from "./model.js";
+import { definitionEvidenceIssue } from "./definition-evidence-issue.js";
 
 /** Read-only inbox projection: findings are not confirmed product gaps. */
 export function definitionDecisions(project: Project, jobs: Job[]) {
@@ -12,7 +13,8 @@ export function definitionDecisions(project: Project, jobs: Job[]) {
     const job = latest.get(area.id);
     const reason = job?.definitionBlock?.reason ?? job?.definitionWork?.blocked;
     if (job && reason && !["completed", "running", "queued"].includes(job.status)) {
-      return [{ id: `definition:${job.id}`, epicID: area.id, label: "Assessment needs attention", explanation: reason,
+      const evidenceIssue = definitionEvidenceIssue(job);
+      return [{ id: `definition:${job.id}`, epicID: area.id, label: evidenceIssue ? "Review blocked by evidence lookup" : "Assessment needs attention", explanation: reason, evidenceIssue,
         evidenceIDs: job.context?.includedIDs ?? [], stale: job.context?.definitionAssessment?.inputKey !== definitionInputKey(project, area.id) }];
     }
     // Partial categories are assessment information, not 1:1 human input tasks.

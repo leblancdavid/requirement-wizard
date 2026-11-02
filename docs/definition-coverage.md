@@ -5,6 +5,195 @@ decisions; it is not readiness, code completeness, or verified delivery to main.
 
 ## Refresh the overall view
 
+### Compact navigation metadata without dropping evidence (2026-11-01)
+
+Two further accepted lookups exposed avoidable overhead even with a single selected
+assessment check. Compatible Refresh/Continue now preserves lookup explanations in
+saved receipts but sends canonical supplemental ID lists rather than repeating old
+AI navigation prose. Citation-map UUIDs share the lossless identifier dictionary at
+an explicit map path; short labels and quoted source maps are unchanged. All exact
+human records and the complete selected check remain supplied. Historical request
+hashes and failed attempts replay across the versioned stage/request-count boundary.
+
+Read-only replay of the latest checkpoint retains **34** stages, **39** records and
+**two** spent attempts, reducing context from **97,129** to **83,208 / 96,000**
+characters. No live inference or real project write was performed. This removes the
+reproduced metadata overflow, not every possible later indivisible-evidence blocker.
+See [upgrade compatibility](migrations.md#compact-definition-navigation-metadata-2026-11-01).
+
+Verification: all 18 default browser runners, the focused continuous/recovery browser
+checks, six focused metadata/recovery regressions, type checking, UI/desktop builds,
+Windows Electron continuity/relaunch checks and diff checking passed. The full suite
+passed **1,456** tests (**750** pretests + **706** main tests); the successful rerun
+removed the command time limit that interrupted the earlier main-suite run.
+
+### Supplemental evidence after pages: bound the AI draft separately (2026-11-01)
+
+The last paging fix did not handle the original step requesting another exact pair
+after its pages finished. That lookup was saved but pushed the full context over
+96,000 characters. Continuation now retains the accepted lookup and all finished
+pages, then reviews complete AI assessment checks in bounded dimension groups while
+supplying all original exact base/supplemental evidence in every group. The app retains
+the complete draft and rejects edits to omitted checks, their hidden-only citations,
+or global confidence/explanation. Verification can still only downgrade findings.
+Selected checks and human records are never truncated to make a group fit.
+
+Exact question/answer pairs previously supplied together in accepted requests in the
+same phase are not automatically repackaged for every later child/batch. Read progress
+does not establish preference precedence: indispensable exact text can still be
+requested, and newly accepted loads remain supplied. Verification reads are separate.
+New groups use a bounded 128-step execution envelope, with at most 64 record partitions
+per phase; legacy work retains its old combined 64-step ceiling until the new optional
+policy is activated. Context, action/grant, failed-attempt and recovery limits remain.
+
+A full read-only, in-memory continuation of the reported checkpoint preserves the 26
+saved stages and accepted lookup and reaches completion with unchanged simulated
+findings: 113 total steps, 38 collection/29 verification partitions, largest context
+95,906 characters. No live requests or project writes were used. This is not proof
+that future live review will accept every relationship; genuine ambiguity, indivisible
+evidence/checks and exhausted limits can still block honestly. See
+[upgrade boundaries and recovery](migrations.md#bounded-assessment-dimensions-after-supplemental-evidence-2026-11-01).
+
+Verification: **1,454** full-suite tests, all 18 default browser runners and nine
+final focused regressions passed. Type checking, UI/desktop builds and Windows Electron
+checks passed, including SQLite continuity/relaunch and saved project retention.
+These checks used synthetic data; the real checkpoint was inspected read-only.
+
+### Oversized linked evidence is reviewed in bounded pages (2026-11-01)
+
+When linked questions/answers plus the retained draft exceed 96,000 characters,
+Refresh and Continue specification now schedule complete question/options/current-answer
+pairs in bounded review pages before the unfinished original evidence step. Every page
+retains the full draft. The original base and all saved supplemental evidence still run
+afterward; nothing is silently omitted, summarized or declared jointly consistent.
+Pages use normal collect/verify rules and saved receipts, so a pause/reopen/portable
+continuation does not repeat an accepted page. Extra draft growth can subdivide pages
+only between whole pairs. Existing failed attempts, recovery consent, workflow budgets
+and the 64-stage ceiling remain authoritative; no higher context limit or reset is used.
+Indispensable cross-page evidence requests belong to the original evidence step, not
+an extra page allowance. Real product conflicts can still block review.
+
+The reported overflow was reproduced read-only: the original base/draft fit, but
+automatic graph expansion exceeded the limit even after the base reached one record.
+An in-memory dry run now schedules three pages, retaining all 23 saved stages and
+spent attempts. With unchanged simulated findings, all pages and the original step
+fit under 96,000 characters. The earlier error incorrectly implied that the 64-stage
+limit had been reached; size/indivisibility and the actual stage ceiling are now distinct.
+No live inference or real project writes were used. See
+[continuation compatibility](migrations.md#bounded-linked-answer-review-pages-2026-11-01).
+
+Verification: full `npm test` passed **1,445** tests (739 pretests + 706 main),
+and all 18 default browser runners passed. After tightening preservation of the
+original supplemental-evidence owner across inserted pages, all seven focused page
+regressions passed again. Type checking, UI/desktop builds and Windows Electron checks
+passed after the user confirmed the app is closed, including SQLite continuity/relaunch,
+saved project retention, renderer isolation and shutdown. No live inference or user-project writes.
+
+### Supply saved resolution answers before declaring evidence unavailable (2026-11-01)
+
+New staged contexts supply complete answered questions/options alongside their exact
+current human answers, including reconciliation questions explicitly linked back to
+loaded questions/answers through canonical evidence IDs. Linked follow-up chains are
+included within the frozen plan; unrelated shared notes and prose matches are not.
+This makes saved resolutions visible without assuming the newest answer wins or that
+an AI question's premise is a human preference. Exact answer scope remains decisive.
+
+Ordinary Refresh and owned Continue specification can resume compatible typed lookup
+failures when a named loaded record proves an unread linked answer bundle exists.
+Completed stages, old request hashes and spent attempts are preserved. Exhausted
+steps still require the existing additional-request consent; oversized bundles block
+without truncation. Completed reviews and genuine product conflicts are not reset.
+See [upgrade and recovery rules](migrations.md#exact-linked-question-and-answer-bundles-2026-11-01).
+
+Verification: full `npm test` passed **1,435** tests (729 pretests + 706 main).
+After adding three more exhausted-recovery outcome tests, all **141** staged-definition/
+workflow tests passed. Type checking, UI build, all 18 default browser runners,
+the focused whole-project refresh-consent browser check and diff check passed.
+Checks used synthetic fixtures, not live inference or real project writes. After the
+user quit the desktop, `npm run test:desktop` rebuilt/staged successfully and passed
+Windows Electron checks, including SQLite continuity/relaunch, saved project retention,
+renderer isolation and shutdown. The earlier native-module staging lock is resolved.
+
+### Continue specification uses the same compatible recovery (2026-11-01)
+
+The coordinator's **Continue specification** path now activates the stable-reference
+upgrade for a proven old label loop, just as explicit Refresh can. It previously
+replayed some saved blockers without activating the upgrade, producing a fast failure
+with zero new model calls. It now resumes the unfinished review within its own existing
+bounded grant; it does not become continuous Refresh or reset failed attempts.
+Exhausted steps still require the existing separate additional-request confirmation,
+and real product conflicts or new lookup blockers remain intact. Original completed
+stages and successful evidence loads are not repeated. See
+[coordinator compatibility](migrations.md#coordinator-owned-reference-policy-continuation-2026-11-01).
+
+### Stable evidence references and technical blockers (2026-10-31)
+
+New staged reviews use `S` evidence labels that keep one canonical meaning throughout
+the assessment input, including additional loads and smaller repacked steps. Earlier
+request-local `E` labels are never reused as S labels. Blocker messages are instructed
+to name canonical records and distinguish an evidence lookup from an actual product
+decision. Stable labels are navigation aids, not new citation authority: unread or
+unrelated evidence remains rejected.
+
+**Review evidence problems — not product decisions** in Specification shows typed
+lookup/technical failures and structurally proven old label loops separately. They
+do not inflate Needs your decision, offer correction forms, or spend more allowance
+preparing Design questions. Use **Overall progress → Refresh definition coverage**
+after updating. The old label-loop case can recheck its unfinished stage with the
+new protocol when its saved requests prove the label was resolved to different
+records. Completed stages, all loaded evidence and failed attempts are preserved;
+the original blocker is retained, not claimed resolved. No other conflict is cleared
+and exhausted allowances still require existing explicit permission.
+
+A saved clarification with no published questions stays saved. It neither repairs
+the assessment's evidence lookup nor means the earlier blocker asks you to decide
+something again. Old no-question results and completed assessments are not repeated
+solely because the protocol changed. See the
+[compatibility ledger](migrations.md#stable-assessment-citations-and-evidence-lookup-blockers-2026-10-31).
+
+Verification: final full `npm test` passed **1,429** tests (723 pretests + 706 main),
+including synthetic label-loop recovery with successful, failed and cancelled
+one-request grants. All 18 default browser runners passed; final focused
+Specification and feature/whole-project refresh runners passed, as did continuous
+definition, type checking, UI/desktop build, Windows Electron checks and diff check.
+The mobile technical-blocker screenshot was inspected. One focused refresh run
+concurrent with a UI rebuild hit a mobile geometry assertion; its rerun and the final
+focused checks passed. All adapters were fixtures, not live qualification of the
+user's model/project. No real project writes, model calls or allowance resets occurred.
+The existing non-blocking UI bundle-size warning remains.
+
+### Linked historical evidence loading (2026-10-31)
+
+Staged definition review can now load exact saved records linked through
+`sourceIDs`, `evidenceIDs`, `sourceID`, `requirementID` or `questionID` on records
+already supplied to that request, even if compact initial planning omitted them.
+This fixes the app exposing valid historical links and then rejecting their targets
+as unknown. Other links do not widen the frozen plan. Navigation is not evidence:
+only successfully loaded records become citable, and final publication independently
+replays the complete evidence ledger. Original text and historical target/status
+meaning remain unchanged; approval of a rejected or replaced requirement does not
+approve a current requirement.
+
+Ordinary refresh activates the new policy only after replaying saved work. It
+preserves completed stages, accepted supplemental loads (including same-stage
+request hashes), original batches and spent attempts across reopen and portable
+continuation. No reset, automatic retry or extra model allowance is introduced.
+Existing size/request/stage bounds and cancellation/stale-result checks remain.
+If failures exhausted the allowance, existing explicit recovery rules still apply.
+See the [compatibility ledger](migrations.md#exact-linked-definition-evidence-2026-10-31).
+
+Rejected-reference diagnostics now count only valid unloaded records as unread;
+unknown references are not also counted as unread or loaded. New diagnostic
+measurements classify `definitionEvidence` replies as loads, not analyses. Historical
+diagnostic exports are retained as originally recorded.
+
+Verification: full `npm test` passed (716 pretests + 705 main tests = 1,421),
+followed by a passing 100-test staged-definition/diagnostics rerun after final
+policy and upgrade-test adjustments. Type checking, UI build, definition-recovery
+and continuous-definition browser runners, and diff check passed. Browser checks
+used fixture adapters; no live model calls or writes to the diagnosed real project.
+The full browser suite and desktop packaging were not rerun for this engine change.
+
 ### Refresh efficiency and evidence references (2026-10-27)
 
 Continuous refresh remains the default: no new whole-action cap or periodic Continue
@@ -67,9 +256,12 @@ The historical calls are retained, not reset. For example, nine saved steps and
 three recorded calls including one successful evidence request can continue with
 call four without a separate recovery action or repeated completed calls.
 
-After three genuinely failed/unfinished calls, Refresh asks inline before allowing
-**one additional request** for each listed area. **Continue refresh** confirms that
-usage; **Cancel** and reload start nothing. If the extra request saves the step,
+After three genuinely failed/unfinished calls, Refresh asks directly below the clicked
+button before allowing **one additional request** for each listed area. The prompt
+scrolls into view and receives keyboard focus. **Allow one request and refresh** confirms
+that usage and immediately resumes the selected feature or whole-project scope;
+there is no separate Continue step. **Cancel** restores focus to the clicked button;
+closing or reload starts nothing. If the extra request saves the step,
 remaining normal steps and areas continue in the same refresh. Repeated refresh
 never grants another extension to that exhausted step. Genuine evidence conflicts,
 unfitting records and stale inputs are not bypassed. Automatic maintenance retains

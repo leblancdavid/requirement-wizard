@@ -358,7 +358,7 @@ export type Job = {
   submissionAllowance?: { step: number; attempts: number; limit: number; canExtend: boolean };
   submissionProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
   readinessProgress?: { completed: number; total: number; phase: "read" | "check" | "complete" };
-  definitionBlock?: { format: 1; reason: string };
+  definitionBlock?: { format: 1; reason: string; kind?: import("./definition-evidence-issue.js").DefinitionBlockKind };
   definitionInterruption?: import("./definition-interruption.js").DefinitionInterruption;
   /** Browser-safe checkpoint summary; batch outputs remain in the local store. */
   scanProgress?: { completed: number; total: number; capturedAt: string; resumable: boolean };

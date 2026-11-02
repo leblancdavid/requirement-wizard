@@ -1,5 +1,111 @@
 # Coordinated workflow preview (DEC-032)
 
+## Compact saved-lookup metadata (2026-11-01)
+
+Ordinary Continue/Refresh adopts compact context metadata after replay: canonical
+supplemental IDs replace repeated historical AI lookup explanations, while originals
+remain in receipts. Citation-map values can share the lossless identifier dictionary.
+No human evidence or selected check is shortened, accepted calls are not repeated,
+and existing attempts, coordinator grants and context limits remain authoritative.
+The latest real checkpoint replays read-only with all 34 stages and 39 records at
+83,208 / 96,000 characters; future live interpretation remains unverified. See
+[migration details](migrations.md#compact-definition-navigation-metadata-2026-11-01).
+
+Verification: **1,456** full-suite tests, all 18 default browser runners, focused
+continuous/recovery browser checks, six focused metadata/recovery regressions, type
+checking, UI/desktop builds and Windows Electron checks passed. These checks use
+fixtures; the real checkpoint was inspected read-only, without live model calls.
+
+## Bounded draft groups after saved evidence loads (2026-11-01)
+
+Continue specification now resumes the accepted-pages → supplemental-load overflow
+path without repeating either the pages or saved lookup. Complete selected AI draft
+checks are reviewed in bounded dimension groups; all exact base/supplemental evidence
+remains supplied. Omitted checks and global findings are preserved by app-side
+validation. A narrower group is not permission to settle an unknown cross-dimension
+relationship or to waive an exhausted attempt/recovery grant.
+
+The optional execution policy distinguishes 64 exact-evidence partitions **per phase**
+from up to 128 total review steps (including linked/dimension groups), instead of the
+legacy combined 64-step ceiling. This is a bounded task schedule, not a larger workflow
+grant: Continue still spends its existing eight-request/five-minute burst before
+dispatch and pauses at its boundary. Explicit continuation resumes saved groups;
+reopen alone starts no calls. Metrics can retain more than 64 requests without losing
+or inventing measurements. See
+[compatibility and limits](migrations.md#bounded-assessment-dimensions-after-supplemental-evidence-2026-11-01).
+
+Verification: full suite **1,454** tests, 18 default browser runners, final nine focused
+scope/recovery regressions, type checking and UI/desktop builds passed. Windows Electron
+checks passed after the app was closed. A read-only no-inference simulation of the
+remaining real checkpoint schedule reached completion; this does not qualify future
+live model interpretation or guarantee that no genuine blocker remains.
+
+## Bounded linked-answer pages (2026-11-01)
+
+Continue specification can now insert full linked question/answer review pages before
+an oversized unfinished evidence step, using the same owned grant. Each request is
+charged before dispatch; paging does not enlarge the eight-request/five-minute burst,
+reset failed attempts or grant exhausted-step recovery. Original evidence and saved
+loads still run after all pages; completed pages resume through ordinary Continue or
+Refresh without a separate recovery workflow. The common 64-stage ceiling still applies.
+Synthetic tests exercise the actual coordinator entry point, charge dispatched pages
+to its existing grant and reject repeated continuation of a genuine new blocker.
+See [migration ledger](migrations.md#bounded-linked-answer-review-pages-2026-11-01).
+
+Verification: full suite **1,445** tests, all 18 default browser runners, final seven
+focused page regressions, type checking and UI/desktop builds passed. Windows Electron
+checks passed after the app was closed, including SQLite continuity/relaunch and saved
+project retention. This qualifies packaging/continuation, not live model correctness.
+
+## Saved linked-answer continuation (2026-11-01)
+
+The same owned Continue specification permission also enables the additive
+`linkedAnswerPolicy` upgrade for typed lookup failures with a canonical unread
+question/answer witness. Full questions/options and current human answers, including
+explicit reverse-linked reconciliation chains, are supplied before review resumes.
+Graph links do not decide which preference governs. Refresh uses the same upgrade;
+there is no separate linked-answer recovery workflow. Existing bounded coordinator
+grants and exhausted-step consent remain unchanged. Original receipts, evidence
+loads, hashes and spent attempts survive. See the
+[compatibility ledger](migrations.md#exact-linked-question-and-answer-bundles-2026-11-01).
+
+Desktop follow-up: after the user quit the app, `npm run test:desktop` successfully
+rebuilt/staged the update and passed Windows Electron checks, including saved SQLite
+continuity/relaunch, renderer isolation and shutdown. This resolves the staging lock
+reported below; verification used test data, not the user's project or live inference.
+
+## Saved reference-policy recovery through Continue specification (2026-11-01)
+
+**Continue specification** now activates the compatible stable-reference upgrade
+when resuming a structurally proven old evidence-label loop. Previously only ordinary
+Refresh/recovery supplied that permission, so Continue could replay the old error
+with zero model requests instead of reaching the repaired unfinished step.
+
+The permission is derived internally from the live, owned coordinator grant; it is
+not an API option or a new persisted authorization. It is separate from continuous
+Refresh: Continue retains its existing eight-request/five-minute burst, worker lease,
+before-dispatch accounting, exact evidence bounds and per-step failed-attempt limits.
+Completed review calls, supplemental evidence, raw replies and original blocker are
+retained. A renewed workflow burst does not grant an exhausted step another request;
+that still requires the existing explicit confirmation through Refresh. Genuine
+product conflicts and new-protocol lookup blocks are not silently cleared or retried.
+
+Synthetic coordinator tests exercise the actual Continue entry point after repeated
+SQLite reopen, including an old label loop, exhausted attempts and an explicit product
+decision blocker. No automatic calls occur on reopen/poll; only the compatible case
+resumes, its new calls are charged to the workflow grant, and repeating Continue cannot
+clear a new block or reset attempts. No live model calls or real project writes were
+used. This fixes continuation plumbing, not the correctness of any model's new review.
+
+Verification: full `npm test` passed **1,432** tests (726 pretests + 706 main),
+including the three coordinator/reopen regressions; type checking, UI build, all 18
+default browser runners and diff check passed. The Windows desktop build/check attempt was
+blocked by `EPERM` removing the staged SQLite native module, consistent with the
+desktop app still running. No process was terminated. Quit the desktop completely,
+then rerun `npm run test:desktop` before launching the updated staged desktop build;
+the dependency staging step did not complete. No live model calls or real project
+data writes were used for verification.
+
 ## Current controls (2026-10-29)
 
 The primary action is now **Continue specification** (formerly Continue project).

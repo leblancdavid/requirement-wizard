@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
@@ -18,6 +18,9 @@ import { coverage } from "../core/coverage.js";
 import { automaticInputPermission, processingPolicySchema } from "../core/processing-policy.js";
 import { workflowRunChanges, workflowRunSchema } from "../core/workflow-run.js";
 import { proposeRefinements } from "../core/refinement.js";
+import { planDefinitionStages, definitionStageContext, acceptDefinitionStage, requestDefinitionEvidence, upgradeDefinitionEvidenceFollowups, replayDefinitionStages } from "../core/definition-stages.js";
+import { upgradeDefinitionAllowance } from "../core/definition-budget.js";
+import { definitionLabelDrift } from "../core/definition-evidence-issue.js";
 
 const empty = (): Analysis => ({ summary: "Checked existing decisions", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 function mode(store: ProjectStore, id: string, next: "manual" | "legacy" | "guided") {
@@ -185,6 +188,88 @@ function checks(calls: string[], defined = true): DiscoveryAdapter {
   } };
 }
 function grant(workflow: ProjectWorkflow, store: ProjectStore, id: string) { workflow.configure(id, store.projectRevision(id), workflow.view(id).version, "continue"); }
+
+function blockedWorkflowDefinition(store: ProjectStore, scenario: "drift" | "exhausted" | "decision") {
+  let p = seed(store);
+  const baseline = store.beginJob(p.id, p.revision).job; store.claimJob(baseline.id, Date.now() + 60000);
+  store.finishJob(baseline.id, { ...empty(), assessments: [{ epicID: "project", confidence: "medium", explanation: "Earlier synthetic definition baseline", checks:
+    dimensions.map((dimension) => ({ dimension, importance: "important", status: "defined", explanation: "Earlier recorded scope", evidenceIDs: [p.sources[0]!.id] })) }] });
+  p = store.get(p.id);
+  for (let i = 0; i < 15; i++) p = store.note(p.id, p.revision, `Exact workflow evidence ${i}\n` + Array.from({ length: 160 }, (_, n) => createHash("sha256").update(`workflow-label-${i}-${n}`).digest("hex")).join(""), "project");
+  const work = planDefinitionStages(p, "project"); delete work.stableCitationPolicy; delete work.linkedAnswerPolicy;
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  const [first, second] = work.batches[0]!; assert.ok(first && second);
+  work.attempts = 1;
+  const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: { epicID: "project", confidence: "medium", explanation: "Original accumulated findings", checks:
+    dimensions.map((dimension) => ({ dimension, importance: "important", status: "defined", explanation: "Original saved constraint", evidenceIDs: [first, second] })) } }, job.id);
+  upgradeDefinitionEvidenceFollowups(p, work);
+  const stage = (definitionStageContext(p, work, draft).data as { definitionStage: { citationLabels: Record<string, string> } }).definitionStage;
+  const label = Object.entries(stage.citationLabels).find(([, id]) => id === second)![0];
+  work.attempts = 1;
+  requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [label], reason: "Load the exact earlier decision" } }, job.id);
+  work.attempts = 2;
+  requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [label], reason: "The reviewer still cannot find the intended decision" } }, job.id);
+  work.attempts = scenario === "exhausted" ? 5 : 3;
+  if (work.attempts > 3) upgradeDefinitionAllowance(work);
+  work.blocked = scenario === "decision" ? "The human decisions conflict about resuming the mission; the governing preference is not established."
+    : `The exact human decision ${label} remains unavailable after the recorded requests. This blocks review, not a missing feature.`;
+  if (scenario === "decision") work.blockedKind = "product-decision";
+  store.checkpointDefinition(job.id, work, definitionStageContext(p, work, draft).manifest);
+  store.blockDefinition(job.id, work.blocked, work.blockedKind);
+  return { p, job: store.getJob(job.id), work, draft };
+}
+
+for (const scenario of ["drift", "exhausted", "decision"] as const) test(`Continue specification handles saved ${scenario} definition work without widening its grant`, async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "workflow-definition-protocol-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file), workflow: ProjectWorkflow | undefined;
+  try {
+    const { p, job, work, draft } = blockedWorkflowDefinition(store, scenario);
+    assert.equal(definitionLabelDrift(work), scenario !== "decision");
+    assert.equal(definitionFollowThrough(coverage(p).epics).find((area) => area.epicID === "project")!.state, "outdated");
+    store.close(); store = new ProjectStore(file); store.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.getJob(job.id), job);
+    let calls = 0;
+    workflow = new ProjectWorkflow(store, { async analyze(_snapshot, { context }) {
+      calls++;
+      assert.equal(scenario, "drift", "A new workflow burst is not a failed-step recovery grant or a human decision");
+      assert.equal(context.manifest.definitionAssessment?.epicID, "project");
+      const stage = (context.data as { definitionStage: { stableCitationPolicy?: string; phase: string } }).definitionStage;
+      assert.equal(stage.stableCitationPolicy, "input-stable-s-v1");
+      if (calls === 1) return { definitionUpdate: { checks: [] } };
+      return { definitionBlocked: { kind: "evidence-lookup", reason: "Synthetic new-protocol lookup blocker. Earlier product decisions remain unchanged." } };
+    } });
+    workflow.tick(p.id); await workflow.wait(p.id);
+    assert.equal(calls, 0, "Reopen/poll does not authorize protocol recovery or model work");
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    const continued = store.jobs(p.id).filter((j) => j.definitionWork).at(-1)!;
+    assert.notEqual(continued.id, job.id);
+    assert.equal(workflow.view(p.id).phase, "blocked");
+    assert.equal(store.workflow(p.id).grant!.used, calls);
+    assert.deepEqual(store.get(p.id), p, "Partial review cannot change decisions, publish scores or establish readiness");
+    assert.deepEqual(store.getJob(job.id), job);
+    assert.deepEqual(continued.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.deepEqual(continued.definitionWork!.batches, work.batches);
+    assert.deepEqual(continued.definitionWork!.evidenceRequests, work.evidenceRequests);
+    assert.deepEqual(continued.definitionWork!.evidenceFollowups, work.evidenceFollowups);
+    if (scenario === "drift") {
+      assert.equal(calls, 2);
+      assert.equal(continued.definitionWork!.receipts[work.receipts.length]!.attempts, work.attempts + 1);
+      assert.equal(continued.definitionWork!.stableCitationPolicy!.supersededBlock, work.blocked);
+      assert.equal(continued.definitionWork!.blockedKind, "evidence-lookup");
+      assert.deepEqual(replayDefinitionStages(p, continued.definitionWork!), draft);
+    } else {
+      assert.equal(calls, 0);
+      assert.equal(continued.definitionWork!.attempts, work.attempts);
+      if (scenario === "decision") assert.equal(continued.definitionWork!.blocked, work.blocked);
+      assert.equal(continued.definitionWork!.recovery, undefined);
+    }
+    const beforeRetry = calls;
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.equal(calls, beforeRetry, "Continue cannot repeatedly clear a new blocker or reset failed attempts");
+    assert.equal(store.workflow(p.id).grant!.used, 0);
+  } finally { await workflow?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("run receipts distinguish a whole worker pass from its latest change and do not invent older runs", async () => {
   const store = new ProjectStore(":memory:"); const calls: string[] = [];

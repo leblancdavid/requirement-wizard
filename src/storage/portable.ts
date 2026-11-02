@@ -259,7 +259,7 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
     submissionStage: z.object({ policy: z.literal("exact-submission-batches-v1"), planKey: z.string().regex(/^[a-f0-9]{64}$/), step: z.number().int().min(0).max(63), phase: z.enum(["read", "check"]) }).strict().optional(),
     readinessStage: z.object({ policy: z.literal("exact-readiness-batches-v1"), planKey: z.string().regex(/^[a-f0-9]{64}$/), step: z.number().int().nonnegative(), phase: z.enum(["read", "check"]) }).strict().optional() }).passthrough().optional(),
   retrievalWork: retrievalWorkSchema.optional(), gapReport: z.unknown().optional(), epicReviewReport: z.unknown().optional(),
-  definitionWork: definitionWorkSchema.optional(), definitionBlock: z.object({ format: z.literal(1), reason: z.string().min(1).max(1200) }).strict().optional(),
+  definitionWork: definitionWorkSchema.optional(), definitionBlock: z.object({ format: z.literal(1), reason: z.string().min(1).max(1200), kind: z.enum(["evidence-lookup", "product-decision", "technical"]).optional() }).strict().optional(),
   definitionInterruption: definitionInterruptionSchema.optional(),
   readinessWork: readinessWorkSchema.optional(),
   submissionWork: submissionWorkSchema.optional(),

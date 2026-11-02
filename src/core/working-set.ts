@@ -121,14 +121,14 @@ export function shareRepeatedText(data: unknown, compactInstructions = false, sh
 }
 
 /** Share repeated identifiers only in explicitly named identifier fields. */
-export function shareRepeatedIdentifiers(data: unknown, compactInstructions = false) {
+export function shareRepeatedIdentifiers(data: unknown, compactInstructions = false, recordMaps: readonly string[] = []) {
   const isIdentifier = (field: string) => field !== "sharedTextID"
     && (field === "id" || field.endsWith("ID") || field.endsWith("IDs") || field === "dependencies");
   const counts = new Map<string, number>();
-  const visit = (value: unknown, field = "") => {
+  const visit = (value: unknown, field = "", path = "") => {
     if (typeof value === "string" && isIdentifier(field)) counts.set(value, (counts.get(value) ?? 0) + 1);
-    else if (Array.isArray(value)) value.forEach((item) => visit(item, field));
-    else if (value && typeof value === "object") Object.entries(value).forEach(([key, item]) => visit(item, key));
+    else if (Array.isArray(value)) value.forEach((item) => visit(item, field, path));
+    else if (value && typeof value === "object") Object.entries(value).forEach(([key, item]) => visit(item, recordMaps.includes(path) ? "recordID" : key, path ? `${path}.${key}` : key));
   };
   visit(data);
   // Budget the dictionary entry as well as each reference. The complete output
@@ -137,18 +137,20 @@ export function shareRepeatedIdentifiers(data: unknown, compactInstructions = fa
     .sort((a, b) => b[1] - a[1]).map(([value]) => value);
   const indexes = new Map(values.map((value, index) => [value, index]));
   let references = 0;
-  const encode = (value: unknown, field = ""): unknown => {
+  const encode = (value: unknown, field = "", path = ""): unknown => {
     if (typeof value === "string" && isIdentifier(field) && indexes.has(value)) {
       references++; return indexes.get(value)!;
     }
-    if (Array.isArray(value)) return value.map((item) => encode(item, field));
-    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encode(item, key)]));
+    if (Array.isArray(value)) return value.map((item) => encode(item, field, path));
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encode(item, recordMaps.includes(path) ? "recordID" : key, path ? `${path}.${key}` : key)]));
     return value;
   };
   return { data: { ...(encode(data) as Record<string, unknown>), identifierTable: {
-    explanation: compactInstructions
+    explanation: (compactInstructions
       ? "Lossless IDs: integers in id, *ID, *IDs (except sharedTextID), and dependencies are zero-based indexes into identifierTable.values, including arrays. Restore original IDs before reading/citing; other numbers/prose are unchanged. Manifest IDs remain original."
-      : "Lossless identifier encoding: in fields named id, ending in ID or IDs (except sharedTextID), or named dependencies, an integer is a zero-based index into identifierTable.values. This applies to array elements too. Replace it with that exact ID when reading links, scope, and records. Other numbers and all prose are unchanged. Always return and cite the expanded original string IDs, never table indexes. The manifest retains original IDs. This encoding changes no evidence, provenance, or scope.",
+      : "Lossless identifier encoding: in fields named id, ending in ID or IDs (except sharedTextID), or named dependencies, an integer is a zero-based index into identifierTable.values. This applies to array elements too. Replace it with that exact ID when reading links, scope, and records. Other numbers and all prose are unchanged. Always return and cite the expanded original string IDs, never table indexes. The manifest retains original IDs. This encoding changes no evidence, provenance, or scope.")
+      + (recordMaps.length ? " Also expand integer VALUES in the exact dotted object-map paths in recordMaps using this SAME table. Map KEYS/short labels stay unchanged; do not interpret integers elsewhere as references." : ""),
+    ...(recordMaps.length ? { recordMaps } : {}),
     values,
   } }, identifiers: values.length, references };
 }

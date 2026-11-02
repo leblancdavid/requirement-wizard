@@ -380,7 +380,8 @@ export class DiscoveryService {
           clearTimeout(timer);
           if (!options.continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition, recoveryJobID: options.definitionRecoveryJobID, onRequest: options.onDefinitionRequest }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition,
+              protocolRecovery: !!this.navigation.workflow, recoveryJobID: options.definitionRecoveryJobID, onRequest: options.onDefinitionRequest }));
         }
         try { definition = definitionContext(project, options.definitionEpicID); }
         catch (error) {
@@ -390,7 +391,8 @@ export class DiscoveryService {
           clearTimeout(timer);
           if (!options.continuousDefinition) timer = setTimeout(timeout, Math.max(1, (workflowLimits?.durationMs ?? options.definitionLimits?.durationMs ?? stagedRunDurationMs) - (Date.now() - started)));
           return completeMeasurement(await runDefinitionStages(this.store, inferenceAdapter, project, job, options.definitionEpicID,
-            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition, onRequest: options.onDefinitionRequest }));
+            { signal: controller.signal, onProgress: options.onProgress, measurement, limits: workflowLimits ?? options.definitionLimits ?? this.navigation.stagedLimits, requestTimeoutMs: this.navigation.definitionRequestMs, schedule: options.definitionSchedule, continuous: options.continuousDefinition,
+              protocolRecovery: !!this.navigation.workflow, onRequest: options.onDefinitionRequest }));
         }
         if (options.definitionSchedule && options.definitionSchedule.deadline - Date.now() < definitionRequestReserve(options.definitionSchedule, "collect")) {
           this.store.attachContext(job.id, definition!.manifest);
@@ -840,7 +842,7 @@ export class DiscoveryService {
       return completeMeasurement(options.helpRequest ? this.store.finishHelp(job.id, output) : this.store.finishJob(job.id, output));
     } catch (error) {
       if (options.definitionEpicID && error instanceof DefinitionEvidenceBlocked && !controller.signal.aborted) {
-        return completeMeasurement(this.store.blockDefinition(job.id, error.message));
+        return completeMeasurement(this.store.blockDefinition(job.id, error.message, "technical"));
       }
       if (options.definitionEpicID && controller.signal.aborted) {
         const work = this.store.getJob(job.id).definitionWork;

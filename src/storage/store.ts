@@ -58,7 +58,7 @@ import { prepareCombinationApply, combinedAssessment, readCombinationPublication
 import { definitionCombinationApplyQuerySchema, definitionCombinationApplySchema, definitionCombinationPublicationSchema,
   type DefinitionCombinationApplyPreview, type DefinitionCombinationApplyResult } from "../core/definition-combination-apply.js";
 import { definitionPublicationKey as jointKey } from "../core/definition-publication.js";
-import { completedDefinitionAssessment, definitionWorkSchema, type DefinitionWork } from "../core/definition-stages.js";
+import { completedDefinitionAssessment, definitionWorkSchema, definitionBlockedSchema, type DefinitionWork } from "../core/definition-stages.js";
 import { definitionInterruptionSchema, definitionInterruptionMessage, type DefinitionInterruption } from "../core/definition-interruption.js";
 import { applySpecificationUpdates } from "../core/specification.js";
 import { specificationUpdatesSchema, stagedDefinitionAnalysisSchema } from "../core/model.js";
@@ -135,7 +135,7 @@ function readStoredJob(payload: string): Job {
     const work = definitionWorkSchema.parse(job.definitionWork), task = job.context?.definitionAssessment;
     if (task?.epicID !== work.epicID || task.inputKey !== work.inputKey || task.staged?.planKey !== work.planKey) throw new Error("Definition checkpoint does not match its saved task policy; original evidence was not overwritten.");
   }
-  if (job.definitionBlock !== undefined) z.object({ format: z.literal(1), reason: z.string().min(1).max(1200) }).strict().parse(job.definitionBlock);
+  if (job.definitionBlock !== undefined) z.object({ format: z.literal(1), reason: z.string().min(1).max(1200), kind: definitionBlockedSchema.shape.definitionBlocked.shape.kind }).strict().parse(job.definitionBlock);
   if (job.definitionInterruption !== undefined) definitionInterruptionSchema.parse(job.definitionInterruption);
   if (job.context?.epicContextBudget !== undefined) epicContextBudgetSchema.parse(job.context.epicContextBudget);
   if (job.epicReviewReport !== undefined) epicReviewReportSchema.parse(job.epicReviewReport);
@@ -2276,12 +2276,12 @@ export class ProjectStore {
     }).immediate();
   }
 
-  blockDefinition(id: string, reason: string): Job {
+  blockDefinition(id: string, reason: string, kind?: NonNullable<Job["definitionBlock"]>["kind"]): Job {
     return this.db.transaction(() => {
       const job = this.getJob(id);
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Definition worker is no longer live.");
       if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
-      job.status = "failed"; job.definitionBlock = { format: 1, reason: reason.slice(0, 1200) }; job.diagnostic = `Evidence blocked: ${job.definitionBlock.reason}`;
+      job.status = "failed"; job.definitionBlock = { format: 1, reason: reason.slice(0, 1200), ...(kind ? { kind } : {}) }; job.diagnostic = `Evidence blocked: ${job.definitionBlock.reason}`;
       job.leaseUntil = null; this.saveJob(job); return job;
     }).immediate();
   }

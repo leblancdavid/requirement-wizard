@@ -6,6 +6,7 @@ import { DiagnosticNotice } from "./diagnostic-notice.js";
 import { definitionStopSummary, statusLabel } from "./user-messages.js";
 import { LogLink } from "./log-access.js";
 import { canRecoverDefinition } from "../core/definition-recovery.js";
+import { definitionEvidenceIssue } from "../core/definition-evidence-issue.js";
 
 export function DefinitionProgress({ job, project }: { job: Job; project: Project }) {
   const task = job.context?.definitionAssessment, work = job.definitionWork;
@@ -13,6 +14,7 @@ export function DefinitionProgress({ job, project }: { job: Job; project: Projec
   const interruption = job.definitionInterruption;
   const stopped = ["interrupted", "cancelled"].includes(job.status);
   const needsAllowance = canRecoverDefinition(job);
+  const evidenceIssue = definitionEvidenceIssue(job);
   const legacyUnknown = stopped && !interruption && !work?.paused;
   const steps = work ? definitionSteps(work) : [], step = work ? steps[work.receipts.length] : undefined;
   const included = new Set(job.context?.includedIDs ?? []);
@@ -20,7 +22,7 @@ export function DefinitionProgress({ job, project }: { job: Job; project: Projec
   const questions = project.questions.filter((r) => included.has(r.id));
   const sources = project.sources.filter((r) => included.has(r.id));
   const research = project.research.filter((r) => included.has(r.id));
-  const label = job.definitionBlock ? "Needs attention" : stopped
+  const label = evidenceIssue ? "Review blocked by evidence lookup" : job.definitionBlock ? "Needs attention" : stopped
     ? interruption?.cause === "user-stop" ? "Stopped—progress saved" : interruption?.cause === "shutdown" ? "Interrupted by shutdown—progress saved"
       : job.status === "interrupted" && (interruption || work?.paused) ? "Paused—progress saved" : "Interrupted—progress saved" : statusLabel(job.status);
   return <section aria-label="Definition assessment progress">
@@ -40,7 +42,7 @@ export function DefinitionProgress({ job, project }: { job: Job; project: Projec
     </>}</LazyDetails>}
     {legacyUnknown && <p>This earlier review stopped, but the reason wasn’t recorded. Completed checks are still saved.</p>}
     {stopped && interruption && <p role="status">{definitionStopSummary(interruption.cause)} Use Refresh definition coverage to continue unfinished work.</p>}
-    {(job.definitionBlock?.reason || job.diagnostic) && <DiagnosticNotice detail={job.definitionBlock?.reason ?? job.diagnostic} summary={needsAllowance ? "The review paused after repeated unsuccessful requests. Your saved work is kept." : job.definitionBlock ? "The assessment found an issue that needs attention before it can finish." : stopped ? "The review stopped before finishing. Completed checks are saved." : undefined} next={needsAllowance ? "Use Refresh definition coverage to confirm one additional request and continue." : job.definitionBlock ? "Open Specification → Needs your decision → Clarify in Design to let AI identify a focused question with answer options. You do not need to write a correction from assessment prose. For technical or unavailable-evidence problems, see Logs." : undefined} />}
+    {(job.definitionBlock?.reason || job.diagnostic) && <DiagnosticNotice detail={job.definitionBlock?.reason ?? job.diagnostic} summary={evidenceIssue ? "The review could not reliably identify or load saved evidence. This is not a missing product decision." : needsAllowance ? "The review paused after repeated unsuccessful requests. Your saved work is kept." : job.definitionBlock ? "The assessment found an issue that needs attention before it can finish." : stopped ? "The review stopped before finishing. Completed checks are saved." : undefined} next={evidenceIssue ? "Use Continue specification or Refresh definition coverage after updating the app. Completed steps and spent attempts are kept; no Design answer is needed to repair this lookup. If an additional request needs permission, confirm it through Refresh. See Logs if it remains blocked." : needsAllowance ? "Use Refresh definition coverage to confirm one additional request and continue." : job.definitionBlock ? "Open Specification → Needs your decision → Clarify in Design to let AI identify a focused question with answer options. You do not need to write a correction from assessment prose. For technical or unavailable-evidence problems, see Logs." : undefined} />}
   </section>;
 }
 

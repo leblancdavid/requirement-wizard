@@ -370,7 +370,7 @@ function App() {
   const selectedEpic = epics.find((item) => item.id === epicID);
   const queuedQuestionIDs = useMemo(() => new Set(data?.submissions.flatMap((item) => item.input.type === "answer" && ["queued", "processing"].includes(item.status) ? [item.input.questionID] : []) ?? []), [data?.submissions]);
   const protectedQuestionIDs = useMemo(() => new Set(data?.submissions.flatMap((item) => item.input.type === "answer" && ["queued", "processing", "saved", "needs-attention"].includes(item.status) ? [item.input.questionID] : []) ?? []), [data?.submissions]);
-  const pendingReviewCount = useMemo(() => project && data ? reviewItems(project, data.submissions, "pending").length + definitionDecisions(project, data.jobs).length : 0, [project, data?.submissions, data?.jobs]);
+  const pendingReviewCount = useMemo(() => project && data ? reviewItems(project, data.submissions, "pending").length + definitionDecisions(project, data.jobs).filter((finding) => !finding.evidenceIssue).length : 0, [project, data?.submissions, data?.jobs]);
   const questions = project?.questions.filter((item) => item.status !== "retired" && !queuedQuestionIDs.has(item.id) && (epicID === "all" || item.epicID === epicID)) ?? [];
   const openQuestions = questions.filter((item) => ["pending", "deferred", "delegated"].includes(item.status));
   const scopedQuestions = project?.questions.filter((item) => item.status !== "retired" && (epicID === "all" || item.epicID === epicID)) ?? [];

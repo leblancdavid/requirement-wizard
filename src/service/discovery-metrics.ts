@@ -32,9 +32,9 @@ export class DiscoveryMeasurement {
     try {
       const raw = await run();
       request.outcome = "returned";
-      request.response = raw && typeof raw === "object" ? "retrieveEvidence" in raw || "clarificationEvidence" in raw || "submissionEvidence" in raw ? "load" : "searchEvidence" in raw ? "search"
+      request.response = raw && typeof raw === "object" ? "retrieveEvidence" in raw || "clarificationEvidence" in raw || "submissionEvidence" in raw || "definitionEvidence" in raw ? "load" : "searchEvidence" in raw ? "search"
         : "reviewBlocked" in raw || "definitionBlocked" in raw || "clarificationBlocked" in raw || "submissionBlocked" in raw ? "blocked"
-          : "summary" in raw || "jointReview" in raw || "guardrailVerdict" in raw || "definitionVerdict" in raw || "definitionAssessment" in raw || "definitionUpdate" in raw || "definitionEvidence" in raw
+          : "summary" in raw || "jointReview" in raw || "guardrailVerdict" in raw || "definitionVerdict" in raw || "definitionAssessment" in raw || "definitionUpdate" in raw
             || "clarificationRead" in raw || "clarificationVerdict" in raw || "submissionKeep" in raw || "submissionCheck" in raw ? "analysis" : "other" : "other";
       return raw;
     } catch (error) { request.outcome = signal.aborted ? "cancelled" : "failed"; throw error; }
