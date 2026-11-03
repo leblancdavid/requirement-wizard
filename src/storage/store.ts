@@ -2263,6 +2263,18 @@ export class ProjectStore {
 
   logHistory(projectID: string, query: unknown) { return logHistory(this.db, projectID, query); }
 
+  /** Local replay owns no new model allowance. Renewal never revives expired,
+   * cancelled or stale work and never replaces another worker's saved evidence. */
+  renewDefinitionLease(id: string, leaseUntil: number) {
+    this.db.transaction(() => {
+      const job = this.getJob(id), now = Date.now();
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= now) throw new Error("Definition worker is no longer live; saved work retained.");
+      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (!Number.isSafeInteger(leaseUntil) || leaseUntil <= now) throw new Error("Definition lease renewal must have a future deadline.");
+      job.leaseUntil = Math.max(job.leaseUntil!, leaseUntil); this.saveJob(job);
+    }).immediate();
+  }
+
   checkpointDefinition(id: string, input: DefinitionWork, context: NonNullable<Job["context"]>, options: { leaseUntil?: number } = {}) {
     this.db.transaction(() => {
       const job = this.getJob(id), work = definitionWorkSchema.parse(input);

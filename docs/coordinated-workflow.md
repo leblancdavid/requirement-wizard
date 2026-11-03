@@ -1,5 +1,91 @@
 # Coordinated workflow preview (DEC-032)
 
+## Bounded exact evidence bundles (2026-11-03)
+
+User-approved continuation can package directly linked question/answer/approval
+provenance together rather than spend model calls following each link separately.
+This is bounded structural retrieval, not permission to infer precedence, approval or
+new product constraints. Existing saved loads can be enriched locally after validated
+replay while keeping original receipts and every spent attempt. No ninth successful
+lookup or broader inference consent is granted. Current-step bundles remain exact;
+whole connected provenance groups stay together if existing pages are needed. The
+final original check still requires indispensable joint evidence to fit. Repeating
+the same eight-load block cannot dispatch another call unchanged. See
+[compatibility and limits](migrations.md#bounded-exact-evidence-bundles-2026-11-03).
+
+## Versioned bounded evidence capacity (2026-11-03)
+
+User-approved continuation can upgrade the original 64 exact-evidence partitions to
+128 per phase after validating saved history and the capacity boundary. This is a
+one-time scheduling policy, not model allowance or broader consent. Existing request,
+failure, exhausted-step recovery, 2,304-step execution and 64 linked-page partition
+ceilings remain. Original receipts and spent attempts are never reset. Separate pages
+still cannot establish a relationship requiring an exact joint read; that check must
+fit or stop safely. See the
+[compatibility ledger](migrations.md#bounded-partition-capacity-upgrade-2026-11-03).
+
+## Cooperative saved-definition validation (2026-11-02)
+
+Continuous consent does not justify repeatedly losing a worker lease during local
+preparation. Definition replay now yields between saved receipts, checks Pause/stale
+revision changes and renews only a still-live lease. Progress explicitly reports
+saved stages validated locally; it does not count new model work or publish coverage.
+Rendering-local caching preserves exact evidence/context semantics and is discarded
+before mutations. Existing action/request deadlines and recovery consent remain.
+See the [compatibility ledger](migrations.md#cooperative-definition-replay-and-rendering-local-caches-2026-11-02).
+
+## Within-step supplemental evidence pages (2026-11-02)
+
+User-approved continuation can page accumulated exact evidence inside one unfinished
+assessment check when even its complete selected finding plus gathered records cannot
+fit. Whole records and supplied current question/answer pairs remain intact. Accepted
+pages save draft progress, but cannot publish the area or establish cross-page
+consistency. The final original check must reload indispensable joint evidence exactly;
+if that bundle still cannot fit, work stops safely without repeated paging.
+
+Pages share existing partition/execution ceilings, request/failure limits and explicit
+recovery consent. Original attempts and successful loads stay charged. Pause, restart
+suspension, stale-result rejection and real product blockers remain in effect. No
+additional page lookups or linked-answer recall are allowed before the final check.
+See the [compatibility ledger](migrations.md#within-step-supplemental-evidence-pages-2026-11-02).
+
+## Stage-scoped supplemental evidence (2026-11-02)
+
+User-approved continuation keeps each unfinished step's exact supplemental loads
+through local repacking, then stops automatically carrying their bodies into later
+steps after acceptance. Every original request/receipt, finding, citation and spent
+attempt remains saved. Required earlier text must be reloaded exactly, within the
+existing action and failure allowance; navigation or omitted findings cannot justify
+new conclusions. Previously validated linked load IDs remain eligible for exact
+reload, not unrestricted project-wide access. Existing Stop, stale/lease guards,
+context limits, genuine blockers and explicit exhausted-step recovery are unchanged.
+See the [compatibility ledger](migrations.md#stage-scoped-supplemental-evidence-bodies-2026-11-02).
+
+## Exact saved-answer recall for scoped ambiguity (2026-11-02)
+
+The user approved restoring full previously reviewed, retained-draft-cited human
+question/answer pairs directly linked to records named by a later lookup blocker.
+Omitted dimension findings stay omitted: the exact human question, options and chosen
+answer support the next check, not an AI summary or inferred preference precedence.
+All linked candidates are recalled or none, within ten complete pairs/twenty records
+and 96,000 characters. The blocked response stays spent; no successful-load credit,
+failure reset or additional consent is manufactured. Already-present evidence and
+genuine product/technical blocks retain their stop rules. Original receipts and
+attempts replay across reopen and portable continuation. See the
+[migration ledger](migrations.md#exact-linked-answer-recall-after-scoped-ambiguity-2026-11-02).
+
+## Bounded invalid-assessment citation correction (2026-11-02)
+
+User-approved correction also covers invalid citations in definition assessments,
+updates and verification verdicts, not just evidence lookups. The entire rejected
+response leaves saved findings unchanged. The next request permitted by live consent
+gets validation feedback, without guessed replacements, partial application or a new
+allowance. Citation and lookup failures share the existing three-failure limit. Other
+errors/blockers, Stop, stale-output protection and separately confirmed exhausted-step
+recovery retain their rules. Exact saved contexts and attempts survive replay/reopen
+and portable continuation; see the
+[migration ledger](migrations.md#bounded-correction-of-invalid-assessment-citations-2026-11-02).
+
 ## Bounded invalid-lookup correction (2026-11-02)
 
 The user approved letting a definition step correct invalid evidence references using

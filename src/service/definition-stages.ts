@@ -12,6 +12,18 @@ import { canDispatchDefinition, definitionFailedAttempts, upgradeDefinitionAllow
 import { definitionExecutionLimit, definitionEvidenceStages } from "../core/definition-continuation.js";
 import { upgradeDefinitionLinkedEvidence, upgradeDefinitionStableCitations, upgradeDefinitionLinkedAnswers, pageDefinitionLinkedAnswers, scopeDefinitionDraft, upgradeDefinitionContextMetadata, upgradeDefinitionExecution,
   upgradeDefinitionEvidenceCorrection, DefinitionEvidenceReferenceError, recordDefinitionEvidenceFailure } from "../core/definition-stages.js";
+import { upgradeDefinitionCitationCorrection, recordDefinitionCitationFailure } from "../core/definition-stages.js";
+import { DefinitionCitationError } from "../core/definition-assessment.js";
+import { recallDefinitionLinkedAnswers } from "../core/definition-stages.js";
+import { upgradeDefinitionSupplementalScope } from "../core/definition-stages.js";
+import { pageDefinitionSupplementalEvidence } from "../core/definition-stages.js";
+import { iterateDefinitionStages } from "../core/definition-stages.js";
+import { setImmediate as yieldToWorker } from "node:timers/promises";
+import type { Analysis } from "../core/model.js";
+import { upgradeDefinitionPartitionCapacity } from "../core/definition-stages.js";
+import { definitionPartitionLimit } from "../core/definition-continuation.js";
+import { upgradeDefinitionEvidenceBundles } from "../core/definition-stages.js";
+import { definitionEvidenceRequests } from "../core/definition-budget.js";
 
 /** Ephemeral estimates shared across one explicit refresh, never a new allowance. */
 export type DefinitionSchedule = { deadline: number; collectMs: number; verifyMs: number };
@@ -23,7 +35,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   epicID: string, options: { signal: AbortSignal; onProgress?: (message: string) => void; measurement?: DiscoveryMeasurement;
     limits?: { requests: number; durationMs: number }; requestTimeoutMs?: number; schedule?: DefinitionSchedule; continuous?: boolean; protocolRecovery?: boolean; recoveryJobID?: string; onRequest?: () => void }): Promise<Job> {
   const local = <T>(phase: Parameters<DiscoveryMeasurement["local"]>[0], run: () => T) => options.measurement ? options.measurement.local(phase, run) : run();
-  const checkpoint = (manifest: NonNullable<Job["context"]>, renewal: { leaseUntil?: number } = {}) => local("checkpoint", () => store.checkpointDefinition(job.id, work, manifest, renewal));
+  const checkpoint = (manifest: NonNullable<Job["context"]>, renewal: { leaseUntil?: number } = { leaseUntil: Date.now() + 360_000 }) => local("checkpoint", () => store.checkpointDefinition(job.id, work, manifest, renewal));
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = options.continuous ? Infinity : Date.now() + limits.durationMs;
   const lease = () => options.continuous ? { leaseUntil: Date.now() + 360_000 } : {};
   const prior = store.definitionHistory(project.id, epicID, definitionInputKey(project, epicID)).find((j) => j.id !== job.id);
@@ -32,7 +44,17 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   const work = local("preparation", () => prior?.definitionWork ? { ...structuredClone(prior.definitionWork), originJobID: prior.id }
     : planDefinitionStages(project, epicID, (progress) => options.onProgress?.(`Preparing exact definition batches · ${progress.prepared} / ${progress.total} evidence records packaged · ${progress.probes} exact size checks. Local preparation only; no model request is running yet.`)));
   delete work.paused;
-  let draft = local("replay", () => replayDefinitionStages(project, work)), calls = 0;
+  let draft: Analysis | undefined, calls = 0;
+  const replay = iterateDefinitionStages(project, work);
+  for (;;) {
+    options.signal.throwIfAborted();
+    await yieldToWorker();
+    options.signal.throwIfAborted();
+    store.renewDefinitionLease(job.id, Date.now() + 360_000);
+    const next = local("replay", () => replay.next());
+    if (next.done) { draft = next.value; break; }
+    options.onProgress?.(`Validating saved definition evidence · ${next.value} / ${work.receipts.length} saved stages checked. Local replay only; no model request is running.`);
+  }
   upgradeDefinitionAllowance(work);
   upgradeDefinitionDraftPolicy(work);
   upgradeDefinitionResponsePolicy(work);
@@ -50,6 +72,18 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     && prior?.definitionBlock?.kind !== "product-decision");
   upgradeDefinitionContextMetadata(work);
   upgradeDefinitionEvidenceCorrection(project, work, draft, prior);
+  upgradeDefinitionCitationCorrection(project, work, draft, prior);
+  upgradeDefinitionSupplementalScope(project, work, draft);
+  let bundleUpgraded = false;
+  const upgradeBundles = () => {
+    if (upgradeDefinitionEvidenceBundles(project, work, draft, work.receipts.length === prior?.definitionWork?.receipts.length ? prior : undefined)) bundleUpgraded = true;
+  };
+  upgradeBundles();
+  if (work.blocked) upgradeDefinitionPartitionCapacity(work);
+  if (work.blocked && work.blockedKind === "evidence-lookup" && prior
+    && recallDefinitionLinkedAnswers(project, work, draft, work.blocked, prior.id, "saved-block")) {
+    options.onProgress?.("Restoring exact saved question/answer pairs linked to the reported ambiguity. Completed checks and all spent attempts are retained; omitted assessment dimensions are not used as evidence.");
+  }
   if (prior?.definitionWork?.blocked && !work.blocked) options.onProgress?.(`The saved protocol blocker has been superseded by the updated evidence/citation contract. All ${work.receipts.length} completed responses and spent attempts are retained. Preparing the unfinished step; no new model request has started yet.`);
   if (options.recoveryJobID) {
     if (prior?.id !== options.recoveryJobID || !canRecoverDefinition(prior)) throw new Error("This assessment is no longer eligible for recovery. Refresh before continuing.");
@@ -67,6 +101,9 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
       options.signal.throwIfAborted();
       upgradeDefinitionExecution(work);
       upgradeDefinitionEvidenceCorrection(project, work, draft);
+      upgradeDefinitionCitationCorrection(project, work, draft);
+      upgradeDefinitionSupplementalScope(project, work, draft);
+      upgradeBundles();
       try { return local("context", currentContext); }
       catch (error) {
         if (!(error instanceof ContextBudgetError)) throw error;
@@ -81,10 +118,33 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
           options.onProgress?.(`Repacking oversized definition evidence into smaller exact-record steps · ${work.receipts.length} completed responses retained. No findings or evidence removed; no completed request repeated.`);
           continue;
         }
+        const capacityStep = definitionSteps(work)[work.receipts.length];
+        if (scoped !== true && capacityStep && capacityStep.ids.length > 1 && capacityStep.linkedReview === undefined
+          && capacityStep.supplementalPaged === undefined && definitionSteps(work).length < definitionExecutionLimit(work)
+          && upgradeDefinitionPartitionCapacity(work)) {
+          checkpoint(error.manifest);
+          options.onProgress?.("Upgraded exact-evidence subdivision capacity to 128 partitions per phase; original evidence, completed responses and all spent attempts retained.");
+          continue;
+        }
         if (scoped !== true) scoped = definitionPhase(work) !== "complete" && scopeDefinitionDraft(project, work, draft);
         if (scoped === "stage-limit") {
           checkpoint(error.manifest);
           return store.blockDefinition(job.id, `Exact evidence and the selected assessment checks can fit individually, but scheduling all remaining dimension groups would exceed this saved policy's ${definitionExecutionLimit(work)}-step execution ceiling. Evidence partitions and linked-answer pages are separately bounded per phase. Original evidence, completed responses and spent attempts are retained; no partial assessment was published.`, "technical");
+        }
+        const supplementalPages = scoped !== true ? pageDefinitionSupplementalEvidence(project, work, draft, job.id) : false;
+        if (supplementalPages === "partition-limit" || supplementalPages === "stage-limit") {
+          if (supplementalPages === "partition-limit" && upgradeDefinitionPartitionCapacity(work)) {
+            checkpoint(error.manifest);
+            options.onProgress?.("Upgraded exact-evidence capacity to 128 partitions per phase. Original receipts and spent attempts retained; request/failure limits and the execution ceiling are unchanged.");
+            continue;
+          }
+          checkpoint(error.manifest);
+          return store.blockDefinition(job.id, `Complete supplemental evidence pages would exceed ${supplementalPages === "partition-limit" ? `the existing ${definitionPartitionLimit(work)} exact-evidence partitions for this phase` : `this saved policy's ${definitionExecutionLimit(work)}-step execution ceiling`}. Original records, accepted checks and spent attempts remain saved. No partial page schedule, truncation or extra allowance was applied.`, "technical");
+        }
+        if (supplementalPages === true) {
+          checkpoint(error.manifest);
+          options.onProgress?.("Reviewing the gathered evidence in bounded exact pages while keeping the complete selected finding. Original loads and spent attempts are retained. Each accepted page saves progress; a final original check must still address indispensable joint relationships before publication.");
+          continue;
         }
         if (scoped) {
           checkpoint(error.manifest);
@@ -94,8 +154,10 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
         checkpoint(error.manifest);
         const current = definitionSteps(work)[work.receipts.length];
         const atExecutionLimit = definitionSteps(work).length >= definitionExecutionLimit(work);
-        const atLimit = definitionEvidenceStages(work, current?.phase) >= 64 || atExecutionLimit;
-        const limit = atExecutionLimit ? `${definitionExecutionLimit(work)}-step execution ceiling` : "64-step exact-evidence ceiling";
+        const atLimit = definitionEvidenceStages(work, current?.phase) >= definitionPartitionLimit(work) || atExecutionLimit;
+        const limit = atExecutionLimit ? `${definitionExecutionLimit(work)}-step execution ceiling` : `${definitionPartitionLimit(work)}-partition exact-evidence ceiling`;
+        if (current?.supplementalPaged !== undefined) return store.blockDefinition(job.id,
+          "The indispensable joint evidence plus the complete selected finding still exceeds 96,000 characters after saved supplemental pages. Separate page reads cannot establish this joint relationship. Original records, page receipts, findings and spent attempts remain saved; no truncation, repeated paging, partial publication or extra allowance was authorized.", "technical");
         if (current?.dimensions) return store.blockDefinition(job.id,
           `The selected assessment checks plus all mandatory exact evidence still exceed 96,000 characters (${error.manifest.characters.toLocaleString("en-US")}). ${atLimit ? `The ${limit} prevents further subdivision.` : "A complete selected check or the shared exact evidence is indivisible at this boundary."} Completed responses, all original evidence and spent attempts remain saved; no text was truncated and no partial assessment published.`, "technical");
         if (current?.linkedReview !== undefined) return store.blockDefinition(job.id,
@@ -111,6 +173,12 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   };
   const initial = prepareContext();
   if (!("manifest" in initial)) return initial;
+  if (!bundleUpgraded && prior?.definitionBlock?.kind === "technical"
+    && prior.definitionBlock.reason === "This step reached its eight successful evidence-request limit. Saved evidence is retained; no partial assessment was published."
+    && work.receipts.length === prior.definitionWork?.receipts.length && definitionEvidenceRequests(work) >= 8) {
+    checkpoint(initial.manifest);
+    return store.blockDefinition(job.id, prior.definitionBlock.reason, "technical");
+  }
   let context = initial;
   checkpoint(context.manifest); options.measurement?.planned(context);
   options.onProgress?.(`Definition evidence prepared in ${((Date.now() - preparationStarted) / 1000).toFixed(1)} seconds · ${work.receipts.length} stages reused · ${definitionSteps(work).length} planned read/check stages. Additional exact subdivisions may be needed if findings grow.`);
@@ -179,12 +247,27 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     }
     if (raw && typeof raw === "object" && "definitionBlocked" in raw) {
       const block = definitionBlockedSchema.parse(raw).definitionBlocked;
+      if (block.kind === "evidence-lookup" && recallDefinitionLinkedAnswers(project, work, draft, block.reason, job.id, "returned-block")) {
+        checkpoint(context.manifest);
+        options.onProgress?.("The reported ambiguity links to exact question/answer pairs reviewed earlier but absent from this request. Restoring their full evidence for the next permitted request; no findings were changed or attempts refunded.");
+        const recalled = prepareContext();
+        if (!("manifest" in recalled)) return recalled;
+        context = recalled; continue;
+      }
       work.blocked = block.reason;
       if (block.kind) work.blockedKind = block.kind;
       checkpoint(context.manifest);
       return store.blockDefinition(job.id, work.blocked, work.blockedKind);
     }
-    draft = local("validation", () => acceptDefinitionStage(project, work, draft, raw, job.id));
+    try { draft = local("validation", () => acceptDefinitionStage(project, work, draft, raw, job.id)); }
+    catch (error) {
+      if (!(error instanceof DefinitionCitationError) || !recordDefinitionCitationFailure(project, work, draft, raw, error, job.id)) throw error;
+      checkpoint(context.manifest);
+      options.onProgress?.("The assessment used invalid evidence citations. No findings were changed. Preparing validation feedback for the next permitted request; the failed attempt remains spent and completed checks are unchanged.");
+      const corrected = prepareContext();
+      if (!("manifest" in corrected)) return corrected;
+      context = corrected; continue;
+    }
     upgradeDefinitionExactWire(work);
     upgradeDefinitionLinkedEvidence(work);
     upgradeDefinitionStableCitations(work);

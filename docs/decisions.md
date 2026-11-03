@@ -47,6 +47,48 @@ every technical detail proposed in the planning documents.
 
 ## Coordinated project workflow (DEC-032)
 
+Confirmed follow-up (2026-11-03): after the review reached eight successful lookups
+inside one step, the user approved bounded exact retrieval bundles for directly
+linked questions, answers and approval provenance, rather than raising another
+limit. Preserve original loads, receipts and spent attempts. Keep the existing
+lookup/failure limits and indispensable joint-evidence safeguards; links do not
+establish approval, precedence or a missing human decision.
+
+Confirmed follow-up (2026-11-03): the user approved a bounded, versioned capacity
+upgrade after the live review reached 64 collection partitions. Raise exact-evidence
+partitions to 128 per phase after validated saved-work continuation; preserve original
+receipts, evidence, citations and spent attempts. Keep execution, linked-page, request,
+failure and recovery ceilings unchanged. No unlimited retries, truncation, historical
+resets or bypass of indispensable joint-evidence checks.
+
+Confirmed follow-up (2026-11-02): the user approved bounded evidence paging within
+one unfinished assessment check. Preserve complete selected findings, whole records,
+supplied current question/answer pairs, original receipts and spent attempts. Pages
+share existing partition/execution limits and cannot establish joint relationships or
+publish an area independently. Append the original check; reload indispensable joint
+evidence exactly or stop if it still cannot fit. No unlimited paging or new allowance.
+
+Confirmed follow-up (2026-11-02): the user approved stage-scoped supplemental evidence.
+Retain every original load/receipt and spent attempt, but stop automatically carrying
+completed steps' load bodies into unrelated later steps. Evidence needed again must
+be reloaded exactly, never summarized or guessed. Preserve supported saved findings
+and citations; omitted evidence cannot justify new findings or product changes.
+Reloads stay inside existing consent and per-step request/failure/recovery limits.
+
+Confirmed follow-up (2026-11-02): the user approved exact linked-answer recall when a
+later scoped check revives ambiguity already addressed by saved human evidence. Restore
+the full directly linked question/answer pairs, preserve completed stages and spent
+attempts, and keep omitted AI findings out of the evidence context. Links and dates do
+not automatically establish precedence; only exact human scope can establish replacement.
+No new model allowance, partial evidence selection or automatic product change.
+
+Confirmed follow-up (2026-11-02): the user approved extending bounded correction to
+invalid **assessment citations** as well as lookups. Both share the existing
+three-failure limit; no guessed replacements or partial application. Preserve saved
+checks and spent attempts, including compatible legacy continuation. Other malformed
+responses, genuine blockers and separately confirmed exhausted-step recovery retain
+their stop/consent rules.
+
 Confirmed follow-up (2026-11-02): the user selected **bounded correction** for invalid
 definition evidence lookups. Give validation feedback and permit correction within the
 existing three-failure/action allowance; preserve progress and charge every attempt.

@@ -1,5 +1,79 @@
 # Browser workspace, epics, and estimated completeness
 
+## Faster local assessment validation (2026-11-03)
+
+Schedule projection indexes active boundaries, and response validation caches only
+immutable calculations during that synchronous read. Visible review steps, context
+bytes, citations, failed attempts and model consent are unchanged; no verification is
+skipped. A same-step historical lookup probe also retains the schedule from before
+the load instead of using dimension splits created afterward. This preserves saved
+root-only lookup receipts on resume. See
+[compatibility and measured scope](migrations.md#indexed-replayvalidation-and-historical-bundle-probe-boundaries-2026-11-03).
+
+Verification: type checking, 825 pretests plus 707 main tests, all 20 default browser
+runners, a fresh desktop build/smoke check and the dedicated desktop startup check
+passed. The paused real checkpoint's 283 stages replayed read-only in 72.8 seconds
+with original evidence and one spent attempt retained. The staged desktop update is
+ready; this does not qualify end-to-end live AI completion. No installer was rebuilt.
+
+## Bounded exact evidence bundles (2026-11-03)
+
+`src/web/definition-bundles-browser-check.ts` is the 20th default runner in
+`npm run test:browser`. A curated eight-load blocked checkpoint exercises local
+question/answer/approval enrichment with no extra lookup slots, charged Pause/reload/
+retry, explicit continuation and final verification. Its screenshot is
+`.reqwizit-state/browser-definition-evidence-bundles-mobile.png`. Fixture adapters
+make no live calls. Exact-source text and original load receipts remain unchanged;
+the browser fixture does not qualify real-project interpretation or completion.
+See [compatibility and limits](migrations.md#bounded-exact-evidence-bundles-2026-11-03).
+
+All 20 default browser runners passed, including the new bundle flow. Windows
+desktop rebuild/full checks and dedicated startup checks passed after fresh quit
+confirmation, using isolated data and no live inference.
+
+## Versioned evidence capacity (2026-11-03)
+
+Compatible definition continuation at the old capacity boundary can adopt a one-time
+128-partition-per-phase policy after exact saved-history validation. Continue
+specification and ordinary Refresh share this engine behavior; neither resets spent
+attempts or bypasses request/failure limits. Old job receipts and evidence stay saved.
+The separate 64 linked-page limit, 2,304-step ceiling, full-record contexts and final
+indispensable joint checks remain. All 19 existing default browser runners passed;
+the new 64-to-128 transition is additionally covered by service, reopen and portable
+regressions, not a dedicated capacity browser fixture. See
+[compatibility and limits](migrations.md#bounded-partition-capacity-upgrade-2026-11-03).
+
+Windows desktop rebuild/full checks and dedicated startup checks also passed after
+fresh quit confirmation, using isolated data and no live inference.
+
+## Lease-safe local definition replay (2026-11-02)
+
+Before model dispatch, staged definition continuation now reports
+“Validating saved definition evidence · N / total saved stages checked.” This is
+local history validation, not a new AI response or published coverage. Replay yields
+between receipts so Pause and concurrent edits can be observed, and renews only a
+still-live/current worker lease. Rendering-local caches avoid repeated schedule/pair
+work without changing saved context hashes. All 19 browser runners, full Windows
+desktop checks and dedicated startup checks passed after rebuilding with the app
+explicitly quit. Read-only real-checkpoint replay took about 4m51s in verification;
+live completion remains unqualified. See the
+[compatibility ledger](migrations.md#cooperative-definition-replay-and-rendering-local-caches-2026-11-02).
+
+## Supplemental evidence page continuation (2026-11-02)
+
+`src/web/definition-supplemental-browser-check.ts` is now the 19th default runner in
+`npm run test:browser`. All 19 default runners passed. Its flow uses a deterministic
+adapter: eight
+saved lookups remain charged, complete selected findings stay in each exact page,
+Pause/reload does not automatically call the model, retry retains the interrupted
+attempt, and completion requires the final exact joint reload. Mobile overflow checks
+and `.reqwizit-state/browser-definition-supplemental-pages-mobile.png` are included.
+This fixture is not live-model or real-project completion qualification. See
+[paging behavior](definition-coverage.md#bounded-evidence-pages-inside-one-unfinished-check-2026-11-02).
+
+The corresponding Windows desktop rebuild, full desktop checks and dedicated startup
+checks passed after explicit quit confirmation, with isolated data and no live inference.
+
 The live Processing & queue summary names the area from the running definition
 assessment (for example, “Checking how clearly ‘Awards & achievements’ is defined…”),
 not the area currently browsed. If its title is unavailable, the saved area ID remains

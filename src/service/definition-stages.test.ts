@@ -12,6 +12,15 @@ import { definitionEvidenceStages, definitionExecutionStageLimit, definitionCell
 import { coverage } from "../core/coverage.js";
 import { dimensions, accumulatedAssessmentEvidenceLimit, accumulatedAssessmentExplanationLimit, assessmentSchema } from "../core/epics.js";
 import { definitionContext } from "../core/definition-assessment.js";
+import { DefinitionCitationError } from "../core/definition-assessment.js";
+import { upgradeDefinitionCitationCorrection, recordDefinitionEvidenceFailure } from "../core/definition-stages.js";
+import { recallDefinitionLinkedAnswers } from "../core/definition-stages.js";
+import { upgradeDefinitionSupplementalScope } from "../core/definition-stages.js";
+import { pageDefinitionSupplementalEvidence, iterateDefinitionStages } from "../core/definition-stages.js";
+import { upgradeDefinitionPartitionCapacity } from "../core/definition-stages.js";
+import { definitionPartitionLimit } from "../core/definition-continuation.js";
+import { upgradeDefinitionEvidenceBundles } from "../core/definition-stages.js";
+import { bundleDefinitionEvidence } from "../core/definition-evidence-bundles.js";
 import { acceptDefinitionStage, completedDefinitionAssessment, definitionStageContext, planDefinitionStages, replayDefinitionStages, upgradeDefinitionDraftPolicy, upgradeDefinitionResponsePolicy, upgradeDefinitionCitationPolicy, definitionSteps, splitDefinitionStage, validateDefinitionPlan, definitionWorkSchema } from "../core/definition-stages.js";
 import { analysisSchema, projectSchema, type Analysis, type Job, type Project } from "../core/model.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
@@ -39,6 +48,248 @@ const result = (epicID: string, evidenceID: string): Analysis => ({ ...empty(), 
   checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "defined", explanation: "Current recorded decision.", evidenceIDs: [evidenceID] })) }] });
 const collectionLimitBlock = "This batch adds exact human approvals that change the retained assessment. The retained acceptance assessment already cites 20 records, which is the response limit for one dimension. Updating it would require dropping earlier citations or omitting the new approval. No missing product decision or product gap is established by this blocker.";
 const crossBatchBlock = "The retained assessment reports earlier accepted rendering constraints, but their exact human decisions are not supplied here. Supply the earlier decisions and any decision replacing or limiting them. Current approvals remain valid within their stated scope.";
+
+const lookupLimitBlock = "This step reached its eight successful evidence-request limit. Saved evidence is retained; no partial assessment was published.";
+
+function evidenceBundleFixture(store: ProjectStore, loads = 8, large: boolean | "near-budget" | "full-budget" = false) {
+  let p = seed(store, 0);
+  p = store.note(p.id, p.revision, "Exact independent current anchor", "runtime"); const anchor = p.sources.at(-1)!.id;
+  p = store.note(p.id, p.revision, "Exact earlier loaded note", "runtime"); const earlier = p.sources.at(-1)!.id;
+  for (let batch = 0; batch < 2; batch++) {
+  const ask = store.beginJob(p.id, p.revision).job; store.claimJob(ask.id, Date.now() + 60_000);
+  store.finishJob(ask.id, { ...empty(), questions: Array.from({ length: 4 }, (_, n) => ({ epicID: "runtime", text: `Which exact scoped rule ${batch * 4 + n}?`,
+    whyItMatters: "Preserve the full human scope and approval", evidenceIDs: [p.sources[0]!.id],
+    options: [{ label: `Keep rule ${batch * 4 + n}`, consequence: "Only the described case changes" }, { label: "Keep the alternative", consequence: "Other cases stay unchanged" }] })) });
+  p = store.get(p.id);
+  for (const q of p.questions.filter((q) => q.status === "pending")) p = store.answer(p.id, p.revision, q.id, { kind: "answer", text: large
+    ? `Exact human scope 🧾\r\n` + Array.from({ length: 95 }, (_, n) => createHash("sha256").update(`answer-${q.id}-${n}`).digest("hex")).join("")
+    : `Exact human choice for ${q.id} 🧾\r\nNot wider approval.` });
+  p = store.get(p.id);
+  }
+  p = store.get(p.id);
+  const propose = store.beginJob(p.id, p.revision).job; store.claimJob(propose.id, Date.now() + 60_000);
+  store.finishJob(propose.id, { ...empty(), requirements: p.questions.map((q, i) => ({ epicID: "runtime", statement: `Apply exact scoped rule ${i}`,
+    rationale: "Do not infer approval from generated wording", sourceIDs: large === "near-budget" ? [q.sourceID!, earlier] : [q.sourceID!], acceptance: [`Preserve scope ${i}`] })) });
+  p = store.get(p.id); const roots = p.requirements.slice(-8).map((r) => r.id);
+  for (const id of roots) p = store.review(p.id, p.revision, id, "accepted", "Approved only the exact reviewed wording, not an unrelated case.");
+  p = store.get(p.id);
+  const work = planDefinitionStages(p, "runtime"), initial = p.sources[0]!.id;
+  work.batches = [[initial], [anchor], work.batches.flat().filter((id) => id !== initial && id !== anchor)];
+  work.planKey = createHash("sha256").update(JSON.stringify(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches])).digest("hex");
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60_000);
+  upgradeDefinitionAllowance(work); upgradeDefinitionContextMetadata(work); upgradeDefinitionEvidenceFollowups(p, work);
+  work.attempts = 1; requestDefinitionEvidence(p, work, undefined, { definitionEvidence: { recordIDs: [earlier], reason: "Original earlier load stays immutable" } }, job.id);
+  const assessment = result("runtime", initial).assessments![0]!;
+  if (large) assessment.checks.find((c) => c.dimension === "rules")!.explanation = Array.from({ length: large === "near-budget" || large === "full-budget" ? 1100 : 850 }, (_, n) => createHash("sha256").update(`complete-bundle-finding-${n}`).digest("hex")).join("");
+  work.attempts = 2; const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: assessment }, job.id);
+  upgradeDefinitionSupplementalScope(p, work, draft);
+  if (large && large !== "full-budget") {
+    work.dimensionReviews = [{ format: 1, fromStage: 1, priorRequests: 1, priorFollowups: 0, splitCount: 0, linkedReviewCount: 0,
+      groups: [dimensions.slice(0, 2), ["rules"], dimensions.slice(3)] }];
+    upgradeDefinitionExecution(work);
+    work.attempts = 1; acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, job.id);
+  }
+  for (const id of roots.slice(0, loads)) {
+    work.attempts++; requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [id], reason: "Original exact requested requirement" } }, job.id);
+  }
+  if (loads === 8) work.attempts++;
+  store.checkpointDefinition(job.id, work, definitionStageContext(p, work, draft).manifest);
+  if (loads === 8) store.blockDefinition(job.id, lookupLimitBlock, "technical"); else store.pauseDefinition(job.id, "request-limit");
+  return { p, work, draft, roots, job: store.getJob(job.id) };
+}
+
+test("bounded provenance bundles include exact question/answer/approval scope without reverse or prose expansion", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, roots } = evidenceBundleFixture(store, 0), root = roots[0]!, req = p.requirements.find((r) => r.id === root)!;
+    const bundle = bundleDefinitionEvidence(p, [root], []);
+    assert.ok(bundle.recordIDs.length > 1 && bundle.recordIDs.length <= 20);
+    assert.ok(req.sourceIDs.every((id) => bundle.recordIDs.includes(id)));
+    const answers = p.sources.filter((s) => s.kind === "answer" && req.sourceIDs.includes(s.id));
+    for (const answer of answers) assert.ok(bundle.recordIDs.includes(answer.questionID!));
+    assert.ok(p.sources.some((s) => s.kind === "confirmation" && bundle.recordIDs.includes(s.id)));
+    assert.ok(!bundle.recordIDs.includes(roots[1]!));
+    const oversized = structuredClone(p); oversized.requirements.find((r) => r.id === root)!.sourceIDs = oversized.sources.map((s) => s.id);
+    const skipped = bundleDefinitionEvidence(oversized, [root], []);
+    assert.deepEqual(skipped.recordIDs, [root]); assert.deepEqual(skipped.omittedRootIDs, [root]);
+    const missing = structuredClone(p); missing.requirements.find((r) => r.id === root)!.sourceIDs.push("missing-exact-record");
+    assert.deepEqual(bundleDefinitionEvidence(missing, [root], []).recordIDs, [root]);
+  } finally { store.close(); }
+});
+
+test("future exact lookups bundle direct provenance atomically within one charged success and replay unchanged", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, roots } = evidenceBundleFixture(store, 0), before = structuredClone(work);
+    assert.equal(upgradeDefinitionEvidenceBundles(p, work, draft), true);
+    work.attempts = 1;
+    const raw = { definitionEvidence: { recordIDs: [roots[0]!], reason: "Read the exact requirement and linked approval scope" } };
+    const request = requestDefinitionEvidence(p, work, draft, raw, "bundled-load");
+    assert.deepEqual(request.response, raw); assert.ok(request.bundle!.bundledRecordIDs.length > 0);
+    assert.ok(request.resolvedRecordIDs!.length <= 20); assert.equal(definitionEvidenceRequests(work), 1); assert.equal(work.attempts, 1);
+    const context = definitionStageContext(p, work, draft), data = expandDefinitionWire(context.data);
+    for (const id of request.resolvedRecordIDs!) assert.ok(context.manifest.includedIDs.includes(id));
+    for (const source of p.sources.filter((s) => context.manifest.includedIDs.includes(s.id))) {
+      assert.equal(data.sources.find((r: any) => r.id === source.id).text, source.text);
+    }
+    assert.deepEqual(replayDefinitionStages(p, work), draft); assert.deepEqual(work.receipts, before.receipts);
+    const invalid = structuredClone(work); invalid.evidenceRequests!.at(-1)!.bundle!.groups = [];
+    assert.throws(() => replayDefinitionStages(p, invalid), /original exact request/);
+    const current = structuredClone(work); work.attempts++;
+    assert.throws(() => requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [roots[1]!, "unknown-id"], reason: "Reject the whole invalid request" } }, "invalid"), /unknown references/);
+    assert.deepEqual(work.evidenceRequests, current.evidenceRequests);
+  } finally { store.close(); }
+});
+
+test("eight saved lookups gain bounded local provenance without rewriting loads or refunding the ninth attempt", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, job } = evidenceBundleFixture(store), historical = store.getJob(job.id); let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const data = expandDefinitionWire(context.data);
+      assert.equal(data.definitionStage.evidenceBundlePolicy.remainingSuccessfulLookups, 0);
+      assert.ok(data.definitionStage.evidenceBundlePolicy.bundledRecordIDs.length > 0);
+      assert.ok(context.manifest.characters <= 96000);
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300_000 } });
+    assert.equal(done.status, "interrupted", done.diagnostic); assert.equal(calls, 1);
+    assert.deepEqual(done.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.equal(done.definitionWork!.receipts[work.receipts.length]!.attempts, 10);
+    assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests); assert.deepEqual(done.definitionWork!.evidenceFollowups, work.evidenceFollowups);
+    assert.deepEqual(replayDefinitionStages(p, done.definitionWork!), draft); assert.deepEqual(store.getJob(job.id), historical);
+    assert.deepEqual(store.get(p.id), p); assert.equal(done.result, undefined);
+  } finally { store.close(); }
+});
+
+test("optional provenance expansion that exceeds 96k falls back atomically to the exact requested roots", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, roots } = evidenceBundleFixture(store, 0, "near-budget");
+    assert.equal(upgradeDefinitionEvidenceBundles(p, work, draft), true);
+    assert.ok(bundleDefinitionEvidence(p, roots, definitionStageContext(p, work, draft).manifest.includedIDs).bundledRecordIDs.length > 0);
+    work.attempts = 1;
+    const request = requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: roots, reason: "Read these exact required roots; optional expansion must fit" } }, "bounded-fallback");
+    assert.deepEqual(request.resolvedRecordIDs, roots); assert.deepEqual(request.bundle!.groups, []);
+    assert.deepEqual(request.bundle!.bundledRecordIDs, []); assert.deepEqual(request.bundle!.omittedRootIDs, roots);
+    assert.ok(definitionStageContext(p, work, draft).manifest.characters <= 96000);
+    assert.deepEqual(replayDefinitionStages(p, work), draft); assert.equal(definitionEvidenceRequests(work), 1);
+  } finally { store.close(); }
+});
+
+test("later same-step dimension and execution policies cannot retroactively expand a saved root-only evidence bundle", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, roots } = evidenceBundleFixture(store, 0, "full-budget");
+    assert.equal(upgradeDefinitionEvidenceBundles(p, work, draft), true);
+    work.attempts = 1;
+    const request = requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: roots,
+      reason: "Exact roots fit, but their optional provenance does not fit the complete current draft" } }, "original-root-only");
+    assert.deepEqual(request.bundle!.bundledRecordIDs, []); assert.deepEqual(request.resolvedRecordIDs, roots);
+    const original = structuredClone(request);
+    work.dimensionReviews = [{ format: 1, fromStage: work.receipts.length, priorRequests: work.evidenceRequests!.length,
+      priorFollowups: work.evidenceFollowups?.length ?? 0, splitCount: 0, linkedReviewCount: 0,
+      groups: [dimensions.slice(0, 2), ["rules"], dimensions.slice(3)] }];
+    upgradeDefinitionExecution(work);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    work.attempts = 2; acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, "accepted-later-scope");
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    assert.deepEqual(work.evidenceRequests!.find((r) => r.stage === 1), original);
+    const forged = structuredClone(work); forged.evidenceRequests!.find((r) => r.stage === 1)!.bundle!.bundledRecordIDs.push("invented-provenance");
+    assert.throws(() => replayDefinitionStages(p, forged), /original exact request/);
+  } finally { store.close(); }
+});
+
+test("bundled provenance pages retain whole connected approval/question/answer groups and the complete selected finding", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, job } = evidenceBundleFixture(store, 8, true), before = structuredClone(work);
+    assert.equal(upgradeDefinitionEvidenceBundles(p, work, draft, job), true);
+    assert.throws(() => definitionStageContext(p, work, draft), ContextBudgetError);
+    assert.equal(pageDefinitionSupplementalEvidence(p, work, draft, "bundled-pages"), true);
+    const groups = work.evidenceBundlePolicy!.restored.flatMap((r) => r.bundle.groups), review = work.supplementalReviews!.at(-1)!;
+    for (const group of groups) assert.ok(review.pages.some((page) => group.every((id) => page.flat().includes(id))), "A complete provenance group must stay on one page");
+    definitionWorkSchema.parse(work); assert.deepEqual(replayDefinitionStages(p, work), draft);
+    let next = draft;
+    while (definitionSteps(work)[work.receipts.length]!.supplementalPage !== undefined) {
+      const context = definitionStageContext(p, work, next), data = expandDefinitionWire(context.data);
+      assert.ok(context.manifest.characters <= 96000);
+      assert.equal(data.definitionStage.draft.assessments[0].checks[0].explanation, draft.assessments![0]!.checks.find((c) => c.dimension === "rules")!.explanation);
+      assert.throws(() => completedDefinitionAssessment(p, work), /Partial/);
+      work.attempts++; next = acceptDefinitionStage(p, work, next, { definitionUpdate: { checks: [] } }, "accepted-bundle-page");
+    }
+    assert.equal(work.receipts[before.receipts.length]!.attempts, 10);
+    assert.deepEqual(replayDefinitionStages(p, work), draft); assert.deepEqual(work.evidenceRequests, before.evidenceRequests); assert.deepEqual(work.evidenceFollowups, before.evidenceFollowups);
+    assert.equal(expandDefinitionWire(definitionStageContext(p, work, next).data).definitionStage.boundedSupplementalReview.phase, "joint-check");
+    const forged = structuredClone(work); forged.evidenceBundlePolicy!.restored[0]!.bundle.groups = [];
+    assert.throws(() => replayDefinitionStages(p, forged), /bounded structural provenance/);
+  } finally { store.close(); }
+});
+
+test("overlapping optional saved bundles that cannot page select only whole groups fitting the original exact context", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, job } = evidenceBundleFixture(store, 8, "near-budget"), original = structuredClone(work);
+    assert.equal(upgradeDefinitionEvidenceBundles(p, work, draft, job), true);
+    const policy = work.evidenceBundlePolicy!, added = new Set(policy.restored.flatMap((r) => r.bundle.bundledRecordIDs));
+    assert.ok(added.size > 0 && added.size < 24, "Optional overlapping enrichment cannot force all provenance into an oversized connected unit");
+    const context = definitionStageContext(p, work, draft); assert.ok(context.manifest.characters <= 96000);
+    for (const group of policy.restored.flatMap((r) => r.bundle.groups)) assert.ok(group.every((id) => context.manifest.includedIDs.includes(id)));
+    assert.ok(policy.restored.length < 8 || policy.restored.some((r) => r.bundle.omittedRootIDs.length));
+    assert.equal(work.attempts, 9); assert.equal(definitionEvidenceRequests(work), 8);
+    assert.deepEqual(work.evidenceRequests, original.evidenceRequests); assert.deepEqual(work.evidenceFollowups, original.evidenceFollowups);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+  } finally { store.close(); }
+});
+
+test("bundle activation survives repeated reopen and portable continuation, rejecting future or forged restored evidence", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "evidence-bundles-")), file = join(directory, "state.sqlite"); let store = new ProjectStore(file);
+  try {
+    const { p, work, draft, job } = evidenceBundleFixture(store), historical = store.getJob(job.id);
+    assert.equal(upgradeDefinitionEvidenceBundles(p, work, draft, historical), true);
+    const next = store.beginJob(p.id, p.revision).job; store.claimJob(next.id, Date.now() + 60_000);
+    store.checkpointDefinition(next.id, work, definitionStageContext(p, work, draft).manifest); store.pauseDefinition(next.id, "request-limit");
+    const paused = store.getJob(next.id);
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(file); assert.deepEqual(store.getJob(next.id), paused); assert.deepEqual(store.getJob(job.id), historical); }
+    const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [paused], [], (r) => store.get(p.id, r))), p.model);
+    const saved = portable.continuation.jobs[0]!.definitionWork!;
+    assert.deepEqual(saved, paused.definitionWork); assert.deepEqual(replayDefinitionStages(p, saved), draft);
+    const future = structuredClone(saved); future.evidenceBundlePolicy!.format = 2 as 1;
+    assert.equal(definitionWorkSchema.safeParse(future).success, false);
+    const forged = structuredClone(saved); forged.evidenceBundlePolicy!.restored[0]!.bundle.bundledRecordIDs.push("invented-record");
+    assert.throws(() => replayDefinitionStages(p, forged), /bounded structural provenance/);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("a ninth lookup remains forbidden after bundling and unchanged retry does not dispatch again", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work } = evidenceBundleFixture(store); let calls = 0;
+    const service = new DiscoveryService(store, { async analyze() { calls++; return { definitionEvidence: { recordIDs: [p.sources[0]!.id], reason: "Do not allow a ninth lookup" } }; } });
+    const failed = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(failed.status, "failed"); assert.equal(calls, 1); assert.match(failed.diagnostic!, /eight successful/);
+    assert.equal(failed.definitionWork!.attempts, 10); assert.equal(definitionEvidenceRequests(failed.definitionWork!), 8);
+    const again = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(again.status, "failed"); assert.equal(calls, 1); assert.equal(again.definitionWork!.attempts, 10);
+    assert.deepEqual(again.definitionWork!.evidenceRequests, work.evidenceRequests); assert.deepEqual(again.definitionWork!.evidenceFollowups, work.evidenceFollowups);
+  } finally { store.close(); }
+});
+
+for (const outcome of ["failed", "cancelled", "stale"] as const) test(`bundled continuation preserves legacy loads and spent attempts on ${outcome}`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, job } = evidenceBundleFixture(store), historical = store.getJob(job.id), controller = new AbortController(); let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze() {
+      calls++; if (outcome === "failed") throw new Error("Synthetic bundle transport failure");
+      if (outcome === "cancelled") controller.abort(); else store.note(p.id, p.revision, "Concurrent decision during exact bundle read", "runtime");
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
+    assert.equal(calls, 1); assert.equal(done.status, outcome, done.diagnostic); assert.ok(done.definitionWork!.evidenceBundlePolicy);
+    assert.equal(done.definitionWork!.attempts, 10); assert.deepEqual(done.definitionWork!.receipts, work.receipts);
+    assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests); assert.deepEqual(done.definitionWork!.evidenceFollowups, work.evidenceFollowups);
+    assert.deepEqual(store.getJob(job.id), historical); assert.equal(done.result, undefined);
+  } finally { store.close(); }
+});
 
 function linkedAnswerFixture(store: ProjectStore, failures = 1, large = false, reviewed = false, noteCount = 15) {
   let p = seed(store, noteCount);
@@ -90,6 +341,783 @@ function linkedAnswerFixture(store: ProjectStore, failures = 1, large = false, r
   store.blockDefinition(job.id, work.blocked, work.blockedKind);
   return { p, work, draft, job: store.getJob(job.id), first, second, resolution, followup, unrelated };
 }
+
+function linkedAnswerRecallFixture(store: ProjectStore, attempts = 1) {
+  const { p, first, second, resolution, unrelated } = linkedAnswerFixture(store);
+  const work = planDefinitionStages(p, "runtime"), initial = p.sources[0]!.id;
+  const head = [initial, resolution.questionID, resolution.answerID], anchors = [first.questionID, first.answerID, second.questionID, second.answerID];
+  const reserved = new Set([...head, ...anchors]);
+  work.batches = [head, anchors, ...work.batches.map((b) => b.filter((id) => !reserved.has(id))).filter((b) => b.length)];
+  work.planKey = createHash("sha256").update(JSON.stringify(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches])).digest("hex");
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  const assessment = result("runtime", initial).assessments![0]!;
+  const rules = assessment.checks.find((c) => c.dimension === "rules")!;
+  rules.evidenceIDs = [resolution.questionID, resolution.answerID]; rules.explanation = "The exact human answer resolves this scoped departure exception.";
+  work.attempts = 1; const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: assessment }, job.id);
+  work.dimensionReviews = [{ format: 1, fromStage: 1, priorRequests: 0, priorFollowups: 0, splitCount: 0, linkedReviewCount: 0,
+    groups: [dimensions.filter((d) => d !== "acceptance"), ["acceptance"]] }];
+  work.attempts = 1; acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, job.id);
+  work.attempts = attempts;
+  const reason = `The records ${first.answerID} and ${second.questionID} conflict; the governing relationship is unavailable in this request.`;
+  const context = definitionStageContext(p, work, draft);
+  assert.ok(!context.manifest.includedIDs.includes(resolution.answerID));
+  work.blocked = reason; work.blockedKind = "evidence-lookup";
+  store.checkpointDefinition(job.id, work, context.manifest); store.blockDefinition(job.id, reason, "evidence-lookup");
+  return { p, work, draft, first, second, resolution, unrelated, reason, job: store.getJob(job.id) };
+}
+
+function supplementalScopeFixture(store: ProjectStore) {
+  const p = seed(store), work = planDefinitionStages(p, "runtime"), job = store.beginJob(p.id, p.revision).job;
+  const ids = work.batches.flat(), head = ids.slice(0, 1), body = ids.slice(1, 5), reserved = new Set([...head, ...body]);
+  work.batches = [head, body, ...work.batches.map((b) => b.filter((id) => !reserved.has(id))).filter((b) => b.length)];
+  work.planKey = createHash("sha256").update(JSON.stringify(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches])).digest("hex");
+  store.claimJob(job.id, Date.now() + 60000); upgradeDefinitionAllowance(work); upgradeDefinitionContextMetadata(work);
+  work.attempts = 1;
+  let draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: result("runtime", definitionStageContext(p, work).manifest.includedIDs[0]!).assessments![0] }, job.id);
+  upgradeDefinitionEvidenceFollowups(p, work);
+  const tail = work.batches.slice(2).flat(), oldID = tail.at(-1)!, currentID = tail.at(-2)!;
+  assert.ok(oldID && currentID && oldID !== currentID);
+  work.attempts = 1; requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [oldID], reason: "Earlier completed step needed this exact note" } }, job.id);
+  assert.equal(splitDefinitionStage(work), true);
+  work.attempts = 2; draft = acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, job.id);
+  work.attempts = 1; requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [currentID], reason: "Current unfinished step needs this exact note" } }, job.id);
+  store.checkpointDefinition(job.id, work, definitionStageContext(p, work, draft).manifest); store.pauseDefinition(job.id, "request-limit", 300000);
+  return { p, work, draft, oldID, currentID, job: store.getJob(job.id) };
+}
+
+function supplementalPageFixture(store: ProjectStore, failures = 0) {
+  let p = seed(store);
+  const short: string[] = [];
+  for (let i = 0; i < 8; i++) { p = store.note(p.id, p.revision, `Exact short constraint ${i}: retain its stated scope.`, "runtime"); short.push(p.sources.at(-1)!.id); }
+  const ask = store.beginJob(p.id, p.revision).job; store.claimJob(ask.id, Date.now() + 60000);
+  store.finishJob(ask.id, { ...empty(), questions: [{ epicID: "runtime", text: "Which exact behavior applies to this page's case?", whyItMatters: "Keep full scope, not a short answer alone.",
+    evidenceIDs: [p.sources[0]!.id], options: [{ label: "Keep the scoped behavior", consequence: "Only this particular case changes." }, { label: "Keep the alternative", consequence: "Other cases remain unchanged." }] }] });
+  p = store.get(p.id); const questionID = p.questions.at(-1)!.id;
+  p = store.answer(p.id, p.revision, questionID, { kind: "answer", text: "Keep the scoped behavior — exact human choice 🧾" });
+  p = store.get(p.id);
+  const answerID = p.sources.at(-1)!.id, work = planDefinitionStages(p, "runtime"), initial = p.sources[0]!.id, anchor = p.requirements[0]!.id;
+  const reserved = new Set([initial, anchor]);
+  work.batches = [[initial], [anchor], ...work.batches.map((b) => b.filter((id) => !reserved.has(id))).filter((b) => b.length)];
+  work.planKey = createHash("sha256").update(JSON.stringify(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches])).digest("hex");
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  upgradeDefinitionAllowance(work); upgradeDefinitionContextMetadata(work); upgradeDefinitionEvidenceFollowups(p, work);
+  work.attempts = 1; requestDefinitionEvidence(p, work, undefined, { definitionEvidence: { recordIDs: [short[0]!], reason: "Older exact lookup remains immutable" } }, job.id);
+  const assessment = result("runtime", initial).assessments![0]!;
+  assessment.checks.find((c) => c.dimension === "acceptance")!.explanation = Array.from({ length: 320 }, (_, i) => createHash("sha256").update(`complete-selected-finding-${i}`).digest("hex")).join("");
+  work.attempts = 2; let draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: assessment }, job.id);
+  upgradeDefinitionSupplementalScope(p, work, draft);
+  work.dimensionReviews = [{ format: 1, fromStage: 1, priorRequests: 1, priorFollowups: 0, splitCount: 0, linkedReviewCount: 0,
+    groups: [dimensions.filter((d) => d !== "acceptance"), ["acceptance"]] }];
+  work.attempts = 1; draft = acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, job.id);
+  upgradeDefinitionExecution(work);
+  for (const id of short.slice(1)) {
+    work.attempts++; requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [id], reason: "Exact current-step evidence, not an assessment" } }, job.id);
+  }
+  const big = p.sources.filter((s) => s.kind === "note" && s.text.startsWith("Human decision")).slice(0, 8).map((s) => s.id);
+  work.attempts++; requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [...big, questionID, answerID], reason: "Read the remaining whole records and exact question/answer together" } }, job.id);
+  assert.equal(work.attempts, 8); work.attempts += failures;
+  let overflow: ContextBudgetError | undefined;
+  try { definitionStageContext(p, work, draft); } catch (error) { assert.ok(error instanceof ContextBudgetError); overflow = error; }
+  assert.ok(overflow); store.checkpointDefinition(job.id, work, overflow.manifest);
+  store.blockDefinition(job.id, "Synthetic current-step supplemental overflow", "technical");
+  assert.ok(store.definitionHistory(p.id, "runtime", work.inputKey).some((j) => j.id === job.id));
+  assert.deepEqual(store.get(p.id), p);
+  assert.equal(planDefinitionStages(store.get(p.id), "runtime").inputKey, work.inputKey);
+  return { p, work, draft, job: store.getJob(job.id), questionID, answerID, overflow };
+}
+
+test("bounded supplemental pages preserve every whole record, complete selected finding and eight charged lookups before a final joint check", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, job, questionID, answerID, overflow } = supplementalPageFixture(store), old = structuredClone(work);
+    const beforePartitions = definitionEvidenceStages(work, "collect");
+    assert.equal(pageDefinitionSupplementalEvidence(p, work, draft, job.id), true);
+    const event = work.supplementalReviews![0]!;
+    assert.deepEqual(event.recordIDs, overflow.manifest.includedIDs); assert.equal(work.attempts, 8);
+    assert.equal(definitionFailedAttempts(work), 0); assert.deepEqual(work.evidenceRequests, old.evidenceRequests); assert.deepEqual(work.evidenceFollowups, old.evidenceFollowups);
+    assert.equal(definitionEvidenceStages(work, "collect"), beforePartitions + event.pages.length);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    const seen = new Set<string>(); let next = draft, pages = 0;
+    while (definitionSteps(work)[work.receipts.length]!.supplementalPage !== undefined) {
+      const context = definitionStageContext(p, work, next), data = expandDefinitionWire(context.data);
+      assert.ok(context.manifest.characters <= 96000);
+      assert.deepEqual(data.definitionStage.draft.assessments[0].checks, draft.assessments![0]!.checks.filter((c) => c.dimension === "acceptance"));
+      assert.equal(context.manifest.includedIDs.includes(questionID), context.manifest.includedIDs.includes(answerID), "Exact current question/answer pair is indivisible");
+      for (const id of context.manifest.includedIDs) {
+        seen.add(id); const record = [...p.sources, ...p.questions, ...p.requirements, ...p.research].find((r) => r.id === id)!;
+        const supplied = [...data.sources, ...data.questions, ...data.requirements, ...data.research].find((r: any) => r.id === id);
+        for (const field of ["text", "statement", "options"] as const) if (field in record) assert.deepEqual(supplied[field], (record as any)[field]);
+      }
+      assert.match(data.definitionStage.boundedSupplementalReview.instruction, /cannot publish.*cross-page consistency/);
+      assert.throws(() => requestDefinitionEvidence(p, work, next, { definitionEvidence: { recordIDs: [p.sources[0]!.id], reason: "Joint requests belong to final check" } }, "forbidden"), /final original step/);
+      assert.throws(() => completedDefinitionAssessment(p, work), /Partial/);
+      work.attempts++; next = acceptDefinitionStage(p, work, next, { definitionUpdate: { checks: [] } }, "saved-page"); pages++;
+    }
+    assert.deepEqual([...seen].sort(), [...event.recordIDs].sort()); assert.equal(pages, event.pages.length);
+    assert.equal(work.receipts[old.receipts.length]!.attempts, 9, "Eight successful lookups stay charged before the first validated page");
+    assert.deepEqual(work.receipts.slice(0, old.receipts.length), old.receipts); assert.deepEqual(next, draft);
+    const final = definitionStageContext(p, work, next), data = expandDefinitionWire(final.data);
+    assert.equal(data.definitionStage.boundedSupplementalReview.phase, "joint-check");
+    assert.ok(final.manifest.includedIDs.length < seen.size); assert.ok(final.manifest.characters <= 96000);
+    assert.match(data.definitionStage.boundedSupplementalReview.instruction, /NOT all supplied simultaneously/);
+    assert.equal(pageDefinitionSupplementalEvidence(p, work, next, "repeat"), false, "Repeated paging cannot replace an indispensable joint read");
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    const forged = structuredClone(work); forged.supplementalReviews![0]!.draftKey = "0".repeat(64);
+    assert.throws(() => replayDefinitionStages(p, forged), /complete exact evidence and selected finding/);
+    const missing = structuredClone(work); missing.supplementalReviews![0]!.pages[0]!.pop();
+    assert.equal(definitionWorkSchema.safeParse(missing).success, false);
+    const future = structuredClone(work); future.supplementalReviews![0]!.format = 2 as 1;
+    assert.equal(definitionWorkSchema.safeParse(future).success, false);
+  } finally { store.close(); }
+});
+
+test("supplemental-page subdivision preserves whole pair units and all original lookup contexts", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, job, questionID, answerID } = supplementalPageFixture(store);
+    assert.ok(pageDefinitionSupplementalEvidence(p, work, draft, job.id)); const before = structuredClone(work);
+    assert.equal(splitDefinitionStage(work), true);
+    assert.deepEqual(replayDefinitionStages(p, work), draft); assert.deepEqual(work.evidenceRequests, before.evidenceRequests); assert.deepEqual(work.evidenceFollowups, before.evidenceFollowups);
+    const steps = definitionSteps(work).filter((s) => s.supplementalPage === 0);
+    assert.ok(steps.every((s) => s.ids.includes(questionID) === s.ids.includes(answerID)));
+    assert.deepEqual(steps.flatMap((s) => s.ids).sort(), [...work.supplementalReviews![0]!.recordIDs].sort());
+  } finally { store.close(); }
+});
+
+test("supplemental pages reject a shared partition ceiling atomically without refunding attempts", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, job } = supplementalPageFixture(store);
+    while (work.batches.length < 63) work.batches.push([p.sources[0]!.id]);
+    const before = structuredClone(work);
+    assert.equal(definitionEvidenceStages(work, "collect"), 63);
+    assert.equal(pageDefinitionSupplementalEvidence(p, work, draft, job.id), "partition-limit");
+    assert.deepEqual(work, before);
+    assert.equal(upgradeDefinitionPartitionCapacity(work), true);
+    assert.equal(definitionPartitionLimit(work), 128);
+    assert.equal(pageDefinitionSupplementalEvidence(p, work, draft, job.id), true);
+    assert.ok(definitionEvidenceStages(work, "collect") > 64);
+    assert.deepEqual(work.receipts, before.receipts); assert.equal(work.attempts, before.attempts);
+  } finally { store.close(); }
+});
+
+function partitionCapacityFixture(store: ProjectStore, overflow = false) {
+  let p = seed(store, 0);
+  for (let i = 0; i < 80; i++) p = store.note(p.id, p.revision, `Exact bounded decision ${i}: retain the whole record.`, "runtime");
+  if (overflow) for (let i = 0; i < 8; i++) p = store.note(p.id, p.revision, `Capacity long evidence ${i}\r\n`
+    + Array.from({ length: 160 }, (_, n) => createHash("sha256").update(`capacity-${i}-${n}`).digest("hex")).join(""), "runtime");
+  p = store.get(p.id);
+  const work = planDefinitionStages(p, "runtime"), ids = work.batches.flat();
+  const big = new Set(p.sources.filter((s) => s.text.startsWith("Capacity long evidence")).map((s) => s.id));
+  work.batches = [[ids[0]!], ids.slice(1).filter((id) => !big.has(id)), ...[...big].map((id) => [id])];
+  work.planKey = createHash("sha256").update(JSON.stringify(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches])).digest("hex");
+  upgradeDefinitionAllowance(work); upgradeDefinitionContextMetadata(work);
+  work.attempts = 1;
+  if (overflow) requestDefinitionEvidence(p, work, undefined, { definitionEvidence: { recordIDs: [work.batches[1]![0]!], reason: "Retain an earlier exact saved load" } }, "original-capacity-history");
+  const first = result("runtime", ids[0]!);
+  if (overflow) { first.assessments![0]!.checks[0]!.explanation = Array.from({ length: 320 }, (_, n) => createHash("sha256").update(`capacity-finding-${n}`).digest("hex")).join(""); work.attempts++; }
+  let draft = acceptDefinitionStage(p, work, undefined, overflow ? { definitionAssessment: first.assessments![0]! } : first, "original-capacity-history");
+  if (overflow) upgradeDefinitionSupplementalScope(p, work, draft);
+  work.dimensionReviews = [{ format: 1, fromStage: 1, priorRequests: 0, priorFollowups: 0, splitCount: 0, linkedReviewCount: 0,
+    groups: [[dimensions[0]], dimensions.slice(1)] }];
+  upgradeDefinitionExecution(work);
+  while (definitionEvidenceStages(work, "collect") < 64) {
+    if (splitDefinitionStage(work)) continue;
+    work.attempts = 1; draft = acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, "original-capacity-history");
+  }
+  while (definitionSteps(work)[work.receipts.length]!.ids.length < 2) {
+    work.attempts = 1; draft = acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, "original-capacity-history");
+  }
+  work.attempts = 2;
+  assert.deepEqual(replayDefinitionStages(p, work), draft);
+  return { p, work, draft };
+}
+
+test("a saved 64-partition supplemental overflow upgrades through the service and saves a charged exact page", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft } = partitionCapacityFixture(store, true);
+    const big = p.sources.filter((s) => s.text.startsWith("Capacity long evidence")).map((s) => s.id);
+    work.attempts = 1; requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: big, reason: "Read the whole indispensable records" } }, "saved-load");
+    let overflow: ContextBudgetError | undefined;
+    try { definitionStageContext(p, work, draft); } catch (error) { assert.ok(error instanceof ContextBudgetError); overflow = error; }
+    assert.ok(overflow); assert.equal(pageDefinitionSupplementalEvidence(p, work, draft, "old-limit"), "partition-limit");
+    const old = store.beginJob(p.id, p.revision).job; store.claimJob(old.id, Date.now() + 60_000);
+    store.checkpointDefinition(old.id, work, overflow.manifest);
+    store.blockDefinition(old.id, "Complete supplemental evidence pages would exceed the existing 64 exact-evidence partitions for this phase. Original records, accepted checks and spent attempts remain saved. No partial page schedule, truncation or extra allowance was applied.", "technical");
+    const historical = store.getJob(old.id); let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.equal(expandDefinitionWire(context.data).definitionStage.boundedSupplementalReview.phase, "evidence-page");
+      assert.ok(context.manifest.characters <= 96000); return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300_000 } });
+    assert.equal(done.status, "interrupted", done.diagnostic); assert.equal(calls, 1);
+    assert.equal(definitionPartitionLimit(done.definitionWork!), 128);
+    assert.ok(definitionEvidenceStages(done.definitionWork!, "collect") > 64);
+    assert.deepEqual(done.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.equal(done.definitionWork!.receipts[work.receipts.length]!.attempts, 2);
+    assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests);
+    assert.deepEqual(store.getJob(old.id), historical); assert.deepEqual(store.get(p.id), p);
+    assert.deepEqual(replayDefinitionStages(p, done.definitionWork!), draft);
+  } finally { store.close(); }
+});
+
+for (const kind of ["product-decision", "evidence-lookup", "technical"] as const) test(`partition upgrade preserves an unrelated ${kind} blocker`, () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { work } = partitionCapacityFixture(store);
+    work.blocked = "Unrelated indispensable evidence or product blocker"; work.blockedKind = kind;
+    const before = structuredClone(work); assert.equal(upgradeDefinitionPartitionCapacity(work), false); assert.deepEqual(work, before);
+  } finally { store.close(); }
+});
+
+test("versioned partition capacity preserves original hashes, grows beyond 64 and stops at 128 without changing execution or attempts", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft } = partitionCapacityFixture(store), original = structuredClone(work), executionLimit = definitionExecutionLimit(work);
+    assert.equal(splitDefinitionStage(work), false);
+    assert.equal(upgradeDefinitionPartitionCapacity(work), true);
+    assert.equal(definitionPartitionLimit(work), 128); assert.equal(work.partitionCapacityPolicy!.fromStage, original.receipts.length);
+    assert.equal(definitionPartitionLimit({ ...work, receipts: work.receipts.slice(0, -1) }), 64);
+    assert.deepEqual(replayDefinitionStages(p, work), draft); assert.equal(work.attempts, 2);
+    assert.equal(splitDefinitionStage(work), true); assert.equal(definitionEvidenceStages(work, "collect"), 65);
+    assert.deepEqual(replayDefinitionStages(p, work), draft); definitionWorkSchema.parse(work);
+    assert.deepEqual(work.receipts, original.receipts); assert.equal(definitionExecutionLimit(work), executionLimit);
+    const stripped = structuredClone(work); delete stripped.partitionCapacityPolicy;
+    assert.throws(() => definitionSteps(stripped), /subdivision|stage limit/);
+    const future = structuredClone(work); future.partitionCapacityPolicy!.format = 2 as 1;
+    assert.equal(definitionWorkSchema.safeParse(future).success, false);
+    const forged = structuredClone(work); forged.partitionCapacityPolicy!.fromStage = 0;
+    assert.throws(() => replayDefinitionStages(p, forged), /capacity boundary|subdivision/);
+    assert.equal(upgradeDefinitionPartitionCapacity(work), false, "Upgrade is nonrenewable");
+    // Add distinct bounded units in a projection-only stress copy, never to the
+    // valid saved fixture: exercise the hard ceiling without 64 model receipts.
+    const ceiling = structuredClone(work);
+    const step = definitionSteps(ceiling)[ceiling.receipts.length]!;
+    ceiling.batches[step.batch - 1] = Array.from({ length: 512 }, (_, i) => `capacity-unit-${i}`);
+    while (definitionEvidenceStages(ceiling, "collect") < 128) {
+      if (splitDefinitionStage(ceiling)) continue;
+      ceiling.receipts.push(original.receipts[0]!);
+    }
+    assert.equal(splitDefinitionStage(ceiling), false); assert.equal(definitionPartitionLimit(ceiling), 128);
+  } finally { store.close(); }
+});
+
+test("partition upgrade survives repeated reopen and portable continuation without replaying a completed model call", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "partition-capacity-")), file = join(directory, "state.sqlite"); let store = new ProjectStore(file);
+  try {
+    const { p, work, draft } = partitionCapacityFixture(store), original = structuredClone(work);
+    work.blocked = "Complete supplemental evidence pages would exceed the existing 64 exact-evidence partitions for this phase. Original records, accepted checks and spent attempts remain saved. No partial page schedule, truncation or extra allowance was applied.";
+    work.blockedKind = "technical";
+    assert.equal(upgradeDefinitionPartitionCapacity(work), true); assert.ok(work.partitionCapacityPolicy!.supersededBlock);
+    assert.equal(splitDefinitionStage(work), true);
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60_000);
+    store.checkpointDefinition(job.id, work, definitionStageContext(p, work, draft).manifest);
+    store.failJob(job.id, "failed", "Synthetic stop after local capacity upgrade, before inference");
+    const historical = store.getJob(job.id);
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(file); assert.deepEqual(store.getJob(job.id), historical); }
+    const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [historical], [], (r) => store.get(p.id, r))), p.model);
+    assert.deepEqual(portable.continuation.jobs[0]!.definitionWork, work);
+    assert.deepEqual(replayDefinitionStages(p, portable.continuation.jobs[0]!.definitionWork!), draft);
+    let calls = 0;
+    const paused = await new DiscoveryService(store, { async analyze() { calls++; return { definitionUpdate: { checks: [] } }; } })
+      .analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300_000 } });
+    assert.equal(calls, 1); assert.equal(paused.status, "interrupted", paused.diagnostic);
+    assert.deepEqual(paused.definitionWork!.receipts.slice(0, original.receipts.length), original.receipts);
+    assert.equal(paused.definitionWork!.receipts[original.receipts.length]!.attempts, 3);
+    assert.deepEqual(store.getJob(job.id), historical);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("cooperative replay preserves exact synchronous validation and does not reuse projections after mutation", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, job } = supplementalPageFixture(store), before = structuredClone(work);
+    const iterator = iterateDefinitionStages(p, work); let count = 0;
+    for (;;) { const next = iterator.next(); if (next.done) { assert.deepEqual(next.value, draft); break; } assert.equal(next.value, ++count); }
+    assert.equal(count, work.receipts.length); assert.deepEqual(work, before);
+    assert.throws(() => definitionStageContext(p, work, draft), ContextBudgetError);
+    assert.equal(pageDefinitionSupplementalEvidence(p, work, draft, job.id), true);
+    const context = definitionStageContext(p, work, draft);
+    assert.equal(expandDefinitionWire(context.data).definitionStage.boundedSupplementalReview.phase, "evidence-page");
+    const forged = structuredClone(work); forged.receipts[0]!.contextKey = "0".repeat(64);
+    assert.throws(() => iterateDefinitionStages(p, forged).next(), /exact evidence\/draft/);
+  } finally { store.close(); }
+});
+
+test("indexed schedule boundaries preserve inactive dimensions, page insertion order and subsequent exact subdivision", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, job } = supplementalPageFixture(store);
+    assert.equal(pageDefinitionSupplementalEvidence(p, work, draft, job.id), true);
+    const expected = structuredClone(definitionSteps(work));
+    const originalScope = work.dimensionReviews![0]!;
+    work.dimensionReviews!.push({ ...originalScope, fromStage: work.receipts.length + 10, splitCount: 0 });
+    work.dimensionReviews!.push({ ...originalScope, fromStage: work.receipts.length,
+      priorRequests: (work.evidenceRequests?.length ?? 0) + 1, splitCount: 0 });
+    assert.deepEqual(definitionSteps(work), expected, "Inactive dimension entries do not change active supplemental-page positions");
+    work.dimensionReviews!.splice(1);
+    assert.equal(splitDefinitionStage(work), true);
+    const steps = definitionSteps(work), pages = steps.filter((s) => s.supplementalPage === 0);
+    assert.deepEqual(pages.flatMap((s) => s.ids).sort(), [...work.supplementalReviews![0]!.recordIDs].sort());
+    assert.equal(steps.filter((s) => s.supplementalPaged === 0).length, 1);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+  } finally { store.close(); }
+});
+
+test("response-validation read caches are discarded after errors and later evidence mutations", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, roots } = evidenceBundleFixture(store, 0);
+    assert.equal(upgradeDefinitionEvidenceBundles(p, work, draft), true);
+    work.attempts = 1; requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [roots[0]!], reason: "First exact source bundle" } }, "first-bundle");
+    const before = structuredClone(work), raw = { definitionUpdate: { checks: [{ ...draft.assessments![0]!.checks[0]!, evidenceIDs: ["not-a-supplied-record"] }] } };
+    work.attempts = 2;
+    assert.throws(() => acceptDefinitionStage(p, work, draft, raw, "invalid-citation"), /missing evidence|outside.*context/);
+    assert.deepEqual(work.receipts, before.receipts); assert.deepEqual(raw.definitionUpdate.checks[0]!.evidenceIDs, ["not-a-supplied-record"]);
+    work.attempts = 3; const request = requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [roots[1]!], reason: "New exact evidence after rejected validation" } }, "second-bundle");
+    const context = definitionStageContext(p, work, draft);
+    for (const id of request.resolvedRecordIDs!) assert.ok(context.manifest.includedIDs.includes(id));
+    work.attempts = 4; const next = acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, "accepted-after-mutation");
+    assert.deepEqual(next, draft); assert.equal(work.receipts.at(-1)!.attempts, 4);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+  } finally { store.close(); }
+});
+
+test("long local replay renews its live lease before dispatch without refunding any saved attempts", async (t) => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, job } = supplementalPageFixture(store), historical = store.getJob(job.id);
+    const now = Date.now.bind(Date); let offset = 0, calls = 0, progress = 0;
+    t.mock.method(Date, "now", () => now() + offset);
+    const done = await new DiscoveryService(store, { async analyze() {
+      calls++; return { definitionBlocked: { kind: "technical", reason: "Stop after lease-safe preparation; no live model." } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true,
+      onProgress(message) { if (message.startsWith("Validating saved definition evidence")) { progress++; offset += 240_000; } } });
+    assert.equal(progress, work.receipts.length); assert.ok(offset > 360_000);
+    assert.equal(calls, 1); assert.equal(done.definitionBlock?.reason, "Stop after lease-safe preparation; no live model.");
+    assert.deepEqual(done.definitionWork!.receipts, work.receipts); assert.equal(done.definitionWork!.attempts, 9);
+    assert.deepEqual(store.getJob(job.id), historical);
+  } finally { t.mock.restoreAll(); store.close(); }
+});
+
+for (const outcome of ["cancelled", "stale"] as const) test(`cooperative saved replay stops before inference when ${outcome}`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, job } = supplementalPageFixture(store), historical = store.getJob(job.id), controller = new AbortController();
+    let calls = 0, progress = 0;
+    const done = await new DiscoveryService(store, { async analyze() { calls++; throw new Error("Must not dispatch during replay"); } })
+      .analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal,
+        onProgress(message) { if (!message.startsWith("Validating saved definition evidence") || progress++) return;
+          setImmediate(() => {
+            if (outcome === "cancelled") controller.abort();
+            else store.note(p.id, p.revision, "Concurrent edit during local history validation", "runtime");
+          });
+        } });
+    assert.equal(done.status, outcome, done.diagnostic); assert.equal(calls, 0);
+    assert.equal(progress, 1); assert.deepEqual(store.getJob(job.id), historical); assert.equal(done.result, undefined);
+  } finally { store.close(); }
+});
+
+test("local replay lease renewal cannot revive expired or cancelled workers or accept a changed revision", (t) => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = store.create("Lease guards", "Keep ownership and evidence", { providerID: "openai", modelID: "fixture" });
+    const job = store.beginJob(p.id, p.revision).job, now = Date.now();
+    store.claimJob(job.id, now + 60_000);
+    store.renewDefinitionLease(job.id, now + 120_000);
+    assert.equal(store.getJob(job.id).leaseUntil, now + 120_000);
+    assert.throws(() => store.renewDefinitionLease(job.id, now - 1), /future deadline/);
+    t.mock.method(Date, "now", () => now + 120_001);
+    const expired = store.getJob(job.id);
+    assert.throws(() => store.renewDefinitionLease(job.id, now + 300_000), /no longer live/);
+    assert.deepEqual(store.getJob(job.id), expired); t.mock.restoreAll();
+    store.failJob(job.id, "cancelled", "Explicit stop");
+    assert.throws(() => store.renewDefinitionLease(job.id, now + 300_000), /no longer live/);
+    const next = store.beginJob(p.id, p.revision).job; store.claimJob(next.id, now + 300_000);
+    store.note(p.id, p.revision, "New human decision", "project");
+    const stale = store.getJob(next.id);
+    assert.throws(() => store.renewDefinitionLease(next.id, now + 360_000), /changed|stale/i);
+    assert.deepEqual(store.getJob(next.id), stale);
+  } finally { t.mock.restoreAll(); store.close(); }
+});
+
+test("supplemental pages retain genuine product blockers without publishing or silently advancing", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work } = supplementalPageFixture(store); let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.equal(expandDefinitionWire(context.data).definitionStage.boundedSupplementalReview.phase, "evidence-page");
+      return { definitionBlocked: { kind: "product-decision", reason: "Synthetic exact page establishes a genuine unresolved product choice." } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(calls, 1); assert.equal(done.status, "failed", done.diagnostic);
+    assert.equal(done.definitionBlock!.kind, "product-decision");
+    assert.deepEqual(done.definitionWork!.receipts, work.receipts); assert.equal(done.definitionWork!.attempts, 9);
+    assert.deepEqual(store.get(p.id), p); assert.equal(done.result, undefined);
+  } finally { store.close(); }
+});
+
+test("saved supplemental pages resume through reopen and portable continuation, then reload only indispensable joint evidence", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "definition-supplemental-pages-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const { p, work, draft, job, questionID, answerID } = supplementalPageFixture(store); let calls = 0, jointReloads = 0;
+    const historical = store.getJob(job.id);
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(file); assert.deepEqual(store.getJob(job.id), historical); }
+    const paused = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const stage = expandDefinitionWire(context.data).definitionStage;
+      assert.equal(stage.boundedSupplementalReview?.phase, "evidence-page", JSON.stringify({ keys: Object.keys(stage), latest: store.jobs(p.id).at(-1)!.definitionWork?.receipts.length })); assert.equal(stage.dimensionScope.dimensions[0], "acceptance");
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(paused.status, "interrupted", paused.diagnostic); assert.equal(calls, 1);
+    assert.equal(paused.definitionWork!.receipts[work.receipts.length]!.attempts, 9); assert.deepEqual(paused.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    const files = renderWorkspace(p, emptyExecution(), continuationState(p, [paused], [], (r) => store.get(p.id, r)));
+    const portable = decodePortable(files, p.model); assert.deepEqual(portable.continuation.jobs[0]!.definitionWork, paused.definitionWork);
+    assert.deepEqual(replayDefinitionStages(p, portable.continuation.jobs[0]!.definitionWork!), draft);
+    store.close(); store = new ProjectStore(file);
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const stage = expandDefinitionWire(context.data).definitionStage;
+      assert.ok(context.manifest.characters <= 96000);
+      if (stage.boundedSupplementalReview?.phase === "joint-check") {
+        if (!jointReloads++) return { definitionEvidence: { recordIDs: [questionID, answerID], reason: "Inspect this indispensable relationship together before changing it" } };
+        assert.ok(context.manifest.includedIDs.includes(questionID) && context.manifest.includedIDs.includes(answerID));
+      }
+      return stage.phase === "verify" ? { definitionVerdict: [] } : { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(jointReloads, 2);
+    assert.deepEqual(done.definitionWork!.receipts.slice(0, paused.definitionWork!.receipts.length), paused.definitionWork!.receipts);
+    assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests);
+    assert.equal(done.definitionWork!.evidenceFollowups!.length, work.evidenceFollowups!.length + 1);
+    assert.deepEqual(completedDefinitionAssessment(p, done.definitionWork!), done.result); assert.deepEqual(store.getJob(job.id), historical);
+    const finished = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [done], [], (r) => store.get(p.id, r))), p.model);
+    assert.deepEqual(completedDefinitionAssessment(p, finished.continuation.jobs[0]!.definitionWork!), done.result);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const outcome of ["failed", "cancelled", "stale"] as const) test(`supplemental pages retain accepted progress and reject a late ${outcome} result`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft } = supplementalPageFixture(store), controller = new AbortController(); let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.equal(expandDefinitionWire(context.data).definitionStage.boundedSupplementalReview.phase, "evidence-page");
+      if (calls === 2) {
+        if (outcome === "failed") throw new Error("Synthetic page transport failure");
+        if (outcome === "cancelled") controller.abort();
+        if (outcome === "stale") store.note(p.id, p.revision, "Concurrent human decision during page review", "runtime");
+      }
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
+    assert.equal(calls, 2); assert.equal(done.status, outcome); assert.equal(done.definitionWork!.receipts.length, work.receipts.length + 1);
+    assert.equal(done.definitionWork!.receipts[work.receipts.length]!.attempts, 9); assert.equal(done.definitionWork!.attempts, 1);
+    assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests); assert.deepEqual(done.definitionWork!.evidenceFollowups, work.evidenceFollowups);
+    assert.deepEqual(replayDefinitionStages(p, done.definitionWork!), draft); assert.equal(done.result, undefined);
+  } finally { store.close(); }
+});
+
+test("supplemental pages preserve three exhausted failures and spend only the separately authorized one-request recovery", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work } = supplementalPageFixture(store, 3); let calls = 0;
+    const service = new DiscoveryService(store, { async analyze() { calls++; return { definitionUpdate: { checks: [] } }; } });
+    const blocked = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(calls, 0); assert.equal(blocked.definitionWork!.attempts, 11); assert.ok(blocked.definitionWork!.supplementalReviews?.length);
+    assert.ok(canRecoverDefinition(blocked));
+    const extra = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionRecoveryJobID: blocked.id, definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(calls, 1); assert.equal(extra.status, "interrupted", extra.diagnostic);
+    assert.equal(extra.definitionWork!.receipts[work.receipts.length]!.attempts, 12);
+    assert.equal(extra.definitionWork!.recovery!.grants.at(-1)!.spent, true); assert.equal(canRecoverDefinition(extra), false);
+    assert.deepEqual(extra.definitionWork!.evidenceRequests, work.evidenceRequests); assert.deepEqual(extra.definitionWork!.evidenceFollowups, work.evidenceFollowups);
+    replayDefinitionStages(p, extra.definitionWork!);
+  } finally { store.close(); }
+});
+
+test("supplemental pages cannot repeat to disguise an indispensable oversized joint read", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work } = supplementalPageFixture(store); let calls = 0;
+    const service = new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const stage = expandDefinitionWire(context.data).definitionStage;
+      if (stage.boundedSupplementalReview.phase === "joint-check") return { definitionEvidence: {
+        recordIDs: work.evidenceFollowups!.at(-1)!.resolvedRecordIDs!, reason: "Synthetic indispensable joint bundle cannot be inferred from separate pages" } };
+      return { definitionUpdate: { checks: [] } };
+    } });
+    const blocked = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(blocked.status, "failed", blocked.diagnostic); assert.equal(blocked.definitionBlock!.kind, "technical");
+    assert.match(blocked.diagnostic!, /indispensable joint evidence|Separate page reads/);
+    assert.equal(blocked.definitionWork!.supplementalReviews!.length, 1); assert.deepEqual(store.get(p.id), p);
+    const count = calls; const again = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(again.status, "failed"); assert.equal(calls, count, "Unchanged refresh cannot repage or repeat model calls");
+    replayDefinitionStages(p, again.definitionWork!);
+  } finally { store.close(); }
+});
+
+test("stage-scoped supplemental evidence retires completed loads without changing receipts, citations, attempts or current-step evidence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, oldID, currentID } = supplementalScopeFixture(store), old = structuredClone(work), before = definitionStageContext(p, work, draft);
+    assert.ok(before.manifest.includedIDs.includes(oldID)); assert.ok(before.manifest.includedIDs.includes(currentID));
+    assert.equal(upgradeDefinitionSupplementalScope(p, work, draft), true);
+    const once = structuredClone(work); assert.equal(upgradeDefinitionSupplementalScope(p, work, draft), false); assert.deepEqual(work, once);
+    assert.deepEqual(work.receipts, old.receipts); assert.deepEqual(work.evidenceRequests, old.evidenceRequests); assert.deepEqual(work.evidenceFollowups, old.evidenceFollowups);
+    assert.equal(work.attempts, old.attempts); assert.deepEqual(replayDefinitionStages(p, work), draft);
+    const next = definitionStageContext(p, work, draft), data = expandDefinitionWire(next.data);
+    assert.ok(!next.manifest.includedIDs.includes(oldID)); assert.ok(next.manifest.includedIDs.includes(currentID));
+    assert.ok(data.definitionStage.previousStageSupplementalIDs.includes(oldID)); assert.deepEqual(data.definitionStage.draft.assessments, draft.assessments);
+    assert.match(data.definitionStage.supplementalScopeInstruction, /NOT.*automatically supplied/);
+    assert.ok(next.manifest.characters < before.manifest.characters);
+    const split = structuredClone(work); assert.equal(splitDefinitionStage(split), true);
+    assert.ok(definitionStageContext(p, split, draft).manifest.includedIDs.includes(currentID), "No accepted step means current loads remain mandatory through repacking");
+    assert.deepEqual(replayDefinitionStages(p, split), draft);
+    work.attempts++; requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [oldID], reason: "Current check genuinely needs this exact earlier record again" } }, "reload");
+    assert.ok(definitionStageContext(p, work, draft).manifest.includedIDs.includes(oldID)); assert.equal(definitionFailedAttempts(work), 0);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    work.attempts++; acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, "accepted");
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+  } finally { store.close(); }
+});
+
+test("stage-scoped activation preserves invalid attempts and correction feedback from the same stage", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft } = supplementalScopeFixture(store);
+    upgradeDefinitionEvidenceCorrection(p, work, draft); work.attempts++;
+    try { requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: ["S99999"], reason: "Rejected lookup before the compatible scope upgrade" } }, "invalid"); }
+    catch (error) { assert.ok(error instanceof DefinitionEvidenceReferenceError); recordDefinitionEvidenceFailure(p, work, draft, error, "invalid"); }
+    const originalFailures = structuredClone(work.evidenceFailures); assert.equal(definitionFailedAttempts(work), 1);
+    upgradeDefinitionSupplementalScope(p, work, draft);
+    assert.deepEqual(replayDefinitionStages(p, work), draft); assert.deepEqual(work.evidenceFailures, originalFailures);
+    const data = expandDefinitionWire(definitionStageContext(p, work, draft).data);
+    assert.equal(data.definitionStage.evidenceCorrection.rejectedLookups.length, 1); assert.equal(definitionFailedAttempts(work), 1);
+    const future = structuredClone(work); future.supplementalScopePolicy!.format = 2 as 1;
+    assert.equal(definitionWorkSchema.safeParse(future).success, false);
+    const forged = structuredClone(work); forged.supplementalScopePolicy!.priorFollowups--;
+    assert.throws(() => replayDefinitionStages(p, forged), /stage-scoped supplemental/);
+  } finally { store.close(); }
+});
+
+for (const kind of ["product-decision", "evidence-lookup", "technical"] as const) test(`stage-scoped upgrade preserves unrelated ${kind} blockers`, () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft } = supplementalScopeFixture(store);
+    work.blocked = "An unrelated unresolved relationship"; work.blockedKind = kind;
+    const before = structuredClone(work); assert.equal(upgradeDefinitionSupplementalScope(p, work, draft), false); assert.deepEqual(work, before);
+  } finally { store.close(); }
+});
+
+test("stage-scoped continuation reopens and exports exact historical loads without replaying accepted calls", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "definition-supplemental-scope-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const { p, work, draft, oldID, currentID, job } = supplementalScopeFixture(store), original = store.getJob(job.id); let calls = 0;
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(file); assert.deepEqual(store.getJob(job.id), original); }
+    const paused = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.ok(!context.manifest.includedIDs.includes(oldID)); assert.ok(context.manifest.includedIDs.includes(currentID));
+      return { definitionEvidence: { recordIDs: [oldID], reason: "Reload exact earlier evidence within current consent" } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(paused.status, "interrupted", paused.diagnostic); assert.equal(calls, 1); assert.equal(paused.definitionWork!.attempts, 2);
+    assert.deepEqual(paused.definitionWork!.receipts, work.receipts); assert.deepEqual(store.getJob(job.id), original);
+    const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [paused], [], (r) => store.get(p.id, r))), p.model);
+    assert.deepEqual(portable.continuation.jobs[0]!.definitionWork, paused.definitionWork);
+    assert.deepEqual(replayDefinitionStages(p, portable.continuation.jobs[0]!.definitionWork!), draft);
+    store.close(); store = new ProjectStore(file);
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      const stage = expandDefinitionWire(context.data).definitionStage;
+      return stage.phase === "verify" ? { definitionVerdict: [] } : { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(done.status, "completed", done.diagnostic); assert.deepEqual(done.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests); assert.equal(done.definitionWork!.evidenceFollowups!.length, work.evidenceFollowups!.length + 1);
+    assert.deepEqual(completedDefinitionAssessment(p, done.definitionWork!), done.result);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("stage-scoped reloads allow validated out-of-plan history, never an unrestricted project-wide allowlist", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, ids, rejected } = seedLinkedHistory(store), work = planDefinitionStages(p, "runtime");
+    const initial = p.sources[0]!.id, anchor = p.requirements.at(-1)!.id, head = [initial, anchor], reserved = new Set(head);
+    work.batches = [head, ...work.batches.map((b) => b.filter((id) => !reserved.has(id))).filter((b) => b.length)];
+    work.planKey = createHash("sha256").update(JSON.stringify(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches])).digest("hex");
+    upgradeDefinitionAllowance(work); upgradeDefinitionContextMetadata(work); upgradeDefinitionEvidenceFollowups(p, work);
+    work.attempts = 1; requestDefinitionEvidence(p, work, undefined, { definitionEvidence: { recordIDs: ids, reason: "Read linked historical human approvals" } }, "original-load");
+    work.attempts = 2;
+    const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: result("runtime", ids[0]!).assessments![0] }, "accepted");
+    assert.ok(!definitionStageContext(p, work, draft).manifest.includedIDs.includes(anchor));
+    assert.ok(ids.every((id) => !definitionStageContext(p, work, draft).manifest.includedIDs.includes(id)));
+    upgradeDefinitionSupplementalScope(p, work, draft); work.attempts = 1;
+    requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: ids, reason: "Reload the exact earlier history, not its interpretation" } }, "reload");
+    assert.ok(ids.every((id) => definitionStageContext(p, work, draft).manifest.includedIDs.includes(id)));
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    work.attempts++;
+    assert.throws(() => requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [p.sources.at(-1)!.id], reason: "Unrelated record is not authorized by prior loads" } }, "bad"), /unknown references/);
+    assert.equal(p.requirements.find((r) => r.id === rejected)!.status, "rejected");
+  } finally { store.close(); }
+});
+
+for (const outcome of ["cancelled", "stale", "exhausted"] as const) test(`stage-scoped upgrade retains attempts and saved evidence when ${outcome}`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, oldID, currentID } = supplementalScopeFixture(store), controller = new AbortController();
+    if (outcome === "exhausted") {
+      work.attempts = 4; // One successful current-step load plus three unfinished attempts.
+      const prior = store.beginJob(p.id, p.revision).job; store.claimJob(prior.id, Date.now() + 60000);
+      store.checkpointDefinition(prior.id, work, definitionStageContext(p, work, draft).manifest); store.failJob(prior.id, "failed", "Synthetic unfinished attempts");
+    }
+    let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.ok(!context.manifest.includedIDs.includes(oldID)); assert.ok(context.manifest.includedIDs.includes(currentID));
+      if (outcome === "cancelled") controller.abort(); else store.note(p.id, p.revision, "Concurrent human decision", "runtime");
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
+    assert.equal(calls, outcome === "exhausted" ? 0 : 1); assert.equal(done.status, outcome === "exhausted" ? "failed" : outcome);
+    assert.deepEqual(done.definitionWork!.receipts, work.receipts); assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests);
+    assert.deepEqual(done.definitionWork!.evidenceFollowups, work.evidenceFollowups);
+    assert.equal(done.definitionWork!.attempts, outcome === "exhausted" ? 4 : 2);
+    assert.deepEqual(replayDefinitionStages(p, done.definitionWork!), draft);
+  } finally { store.close(); }
+});
+
+test("linked-answer recall restores exact scope across omitted dimensions without replaying saved calls or choosing precedence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, resolution, unrelated, reason, job } = linkedAnswerRecallFixture(store), before = structuredClone(work);
+    const oldContext = definitionStageContext(p, work, draft);
+    assert.equal(recallDefinitionLinkedAnswers(p, work, draft, reason, job.id, "saved-block"), true);
+    const after = structuredClone(work); assert.equal(recallDefinitionLinkedAnswers(p, work, draft, reason, job.id, "saved-block"), false);
+    assert.deepEqual(work, after); assert.equal(work.attempts, before.attempts); assert.deepEqual(work.receipts, before.receipts);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    const context = definitionStageContext(p, work, draft), data = expandDefinitionWire(context.data);
+    assert.deepEqual(data.definitionStage.draft.assessments[0].checks.map((c: any) => c.dimension), ["acceptance"]);
+    assert.ok(!JSON.stringify(data.definitionStage.draft).includes("exact human answer resolves"));
+    assert.ok(context.manifest.includedIDs.includes(resolution.questionID) && context.manifest.includedIDs.includes(resolution.answerID));
+    const question = data.questions.find((q: any) => q.id === resolution.questionID), source = data.sources.find((s: any) => s.id === resolution.answerID);
+    assert.equal(question.text, p.questions.find((q) => q.id === resolution.questionID)!.text);
+    assert.deepEqual(question.options, p.questions.find((q) => q.id === resolution.questionID)!.options);
+    assert.equal(source.text, p.sources.find((s) => s.id === resolution.answerID)!.text);
+    assert.ok(!context.manifest.includedIDs.includes(unrelated.answerID)); assert.ok(context.manifest.characters <= 96000);
+    assert.match(data.definitionStage.linkedAnswerRecallInstruction, /do NOT establish preference precedence/);
+    assert.deepEqual(oldContext.manifest.includedIDs.filter((id) => !context.manifest.includedIDs.includes(id)), []);
+    const future = structuredClone(work); future.linkedAnswerRecalls![0]!.format = 2 as 1;
+    assert.equal(definitionWorkSchema.safeParse(future).success, false);
+    const forged = structuredClone(work); forged.linkedAnswerRecalls![0]!.pairs = [{ questionID: unrelated.questionID, answerID: unrelated.answerID }];
+    assert.throws(() => replayDefinitionStages(p, forged), /previously reviewed linked pairs/);
+    const wrongHash = structuredClone(work); wrongHash.linkedAnswerRecalls![0]!.contextKey = "0".repeat(64);
+    assert.throws(() => replayDefinitionStages(p, wrongHash), /original exact context/);
+    const split = structuredClone(work); assert.equal(splitDefinitionStage(split), true);
+    assert.deepEqual(replayDefinitionStages(p, split), draft); assert.ok(definitionStageContext(p, split, draft).manifest.includedIDs.includes(resolution.answerID));
+    const oversized = structuredClone(p);
+    oversized.sources.find((s) => s.id === resolution.answerID)!.text = Array.from({ length: 1800 }, (_, i) => createHash("sha256").update(`recall-indivisible-${i}`).digest("hex")).join("");
+    assert.throws(() => definitionStageContext(oversized, work, draft), ContextBudgetError, "Exact recalled answers are never shortened to fit");
+  } finally { store.close(); }
+});
+
+for (const kind of ["product-decision", "technical"] as const) test(`linked-answer recall cannot clear a ${kind} block`, () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, reason, job } = linkedAnswerRecallFixture(store); work.blockedKind = kind;
+    const before = structuredClone(work); assert.equal(recallDefinitionLinkedAnswers(p, work, draft, reason, job.id, "saved-block"), false);
+    assert.deepEqual(work, before);
+  } finally { store.close(); }
+});
+
+test("linked-answer recall rejects uncited, unlinked, superseded or unreviewed pairs without clearing the saved block", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, reason, job, resolution } = linkedAnswerRecallFixture(store);
+    const noCitation = structuredClone(draft); noCitation.assessments![0]!.checks.find((c) => c.dimension === "rules")!.evidenceIDs = [];
+    assert.equal(recallDefinitionLinkedAnswers(p, work, noCitation, reason, job.id, "saved-block"), false);
+    const unlinked = structuredClone(p); unlinked.questions.find((q) => q.id === resolution.questionID)!.evidenceIDs = [];
+    assert.equal(recallDefinitionLinkedAnswers(unlinked, work, draft, reason, job.id, "saved-block"), false);
+    const superseded = structuredClone(p); superseded.sources.push({ ...superseded.sources.find((s) => s.id === resolution.answerID)!, id: "new-answer", supersedes: resolution.answerID });
+    assert.equal(recallDefinitionLinkedAnswers(superseded, work, draft, reason, job.id, "saved-block"), false);
+    const unreviewed = structuredClone(work); unreviewed.receipts = [];
+    assert.equal(recallDefinitionLinkedAnswers(p, unreviewed, draft, reason, job.id, "saved-block"), false);
+    assert.ok(work.blocked); assert.equal(work.linkedAnswerRecalls, undefined);
+  } finally { store.close(); }
+});
+
+test("saved linked-answer recall survives repeated reopen, portable continuation and bounded retry without repeating the accepted stage", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "definition-answer-recall-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const { p, work, draft, resolution, job } = linkedAnswerRecallFixture(store), original = store.getJob(job.id); let calls = 0;
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(file); assert.deepEqual(store.getJob(job.id), original); }
+    const paused = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.ok(context.manifest.includedIDs.includes(resolution.answerID));
+      assert.equal(expandDefinitionWire(context.data).definitionStage.draft.assessments[0].checks.length, 1);
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(paused.status, "interrupted", paused.diagnostic); assert.equal(calls, 1);
+    assert.deepEqual(paused.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts); assert.equal(paused.definitionWork!.receipts[work.receipts.length]!.attempts, 2);
+    assert.equal(paused.definitionWork!.linkedAnswerRecalls![0]!.jobID, original.id);
+    assert.deepEqual(store.getJob(job.id), original);
+    const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [paused], [], (r) => store.get(p.id, r))), p.model);
+    assert.deepEqual(portable.continuation.jobs[0]!.definitionWork, paused.definitionWork);
+    assert.deepEqual(replayDefinitionStages(p, portable.continuation.jobs[0]!.definitionWork!), draft);
+    store.close(); store = new ProjectStore(file);
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const stage = expandDefinitionWire(context.data).definitionStage;
+      return stage.phase === "verify" ? { definitionVerdict: [] } : { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(done.status, "completed", done.diagnostic); assert.deepEqual(done.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.deepEqual(completedDefinitionAssessment(p, done.definitionWork!), done.result);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("returned lookup block recalls evidence within existing consent; a repeated block with the exact pair present stops", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, reason, job, resolution } = linkedAnswerRecallFixture(store);
+    delete work.blocked; delete work.blockedKind; work.attempts = 0;
+    const context = definitionStageContext(p, work, draft), current = store.beginJob(p.id, p.revision).job;
+    store.claimJob(current.id, Date.now() + 60000); store.checkpointDefinition(current.id, work, context.manifest); store.pauseDefinition(current.id, "request-limit", 300000);
+    let calls = 0;
+    const blocked = await new DiscoveryService(store, { async analyze(_snapshot, { context: next }) {
+      calls++; assert.equal(next.manifest.includedIDs.includes(resolution.answerID), calls > 1);
+      return { definitionBlocked: { kind: "evidence-lookup", reason } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(blocked.status, "failed", blocked.diagnostic); assert.equal(calls, 2);
+    assert.equal(blocked.definitionWork!.linkedAnswerRecalls!.length, 1); assert.equal(blocked.definitionWork!.linkedAnswerRecalls![0]!.source, "returned-block");
+    assert.equal(blocked.definitionWork!.attempts, 2); assert.deepEqual(blocked.definitionWork!.receipts, work.receipts);
+    assert.deepEqual(replayDefinitionStages(p, blocked.definitionWork!), draft);
+    const noRepeat = await new DiscoveryService(store, { async analyze() { assert.fail("Already supplied pairs cannot justify another retry"); } })
+      .analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(noRepeat.status, "failed"); assert.deepEqual(store.getJob(job.id).definitionWork!.receipts, work.receipts);
+  } finally { store.close(); }
+});
+
+test("linked-answer recall does not refund exhausted attempts or silently spend the separate recovery", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, resolution } = linkedAnswerRecallFixture(store, 3); let calls = 0;
+    const service = new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.ok(context.manifest.includedIDs.includes(resolution.answerID)); return { definitionUpdate: { checks: [] } };
+    } });
+    const blocked = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(calls, 0); assert.equal(blocked.definitionWork!.attempts, 3); assert.equal(blocked.definitionWork!.linkedAnswerRecalls!.length, 1);
+    const extra = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionRecoveryJobID: blocked.id, definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(calls, 1); assert.equal(extra.definitionWork!.receipts[work.receipts.length]!.attempts, 4);
+    assert.equal(extra.definitionWork!.recovery!.grants.at(-1)!.spent, true); assert.deepEqual(extra.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    replayDefinitionStages(p, extra.definitionWork!);
+  } finally { store.close(); }
+});
+
+for (const outcome of ["cancelled", "stale"] as const) test(`linked-answer recall preserves progress when its next response is ${outcome}`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, resolution } = linkedAnswerRecallFixture(store), controller = new AbortController(); let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.ok(context.manifest.includedIDs.includes(resolution.answerID));
+      if (outcome === "cancelled") controller.abort(); else store.note(p.id, p.revision, "Concurrent human choice", "runtime");
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
+    assert.equal(calls, 1); assert.equal(done.status, outcome); assert.equal(done.definitionWork!.attempts, 2);
+    assert.deepEqual(done.definitionWork!.receipts, work.receipts); assert.equal(done.definitionWork!.linkedAnswerRecalls!.length, 1);
+    assert.deepEqual(replayDefinitionStages(p, done.definitionWork!), draft);
+  } finally { store.close(); }
+});
 
 test("linked answer bundles follow canonical reverse question evidence and include exact human answers without declaring precedence", () => {
   const store = new ProjectStore(":memory:");
@@ -488,7 +1516,7 @@ test("saved post-page loads resume through SQLite reopen and portable adoption w
     assert.deepEqual(store.getJob(job.id), job);
     const nextJob = store.beginJob(p.id, p.revision).job; store.claimJob(nextJob.id, Date.now() + 60000);
     const paused = await runDefinitionStages(store, { async analyze(_snapshot, { context }) {
-      calls++; const data = expandDefinitionWire(context.data); assert.ok(data.definitionStage.dimensionScope);
+      calls++; const data = expandDefinitionWire(context.data); assert.ok(data.definitionStage.dimensionScope || data.definitionStage.supplementalScopePolicy);
       assert.ok(context.manifest.includedIDs.includes(pair.id) && context.manifest.includedIDs.includes(pair.sourceID!));
       return { definitionUpdate: { checks: [] } };
     } }, p, nextJob, "runtime", { signal: new AbortController().signal, protocolRecovery: true, limits: { requests: 1, durationMs: 300000 } });
@@ -521,7 +1549,8 @@ for (const outcome of ["completed", "failed", "cancelled"] as const) test(`dimen
   try {
     const { p, work, job, pair } = supplementalAfterPages(store, 3), controller = new AbortController(); let calls = 0;
     const service = new DiscoveryService(store, { async analyze(_snapshot, { context }) {
-      calls++; assert.ok(context.manifest.characters <= 96000); assert.ok(expandDefinitionWire(context.data).definitionStage.dimensionScope);
+      calls++; assert.ok(context.manifest.characters <= 96000);
+      const stage = expandDefinitionWire(context.data).definitionStage; assert.ok(stage.dimensionScope || stage.supplementalScopePolicy);
       assert.ok(context.manifest.includedIDs.includes(pair.id));
       if (outcome === "cancelled") { controller.abort(); throw controller.signal.reason; }
       if (outcome === "failed") throw new Error("Synthetic scoped assessment request failure");
@@ -529,11 +1558,11 @@ for (const outcome of ["completed", "failed", "cancelled"] as const) test(`dimen
     } });
     const blocked = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
     assert.equal(calls, 0); assert.equal(blocked.definitionWork!.attempts, work.attempts);
-    assert.ok(blocked.definitionWork!.dimensionReviews?.length); assert.equal(canRecoverDefinition(blocked), true);
+    assert.ok(blocked.definitionWork!.dimensionReviews?.length || blocked.definitionWork!.supplementalScopePolicy); assert.equal(canRecoverDefinition(blocked), true);
     const recovered = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionRecoveryJobID: blocked.id,
       definitionLimits: { requests: 1, durationMs: 300000 }, signal: controller.signal });
     assert.equal(calls, 1); assert.equal(recovered.status, outcome === "completed" ? "interrupted" : outcome);
-    assert.ok(recovered.definitionWork!.executionPolicy, "Cell scheduling never grants another failed-step attempt");
+    assert.ok(recovered.definitionWork!.executionPolicy || recovered.definitionWork!.supplementalScopePolicy, "Exact context repacking never grants another failed-step attempt");
     assert.equal(recovered.definitionWork!.recovery!.grants.at(-1)!.spent, true); assert.equal(canRecoverDefinition(recovered), false);
     assert.deepEqual(recovered.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
     assert.deepEqual(recovered.definitionWork!.evidenceRequests, work.evidenceRequests); assert.deepEqual(recovered.definitionWork!.evidenceFollowups, work.evidenceFollowups);
@@ -552,7 +1581,7 @@ test("Continue specification resumes post-page supplemental work as scoped check
     const { p, work, job, pair } = supplementalAfterPages(store, 0, true); let calls = 0;
     workflow = new ProjectWorkflow(store, { async analyze(_snapshot, { context }) {
       calls++; assert.ok(context.manifest.characters <= 96000);
-      assert.ok(expandDefinitionWire(context.data).definitionStage.dimensionScope);
+      const stage = expandDefinitionWire(context.data).definitionStage; assert.ok(stage.dimensionScope || stage.supplementalScopePolicy);
       assert.ok(context.manifest.includedIDs.includes(pair.id) && context.manifest.includedIDs.includes(pair.sourceID!));
       return { definitionBlocked: { kind: "technical", reason: "Synthetic stop after confirming scoped continuation; no missing human choice is established." } };
     } });
@@ -629,7 +1658,7 @@ test("a relevant edit during scoped review preserves accepted pages and spent at
   try {
     const { p, work } = supplementalAfterPages(store); let calls = 0;
     const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
-      calls++; assert.ok(expandDefinitionWire(context.data).definitionStage.dimensionScope);
+      calls++; const stage = expandDefinitionWire(context.data).definitionStage; assert.ok(stage.dimensionScope || stage.supplementalScopePolicy);
       store.note(p.id, p.revision, "A new explicit constraint arrived while this scoped check was running", "runtime");
       return { definitionUpdate: { checks: [] } };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
@@ -1184,6 +2213,182 @@ test("invalid mixed evidence lookup is corrected atomically with feedback, witho
     const forged = structuredClone(done.definitionWork!); forged.evidenceFailures![0]!.response.definitionEvidence.recordIDs = [wanted];
     assert.throws(() => replayDefinitionStages(p, forged), /not an invalid|original request|context|already loaded|rejected/);
   } finally { store.close(); }
+});
+
+test("assessment citation correction rejects an area ID atomically then accepts a complete corrected assessment", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store); let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const stage = expandDefinitionWire(context.data).definitionStage;
+      if (calls === 1) {
+        const assessment = result("runtime", context.manifest.includedIDs[0]!).assessments![0]!;
+        assessment.checks[0]!.evidenceIDs = ["runtime"];
+        assessment.checks[1]!.explanation = "Rejected batch must not leak this finding";
+        return { definitionAssessment: assessment };
+      }
+      if (calls === 2) {
+        assert.equal(stage.draft, null); assert.equal(stage.citationCorrection.rejectedAssessments.length, 1);
+        assert.match(stage.citationCorrection.instruction, /epic.id.*NOT evidence/);
+        const work = store.jobs(p.id).at(-1)!.definitionWork!;
+        assert.equal(work.receipts.length, 0); assert.equal(work.attempts, 2); assert.equal(work.citationFailures!.length, 1);
+        assert.equal(definitionFailedAttempts(work), 2); assert.deepEqual(store.get(p.id), p);
+      }
+      return stage.phase === "verify" ? { definitionVerdict: [] } : stage.draft ? { definitionUpdate: { checks: [] } }
+        : { definitionAssessment: result("runtime", Object.keys(stage.citationLabels)[0]!).assessments![0] };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(done.definitionWork!.receipts[0]!.attempts, 2);
+    assert.equal(done.definitionWork!.citationFailures!.length, 1);
+    assert.ok(!JSON.stringify(done.result).includes("Rejected batch must not leak"));
+    assert.deepEqual(completedDefinitionAssessment(p, done.definitionWork!), done.result);
+    const forged = structuredClone(done.definitionWork!); forged.citationFailures![0]!.contextKey = "0".repeat(64);
+    assert.throws(() => replayDefinitionStages(p, forged), /original citation request context/);
+    const future = structuredClone(done.definitionWork!); future.citationCorrectionPolicy!.format = 2 as 1;
+    assert.equal(definitionWorkSchema.safeParse(future).success, false);
+    const collision = structuredClone(done.definitionWork!); collision.citationFailures![0]!.attempts = 2;
+    assert.throws(() => replayDefinitionStages(p, collision));
+  } finally { store.close(); }
+});
+
+test("assessment updates and verification citation corrections preserve the accepted draft until a whole valid response", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store); let badUpdate = false, badVerdict = false, originalDraft: unknown;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      const stage = expandDefinitionWire(context.data).definitionStage;
+      if (!stage.draft) return { definitionAssessment: result("runtime", context.manifest.includedIDs[0]!).assessments![0] };
+      const check = stage.draft.assessments[0].checks[0];
+      if (stage.phase === "collect" && !badUpdate) {
+        badUpdate = true; originalDraft = structuredClone(stage.draft);
+        return { definitionUpdate: { confidence: "low", checks: [{ ...check, evidenceIDs: ["runtime"], explanation: "Rejected update" }] } };
+      }
+      if (stage.citationCorrection) {
+        assert.deepEqual(stage.draft, originalDraft, "Invalid update/verdict cannot change even uncited fields");
+      }
+      if (stage.phase === "verify" && !badVerdict) {
+        badVerdict = true; originalDraft = structuredClone(stage.draft);
+        return { definitionVerdict: [{ ...check, status: "partial", evidenceIDs: ["runtime"], explanation: "Rejected downgrade" }] };
+      }
+      return stage.phase === "verify" ? { definitionVerdict: [] } : { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(done.status, "completed", done.diagnostic); assert.ok(badUpdate && badVerdict);
+    assert.equal(done.definitionWork!.citationFailures!.length, 2);
+    assert.ok(done.result!.assessments![0]!.checks.every((c) => c.status === "defined"));
+    assert.deepEqual(completedDefinitionAssessment(p, done.definitionWork!), done.result);
+  } finally { store.close(); }
+});
+
+test("unknown assessment labels are corrected without resolving global labels or identifier indexes", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store); let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const stage = expandDefinitionWire(context.data).definitionStage;
+      if (calls === 1) return { definitionAssessment: result("runtime", "S99999").assessments![0] };
+      if (calls === 2) assert.match(stage.citationCorrection.rejectedAssessments[0].validation, /Unknown citation label/);
+      return stage.phase === "verify" ? { definitionVerdict: [] } : stage.draft ? { definitionUpdate: { checks: [] } }
+        : { definitionAssessment: result("runtime", Object.keys(stage.citationLabels)[0]!).assessments![0] };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(done.definitionWork!.citationFailures!.length, 1);
+    assert.deepEqual(completedDefinitionAssessment(p, done.definitionWork!), done.result);
+    const forged = structuredClone(done.definitionWork!);
+    const raw = forged.citationFailures![0]!.response;
+    assert.ok("definitionAssessment" in raw); raw.definitionAssessment.checks[0]!.evidenceIDs = [done.definitionWork!.batches[0]![0]!];
+    // Leaving other unknown labels changes the bounded diagnostic location too.
+    assert.throws(() => replayDefinitionStages(p, forged));
+  } finally { store.close(); }
+});
+
+for (const mixed of [false, true]) test(`citation correction shares the three-failure limit and explicit recovery (mixed lookups: ${mixed})`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store); let calls = 0;
+    const service = new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++;
+      if (mixed && calls === 2) return { definitionEvidence: { recordIDs: ["S99999"], reason: "Invalid lookup shares the limit" } };
+      return { definitionAssessment: result("runtime", "runtime").assessments![0] };
+    } });
+    const failed = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(failed.status, "failed", failed.diagnostic); assert.equal(calls, 3); assert.equal(failed.definitionWork!.attempts, 3);
+    assert.equal(failed.definitionWork!.citationFailures!.length, mixed ? 2 : 3);
+    assert.equal(failed.definitionWork!.evidenceFailures?.length ?? 0, mixed ? 1 : 0);
+    assert.equal(failed.definitionWork!.receipts.length, 0); replayDefinitionStages(p, failed.definitionWork!);
+    const blocked = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(calls, 3); assert.ok(canRecoverDefinition(blocked));
+    const extra = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionRecoveryJobID: blocked.id,
+      definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(calls, 4); assert.equal(extra.definitionWork!.recovery!.grants.at(-1)!.spent, true);
+    assert.equal(canRecoverDefinition(extra), false); replayDefinitionStages(p, extra.definitionWork!);
+    assert.deepEqual(store.get(p.id), p);
+  } finally { store.close(); }
+});
+
+for (const outcome of ["cancelled", "stale", "malformed"] as const) test(`assessment citation correction stops on ${outcome} output`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), controller = new AbortController(); let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze() {
+      calls++;
+      if (calls === 2) {
+        if (outcome === "cancelled") controller.abort();
+        else if (outcome === "stale") store.note(p.id, p.revision, "Concurrent human decision", "runtime");
+        else return { definitionAssessment: { checks: "malformed" } };
+      }
+      return { definitionAssessment: result("runtime", "runtime").assessments![0] };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
+    assert.equal(calls, 2); assert.equal(done.status, outcome === "malformed" ? "failed" : outcome);
+    assert.equal(done.definitionWork!.attempts, 2); assert.equal(done.definitionWork!.citationFailures!.length, 1);
+    assert.equal(done.definitionWork!.receipts.length, 0); replayDefinitionStages(p, done.definitionWork!);
+  } finally { store.close(); }
+});
+
+test("legacy citation failure upgrades after replay and survives loads, mixed feedback, reopen and portable continuation", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "definition-citation-correction-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const p = seed(store), work = planDefinitionStages(p, "runtime"), old = store.beginJob(p.id, p.revision).job;
+    store.claimJob(old.id, Date.now() + 60000); upgradeDefinitionAllowance(work);
+    upgradeDefinitionEvidenceCorrection(p, work);
+    // An older failed lookup, an accepted load, then a citation error: the new
+    // legacy feedback must not leak into either earlier request's hash.
+    work.attempts = 1;
+    try { requestDefinitionEvidence(p, work, undefined, { definitionEvidence: { recordIDs: ["S99999"], reason: "Old lookup failure" } }, old.id); }
+    catch (error) { assert.ok(error instanceof DefinitionEvidenceReferenceError); recordDefinitionEvidenceFailure(p, work, undefined, error, old.id); }
+    const wanted = definitionStageContext(p, work).manifest.omittedIDs[0]!; work.attempts = 2;
+    requestDefinitionEvidence(p, work, undefined, { definitionEvidence: { recordIDs: [wanted], reason: "Old accepted exact load" } }, old.id);
+    work.attempts = 3; const originalContext = definitionStageContext(p, work); let reason = "";
+    try { acceptDefinitionStage(p, work, undefined, { definitionAssessment: result("runtime", "runtime").assessments![0] }, old.id); }
+    catch (error) { assert.ok(error instanceof DefinitionCitationError); reason = error.message; }
+    store.checkpointDefinition(old.id, work, originalContext.manifest); store.failJob(old.id, "failed", reason);
+    const original = store.getJob(old.id);
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(file); assert.deepEqual(store.getJob(old.id), original); }
+    let calls = 0;
+    const paused = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const feedback = expandDefinitionWire(context.data).definitionStage.citationCorrection;
+      assert.equal(feedback.earlierFailure.attempt, 3); assert.equal(feedback.earlierFailure.validation, reason);
+      assert.match(feedback.earlierFailure.missingDetails, /not saved/); assert.equal(feedback.rejectedAssessments.length, 0);
+      return { definitionEvidence: { recordIDs: [context.manifest.omittedIDs[0]!], reason: "Exact support for correction" } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(paused.status, "interrupted", paused.diagnostic); assert.equal(calls, 1); assert.equal(paused.definitionWork!.attempts, 4);
+    assert.equal(definitionFailedAttempts(paused.definitionWork!), 2); assert.deepEqual(store.getJob(old.id), original);
+    assert.deepEqual(paused.definitionWork!.evidenceRequests, work.evidenceRequests);
+    const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [paused], [], (r) => store.get(p.id, r))), p.model);
+    assert.deepEqual(portable.continuation.jobs[0]!.definitionWork, paused.definitionWork);
+    replayDefinitionStages(p, portable.continuation.jobs[0]!.definitionWork!);
+    store.close(); store = new ProjectStore(file);
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      const stage = expandDefinitionWire(context.data).definitionStage;
+      return stage.phase === "verify" ? { definitionVerdict: [] } : stage.draft ? { definitionUpdate: { checks: [] } }
+        : { definitionAssessment: result("runtime", context.manifest.includedIDs[0]!).assessments![0] };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(done.definitionWork!.receipts[0]!.attempts, 5);
+    assert.deepEqual(completedDefinitionAssessment(p, done.definitionWork!), done.result);
+    const forged = structuredClone(done.definitionWork!); forged.citationCorrectionPolicy!.legacyRejection!.contextKey = "0".repeat(64);
+    assert.throws(() => replayDefinitionStages(p, forged), /legacy citation correction/);
+    const blocked = { ...work, blocked: "A genuine human choice remains" }; upgradeDefinitionCitationCorrection(p, blocked, undefined, original);
+    assert.equal(blocked.citationCorrectionPolicy, undefined);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("invalid lookup correction stops after three failures and cannot silently grant exhausted recovery", async () => {
@@ -2467,7 +3672,7 @@ test("recovery authorization survives a pre-dispatch crash conservatively and fu
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("first-batch citation failure saves actionable bounded diagnostics across reopen without retrying", async () => {
+test("first-batch citation failure saves actionable bounded diagnostics across reopen without exceeding consent", async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "definition-citation-diagnostic-")), path = join(directory, "projects.sqlite");
   let store = new ProjectStore(path);
@@ -2479,13 +3684,14 @@ test("first-batch citation failure saves actionable bounded diagnostics across r
       const outside = p.sources.find((s) => !context.manifest.includedIDs.includes(s.id))!.id;
       assessment.checks[6]!.evidenceIDs = [outside, "ffffffff-ffff-ffff-ffff-ffffffffffff"];
       return { definitionAssessment: assessment };
-    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
-    assert.equal(job.status, "failed"); assert.equal(calls, 1);
-    assert.match(job.diagnostic!, /Definition collect batch 1\/\d/);
-    assert.match(job.diagnostic!, /checks\[6\] \(failures\)/);
-    assert.match(job.diagnostic!, /1 missing; 1 outside allowed evidence/);
-    assert.match(job.diagnostic!, /ffffffff-ffff-ffff-ffff-ffffffffffff — missing record/);
-    assert.ok(job.diagnostic!.length < 1200);
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(job.status, "interrupted"); assert.equal(calls, 1);
+    const diagnostic = job.definitionWork!.citationFailures![0]!.reason;
+    assert.match(diagnostic, /Definition collect batch 1\/\d/);
+    assert.match(diagnostic, /checks\[6\] \(failures\)/);
+    assert.match(diagnostic, /1 missing; 1 outside allowed evidence/);
+    assert.match(diagnostic, /ffffffff-ffff-ffff-ffff-ffffffffffff — missing record/);
+    assert.ok(diagnostic.length < 1200);
     assert.equal(job.definitionWork!.receipts.length, 0); assert.equal(job.definitionWork!.attempts, 1);
     assert.deepEqual(store.get(p.id), p);
     store.close(); store = new ProjectStore(path);

@@ -20,6 +20,7 @@ for (let i = 0; i < 12; i++) project = store.note(project.id, project.revision,
   `Original decision ${i}\r\n` + Array.from({ length: 160 }, (_, n) => createHash("sha256").update(`continuous-${i}-${n}`).digest("hex")).join(""), "project");
 let calls = 0, waiting = false, pauseOnce = true;
 let invalidLookupOnce = true, rejectedValidID = "";
+let invalidCitationOnce = true;
 const contexts: string[] = [];
 const app = await startApp({ store, port: 0,
   catalog: new OpenCodeCatalog("unused", async () => ({ connected: ["openai"], all: [{ id: "openai", name: "OpenAI", models: { fixture: { name: "Fixture" } } }] })),
@@ -36,13 +37,16 @@ const app = await startApp({ store, port: 0,
       assert.ok("evidenceCorrection" in stage, "Invalid references receive validation feedback within the same failed-attempt limit");
       assert.ok(!context.manifest.includedIDs.includes(rejectedValidID), "Rejected mixed lookup loads no partial evidence");
     }
+    if (calls === 3) assert.ok("citationCorrection" in stage, "Invalid assessment citations receive bounded feedback");
     if (pauseOnce && epicID === "project" && stage.phase === "collect" && stage.batch === 2) {
       pauseOnce = false; waiting = true; signal.throwIfAborted();
       return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
     }
+    const citation = invalidCitationOnce ? epicID : label;
+    invalidCitationOnce = false;
     return stage.phase === "verify" ? { definitionVerdict: [] } : { summary: "Recorded decisions", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [],
       assessments: [{ epicID, confidence: "medium", explanation: "Evidence-backed definition estimate, not readiness.", checks: dimensions.map((dimension) => ({ dimension,
-          importance: "important", status: "defined", explanation: "Recorded human decision.", evidenceIDs: [label] })) }] };
+          importance: "important", status: "defined", explanation: "Recorded human decision.", evidenceIDs: [citation] })) }] };
   } },
 });
 const browser = await chromium.launch();
@@ -64,7 +68,7 @@ try {
   await expect(page.locator(".queue-header")).toContainText(`Checking how clearly “${project.epics.find((area) => area.id === "project")!.title}” is defined…`);
   await page.getByRole("button", { name: /Processing & queue:/ }).click();
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
-  await expect(queue.getByRole("region", { name: "Definition refresh progress", exact: true })).toContainText("3 model requests this refresh");
+  await expect(queue.getByRole("region", { name: "Definition refresh progress", exact: true })).toContainText("4 model requests this refresh");
   await expect(queue.getByRole("region", { name: "Definition refresh progress", exact: true })).toContainText("area 1 of 13");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".queue-header")).toContainText(`Checking how clearly “${project.epics.find((area) => area.id === "project")!.title}” is defined…`);
@@ -76,9 +80,10 @@ try {
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("cancelled");
   const paused = store.jobs(project.id).at(-1)!;
   assert.equal(paused.definitionWork!.receipts.length, 1); assert.equal(paused.definitionWork!.attempts, 1);
-  assert.equal(paused.definitionWork!.evidenceFailures!.length, 1); assert.equal(paused.definitionWork!.receipts[0]!.attempts, 2);
+  assert.equal(paused.definitionWork!.evidenceFailures!.length, 1); assert.equal(paused.definitionWork!.receipts[0]!.attempts, 3);
+  assert.equal(paused.definitionWork!.citationFailures!.length, 1);
   assert.equal(paused.definitionInterruption!.cause, "user-stop"); assert.equal(store.get(project.id).assessments.length, 0);
-  await page.reload(); assert.equal(calls, 3, "Reload must not automatically resume calls");
+  await page.reload(); assert.equal(calls, 4, "Reload must not automatically resume calls");
   await page.locator(".progress-trigger").click();
   await overview.getByRole("button", { name: "Refresh definition coverage", exact: true }).click();
   await expect.poll(() => coverage(store.get(project.id)).stale, { timeout: 60000 }).toBe(false);
@@ -94,5 +99,5 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-definition-continuous-mobile.png", fullPage: true });
   assert.deepEqual(errors, []);
-  console.log("Continuous definition browser passed: bounded atomic lookup correction, usage explanation, Pause assessment, saved partial work, reload without auto-resume, more than ten areas, exact stage reuse and mobile. Fixture adapter only; no live calls.");
+  console.log("Continuous definition browser passed: bounded atomic lookup and assessment citation correction, usage explanation, Pause assessment, saved partial work, reload without auto-resume, more than ten areas, exact stage reuse and mobile. Fixture adapter only; no live calls.");
 } finally { await browser.close(); await app.close(); store.close(); }

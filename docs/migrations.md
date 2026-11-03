@@ -1,5 +1,464 @@
 # Data migrations and upgrade compatibility
 
+## Indexed replay/validation and historical bundle-probe boundaries (2026-11-03)
+
+**No persisted format, fingerprint or assessment-semantic change:** SQLite remains
+23 and definition work remains 1. Dimension/page schedule projection now indexes
+active boundary positions instead of scanning every dimension event at every split/
+linked-page combination. Response validation uses the same synchronous read-only
+projection/completed-pair cache as context rendering; caches are discarded on
+return/error and never survive mutations, replay yields or model dispatch. Original
+receipts, exact context bytes, evidence and attempts remain unchanged. No saved-data
+rewrite, reset, reassessment or repeated model call is required.
+
+Deep replay also exposed a pre-existing bundle-probe incompatibility: a dimension or
+execution policy created **after** a saved load could become enabled when replay's
+optional packing probe appended that load, making its old root-only fallback appear
+to expand differently. A comparison without the new response cache reproduced the
+same failure at stage 185. Probes now freeze the schedule/count-bound policies active
+**before** the reply while adding its proposed bodies. This validates the original
+saved representation, not a newly improved packing result. Every original context
+hash, resolved record list and bundle ledger must still match; forged evidence is
+not repaired or accepted. No historical bundle or accepted finding is rewritten.
+
+Verification includes an isolated snapshot of the running review: all 249 historical
+schedule projections matched pre-change byte hashes; projection time was 611 ms
+before and 113 ms after in a local microbenchmark, not an end-to-end review speedup.
+Targeted regressions cover inactive boundary ordering, cache cleanup after rejection/
+mutation and replay after same-stage post-load dimension/execution changes.
+
+The optimized isolated 248-stage snapshot replay passed every original receipt hash
+and evidence validator in 75,846 ms, with attempts and original work unchanged. It
+ran at lower process priority while leaving the live app untouched. A paired,
+alternating-order five-sample benchmark of that snapshot's next verification response
+produced identical virtual receipts/drafts: median validation was 1,098 ms without
+the new response read cache and 59 ms with it (both using indexed projection). These
+are local computation measurements, not reductions in provider latency or promises
+about total completion time. No inference or real-project writes were used.
+
+Final read-only verification after the user paused and fully quit the desktop passed
+all **283 saved stages** in **72,849 ms**, preserving the original 248-stage prefix,
+all original loads and the current **one spent attempt**. This remains unfinished
+verification work, not a completed assessment. Type checking, all **825 pretests and
+707 main tests**, and all **20 default browser runners** passed. Browser checks use
+deterministic adapters, not live inference; the existing UI chunk-size warning remains.
+
+After the user's quit confirmation, the optimized desktop staging app was rebuilt;
+`npm run test:desktop` and `npx tsx src/desktop/startup-check.ts` passed against
+isolated data, including saved-work continuity, native shutdown and startup recovery.
+The staged desktop is ready for explicit continuation. Installer generation and
+end-to-end live AI completion were not repeated or claimed.
+
+## Bounded exact evidence bundles (2026-11-03)
+
+**Additive forward context policy:** SQLite remains **23**, definition work **1**.
+The user approved gathering directly linked questions, answers and approval evidence
+in exact bundles instead of spending successive model lookups following each link.
+Strict format-1 `evidenceBundlePolicy` records the activation stage, original load/
+attempt/schedule counts, original context hash, absent-policy snapshot and bounded
+local enrichments of existing current-step loads. Each original load can contribute
+at most 20 total root/new records. Original receipts, raw lookup responses, resolved
+IDs and spent attempts are not rewritten or credited anew. Only the exact old
+eight-successful-lookups technical blocker can be superseded, and only when there is
+additional bounded saved provenance to supply. Unrelated blockers remain intact.
+
+Bundles follow at most two **forward structural** sourceIDs/evidenceIDs/sourceID/
+requirementID/questionID hops, then complete directly linked question/current-response
+units. Historical answers remain alongside the question/current response, not
+replaced. No prose matches, reverse requirement searches, latest-answer precedence,
+inferred approval or unrestricted project allowlist is used. Missing or oversized
+optional groups are omitted whole, not shortened or treated as missing human choices.
+Future lookup receipts preserve their raw roots and record the exact deterministic
+bundle; optional expansion must fit the existing 96,000-character request context or
+fall back to the requested roots without partial automatic provenance groups.
+
+Compatible unfinished saved loads can receive one recorded local enrichment at
+activation, without a ninth model lookup or a successful-response credit. These bodies
+remain mandatory for that unfinished step. If they require existing supplemental
+pages, complete connected provenance groups remain indivisible (including overlapping
+groups), as do question/answer pairs. Page units may now contain up to 320 records,
+bounded by the eight current loads and eight restored bundles of at most 20 records
+each. Original format-1 page events still replay with their original pair units.
+Accepted page progress is not joint proof: the final original check still requires
+an exact joint read for indispensable relationships and blocks if that cannot fit.
+
+Full optional enrichment is used only when the exact combined context fits or the
+existing page planner can fit every whole connected group. Otherwise activation
+selects only complete optional groups that fit alongside **all** original mandatory
+evidence and the complete selected finding. It examines recent lookup roots first
+as a packing heuristic, not human-preference precedence. Skipped optional bodies stay
+saved but are not represented as supplied; no exhaustive provenance-read claim is
+made. If nothing additional fits a legacy exhausted step, its blocker remains and
+unchanged continuation dispatches no new model request.
+
+The eight successful lookups, twelve raw attempts, three failed attempts, explicit
+exhausted-step recovery, partition/execution ceilings, stale-result checks and restart
+suspension remain unchanged. Zero remaining lookup slots are explicit in future
+contexts. A repeated unchanged eight-load block dispatches no further model request.
+Restored records remain eligible for exact reload after their bodies retire, but do
+not become human decisions or preference evidence merely through graph linkage.
+
+Replay validates the original activation context and deterministic restored groups,
+then every future bundled request's raw roots and exact expansion. Reopen and portable
+continuation preserve the policy, original evidence and charges. Unsupported future
+formats, forged expansions and inconsistent boundaries reject rather than rewriting
+or resetting saved work. Older clients reject the new optional field/page units;
+there is no downgrade. Completed assessments require no migration or reassessment.
+
+Verification: eleven focused bundle regressions, type checking, the full suite
+(822 pretests plus 707 main tests), all 20 default browser runners, Windows desktop
+rebuild/full checks and the dedicated startup runner passed. Desktop replacement
+followed fresh explicit quit confirmation; desktop tests use isolated data. Checks
+cover raw/whole exact evidence, forged/future bundles, SQLite reopen, portable
+continuation, connected-group pages, optional budget fallback, charged failures/
+cancellation/staleness, ninth-lookup refusal and no-call unchanged retry.
+
+An initial read-only real-checkpoint trial validated 155 original receipts and
+retained nine attempts/eight successful loads, but its proposed 30 additional
+records formed overlapping provenance that could not safely fit whole pages. That
+trial was **not** a passing continuation plan. Budget-aware whole-group fallback
+was added with a matching regression. Final read-only verification passed: all 155
+original receipt hashes validated; nine attempts, eight successful loads and the
+one failed attempt remained charged. One complete optional group added three exact
+records and the combined context fit at 94,590 characters, without dropping original
+evidence or changing load receipts. Other optional groups remain unsupplied. The
+observed full verification took 664,229 ms alongside other local checks, not a
+guaranteed resume duration. An isolated temporary verified-draft cache was written;
+no live calls or real-project writes were used. This does not qualify live
+interpretation or whole-area publication.
+
+## Bounded partition-capacity upgrade (2026-11-03)
+
+**Additive forward policy:** SQLite remains **23**, definition work remains **1**.
+The user approved raising exact-evidence capacity from 64 to **128 partitions per
+phase**. The optional strict format-1 `partitionCapacityPolicy` records the activation
+stage, prior primary/follow-up counts, spent attempts, subdivision/page-event counts
+and an optional original superseded capacity blocker. It activates only after exact
+historical replay, at a proven near-full capacity/subdivision boundary. Only the
+recognized old technical capacity blocker can be superseded; unrelated product,
+lookup and technical blockers remain. Startup alone does not change jobs or call AI.
+
+Original batches, receipts, lookup responses, exact evidence, context hashes, citations
+and spent attempts are retained. Earlier schedule events, including events earlier
+in the same stage, retain the old 64-partition validation. New events use 128 only
+after the recorded boundary and matching saved counts; the upgrade cannot authorize
+an oversized historical schedule retrospectively. A reconstructed pre-upgrade plan
+must independently validate the original bounded capacity witness.
+
+The existing **2,304-step execution ceiling**, **64 linked-answer page partitions per
+phase**, request/load/failure limits, explicit exhausted-step recovery, 96,000-character
+contexts and final joint-evidence checks remain unchanged. More partitions are not
+new inference consent. The policy is one-time/nonrenewable: 128 remains a hard limit,
+and an indispensable oversized joint read still blocks. Shared schema bounds permit
+at most 254 subdivisions across both phases under this policy; legacy work retains
+its original 62-subdivision bound and per-phase limits. No partial schedule or text
+truncation is used when a limit is reached.
+
+Reopen and portable continuation preserve the policy and all original evidence.
+Future formats and inconsistent activation witnesses reject without rewriting work.
+Older apps reject the new optional field; there is no downgrade. No reset,
+reassessment of completed calls, database migration or fingerprint change is needed.
+Failed/cancelled continuation remains explicit and retains previously saved work.
+
+Verification: seven focused capacity checks, type checking, the full suite (811
+pretests plus 707 main tests) and all 19 existing default browser runners passed,
+including old-limit refusal, a service-level saved-overflow upgrade, charged page
+progress, unrelated blockers, 128 refusal, forged/future policies, exact historical
+replay, repeated SQLite reopen and portable continuation. Read-only real-checkpoint
+validation retained 129 original receipts and five attempts, then planned pages of
+16/three records using 66 collection partitions. The first context was 88,218
+characters. This made no live calls or real-project writes and did not complete the
+remaining area or its final joint check.
+
+After fresh explicit quit confirmation, Windows desktop rebuild/full checks and the
+dedicated startup runner passed with isolated test data. Diff checking passed. No
+packaged installer or full live-model assessment completion is claimed.
+
+## Cooperative definition replay and rendering-local caches (2026-11-02)
+
+**Compatibility: no persisted format or assessment-semantic change.** SQLite remains
+23 and definition work remains 1. No migration, history rewrite, reassessment, attempt
+refund or model call is required. Context encoding, evidence selection, request hashes
+and replay rejection rules are unchanged. Rendering-local schedule and completed-pair
+caches exist only during one synchronous, read-only context rendering; they are
+discarded on return/error, never retained across mutations or asynchronous boundaries.
+The follow-up owner is computed once before filtering loads rather than per load.
+
+The service consumes the same exact replay validator at cooperative receipt
+boundaries, yielding to the worker event loop, checking cancellation and renewing only
+an already-live, current-revision job lease. Progress names validated saved stages,
+not completed AI work. Lease renewal cannot revive expired/cancelled workers, accept
+changed revisions, grant inference or overwrite original saved jobs. Checkpoints also
+renew finite leases during local preparation; per-request deadlines, bounded action
+limits, explicit recovery consent and restart suspension are unchanged. Interruption
+before a new checkpoint leaves the historical source work intact for explicit resume.
+
+This addresses four observed ~37-minute failures before any adapter request: local
+history replay outlasted the worker lease, then its first checkpoint was rejected.
+Tests cover exact cooperative/synchronous replay, forged hashes, post-mutation cache
+freshness, simulated replay beyond the original lease, event-loop cancellation and
+stale edits before inference, and strict renewal guards. Real-checkpoint performance
+verification is read-only and does not establish live-model or whole-area completion.
+
+Verification: type checking, five new targeted regressions, the full suite (805
+pretests plus 707 main tests), all 19 default browser runners, Windows desktop rebuild/
+full checks, dedicated startup checks and diff checking passed. Desktop replacement
+followed fresh explicit quit confirmation. Read-only replay of the original checkpoint
+validated all 119 receipt hashes in 291,483 ms, then planned the same 27/two-record
+pages with an 85,684-character first context; all original loads, receipts and eight
+spent attempts were unchanged. This ran alongside other checks and is an observed
+local duration, not a cross-machine benchmark or guaranteed resume time. The exported
+failed runs measured 2,144,284–2,193,105 ms in replay and dispatched zero requests.
+No real-project write, live inference or completed-area publication was exercised.
+
+## Within-step supplemental evidence pages (2026-11-02)
+
+**Additive forward continuation:** SQLite remains **23**, definition work **1**.
+Optional strict format-1 `supplementalReviews` events record the exact overflow
+boundary, original load counts, spent attempts, schedule counts, selected-finding
+digest, complete record IDs and whole-record page units. Current supplied question/
+answer pairs stay together. Historical replay validates the original overflow,
+evidence and finding before accepting this local scheduling event; original receipts,
+loads, hashes, provenance and attempts are not rewritten or refunded. No startup
+rewrite or model call occurs. Completed assessments need no reassessment.
+
+After stage-scoped loading and dimension subdivision cannot fit one unfinished
+check, bounded pages supply its complete selected finding plus whole exact records.
+Accepted pages save draft progress, not a published assessment or proof of cross-page
+consistency. The original check follows every page. Indispensable relationships must
+reload the necessary exact records jointly within existing allowances; an oversized
+joint bundle stops rather than repaging indefinitely. Page requests cannot load more
+evidence or trigger linked-answer recall. Supplemental pages and subdivisions share
+the existing 64 evidence partitions per phase and saved execution ceiling. An
+unavailable partition/execution budget rejects the entire proposed schedule.
+
+Reopen and portable continuation preserve events and original evidence. Unsupported
+future formats, missing records, changed findings and inconsistent boundaries reject
+without downgrade or invented evidence. Older clients reject the new optional field;
+resume using a supporting app. Failures, cancellation, stale revisions and exhausted
+recovery retain accepted page progress and charged attempts.
+
+Verification: ten focused page regressions and type checking passed, including
+SQLite reopen, portable continuation, full findings/records, pair subdivision, failure/
+cancellation/staleness, charged recovery, shared partition-limit rejection, genuine
+product blockers and oversized-joint refusal. The full test run passed 800 pretests
+and 707 main tests; all 19 default browser runners passed, including Pause/reload,
+charged retry, exact continuation and final joint reload. Read-only simulation of the
+user's saved checkpoint retained 119 original
+stages and eight attempts; 29 records became pages of 27 and two, with contexts of
+85,684 and 74,476 characters and a pending final joint context of 64,518. Findings
+and original loads were unchanged after both simulated page receipts. This did not
+complete the real area, call a live model or modify real project storage.
+
+After explicit confirmation that the app was fully quit, the Windows desktop rebuild,
+full desktop runner and dedicated startup runner passed using isolated test data.
+CLI help checks and `git diff --check` also passed. No packaged installer or live
+end-to-end assessment completion is claimed.
+
+## Stage-scoped supplemental evidence bodies (2026-11-02)
+
+**Additive forward context policy:** SQLite remains **23**, definition work **1**.
+The user approved stopping automatic carry-forward of completed steps' supplemental
+loads while retaining every original load, accepted receipt, citation and spent
+attempt. Optional strict `supplementalScopePolicy` format **1** records the activation
+stage, exact prior primary/follow-up counts, spent-attempt boundary and schedule-event
+counts. It activates only after historical replay on unfinished compatible work that
+has earlier accepted loads. Reopen alone neither changes jobs nor calls a model.
+
+Before activation, old contexts retain the legacy inherited-owner semantics. After
+activation, a request supplies its exact scheduled base and **all loads requested in
+that unfinished step**, including accepted loads predating the compatible upgrade.
+Local subdivision/repacking before a receipt is accepted keeps those current loads.
+Once the step is accepted, its load receipts remain immutable but their bodies are
+not automatically carried into later steps, including sibling dimension groups or
+subdivisions. Protocol/schedule ownership is unchanged; historical primary requests
+and follow-ups are never deleted, rewritten, reassigned or falsely credited anew.
+
+Earlier load IDs from the inherited owner appear as explicit navigation, not quoted
+human evidence or new product constraints. Previously validated exact load IDs remain
+reloadable, including out-of-plan linked records authorized by those earlier receipts;
+unrelated project IDs do not become eligible. A required reload consumes the existing
+step/action allowance. Retained supported findings/citations stay unchanged, but
+omitted human text or omitted AI dimensions cannot justify new or revised findings.
+The request explicitly requires exact reloads before using indispensable old evidence,
+and blocks if it cannot be supplied safely. No summarization, truncation, inferred
+replacement, failure refund or new model consent occurs. Twelve-request/eight-load,
+three-failure, recovery, Stop, stale-output, lease and 96,000-character rules remain.
+
+Stage plus request-count/attempt boundaries preserve hashes of earlier loads and
+correction failures in the same stage. Existing recall-event absence snapshots also
+recognize the new policy. Compatible old technical single-check overflow blocks can
+be superseded only when the exact old context really overflows and removing completed
+loads produces a fitting context with fewer bodies; unrelated evidence/product/
+technical blockers remain intact. Some legacy full-draft overflows now fit without
+dimension subdivision; tests accept either exact representation rather than requiring
+unnecessary scoped work. Previously completed calls are not repeated just to change
+representation. Completed assessments need no upgrade or reassessment.
+
+Portable continuation preserves the policy and all original historical loads.
+Unsupported future formats, inconsistent activation counts and malformed boundaries
+reject; older apps cannot read the new field (no downgrade support). This is an
+additive workflow/context representation, not a SQL migration or assessment-input
+fingerprint change. Interrupted preparation can retry from the latest durable
+checkpoint without refunding attempts or overwriting the original dated job.
+
+Read-only diagnosis of the revision-3041 checkpoint with **93** saved stages found a
+single-record boost check still inherited **19** records from seven earlier completed
+material-retention lookups. Its selected acceptance check was also retained in full.
+The compatible in-memory upgrade preserves all 93 receipts, all original primary and
+follow-up requests, the unchanged draft/citations and **one** spent current-step
+attempt. Its next context is **49,558 / 96,000** characters with three detailed records
+(boost requirement plus exact question/answer), compared with the blocked **98,167**
+characters and 48 records. The earlier 48,053-character pruning experiment was only a
+size lower bound, not a valid migration; the implemented policy adds honest navigation
+and instructions. No historical load was actually pruned or rewritten.
+
+Verification: **1,497** full-suite tests (**790** pretests + **707** main), ten focused
+stage-scope regressions, type checking, all 18 default browser runners, the focused
+continuous correction/Pause/reload browser flow, UI/desktop builds and Windows Electron
+continuity/relaunch passed. Tests cover immutable older loads, same-stage correction
+hashes, current evidence through subdivision, exact reloading of out-of-plan receipt-
+validated history without global access, repeated SQLite reopen, portable continuation,
+future/inconsistent policies, unrelated blockers, stale/cancelled output and exhaustion.
+
+The no-inference unchanged-findings simulation logged **125** new simulated checks
+(**218** total stages), **16** extra subdivisions and an observed maximum **93,295**
+characters, then reached its **ten-minute local verification guard** before completion.
+It is not a passing full-continuation/publication simulation. The initial upgrade and
+93-stage historical replay passed independently; future live interpretation, new
+findings/reloads and whole-run completion remain unqualified. No real-project writes,
+live AI calls, commits or pushes were performed during verification.
+
+## Exact linked-answer recall after scoped ambiguity (2026-11-02)
+
+**Additive forward event ledger:** SQLite remains **23**, definition work **1**.
+The user approved resupplying exact saved resolution evidence when a later scoped
+review revisits conflicting records but omits their earlier linked question/answer.
+Optional `linkedAnswerRecalls` events are strict format **1**. Each retains the
+original stage, spent attempt, source job, saved/returned-block provenance, original
+lookup-block reason and context hash, scheduling-event counts, named anchor IDs and
+complete question/current-answer pair IDs. `absentPolicies` preserves the exact
+pre-recall protocol markers if a subsequent compatible continuation adopts a marker
+at the same stage. Events neither replace the accepted draft nor fabricate AI loads.
+
+Recovery runs only after historical replay or a newly returned typed `evidence-lookup`
+block, within an explicit task's live consent. Every candidate must be an answered,
+current, non-superseded reciprocal question/answer pair in the frozen plan, already
+read together in the same phase's saved base/page evidence and cited by the retained
+draft. Its explicit question `evidenceIDs` must reference a full record actually
+supplied and named in the blocker. No keyword/prose-link matching, global search,
+latest-answer-wins inference or hidden-dimension AI finding is used as product evidence.
+Restore **all** such candidates or none (at most ten complete pairs/twenty records).
+Exact questions, options and chosen answers are supplied, not a synthesized resolution.
+Human wording and stated scope alone can establish replacement or an exception.
+
+The original blocked response remains spent against the same three-failure limit.
+A local reload earns no successful evidence-request credit, new allowance or model
+consent. Stop, expected-revision/lease guards, timeouts and the separately confirmed
+one-request exhausted-step recovery remain unchanged. Product-decision/technical
+blocks, missing/unlinked/uncited/superseded pairs and already supplied pairs are not
+cleared. A repeated ambiguity with the exact pair present stops normally. Recalled
+evidence remains supplied in subsequent same-phase steps only when a named anchor is
+in their base evidence. Contexts still obey 96,000 characters, with existing exact
+subdivision/dimension bounds; indivisible oversized evidence is never shortened.
+
+Replay removes recalls from requests/failures preceding their stage/attempt and trims
+later schedule events. Each event must reproduce its exact missing-pair candidates
+and original context. Existing requests, accepted checks, human evidence, citation
+labels, input/plan identities and attempts remain intact. Reopen alone never calls a
+model or rewrites jobs. Interrupted continuation retains the old dated job and latest
+durable checkpoint; no completed call is repeated. Portable continuation carries the
+ledger; malformed/forged events and unsupported future formats reject. Older apps
+cannot read the new optional field; no downgrade support, SQL migration, fingerprint
+change, reset or reassessment of equivalent completed work is required.
+
+Read-only diagnosis at revision **3041** found the explicit human answer “One trick
+is enough; replace the two-trick and two-move minimums” was read at stage **35** and
+retained in the rules assessment, but absent from the later acceptance-only request.
+An in-memory recall restores that full pair and the other directly linked cited pair
+without exposing the omitted rules assessment. All **50** accepted stages, accepted
+lookups and **two** spent current-step attempts replay unchanged. The continuation is
+**95,811 / 96,000** characters (previously 90,430), without further subdivision.
+This is deterministic exact-context verification, not qualification of live model
+interpretation. No live calls or real-project writes were made.
+
+Verification: **1,485** full-suite tests (**778** pretests + **707** main), **nine**
+final focused recall regressions (including subsequently added cancellation/staleness
+cases), type checking, all 18 default browser runners, the focused continuous
+correction/Pause/reload browser check, UI/desktop builds, Windows Electron
+continuity/relaunch and diff checks passed. Recall-specific fixtures cover exact
+cross-dimension evidence, no hidden AI finding, full-pair/no-precedence semantics,
+no partial/oversized answer truncation, forged/future ledgers, repeated reopen,
+portable continuation, saved/returned blocks, repeated-block stops and charged
+exhausted-step recovery, including same-stage compatible protocol adoption.
+
+A larger unchanged-findings continuation simulation initially exceeded its local
+120-second execution timeout without producing a completion result. The bounded longer
+in-memory simulation subsequently completed in **449,453 ms**: **144** new simulated
+checks, **194** total stages, **18** additional exact subdivisions, and maximum
+**95,990 / 96,000** characters. All 50 original receipts and accepted lookups remained
+unchanged; the original two spent attempts were retained through the first simulated
+continuation, and the simulated findings stayed identical. Neither attempt used
+inference or wrote to project storage. This qualifies unchanged-findings scheduling
+and replay, not future live interpretation or genuinely new findings/blockers.
+
+## Bounded correction of invalid assessment citations (2026-11-02)
+
+**Additive forward protocol policy:** SQLite remains **23**, definition work **1**.
+The user explicitly approved extending bounded correction from evidence lookups to
+invalid citations in definition assessments, updates and verification verdicts.
+Optional strict `citationCorrectionPolicy` format **1** records activation stage and
+prior accepted lookup counts. `citationFailures` records the entire rejected parsed
+response, generated diagnostic, original context hash, stage/attempt, job/model and
+subdivision/linked/dimension-event counts. Nothing from a rejected response changes
+the accepted draft, including valid checks, confidence or explanation. No area ID is
+promoted to an evidence record, and no missing reference is guessed, dropped or
+replaced automatically. Feedback explicitly distinguishes area IDs, evidence IDs,
+request citation labels and identifier-table indexes. Rejected assessment text stays
+in its receipt, not in the next context as product constraints.
+
+Each rejected assessment consumes the **same three-failure limit** as invalid lookups
+and interrupted/failed calls. It earns no successful-load credit and grants no new
+request/action/workflow consent. Existing per-request timeout, eight-load/12-request
+envelope, Stop, revision/lease guards and separately confirmed one-request exhausted
+recovery remain unchanged. Other malformed output and genuine blockers still stop.
+Unknown labels and missing/out-of-context canonical records receive bounded feedback;
+the next permitted request must return a complete valid response for that step.
+
+Activation occurs only after historical replay on unfinished compatible unblocked
+work. Contexts without citation feedback remain byte-identical. Replay excludes later
+failed assessments from earlier loads/failures; it also suppresses later same-stage
+legacy feedback when reconstructing requests at or before its spent attempt. Each
+saved rejection must reproduce the same typed validation error from its original
+context before continuation/publication. Original human records, citation authority,
+receipts, input/plan keys and spent attempts remain intact. Older completed work needs
+no reassessment. Unsupported future policy versions and malformed/forged ledgers reject.
+
+Legacy failed jobs matching the app-generated citation diagnostic retain their original
+job, diagnostic and attempt in `legacyRejection`, with a hash of the compatible prepared
+continuation context. Feedback explicitly says the rejected response was not saved;
+no replacement evidence or missing response is reconstructed. Opening the database
+alone does not migrate jobs or make calls. New fields are carried through portable
+continuation; older apps cannot read them (no downgrade support). No SQL migration or
+assessment-fingerprint change is necessary. Interrupted upgrades retain the old job
+and resume from the latest durable checkpoint; they never refund attempts.
+
+Read-only replay of the reported revision **3035** confirms the rejected citation was
+the ID of “Modular traversal tiles and prop population,” not an evidence record. The
+in-memory upgrade retains **zero completed stages**, **one spent attempt**, all **30**
+supplied records and their exact citation map. Feedback fits at **37,576 / 96,000**
+characters (previously 36,119). No inference or real-project write was performed.
+
+Verification: **1,477** full-suite tests (**770** pretests + **707** main), **10**
+final focused citation regressions (including the subsequently added unknown-label
+case), type checking, all 18 default browser runners, UI/desktop builds and Windows
+Electron continuity/relaunch checks passed. The focused browser flow passed atomic
+lookup rejection → invalid assessment citation → correction → Pause/reload → exact
+continuation, with unchanged saved findings and mobile controls. Its first invocation
+timed out on reload while the UI build was being replaced concurrently; the isolated
+rerun against completed assets passed. Fixtures qualify protocol/accounting, not live
+model correction or semantic interpretation. No live calls or real-project writes.
+
 ## Bounded correction of invalid evidence lookups (2026-11-02)
 
 **Additive forward protocol policy:** SQLite remains **23**, definition work **1**.

@@ -5,6 +5,207 @@ decisions; it is not readiness, code completeness, or verified delivery to main.
 
 ## Refresh the overall view
 
+### Faster exact local validation (2026-11-03)
+
+The running review advanced beyond collection into verification, but its measured
+startup and response validation accounted for roughly half of its hour-long run.
+Active schedule boundaries are now indexed, and response validation reuses
+calculation results only within its synchronous immutable read. Every saved evidence
+and context check still runs; no AI checks, human text, citations or limits are
+omitted. The isolated live-checkpoint comparison matched 249 historical schedule
+projections byte-for-byte and reduced that projection microbenchmark from 611 to
+113 ms. This does not claim a matching total model/review speedup.
+
+A same-step historical optional-bundle probe now retains the schedule/policies from
+before its saved load rather than adopting later-created dimension groups when
+replaying it. Original root-only receipts remain unchanged and independently
+validated; no model retry or reassessment is required. See
+[compatibility and verification](migrations.md#indexed-replayvalidation-and-historical-bundle-probe-boundaries-2026-11-03).
+
+The complete isolated 248-stage history validated in about 76 seconds with all
+original receipts and attempts unchanged. A five-pair next-response microbenchmark
+gave identical virtual results with median local validation reduced from 1.10 seconds
+to 0.059 seconds. These timings do not remove AI request time or required verification
+steps and are not a total-review completion guarantee. No additional live calls or
+real-project writes were used for these checks.
+
+After the user paused and fully quit, the final read-only checkpoint replay passed
+all 283 saved stages in 72.8 seconds, retaining the original loads and one spent
+attempt. The assessment is still in verification; reopening requires explicit
+continuation, and no fixed remaining count or finish time is promised.
+
+### Bounded exact provenance bundles (2026-11-03)
+
+Compatible staged continuation now packages directly linked questions, responses and
+approval provenance with requested roots. At most two forward structural hops and
+complete question/current-response units are eligible, with at most 20 root/new
+records per lookup bundle. Raw model requests and all original evidence are retained;
+links never establish approval or precedence. Optional groups that cannot fit are
+omitted whole, not summarized. Existing saved loads can receive one bounded local
+enrichment after exact replay, without another successful lookup or refunded attempt.
+
+Current-step enriched bodies stay mandatory until accepted. Supplemental pages keep
+complete connected provenance groups together; accepted pages cannot establish joint
+relationships or publish partial coverage. The original final check must still read
+indispensable evidence jointly or stop safely. Eight successful lookups, twelve raw
+attempts, three failures and all existing recovery/partition/execution limits remain.
+An unchanged repeated eight-load block does not dispatch another model request. See
+[compatibility and recovery](migrations.md#bounded-exact-evidence-bundles-2026-11-03).
+
+If overlapping full enrichment would be indivisible/oversized even with pages,
+optional packing keeps only complete groups fitting alongside all original current
+evidence and the complete selected finding. Other optional bodies remain saved and
+unsupplied, not missing decisions. This is not a guarantee that every indispensable
+relationship can be completed under the remaining limits.
+
+Verification: eleven focused regressions, all 1,529 pretest/main tests, all 20 browser
+runners, type checking and Windows desktop/startup checks passed. The initial real
+155-stage checkpoint trial exposed indivisible overlapping optional enrichment;
+that full-enrichment plan did not fit and prompted the budget-aware fallback.
+Real-project live interpretation and completion remain unverified.
+
+Final read-only checkpoint verification passed: all 155 original receipts validated,
+with nine attempts/eight successful loads/one failed attempt unchanged. Budget-aware
+packing added one complete three-record provenance group; all original current
+evidence and the selected finding fit together at 94,590 characters. Other optional
+groups were not supplied. No model calls or real-project writes were made, and this
+does not establish completion of the remaining review.
+
+### Versioned evidence-partition capacity (2026-11-03)
+
+After exact replay, compatible work at the old capacity boundary can adopt a one-time
+format-1 policy allowing **128 evidence partitions per phase**. Historical schedules
+still validate at their original 64 boundary. All evidence, findings, receipts,
+citations and spent attempts remain saved; the 2,304-step execution ceiling, separate
+64 linked-page partition limit, request/failure/recovery rules and exact final joint
+checks do not change. Unrelated blockers cannot be cleared by this upgrade.
+
+The user's new checkpoint advanced to 129 stages before reaching the old capacity.
+Read-only validation retained those stages and five spent attempts, then planned
+16/three-record pages using 66 collection partitions; the first page was 88,218
+characters. Seven focused capacity checks, type checking, all 1,518 pretest/main
+tests and all 19 existing default browser runners passed. This is not
+whole-area completion or live-model qualification of the new continuation. See
+[compatibility and recovery](migrations.md#bounded-partition-capacity-upgrade-2026-11-03).
+
+### Lease-safe saved-history validation (2026-11-02)
+
+Saved-stage replay now yields between exact receipt validations, reports local
+validation progress and renews only a live/current worker lease. Pause and concurrent
+edits can stop replay before inference. Read-only context rendering reuses schedule
+projections and completed-pair calculations only for that rendering; later mutations
+or requests always recompute. Every original context hash and evidence validator
+still runs. No completed call, attempt or citation is replaced or refunded.
+
+This fixes local pre-inference replay exhausting the worker lease; “Couldn't finish”
+with “Definition worker is no longer live” was not an AI/product decision failure.
+See [compatibility and recovery](migrations.md#cooperative-definition-replay-and-rendering-local-caches-2026-11-02).
+
+Verification: read-only replay validated the real checkpoint's 119 receipt hashes in
+about 4m51s, with its eight spent attempts and all original evidence unchanged; the
+next page fit at 85,684 characters. Five new targeted tests, all 1,512 pretest/main
+tests, 19 browser runners and Windows desktop/startup checks passed. These qualify
+local validation/lease handling, not live-model or completed-area publication.
+
+### Bounded evidence pages inside one unfinished check (2026-11-02)
+
+When current-step exact loads plus one complete selected finding overflow, the engine
+can schedule whole-record supplemental pages, keeping supplied current question/answer
+pairs together. Each page retains the full selected finding, saves only validated draft
+progress and consumes existing evidence-partition/execution limits. Original loads,
+citations, responses and spent attempts remain saved. Pages grant no extra lookups or
+linked-answer recall. After all pages, the original joint check still runs: indispensable
+relationships require an exact joint reload, and oversized joint evidence blocks rather
+than repeating pages or publishing a partial assessment.
+
+Ten focused regressions, type checking, all 1,507 pretest/main tests and all 19 default
+browser runners passed, including the new desktop/mobile browser flow. Read-only
+simulation retained the real checkpoint's 119 stages and eight
+attempts, paged 29 records into 27 and two, and kept findings unchanged. Page contexts
+were 85,684/74,476 characters; the pending final joint check was 64,518. No live model
+interpretation, whole-area completion or real-project writes were verified. See the
+[compatibility ledger](migrations.md#within-step-supplemental-evidence-pages-2026-11-02).
+
+The desktop was rebuilt after explicit quit confirmation; full Windows desktop and
+dedicated startup checks passed with isolated data. The updated shared engine is in
+`dist/desktop-app`; no packaged installer or live completion was tested.
+
+### Completed supplemental loads no longer accumulate across steps (2026-11-02)
+
+The user approved stage-scoped supplemental evidence. Each unfinished step keeps all
+of its requested full records through local repacking. After that step is accepted,
+the exact load receipts remain saved but their bodies are not automatically included
+in later steps. Earlier IDs are navigation only: indispensable text must be loaded
+again exactly before new/revised findings rely on it. Previously validated linked
+loads remain reloadable even outside the original plan; unrelated IDs stay rejected.
+Saved findings/citations and spent attempts remain unchanged; no new allowance or
+summary substitutes for human evidence. Context and failure/recovery limits still apply.
+
+Read-only replay of the reported 93-stage checkpoint preserves every accepted stage
+and load, its complete draft and one spent current-step attempt. The implemented
+continuation is **49,558 / 96,000** characters (three detailed current records), rather
+than 98,167 characters with 19 inherited material-retention records. Compatible exact
+work may now fit without an unnecessary dimension split. See the
+[migration ledger](migrations.md#stage-scoped-supplemental-evidence-bodies-2026-11-02).
+
+Verification: **1,497** full-suite tests, ten focused stage-scope regressions, type
+checking, all 18 default browser runners, the focused continuous/Pause/reload flow,
+UI/desktop builds and Windows Electron checks passed. The unchanged-findings offline
+simulation logged 218 total stages and contexts no larger than 93,295 characters at
+that point, but its ten-minute local guard ended the run before completion. It does
+not qualify full continuation/publication or live model interpretation. No inference
+or real-project writes occurred during verification.
+
+### Recall exact linked answers instead of reviving a resolved ambiguity (2026-11-02)
+
+A scoped check can omit another dimension's AI findings without losing the person's
+decisions. If a typed lookup blocker names currently supplied records whose exact
+linked question/answer pairs were read earlier and cited in saved work, continuation
+can restore those full pairs. This is bounded exact evidence recall, **not** automatic
+preference precedence or permission to reason from an omitted assessment dimension.
+Questions, options and chosen answers stay exact; all candidate pairs are supplied or
+none. Already-present pairs and genuine product/technical blocks still stop normally.
+The original blocked attempt remains spent; no new allowance is granted.
+
+The reported revision-3041 minimum-trick conflict already had an explicit replacement
+answer, read at stage 35. Read-only replay with recall preserves all 50 accepted
+stages and two spent attempts. The acceptance-only continuation includes the exact
+resolution at 95,811 / 96,000 characters, without exposing the omitted rules finding.
+Live interpretation remains unqualified. See the
+[compatibility ledger](migrations.md#exact-linked-answer-recall-after-scoped-ambiguity-2026-11-02).
+
+Verification: 1,485 full-suite tests, nine final focused recall regressions, type
+checking, all 18 default browser runners, the focused continuous/Pause/reload browser
+check, UI/desktop builds and Windows Electron checks passed. A larger unchanged-findings
+simulation timed out at its initial 120-second local limit; the longer bounded run
+then completed with **144** new simulated checks, **194** total stages, **18** added
+exact subdivisions and maximum **95,990 / 96,000** characters. Original receipts,
+accepted lookups and simulated findings stayed unchanged; spent attempts were retained.
+No live interpretation or real-project writes were used for verification.
+
+### Invalid assessment citations use the same bounded correction (2026-11-02)
+
+The user approved extending correction to citations in first assessments, later
+updates and verification verdicts. Area IDs are not evidence records. An invalid
+citation rejects the entire response without changing saved checks or confidence.
+The next permitted request receives validation feedback and must return a complete
+valid response, never a guessed replacement or partially applied patch. Lookup and
+citation failures share the existing three-failure limit; Stop, stale-output rejection,
+other errors, blockers and explicit exhausted-step recovery retain their rules.
+
+Existing work upgrades after exact replay, without resetting attempts or repeating
+completed calls. Legacy failures retain their diagnostic and disclose missing raw
+response details. The reported revision-3035 checkpoint retains one spent attempt and
+all 30 supplied records; feedback fits at 37,576 / 96,000 characters. This was read-only
+replay, not live correction qualification. See the
+[compatibility ledger](migrations.md#bounded-correction-of-invalid-assessment-citations-2026-11-02).
+
+Verification: 1,477 full-suite tests, 10 final focused citation regressions, type
+checking, all 18 default browser runners, the focused mixed-lookup/citation correction
+and Pause/reload browser flow, UI/desktop builds and Windows Electron checks passed.
+The focused browser initially timed out during a concurrent UI rebuild; its isolated
+rerun passed. No live model correction was tested.
+
 ### Invalid lookup correction stays within the failed-attempt limit (2026-11-02)
 
 An unknown reference in a mixed evidence lookup still rejects the **entire** request;
