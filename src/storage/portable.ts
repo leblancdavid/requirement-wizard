@@ -3,7 +3,7 @@ import { z } from "zod";
 import { analysisSchema, stagedDefinitionAnalysisSchema, scanAnalysisSchema, projectSchema, projectFields, modelSelection, researchEvidenceSchema, reviewFingerprint, type Project, type Job, type Submission, type ModelSelection } from "../core/model.js";
 import { emptyExecution, executionConfigSchema, assessmentOutputSchema, type ExecutionState } from "../core/execution.js";
 import { executionSchemaVersion, canonicalJSON } from "../core/assessment-identity.js";
-import { implementationPlanningSchema, implementationPlanningWorkSchema } from "../core/implementation-planning.js";
+import { implementationPlanningSchema, implementationPlanningWorkSchema, planningTargetInputSchema, planningMaterialsWitnessSchema, planningTargetSourcesSchema } from "../core/implementation-planning.js";
 import { retrievalWorkSchema } from "../core/gap-retrieval.js";
 import { definitionWorkSchema } from "../core/definition-stages.js";
 import { definitionTaskSchema } from "../core/definition-assessment.js";
@@ -12,6 +12,7 @@ import { readinessWorkSchema } from "../core/readiness-stages.js";
 import { submissionWorkSchema } from "../core/submission-stages.js";
 import { refinementStageSchema, refinementWorkSchema } from "../core/refinement-stages.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionBaselineKey } from "../core/definition-baseline.js";
 import { definitionInterruptionSchema } from "../core/definition-interruption.js";
 import { recoveryRevisionSchema, recoveryRevisionCurrent, definitionRevisionSchema, definitionRevisionCurrent } from "../core/implementation-revisions.js";
 import { upgradeExecutionPayload } from "./migrations.js";
@@ -53,6 +54,39 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
       linked.add(job.submissionWork.draftRepair.sourceJobID); linked.add(job.submissionWork.draftRepair.clarificationJobID);
     }
   }
+  // Only original publishers needed by current assessments and current baseline
+  // work, not every obsolete definition job in the activity archive.
+  const baselineRoots: string[] = [];
+  const baselineJobs = new Map(jobs.map((job) => [job.id, job]));
+  for (const assessment of project.assessments) {
+    if (assessment.combinedReview || assessment.mixedReview || assessment.checks.length !== 9) continue;
+    const publisher = [...jobs].reverse().find((job) => job.status === "completed" && job.expectedRevision === assessment.atRevision - 1
+      && job.context?.definitionAssessment?.epicID === assessment.epicID);
+    if (publisher) baselineRoots.push(publisher.id);
+  }
+  for (const job of jobs) if (job.definitionWork?.baseline && job.definitionWork.inputKey === currentDefinitionKey(job.definitionWork.epicID))
+    baselineRoots.push(job.definitionWork.baseline.sourceJobID);
+  // An answer can be exported before the next review starts. Preserve the same
+  // bounded source candidates as local preparation, not only already-bound roots.
+  const partialCounts = new Map<string, number>();
+  for (const job of [...jobs].reverse()) {
+    const work = job.definitionWork;
+    if (!work?.receipts.length || !["failed", "cancelled", "interrupted", "stale"].includes(job.status)
+      || job.expectedRevision >= project.revision
+      || job.expectedRevision < (project.assessments.find((a) => a.epicID === work.epicID)?.atRevision ?? 0)) continue;
+    const count = partialCounts.get(work.epicID) ?? 0;
+    if (count >= 4) continue;
+    partialCounts.set(work.epicID, count + 1); baselineRoots.push(job.id);
+  }
+  const visited = new Set<string>();
+  for (let index = 0; index < baselineRoots.length; index++) {
+    const id = baselineRoots[index]!; if (visited.has(id)) continue;
+    visited.add(id); linked.add(id);
+    // Unpublished checkpoint sources remain replayable, so keep their necessary
+    // origin chain. Completed origins can use the compact publication receipt.
+    const source = baselineJobs.get(id);
+    if (source?.status !== "completed" && source?.definitionWork?.baseline) baselineRoots.push(source.definitionWork.baseline.sourceJobID);
+  }
   const definitionIdentity = (job: Job) => job.definitionWork && JSON.stringify([job.definitionWork.policy, job.definitionWork.epicID, job.definitionWork.inputKey, job.definitionWork.planKey]);
   const completedDefinitions = new Set(jobs.filter((j) => j.status === "completed" && j.result && j.definitionWork).map(definitionIdentity));
   for (const job of jobs) {
@@ -85,6 +119,18 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (copy.scan) copy.scan.workspaceKey = "portable";
     if (copy.scanWork) copy.scanWork.bindingID = "portable";
     for (const stage of copy.retrievalWork?.stages ?? []) delete stage.sessionID;
+    if (copy.status === "completed" && copy.context?.definitionAssessment && linked.has(copy.id)
+      && copy.context.definitionAssessment.inputKey !== currentDefinitionKey(copy.context.definitionAssessment.epicID)) {
+      // A dated publication-origin receipt, not a replayable old ledger or an
+      // attestation that current evidence was reviewed by this historical job.
+      // Its exact published snapshot/result authenticate baseline selection.
+      copy.portableReceipt = 1;
+      delete copy.definitionWork; delete copy.definitionBlock; delete copy.definitionInterruption;
+      const c = copy.context;
+      copy.context = { revision: c.revision, focusEpicID: c.focusEpicID, characters: c.characters, budget: c.budget,
+        includedIDs: [], omittedIDs: [], definitionAssessment: c.definitionAssessment,
+        selectionReason: "Portable original definition publication receipt; historical request bodies omitted." };
+    }
     if (copy.status === "completed" && copy.context?.refinementOnly && !copy.refinementWork) {
       const c = copy.context;
       copy.portableReceipt = 1;
@@ -109,9 +155,21 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   const revisions = new Set<number>();
   for (const job of kept.values()) {
     if (needsOriginalRevision(job)) revisions.add(job.expectedRevision);
+    if (job.definitionWork?.baseline) revisions.add(job.definitionWork.baseline.sourceRevision);
     for (const stage of job.retrievalWork?.stages ?? []) revisions.add(stage.revision);
     if (job.retrievalWork?.final?.revision) revisions.add(job.retrievalWork.final.revision);
     if (job.retrievalWork?.reuse) revisions.add(job.retrievalWork.reuse.sourceRevision);
+  }
+  // Preserve one exact publication snapshot per current ordinary assessment so
+  // a later answer on a clone can reuse its collection. This is not full history.
+  // Some older portable imports lack it: keep that absence honest and fall back.
+  const baselineSnapshots = new Map<number, Project>();
+  for (const assessment of project.assessments) {
+    if (assessment.combinedReview || assessment.mixedReview || assessment.checks.length !== 9 || assessment.atRevision === project.revision) continue;
+    try { baselineSnapshots.set(assessment.atRevision, snapshot(assessment.atRevision)); revisions.add(assessment.atRevision); }
+    catch (error) {
+      if (!(error instanceof Error) || error.message !== "Project or revision not found.") throw error;
+    }
   }
   for (const submission of waiting) if (submission.appliedRevision) { revisions.add(submission.appliedRevision); revisions.add(submission.appliedRevision - 1); }
   const base = portableProject(project) as Record<string, unknown>;
@@ -128,7 +186,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   };
   for (const revision of [...revisions].sort((a, b) => a - b)) {
     if (revision === project.revision) continue;
-    const original = snapshot(revision);
+    const original = baselineSnapshots.get(revision) ?? snapshot(revision);
     const previous = portableProject(original) as Record<string, unknown>;
     const delta: Delta = { model: { value: intern(withoutAccount(original.model)) } };
     for (const key of new Set([...Object.keys(base), ...Object.keys(previous)])) {
@@ -185,6 +243,7 @@ export function portableExecution(state: ExecutionState): ExecutionState {
   if (state.planning) {
     const { sessionID: _session, sessions: _sessions, diagnostic: _diagnostic, ...plan } = state.planning;
     output.planning = { ...plan, model: { providerID: plan.model.providerID, modelID: plan.model.modelID }, bindingID: "portable", status: plan.status === "generating" ? "interrupted" : plan.status };
+    if (plan.pendingSources) output.planning.pendingSources = Object.fromEntries(Object.entries(plan.pendingSources).map(([id, source]) => [id, { ...source, bindingID: "portable" }]));
   }
   return output;
 }
@@ -241,9 +300,11 @@ const executionSchema = z.object({ schemaVersion: z.union([z.literal(1), z.liter
     impacts: z.record(z.object({ fingerprint: z.string().optional(), policy: z.string().optional(), reusable: z.boolean(), reason: z.string() }).strict()).optional(),
     capture: z.object({ fingerprint: z.string(), capturedAt: z.string(), files: z.number(), excerpts: z.number(), omissions: z.number(), traversalLimited: z.boolean(), omitted: z.array(z.object({ path: z.string(), reason: z.string() }).strict()) }).strict().optional(),
   }).strict()).optional(),
-  planning: z.object({ format: z.literal(1), id: z.string(), revision: z.number().int(), bindingID: z.literal("portable"), createdAt: z.string(),
+  planning: z.object({ format: z.union([z.literal(1), z.literal(2)]), id: z.string(), revision: z.number().int(), bindingID: z.literal("portable"), createdAt: z.string(),
     status: z.enum(["proposed", "approved", "dismissed", "failed", "interrupted"]), configFingerprint: z.string(), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
-    output: implementationPlanningSchema.optional(), stageWork: z.record(implementationPlanningWorkSchema).optional(), finishedAt: z.string().optional(), approvedAt: z.string().optional(), acceptedEdges: z.array(z.string()).optional(), resolution: z.string().optional(),
+    output: implementationPlanningSchema.optional(), stageWork: z.record(implementationPlanningWorkSchema).optional(), targetInputs: z.record(planningTargetInputSchema).optional(),
+    targetMaterials: z.record(planningMaterialsWitnessSchema).optional(), pendingSources: planningTargetSourcesSchema.optional(),
+    finishedAt: z.string().optional(), approvedAt: z.string().optional(), acceptedEdges: z.array(z.string()).optional(), resolution: z.string().optional(),
   }).strict().optional(),
 }).strict();
 const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string().min(1), expectedRevision: z.number().int().positive(),
@@ -285,9 +346,11 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
 "Saved-response continuation must retain its exact task and plan.").refine((job) => !job.readinessWork || JSON.stringify(job.context?.readinessQuestions) === JSON.stringify(job.readinessWork.task)
   && job.context?.readinessStage?.planKey === job.readinessWork.planKey,
 "Clarification continuation must retain its exact task and plan.").refine((job) => !job.definitionWork || job.context?.definitionAssessment?.staged?.planKey === job.definitionWork.planKey
-  && job.context.definitionAssessment.epicID === job.definitionWork.epicID && job.context.definitionAssessment.inputKey === job.definitionWork.inputKey,
-"Definition continuation must retain its original exact staged task identity.").refine((job) => !job.result || !!job.definitionWork || analysisSchema.safeParse(job.result).success,
-"Only staged definition results can contain accumulated assessment citations.");
+  && job.context.definitionAssessment.epicID === job.definitionWork.epicID && job.context.definitionAssessment.inputKey === job.definitionWork.inputKey
+  && job.context.definitionAssessment.staged.baselineKey === (job.definitionWork.baseline ? definitionBaselineKey(job.definitionWork.baseline) : undefined),
+"Definition continuation must retain its original exact staged task identity.").refine((job) => !job.result || !!job.definitionWork
+  || job.portableReceipt === 1 && job.status === "completed" && !!job.context?.definitionAssessment || analysisSchema.safeParse(job.result).success,
+"Only staged definition results or original publication receipts can contain accumulated assessment citations.");
 
 export type PortableProject = { project: Project; execution: ExecutionState; continuation: Continuation; snapshots: () => Generator<Project> };
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {

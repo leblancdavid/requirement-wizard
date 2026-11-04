@@ -43,7 +43,7 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   store.assertSubmissionDraftRepair(project, item, w);
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;
-  const current = () => { options.signal.throwIfAborted(); if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError(); };
+  const current = () => { options.signal.throwIfAborted(); if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError(); };
   for (;;) {
     current();
     const done = submissionStep(w) === submissionTotalSteps(w);
@@ -82,7 +82,7 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
         onTelemetry: (value) => { if (!signal.aborted) store.attachTelemetry(job.id, value); },
         onResearch: (evidence) => { if (evidence.length) throw new Error("Staged saved-input follow-up forbids research."); }, onProgress: options.onProgress ?? (() => {}) });
       const raw = await Promise.race([options.measurement ? options.measurement.request(request, context, signal) : request(), interrupted]);
-      signal.throwIfAborted(); current();
+      signal.throwIfAborted();
       const next = acceptSubmissionStage(m, w, draft, raw, job); draft = next.draft; blocked = next.blocked;
       store.checkpointSubmission(job.id, w, context.manifest);
     } catch (error) {

@@ -285,7 +285,10 @@ for (const outcome of ["failed", "cancelled", "stale"] as const) test(`bundled c
       return { definitionUpdate: { checks: [] } };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
     assert.equal(calls, 1); assert.equal(done.status, outcome, done.diagnostic); assert.ok(done.definitionWork!.evidenceBundlePolicy);
-    assert.equal(done.definitionWork!.attempts, 10); assert.deepEqual(done.definitionWork!.receipts, work.receipts);
+    assert.equal(done.definitionWork!.attempts, outcome === "stale" ? 0 : 10);
+    assert.deepEqual(done.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.equal(done.definitionWork!.receipts.length, work.receipts.length + (outcome === "stale" ? 1 : 0));
+    if (outcome === "stale") assert.equal(done.definitionWork!.receipts.at(-1)!.attempts, 10);
     assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests); assert.deepEqual(done.definitionWork!.evidenceFollowups, work.evidenceFollowups);
     assert.deepEqual(store.getJob(job.id), historical); assert.equal(done.result, undefined);
   } finally { store.close(); }
@@ -795,7 +798,7 @@ test("saved supplemental pages resume through reopen and portable continuation, 
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-for (const outcome of ["failed", "cancelled", "stale"] as const) test(`supplemental pages retain accepted progress and reject a late ${outcome} result`, async () => {
+for (const outcome of ["failed", "cancelled", "stale"] as const) test(`supplemental pages retain original progress without publishing a late ${outcome} result`, async () => {
   const store = new ProjectStore(":memory:");
   try {
     const { p, work, draft } = supplementalPageFixture(store), controller = new AbortController(); let calls = 0;
@@ -808,8 +811,9 @@ for (const outcome of ["failed", "cancelled", "stale"] as const) test(`supplemen
       }
       return { definitionUpdate: { checks: [] } };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
-    assert.equal(calls, 2); assert.equal(done.status, outcome); assert.equal(done.definitionWork!.receipts.length, work.receipts.length + 1);
-    assert.equal(done.definitionWork!.receipts[work.receipts.length]!.attempts, 9); assert.equal(done.definitionWork!.attempts, 1);
+    assert.equal(calls, 2); assert.equal(done.status, outcome); assert.equal(done.definitionWork!.receipts.length, work.receipts.length + (outcome === "stale" ? 2 : 1));
+    assert.equal(done.definitionWork!.receipts[work.receipts.length]!.attempts, 9); assert.equal(done.definitionWork!.attempts, outcome === "stale" ? 0 : 1);
+    if (outcome === "stale") assert.equal(done.definitionWork!.receipts.at(-1)!.attempts, 1);
     assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests); assert.deepEqual(done.definitionWork!.evidenceFollowups, work.evidenceFollowups);
     assert.deepEqual(replayDefinitionStages(p, done.definitionWork!), draft); assert.equal(done.result, undefined);
   } finally { store.close(); }
@@ -971,11 +975,96 @@ for (const outcome of ["cancelled", "stale", "exhausted"] as const) test(`stage-
       return { definitionUpdate: { checks: [] } };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
     assert.equal(calls, outcome === "exhausted" ? 0 : 1); assert.equal(done.status, outcome === "exhausted" ? "failed" : outcome);
-    assert.deepEqual(done.definitionWork!.receipts, work.receipts); assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests);
+    assert.deepEqual(done.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.equal(done.definitionWork!.receipts.length, work.receipts.length + (outcome === "stale" ? 1 : 0));
+    assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests);
     assert.deepEqual(done.definitionWork!.evidenceFollowups, work.evidenceFollowups);
-    assert.equal(done.definitionWork!.attempts, outcome === "exhausted" ? 4 : 2);
+    assert.equal(done.definitionWork!.attempts, outcome === "exhausted" ? 4 : outcome === "stale" ? 0 : 2);
+    if (outcome === "stale") assert.equal(done.definitionWork!.receipts.at(-1)!.attempts, 2);
     assert.deepEqual(replayDefinitionStages(p, done.definitionWork!), draft);
   } finally { store.close(); }
+});
+
+function pageOnlyAnswerRecallFixture(store: ProjectStore) {
+  const seeded = linkedAnswerFixture(store, 1, true), { p, work, resolution, first, second } = seeded;
+  let draft = seeded.draft;
+  upgradeDefinitionAllowance(work); upgradeDefinitionLinkedAnswers(p, work, true);
+  assert.equal(pageDefinitionLinkedAnswers(p, work, draft), true);
+  while (definitionSteps(work)[work.receipts.length]?.linkedReview !== undefined) {
+    const context = definitionStageContext(p, work, draft);
+    const checks = context.manifest.includedIDs.includes(resolution.questionID) ? [{ ...draft.assessments![0]!.checks[0]!,
+      evidenceIDs: [resolution.questionID, resolution.answerID] }] : [];
+    work.attempts++;
+    draft = acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks } }, "original-linked-page");
+  }
+  assert.equal(work.dimensionReviews, undefined);
+  assert.ok(definitionSteps(work)[work.receipts.length]!.linkedReviewed !== undefined);
+  const reason = `The exact answers ${first.answerID} and ${second.answerID} appear inconsistent; the saved governing relationship is absent here.`;
+  work.attempts = 1; work.blocked = reason; work.blockedKind = "evidence-lookup";
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.checkpointDefinition(job.id, work, definitionStageContext(p, work, draft).manifest);
+  store.blockDefinition(job.id, reason, "evidence-lookup");
+  return { ...seeded, draft, reason, job: store.getJob(job.id) };
+}
+
+test("page-only original checks recall previously read cited reconciliation pairs without changing historical contexts or deciding precedence", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, resolution, unrelated, reason, job } = pageOnlyAnswerRecallFixture(store), before = structuredClone(work);
+    const oldContext = definitionStageContext(p, work, draft);
+    assert.ok(!oldContext.manifest.includedIDs.includes(resolution.answerID));
+    assert.equal(recallDefinitionLinkedAnswers(p, work, draft, reason, job.id, "saved-block"), true);
+    assert.equal(work.dimensionReviews, undefined);
+    assert.deepEqual(work.receipts, before.receipts); assert.deepEqual(work.evidenceRequests, before.evidenceRequests);
+    assert.deepEqual(work.evidenceFollowups, before.evidenceFollowups); assert.equal(work.attempts, before.attempts);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    const context = definitionStageContext(p, work, draft), data = expandDefinitionWire(context.data);
+    assert.ok(context.manifest.characters <= 96000);
+    assert.ok(context.manifest.includedIDs.includes(resolution.questionID) && context.manifest.includedIDs.includes(resolution.answerID));
+    assert.deepEqual(data.questions.find((q: any) => q.id === resolution.questionID).options, p.questions.find((q) => q.id === resolution.questionID)!.options);
+    assert.equal(data.sources.find((s: any) => s.id === resolution.answerID).text, p.sources.find((s) => s.id === resolution.answerID)!.text);
+    assert.match(data.definitionStage.linkedAnswerRecallInstruction, /do NOT establish preference precedence/);
+    const forged = structuredClone(work); forged.linkedAnswerRecalls![0]!.pairs = [unrelated];
+    assert.throws(() => replayDefinitionStages(p, forged), /previously reviewed linked pairs/);
+    const noRecall = structuredClone(work); delete noRecall.linkedAnswerRecalls;
+    assert.deepEqual(definitionStageContext(p, noRecall, draft), oldContext, "Recall-only receipt inspection must not change graph omission or old context hashes");
+  } finally { store.close(); }
+});
+
+test("page-only recall still refuses uncited pairs and product-decision blocks", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, reason, job } = pageOnlyAnswerRecallFixture(store), before = structuredClone(work);
+    const uncited = structuredClone(draft); uncited.assessments![0]!.checks.forEach((c) => { c.evidenceIDs = []; });
+    assert.equal(recallDefinitionLinkedAnswers(p, work, uncited, reason, job.id, "saved-block"), false);
+    assert.deepEqual(work, before);
+    work.blockedKind = "product-decision";
+    assert.equal(recallDefinitionLinkedAnswers(p, work, draft, reason, job.id, "saved-block"), false);
+    assert.equal(work.blocked, reason); assert.equal(work.linkedAnswerRecalls, undefined);
+  } finally { store.close(); }
+});
+
+test("page-only recall survives SQLite reopen and portable continuation without refunding the blocked attempt or repeating pages", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "page-only-recall-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const { p, work, draft, resolution, job } = pageOnlyAnswerRecallFixture(store);
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(file); assert.deepEqual(store.getJob(job.id), job); }
+    let calls = 0;
+    const paused = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.ok(context.manifest.includedIDs.includes(resolution.questionID) && context.manifest.includedIDs.includes(resolution.answerID));
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(calls, 1); assert.equal(paused.status, "interrupted", paused.diagnostic);
+    assert.equal(paused.definitionWork!.receipts.length, work.receipts.length + 1);
+    assert.equal(paused.definitionWork!.receipts.at(-1)!.attempts, 2);
+    assert.deepEqual(paused.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.deepEqual(store.getJob(job.id), job);
+    const portable = decodePortable(renderWorkspace(p, emptyExecution(), continuationState(p, [paused], [], (r) => store.get(p.id, r))), p.model);
+    assert.deepEqual(portable.continuation.jobs[0]!.definitionWork, paused.definitionWork);
+    assert.deepEqual(replayDefinitionStages(p, portable.continuation.jobs[0]!.definitionWork!), draft);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("linked-answer recall restores exact scope across omitted dimensions without replaying saved calls or choosing precedence", () => {
@@ -1113,8 +1202,11 @@ for (const outcome of ["cancelled", "stale"] as const) test(`linked-answer recal
       if (outcome === "cancelled") controller.abort(); else store.note(p.id, p.revision, "Concurrent human choice", "runtime");
       return { definitionUpdate: { checks: [] } };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
-    assert.equal(calls, 1); assert.equal(done.status, outcome); assert.equal(done.definitionWork!.attempts, 2);
-    assert.deepEqual(done.definitionWork!.receipts, work.receipts); assert.equal(done.definitionWork!.linkedAnswerRecalls!.length, 1);
+    assert.equal(calls, 1); assert.equal(done.status, outcome); assert.equal(done.definitionWork!.attempts, outcome === "stale" ? 0 : 2);
+    assert.deepEqual(done.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.equal(done.definitionWork!.receipts.length, work.receipts.length + (outcome === "stale" ? 1 : 0));
+    if (outcome === "stale") assert.equal(done.definitionWork!.receipts.at(-1)!.attempts, 2);
+    assert.equal(done.definitionWork!.linkedAnswerRecalls!.length, 1);
     assert.deepEqual(replayDefinitionStages(p, done.definitionWork!), draft);
   } finally { store.close(); }
 });
@@ -1236,6 +1328,115 @@ test("saved linked-answer lookup failures resume through reopen and portable ado
         const reopened = new ProjectStore(join(directory, "adopted.sqlite"));
         try { assert.deepEqual(reopened.getJob(done.id), done); } finally { reopened.close(); }
       }
+    } finally { adopted.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+function largeDraftLinkedPagesFixture(store: ProjectStore) {
+  const seeded = linkedAnswerFixture(store, 1, true), { p } = seeded;
+  const work = planDefinitionStages(p, "runtime");
+  work.batches = structuredClone(seeded.work.batches); work.planKey = seeded.work.planKey;
+  delete work.linkedAnswerPolicy;
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  const assessment = result("runtime", work.batches[0]![0]!).assessments![0]!;
+  assessment.checks.forEach((check, i) => { check.explanation = Array.from({ length: 240 }, (_, n) =>
+    createHash("sha256").update(`large-retained-check-${i}-${n}`).digest("hex")).join(""); });
+  work.attempts = 1;
+  const draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: assessment }, job.id);
+  upgradeDefinitionAllowance(work); upgradeDefinitionLinkedAnswers(p, work);
+  let overflow: ContextBudgetError | undefined;
+  try { definitionStageContext(p, work, draft); }
+  catch (error) { assert.ok(error instanceof ContextBudgetError); overflow = error; }
+  assert.ok(overflow); assert.equal(scopeDefinitionDraft(p, structuredClone(work), draft), false);
+  store.checkpointDefinition(job.id, work, overflow.manifest);
+  store.blockDefinition(job.id, "Synthetic combined large-draft and linked-graph overflow.");
+  return { p, work, draft, job: store.getJob(job.id) };
+}
+
+test("linked-page sizing combines whole dimension views with whole exact pairs when neither full-draft pages nor graph-wide scopes fit", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft } = largeDraftLinkedPagesFixture(store), before = structuredClone(work);
+    assert.ok(JSON.stringify(draft).length > 96000);
+    assert.equal(pageDefinitionLinkedAnswers(p, work, draft), true);
+    const pairs = structuredClone(work.linkedAnswerReviews!.at(-1)!.pages.flat());
+    assert.equal(work.attempts, before.attempts); assert.deepEqual(work.receipts, before.receipts);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+    const visits = new Map<string, Set<string>>(); let next = draft;
+    while (definitionSteps(work)[work.receipts.length]?.linkedReview !== undefined) {
+      try { definitionStageContext(p, work, next); }
+      catch (error) { assert.ok(error instanceof ContextBudgetError); assert.equal(scopeDefinitionDraft(p, work, next), true); }
+      const context = definitionStageContext(p, work, next), data = expandDefinitionWire(context.data);
+      assert.ok(context.manifest.characters <= 96000);
+      const scope = definitionSteps(work)[work.receipts.length]!.dimensions ?? dimensions;
+      assert.deepEqual(data.definitionStage.draft.assessments[0].checks, draft.assessments![0]!.checks.filter((c) => scope.includes(c.dimension)));
+      for (const pair of data.definitionStage.linkedAnswerPairs) {
+        assert.ok(context.manifest.includedIDs.includes(pair.questionID) && context.manifest.includedIDs.includes(pair.answerID));
+        assert.deepEqual(data.questions.find((q: any) => q.id === pair.questionID).options, p.questions.find((q) => q.id === pair.questionID)!.options);
+        assert.equal(data.sources.find((s: any) => s.id === pair.answerID).text, p.sources.find((s) => s.id === pair.answerID)!.text);
+        const visited = visits.get(pair.questionID) ?? new Set<string>(); scope.forEach((d) => visited.add(d)); visits.set(pair.questionID, visited);
+      }
+      work.attempts++; next = acceptDefinitionStage(p, work, next, { definitionUpdate: { checks: [] } }, "whole-check-page");
+      assert.throws(() => completedDefinitionAssessment(p, work), /Partial or blocked/);
+    }
+    assert.deepEqual([...visits.keys()].sort(), pairs.filter((_id, i) => i % 2 === 0).sort());
+    for (const visited of visits.values()) assert.deepEqual([...visited], dimensions);
+    assert.equal(scopeDefinitionDraft(p, work, next), true, "The original exact evidence check remains scheduled and scoped separately");
+    assert.ok(definitionStageContext(p, work, next).manifest.characters <= 96000);
+    assert.deepEqual(next, draft); assert.deepEqual(work.receipts.slice(0, before.receipts.length), before.receipts);
+    assert.deepEqual(replayDefinitionStages(p, work), draft);
+  } finally { store.close(); }
+});
+
+test("combined linked paging refuses a genuinely indivisible pair without mutating saved work or dropping findings", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft } = largeDraftLinkedPagesFixture(store), before = structuredClone(work), findings = structuredClone(draft);
+    const huge = structuredClone(p);
+    for (const question of huge.questions) question.text += Array.from({ length: 1800 }, (_, n) => createHash("sha256").update(`indivisible-pair-${n}`).digest("hex")).join("");
+    assert.equal(pageDefinitionLinkedAnswers(huge, work, draft), false);
+    assert.deepEqual(work, before); assert.deepEqual(draft, findings);
+  } finally { store.close(); }
+});
+
+test("combined linked-page dimension progress survives cancellation, repeated reopen and portable adoption with the in-flight attempt charged", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "combined-linked-pages-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const { p, work, draft, job } = largeDraftLinkedPagesFixture(store), controller = new AbortController();
+    let calls = 0;
+    const paused = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; assert.ok(context.manifest.characters <= 96000);
+      assert.ok(expandDefinitionWire(context.data).definitionStage.dimensionScope);
+      if (calls === 2) controller.abort();
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
+    assert.equal(calls, 2); assert.equal(paused.status, "cancelled", paused.diagnostic);
+    assert.equal(paused.definitionWork!.receipts.length, work.receipts.length + 1);
+    assert.equal(paused.definitionWork!.attempts, 1); assert.equal(paused.result, undefined);
+    assert.deepEqual(paused.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.deepEqual(replayDefinitionStages(p, paused.definitionWork!), draft);
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(file);
+      assert.deepEqual(store.getJob(paused.id), paused); assert.deepEqual(store.getJob(job.id), job);
+    }
+    const path = join(directory, "project"); mkdirSync(path); store.connectWorkspace(p.id, p.revision, path); store.syncWorkspace(p.id);
+    const adopted = new ProjectStore(join(directory, "adopted.sqlite"));
+    try {
+      adopted.openWorkspace(path, p.model);
+      assert.deepEqual(adopted.getJob(paused.id).definitionWork, paused.definitionWork);
+      let resumedCalls = 0;
+      const resumed = await new DiscoveryService(adopted, { async analyze(_snapshot, { context }) {
+        resumedCalls++; assert.ok(context.manifest.characters <= 96000);
+        return { definitionUpdate: { checks: [] } };
+      } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300000 } });
+      assert.equal(resumedCalls, 1); assert.equal(resumed.status, "interrupted", resumed.diagnostic);
+      assert.equal(resumed.definitionWork!.receipts.length, paused.definitionWork!.receipts.length + 1);
+      assert.equal(resumed.definitionWork!.receipts.at(-1)!.attempts, 2);
+      assert.deepEqual(resumed.definitionWork!.receipts.slice(0, paused.definitionWork!.receipts.length), paused.definitionWork!.receipts);
+      assert.deepEqual(replayDefinitionStages(adopted.get(p.id), resumed.definitionWork!), draft);
+      assert.equal(resumed.result, undefined);
     } finally { adopted.close(); }
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
@@ -1663,7 +1864,10 @@ test("a relevant edit during scoped review preserves accepted pages and spent at
       return { definitionUpdate: { checks: [] } };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
     assert.equal(calls, 1); assert.equal(done.status, "stale");
-    assert.deepEqual(done.definitionWork!.receipts, work.receipts); assert.equal(done.definitionWork!.attempts, work.attempts + 1);
+    assert.deepEqual(done.definitionWork!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.equal(done.definitionWork!.receipts.length, work.receipts.length + 1);
+    assert.equal(done.definitionWork!.receipts.at(-1)!.attempts, work.attempts + 1); assert.equal(done.definitionWork!.attempts, 0);
+    replayDefinitionStages(p, done.definitionWork!);
     assert.equal(store.get(p.id).revision, p.revision + 1); assert.equal(done.result, undefined);
   } finally { store.close(); }
 });
@@ -2337,7 +2541,7 @@ for (const outcome of ["cancelled", "stale", "malformed"] as const) test(`assess
       return { definitionAssessment: result("runtime", "runtime").assessments![0] };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
     assert.equal(calls, 2); assert.equal(done.status, outcome === "malformed" ? "failed" : outcome);
-    assert.equal(done.definitionWork!.attempts, 2); assert.equal(done.definitionWork!.citationFailures!.length, 1);
+    assert.equal(done.definitionWork!.attempts, 2); assert.equal(done.definitionWork!.citationFailures!.length, outcome === "stale" ? 2 : 1);
     assert.equal(done.definitionWork!.receipts.length, 0); replayDefinitionStages(p, done.definitionWork!);
   } finally { store.close(); }
 });
@@ -2412,7 +2616,7 @@ test("invalid lookup correction stops after three failures and cannot silently g
   } finally { store.close(); }
 });
 
-for (const outcome of ["cancelled", "stale"] as const) test(`late ${outcome} correction output retains only the earlier rejected lookup and spent attempts`, async () => {
+for (const outcome of ["cancelled", "stale"] as const) test(`late ${outcome} correction output retains spent attempts without accepting invalid evidence`, async () => {
   const store = new ProjectStore(":memory:");
   try {
     const p = seed(store), controller = new AbortController(); let calls = 0;
@@ -2425,7 +2629,7 @@ for (const outcome of ["cancelled", "stale"] as const) test(`late ${outcome} cor
       return { definitionEvidence: { recordIDs: [context.manifest.omittedIDs[0]!, "S99999"], reason: "Invalid lookup cannot outrun cancellation or stale state" } };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
     assert.equal(done.status, outcome); assert.equal(calls, 2); assert.equal(done.definitionWork!.attempts, 2);
-    assert.equal(done.definitionWork!.evidenceFailures!.length, 1); assert.equal(done.definitionWork!.receipts.length, 0);
+    assert.equal(done.definitionWork!.evidenceFailures!.length, outcome === "stale" ? 2 : 1); assert.equal(done.definitionWork!.receipts.length, 0);
     assert.equal(done.definitionWork!.evidenceRequests?.length ?? 0, 0); replayDefinitionStages(p, done.definitionWork!);
   } finally { store.close(); }
 });
@@ -2979,7 +3183,7 @@ test("new linked evidence discovered in a later child preserves earlier child co
   } finally { store.close(); }
 });
 
-for (const mode of ["cancelled", "stale"] as const) test(`${mode} follow-up responses keep the earlier evidence request but cannot add new evidence`, async () => {
+for (const mode of ["cancelled", "stale"] as const) test(`${mode} follow-up responses preserve original evidence without publishing`, async () => {
   const store = new ProjectStore(":memory:");
   try {
     const p = seed(store), controller = new AbortController(); let calls = 0;
@@ -2992,8 +3196,10 @@ for (const mode of ["cancelled", "stale"] as const) test(`${mode} follow-up resp
       return { definitionEvidence: { recordIDs: [context.manifest.omittedIDs[0]!], reason: "Read exact linked evidence." } };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", signal: controller.signal });
     assert.equal(job.status, mode); assert.equal(calls, 2);
-    assert.equal(job.definitionWork!.evidenceRequests!.length, 1); assert.equal(job.definitionWork!.evidenceFollowups, undefined);
+    assert.equal(job.definitionWork!.evidenceRequests!.length, 1);
+    assert.equal(job.definitionWork!.evidenceFollowups?.length ?? 0, mode === "stale" ? 1 : 0);
     assert.equal(job.definitionWork!.attempts, 2); assert.deepEqual(store.get(p.id).assessments, []);
+    replayDefinitionStages(p, job.definitionWork!);
   } finally { store.close(); }
 });
 
@@ -3221,7 +3427,7 @@ test("verification may cite supplied cross-batch evidence but cannot upgrade fin
   } finally { store.close(); }
 });
 
-for (const mode of ["cancelled", "stale"] as const) test(`${mode} cross-batch evidence responses cannot checkpoint new evidence`, async () => {
+for (const mode of ["cancelled", "stale"] as const) test(`${mode} cross-batch evidence responses cannot publish new findings`, async () => {
   const store = new ProjectStore(":memory:");
   try {
     const p = seed(store), controller = new AbortController();
@@ -3230,8 +3436,9 @@ for (const mode of ["cancelled", "stale"] as const) test(`${mode} cross-batch ev
       else store.note(p.id, p.revision, "A newer decision", "project");
       return { definitionEvidence: { recordIDs: [context.manifest.omittedIDs[0]!], reason: "Read saved earlier decision." } };
     } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", signal: controller.signal });
-    assert.equal(job.status, mode); assert.equal(job.definitionWork!.evidenceRequests, undefined);
+    assert.equal(job.status, mode); assert.equal(job.definitionWork!.evidenceRequests?.length ?? 0, mode === "stale" ? 1 : 0);
     assert.equal(job.definitionWork!.attempts, 1); assert.deepEqual(store.get(p.id).assessments, []);
+    replayDefinitionStages(p, job.definitionWork!);
   } finally { store.close(); }
 });
 function seed(store: ProjectStore, count = 15) {
@@ -4284,7 +4491,9 @@ for (const mode of ["cancelled", "stale", "malformed", "blocked"] as const) test
     } });
     const job = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", signal: controller.signal });
     assert.equal(job.status, mode === "malformed" || mode === "blocked" ? "failed" : mode); assert.equal(calls, 1);
-    assert.equal(job.definitionWork!.attempts, 1); assert.deepEqual(store.get(p.id).assessments, []);
+    assert.equal(job.definitionWork!.attempts, mode === "stale" ? 0 : 1); assert.deepEqual(store.get(p.id).assessments, []);
+    assert.equal(job.definitionWork!.receipts.length, mode === "stale" ? 1 : 0);
+    if (mode === "stale") { assert.equal(job.definitionWork!.receipts[0]!.attempts, 1); replayDefinitionStages(p, job.definitionWork!); }
     if (mode === "blocked") {
       const again = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime" });
       assert.equal(again.definitionBlock!.reason, job.definitionBlock!.reason); assert.equal(calls, 1, "Unchanged evidence blockers cannot replay calls");
@@ -4472,10 +4681,12 @@ test("continuous lease renewal cannot shorten a live lease or resurrect an expir
     assert.deepEqual(store.getJob(job.id), saved);
     store.note(p.id, p.revision, "A newer human decision wins", "runtime");
     assert.throws(() => store.checkpointDefinition(job.id, work, context.manifest, { leaseUntil: Date.now() + 360000 }), /Project changed/);
-    assert.deepEqual(store.getJob(job.id), saved);
+    const stale = store.getJob(job.id);
+    assert.equal(stale.status, "stale"); assert.equal(stale.leaseUntil, null);
+    assert.deepEqual(stale.definitionWork, saved.definitionWork); assert.deepEqual(stale.context, saved.context);
     t.mock.timers.tick(360001);
     assert.throws(() => store.checkpointDefinition(job.id, work, context.manifest, { leaseUntil: Date.now() + 360000 }), /no longer live/);
-    assert.deepEqual(store.getJob(job.id), saved);
+    assert.deepEqual(store.getJob(job.id), stale);
   } finally { t.mock.timers.reset(); store.close(); }
 });
 

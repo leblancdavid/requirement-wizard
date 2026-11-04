@@ -2,6 +2,21 @@
 
 ## Confirmed product direction
 
+**Durable incremental workflows (2026-11-03).** The user approved addressing
+decision-triggered loss of usable progress across all long-running processes, not
+just Continue specification, with efficiency as an explicit goal. Preserve original
+work, reconcile changed inputs and repeat only justified work without weakening
+stale-publication, evidence or consent safeguards. The phased
+[resilience plan](workflow-resilience.md) distinguishes implemented response
+preservation, collection reuse and conservative review scheduling from pending
+cross-workflow reconciliation and narrower verification.
+
+The implemented scheduling slice is deliberately limited to definition evidence
+reviews outside waiting questions' recorded dependency/provenance scope. It does not
+establish semantic independence or authorize proposal updates, verification skips or
+coding while decisions wait. Other workflow reconciliation remains pending; see
+[implemented limits](coordinated-workflow.md#question-scoped-review-scheduling-2026-11-03).
+
 **Automatic Design clarification (2026-10-27).** The user approved automatically
 preparing Design questions when reviews identify unresolved choices, rather than
 requiring routine Clarify clicks, and continuing preparation to completion without

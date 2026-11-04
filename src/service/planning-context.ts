@@ -63,7 +63,14 @@ export function implementationPlanningContext(project: Project, state: Execution
     }
   }
   const omitted = sections().dependencyScope.omittedRequirements;
-  return { prompt: prompt(compact), evidenceIDs: evidenceIDs(), requirementIDs: new Set([...represented, ...behaviorIndex.map((r) => r.id)]),
+  // Unrelated source inventory is navigation metadata, never supplied evidence.
+  // Retain every other field, including candidate selection and omission warnings.
+  const identityData = sections();
+  const { unrelatedSources: _unrelatedSources, ...identityOmissions } = identityData.target.omitted;
+  const finalPrompt = prompt(compact);
+  return { prompt: finalPrompt, evidenceIDs: evidenceIDs(), requirementIDs: new Set([...represented, ...behaviorIndex.map((r) => r.id)]),
+    reuseIdentity: { instructions: finalPrompt.slice(0, finalPrompt.indexOf("\n")),
+      data: { ...identityData, target: { ...identityData.target, omitted: identityOmissions } } },
     reviewQuestion: omitted ? `Dependency coverage is incomplete: ${omitted} approved requirement(s) were omitted from this package's bounded context. Review their exact behavior and resolve any additional prerequisites before approving.` : undefined };
 }
 

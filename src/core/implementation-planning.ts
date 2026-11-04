@@ -16,16 +16,93 @@ export const implementationPlanningSchema = z.object({
   }).strict()).min(1).max(500),
 }).strict();
 export type ImplementationPlanningOutput = z.infer<typeof implementationPlanningSchema>;
-export const implementationPlanningWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-planning-batches-v1"),
+export const legacyImplementationPlanningWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-planning-batches-v1"),
   requirementID: z.string().min(1), inputKey: z.string().regex(/^[a-f0-9]{64}$/),
   batches: z.array(z.array(z.string().min(1)).min(1)).min(1).max(32),
   attempts: z.number().int().min(0).max(3),
   receipts: z.array(z.object({ contextKey: z.string().regex(/^[a-f0-9]{64}$/), output: implementationPlanningSchema,
     attempts: z.number().int().min(1).max(3) }).strict()).max(64),
 }).strict();
-export type ImplementationPlanningWork = z.infer<typeof implementationPlanningWorkSchema>;
+export const planningMaterialsWitnessSchema = z.object({ requirementID: z.string().min(1), inputKey: z.string().regex(/^[a-f0-9]{64}$/),
+  base: z.record(z.unknown()), records: z.array(z.object({ key: z.string().min(1),
+    field: z.enum(["guardrails", "supportingRequirements", "evidence", "questions", "research"]), record: z.record(z.unknown()),
+  }).strict()).max(10000),
+}).strict();
+export const planningCollectionBaselineSchema = z.object({ format: z.literal(1), sourcePlanID: z.string().min(1), sourceRevision: z.number().int().positive(),
+  sourceInputKey: z.string().regex(/^[a-f0-9]{64}$/), materials: planningMaterialsWitnessSchema, work: legacyImplementationPlanningWorkSchema,
+  sourceInput: z.lazy(() => planningTargetInputSchema).optional(),
+}).strict();
+const additivePlanningWorkSchema = legacyImplementationPlanningWorkSchema.extend({ format: z.literal(2), policy: z.literal("planning-collect-pending-verify-all-v1"),
+  collectionBatches: z.array(z.array(z.string().min(1)).min(1)).max(32), baseline: planningCollectionBaselineSchema,
+}).strict();
+type LegacyPlanningWork = z.infer<typeof legacyImplementationPlanningWorkSchema>;
+type OriginalPlanningBaseline = z.infer<typeof planningCollectionBaselineSchema>;
+type RecursivePlanningBaseline = Omit<OriginalPlanningBaseline, "format" | "work"> & { format: 2; work: ImplementationPlanningWork };
+const planningEvidenceDeltaSchema = z.object({ changed: z.array(z.string().min(1)).max(10000), removed: z.array(z.string().min(1)).max(10000),
+  historicalOnlyIDs: z.array(z.string().min(1)).max(10000) }).strict();
+export type ImplementationPlanningWork = LegacyPlanningWork | z.infer<typeof additivePlanningWorkSchema>
+  | Omit<LegacyPlanningWork, "format" | "policy"> & { format: 3; policy: "planning-chain-pending-verify-all-v1"; collectionBatches: string[][];
+    baseline: RecursivePlanningBaseline }
+  | Omit<LegacyPlanningWork, "format" | "policy"> & { format: 4; policy: "planning-reconcile-evidence-verify-all-v1"; collectionBatches: string[][];
+    baseline: RecursivePlanningBaseline & { sourceCreatedAt?: string; sourceFinishedAt?: string }; retainedRecordKeys: string[]; delta: z.infer<typeof planningEvidenceDeltaSchema> };
+export const planningAncestryLimit = 6;
+/** Bound recursive persisted input before invoking a recursive schema/parser. */
+export function planningWorkDepth(input: unknown) {
+  let work = input, depth = 0; const seen = new Set<object>();
+  while (work && typeof work === "object") {
+    if (seen.has(work) || ++depth > planningAncestryLimit) return planningAncestryLimit + 1;
+    seen.add(work);
+    const item = work as { format?: unknown; baseline?: { work?: unknown } };
+    if (item.format !== 2 && item.format !== 3 && item.format !== 4) break;
+    work = item.baseline?.work;
+  }
+  return depth;
+}
+export const implementationPlanningWorkSchema: z.ZodType<ImplementationPlanningWork, z.ZodTypeDef, unknown> = z.unknown().superRefine((work, ctx) => {
+  if (planningWorkDepth(work) > planningAncestryLimit) ctx.addIssue({ code: z.ZodIssueCode.custom, fatal: true, message: "Planning ancestry exceeds its bounded depth." });
+}).pipe(z.lazy(() => z.discriminatedUnion("format", [legacyImplementationPlanningWorkSchema, additivePlanningWorkSchema,
+  legacyImplementationPlanningWorkSchema.extend({ format: z.literal(3), policy: z.literal("planning-chain-pending-verify-all-v1"),
+    collectionBatches: z.array(z.array(z.string().min(1)).min(1)).max(32),
+    baseline: planningCollectionBaselineSchema.omit({ format: true, work: true }).extend({ format: z.literal(2), work: z.lazy(() => implementationPlanningWorkSchema) }).strict(),
+  }).strict(),
+  legacyImplementationPlanningWorkSchema.extend({ format: z.literal(4), policy: z.literal("planning-reconcile-evidence-verify-all-v1"),
+    collectionBatches: z.array(z.array(z.string().min(1)).min(1)).max(32), retainedRecordKeys: z.array(z.string().min(1)).max(10000), delta: planningEvidenceDeltaSchema,
+    baseline: planningCollectionBaselineSchema.omit({ format: true, work: true }).extend({ format: z.literal(2), work: z.lazy(() => implementationPlanningWorkSchema),
+      sourceCreatedAt: z.string().optional(), sourceFinishedAt: z.string().optional() }).strict(),
+  }).strict(),
+])));
+export const implementationPlanningCollectionBatches = (work: ImplementationPlanningWork) => work.format !== 1 ? work.collectionBatches : work.batches;
+export const implementationPlanningStageTotal = (work: ImplementationPlanningWork) => implementationPlanningCollectionBatches(work).length + work.batches.length;
+/** For schema-validated work, count only completely accepted collection batches. */
+export function implementationPlanningCollectedKeys(work: ImplementationPlanningWork): Set<string> {
+  return new Set([...implementationPlanningRetainedKeys(work),
+    ...implementationPlanningCollectionBatches(work).slice(0, Math.min(work.receipts.length, implementationPlanningCollectionBatches(work).length)).flat()
+      .filter((key) => work.format !== 4 || !key.startsWith("retired:"))]);
+}
+export function implementationPlanningRetainedKeys(work: ImplementationPlanningWork): Set<string> {
+  return work.format === 1 ? new Set() : work.format === 4 ? new Set(work.retainedRecordKeys) : implementationPlanningCollectedKeys(work.baseline.work);
+}
+export const planningTargetInputSchema = z.object({ format: z.literal(1), policy: z.literal("exact-planning-inputs-v1"),
+  mode: z.enum(["single", "staged"]), inputKey: z.string().regex(/^[a-f0-9]{64}$/),
+  originPlanID: z.string().min(1), originRevision: z.number().int().positive(),
+  packageKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  originPlanCreatedAt: z.string().optional(), originPlanFinishedAt: z.string().optional(),
+}).strict();
+export type PlanningTargetInput = z.infer<typeof planningTargetInputSchema>;
+const planningSourceFields = z.object({ format: z.literal(1), policy: z.literal("retained-planning-target-v1"), sourcePlanID: z.string().min(1),
+  sourceRevision: z.number().int().positive(), sourceCreatedAt: z.string(), sourceFinishedAt: z.string().optional(),
+  bindingID: z.string().min(1), configFingerprint: z.string(), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
+  input: planningTargetInputSchema,
+});
+export const planningTargetSourceSchema = z.discriminatedUnion("mode", [
+  planningSourceFields.extend({ mode: z.literal("single"), package: implementationPlanningSchema.shape.packages.element }).strict(),
+  planningSourceFields.extend({ mode: z.literal("staged"), work: implementationPlanningWorkSchema, materials: planningMaterialsWitnessSchema,
+    package: implementationPlanningSchema.shape.packages.element.optional() }).strict(),
+]);
+export const planningTargetSourcesSchema = z.record(planningTargetSourceSchema).refine((sources) => Object.keys(sources).length <= 500, "Planning sources exceed the approved-target bound.");
+export type PlanningTargetSource = z.infer<typeof planningTargetSourceSchema>;
 export type ImplementationPlanning = {
-  format: 1; id: string; revision: number; bindingID: string; createdAt: string;
+  format: 1 | 2; id: string; revision: number; bindingID: string; createdAt: string;
   status: "generating" | "proposed" | "approved" | "dismissed" | "failed" | "interrupted";
   configFingerprint: string; model: { providerID: string; modelID: string };
   output?: ImplementationPlanningOutput; diagnostic?: string; sessionID?: string;
@@ -33,18 +110,56 @@ export type ImplementationPlanning = {
   sessions?: string[];
   finishedAt?: string;
   stageWork?: Record<string, ImplementationPlanningWork>;
+  targetInputs?: Record<string, PlanningTargetInput>;
+  targetMaterials?: Record<string, z.infer<typeof planningMaterialsWitnessSchema>>;
+  pendingSources?: Record<string, PlanningTargetSource>;
 };
 /** Cheap read/write gate; full exact ledgers are validated on replay/portable decode. */
 export function assertImplementationPlanningFormats(state: Pick<ExecutionState, "planning" | "planningHistory">) {
   for (const plan of [state.planning, ...state.planningHistory ?? []]) {
     if (!plan) continue;
-    if (plan.format !== 1) throw new Error("Unsupported implementation planning format. Saved work was not overwritten.");
-    if (plan.stageWork !== undefined) {
-      if (!plan.stageWork || typeof plan.stageWork !== "object" || Array.isArray(plan.stageWork)
-        || Object.values(plan.stageWork).some((work) => !work || work.format !== 1 || work.policy !== "exact-planning-batches-v1")) {
-        throw new Error("Unsupported staged implementation planning format. Saved work was not overwritten.");
+    if (plan.format !== 1 && plan.format !== 2) throw new Error("Unsupported implementation planning format. Saved work was not overwritten.");
+    if (plan.format === 1 && (plan.pendingSources !== undefined || plan.targetMaterials !== undefined)) throw new Error("Retained target sources require planning format 2. Saved work was not overwritten.");
+    if (plan.targetMaterials !== undefined) z.record(planningMaterialsWitnessSchema).parse(plan.targetMaterials);
+    if (plan.pendingSources !== undefined) {
+      const sources = planningTargetSourcesSchema.parse(plan.pendingSources);
+      for (const [id, source] of Object.entries(sources)) {
+        if (source.input.mode !== source.mode || source.input.originRevision > source.sourceRevision || source.sourceRevision > plan.revision
+          || source.bindingID !== plan.bindingID || source.configFingerprint !== plan.configFingerprint
+          || source.model.providerID !== plan.model.providerID || source.model.modelID !== plan.model.modelID
+          || source.package && (source.package.requirementID !== id || !source.input.packageKey)
+          || source.mode === "staged" && (source.materials.requirementID !== id || source.work.requirementID !== id || source.materials.inputKey !== source.work.inputKey))
+          throw new Error("Retained planning source does not match its original target or execution context. Saved work was not overwritten.");
+        if (source.mode === "staged") validatePlanningWorkFormat(source.work, source.sourceRevision);
       }
     }
+    if (plan.targetInputs !== undefined) {
+      const inputs = z.record(planningTargetInputSchema).parse(plan.targetInputs);
+      if (Object.values(inputs).some((input) => input.originRevision > plan.revision))
+        throw new Error("Planning input receipt is newer than its plan. Saved work was not overwritten.");
+    }
+    if (plan.stageWork !== undefined) {
+      if (!plan.stageWork || typeof plan.stageWork !== "object" || Array.isArray(plan.stageWork)
+        || Object.values(plan.stageWork).some((work) => !work || !(work.format === 1 && work.policy === "exact-planning-batches-v1"
+          || work.format === 2 && work.policy === "planning-collect-pending-verify-all-v1"
+          || work.format === 3 && work.policy === "planning-chain-pending-verify-all-v1"
+          || work.format === 4 && work.policy === "planning-reconcile-evidence-verify-all-v1"))) {
+        throw new Error("Unsupported staged implementation planning format. Saved work was not overwritten.");
+      }
+      for (const work of Object.values(plan.stageWork)) validatePlanningWorkFormat(work, plan.revision);
+    }
+  }
+}
+function validatePlanningWorkFormat(work: ImplementationPlanningWork, revision: number) {
+  if (work.format === 1) return;
+  implementationPlanningWorkSchema.parse(work);
+  if (JSON.stringify(work.baseline).length > 1_000_000) throw new Error("Unsupported planning baseline revision or witness size. Saved work was not overwritten.");
+  let source: ImplementationPlanningWork = work;
+  while (source.format !== 1) {
+    if (source.baseline.sourceRevision >= revision) throw new Error("Planning ancestry revisions must strictly precede their descendants. Saved work was not overwritten.");
+    if (source.baseline.sourceInput && (source.baseline.sourceInput.mode !== "staged" || source.baseline.sourceInput.inputKey !== source.baseline.sourceInputKey
+      || source.baseline.sourceInput.originRevision > source.baseline.sourceRevision)) throw new Error("Planning source receipt does not match its historical input.");
+    revision = source.baseline.sourceRevision; source = source.baseline.work;
   }
 }
 export const planningEdgeID = (target: string, prerequisite: string) => JSON.stringify([target, prerequisite]);

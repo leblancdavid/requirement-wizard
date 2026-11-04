@@ -153,9 +153,14 @@ new code, fetch main, run checks, modify source or establish branch availability
   No mandatory evidence is truncated. Each request consumes provider allowance; the
   UI explains that larger requirements can need many reading/checking requests.
 - Package checkpoints and session IDs persist after each successful response. Explicit
-  retry skips completed packages only when specification revision, workspace binding and
-  saved settings still match. Cancellation, malformed output and stale responses retain
-  prior packages and diagnostics without changing reviewed dependencies or delivery.
+  retry retains existing same-revision progress. New exact-input receipts also allow
+  **Prepare plan** to reuse an unchanged target across revisions when its supplied
+  evidence, dependency candidates, global context, assessment metadata and runtime
+  instructions match under the same settings/model/workspace. Changed targets need
+  fresh work; original plans and spent attempts remain historical evidence. Current
+  replacement plans still require explicit human review/approval. Cancellation,
+  malformed output and stale responses do not change reviewed dependencies or delivery.
+  See [compatibility and limits](migrations.md#exact-input-implementation-planning-across-revisions-2026-11-04).
 - **Hard prerequisites** are individually selectable; **preferred ordering** is advisory.
   Initial suggestions apply compatible preferred edges, ignoring preferences that would
   create a cycle. Move packages earlier/later to adjust tie-breaking. The separately
@@ -213,6 +218,32 @@ New partial ledgers are versioned inside the existing planning envelope and port
 projection; see [migration/recovery](migrations.md#exact-staged-implementation-planning-2026-10-25).
 Existing compatible completed packages, approved plans, assessments and delivery
 evidence are not invalidated by this representation change.
+
+As of 2026-11-04, an explicit replacement plan can also reuse original collection
+after **added evidence** when target/global policy and existing records are unchanged.
+It retains the old provisional draft, reads all added or previously unread records,
+then verifies every current batch. Earlier verification is historical only. The UI
+shows the original revision and the shorter current schedule, not a completeness
+claim. Pause/reload and portable continuation retain attempts; approval still requires
+human resolution and a current plan. Changed/removed records, structural changes and
+target/global policy changes still require fresh collection. Repeated **additive** changes can
+now retain collection through a bounded chain, including interrupted follow-ups with
+no accepted new reply. The UI shows the retained exact-record count and source
+checkpoint revision; all current batches still verify. At six snapshots or the
+one-million-character JSON witness cap, preparation falls back conservatively while preserving old
+work. The depth-limit restart is explained in the replacement plan. See
+[compatibility and boundaries](migrations.md#additive-evidence-planning-collection-follow-ups-2026-11-04).
+
+Prepared staged plans can also reconcile changed or retired-context evidence while
+keeping unchanged reads. They review exact changes and historical removals, verify
+every current batch, and require explicit resolution of an evidence-review warning.
+Old dependency proposals and superseded citations are not current authority; reviewed
+execution dependencies are not silently removed. This is not a source-editing UI or
+automatic product-change approval. Target/global-envelope and requirement-guardrail
+changes still require fresh preparation. A later target not yet prepared when an
+earlier target stops may still need older source selection/carry-forward; portable
+recovery for already-prepared targets does not qualify that remaining gap. See the
+[evidence reconciliation ledger](migrations.md#planning-evidence-revisionremoval-reconciliation-2026-11-04).
 
 Verification includes deterministic wire round trips, complete record read/check
 coverage, verification restrictions, failure/cancellation/staleness, spent attempts,

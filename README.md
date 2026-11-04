@@ -45,6 +45,32 @@ New run receipts also identify original definition reviews unchanged and current
 both run boundaries, without claiming skipped calls or resolved findings. Older
 receipts are preserved without reconstructed provenance; see
 [compatibility](docs/migrations.md#retained-definition-reviews-in-specification-runs-2026-10-29).
+
+Eligible staged assessment follow-ups can now reuse a saved collection baseline:
+collect changed evidence, then check every current evidence batch before publication.
+Unfinished first reviews can also retain their provisional draft and completed
+original collection, reading only changed or still-unread records before verification.
+Original findings remain saved; this is not automatic finding-independence or
+verification skipping. See [workflow resilience](docs/workflow-resilience.md).
+
+Pending scoped questions can now hold affected reviews while other evidence reviews
+continue under the same workflow permission. The queue distinguishes waiting,
+retained and current work. Global or uncertain decisions still hold all reviews;
+this does not approve choices or skip verification.
+
+Staged answer follow-up, clarification and refinement also retain valid completed
+replies when another edit arrives mid-request. They stop before stale publication;
+explicit continuation reuses the saved work only when exact current inputs match.
+
+Retrieval and staged epic reviews likewise retain valid replies before stopping for
+edits. Planning retains historical packages/checks but still requires current inputs
+before proposing a plan. Explicit Prepare plan can reuse individually unchanged
+targets across revisions using exact-input receipts. An initial additive-evidence
+follow-up also retains original reads/drafts while collecting pending evidence and
+verifying every current batch. Prepared staged plans can reconcile changed or retired
+evidence through bounded ancestry with explicit review; broader target/global
+reconciliation and source carry-forward for unprepared later targets remain future work.
+
 **Settings → Advanced assessment tools → Inspect changes since a definition review** compares saved inputs
 without AI calls. Unchanged citations do not justify skipping a whole-area review;
 see [finding impact](docs/definition-finding-impact.md).

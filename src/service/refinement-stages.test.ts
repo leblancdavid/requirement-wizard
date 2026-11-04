@@ -260,7 +260,7 @@ test("changed evidence rejects old receipts and starts a new explicit plan witho
     assert.deepEqual(f.store.getJob(first.id).refinementWork, first.refinementWork);
   } finally { f.store.close(); }
 });
-test("cancellation and stale revisions cannot publish and preserve the pre-dispatch attempt", async () => {
+test("cancellation and stale revisions cannot publish; valid stale responses retain their charged original receipt", async () => {
   for (const pairMode of [false, true]) for (const mode of ["cancel", "stale"] as const) {
     const f = pairMode ? pairFixture() : fixture(), controller = new AbortController();
     try {
@@ -268,8 +268,11 @@ test("cancellation and stale revisions cannot publish and preserve the pre-dispa
         if (mode === "cancel") controller.abort(); else f.store.note(f.project.id, f.project.revision, "New exact constraint", "project");
         return f.output();
       } }).analyze(f.project.id, f.project.revision, { signal: controller.signal, ...("options" in f ? f.options : { refinementOnly: true, recordIDs: [f.requirementID] }) });
-      assert.equal(job.status, mode === "cancel" ? "cancelled" : "stale", job.diagnostic); assert.equal(job.refinementWork!.attempts, 1);
-      assert.equal(job.refinementWork!.receipts.length, 0); assert.equal(f.store.get(f.project.id).refinements.length, 0);
+      assert.equal(job.status, mode === "cancel" ? "cancelled" : "stale", job.diagnostic);
+      assert.equal(job.refinementWork!.attempts, mode === "cancel" ? 1 : 0);
+      assert.equal(job.refinementWork!.receipts.length, mode === "cancel" ? 0 : 1);
+      if (mode === "stale") assert.equal(job.refinementWork!.receipts[0]!.attempt, 1);
+      assert.equal(f.store.get(f.project.id).refinements.length, 0);
     } finally { f.store.close(); }
   }
 });

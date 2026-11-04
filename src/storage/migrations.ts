@@ -5,7 +5,7 @@ import { decisionIdentity, executionSchemaVersion } from "../core/assessment-ide
 import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
 import { workflowSchema, workflowReadinessSchema } from "../core/workflow.js";
-import { implementationPlanningWorkSchema } from "../core/implementation-planning.js";
+import { implementationPlanningWorkSchema, assertImplementationPlanningFormats } from "../core/implementation-planning.js";
 import { recoveryRevisionSchema, definitionRevisionSchema } from "../core/implementation-revisions.js";
 import { processingPolicySchema } from "../core/processing-policy.js";
 import { workflowRunSchema } from "../core/workflow-run.js";
@@ -37,7 +37,7 @@ const savedAssessment = savedIdentity.extend({ contextPolicy: z.string().optiona
 const executionEnvelope = z.object({ schemaVersion: z.number().int().nonnegative().optional(), version: z.number().int().nonnegative(),
   recoveryRevision: recoveryRevisionSchema.optional(),
   definitionRevision: definitionRevisionSchema.optional(),
-  planning: z.object({ format: z.literal(1), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough().optional(), planningHistory: z.array(z.object({ format: z.literal(1), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough()).optional(),
+  planning: z.object({ format: z.union([z.literal(1), z.literal(2)]), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough().optional(), planningHistory: z.array(z.object({ format: z.union([z.literal(1), z.literal(2)]), stageWork: z.record(implementationPlanningWorkSchema).optional() }).passthrough()).optional(),
   assessments: z.record(savedAssessment), workspaceAssessments: z.record(savedAssessment).optional(), mainAssessments: z.record(savedAssessment).optional(),
   delivered: z.record(savedIdentity), deliveryHistory: z.array(savedIdentity).optional(), history: z.array(z.unknown()) }).passthrough();
 
@@ -57,6 +57,7 @@ function upgradeIdentity(record: z.infer<typeof savedIdentity>) {
 
 export function upgradeExecutionPayload(raw: unknown): ExecutionState {
   const state = executionEnvelope.parse(raw);
+  assertImplementationPlanningFormats(state as ExecutionState);
   if ((state.schemaVersion ?? 0) > executionSchemaVersion) throw new Error("Unsupported future execution data format. Upgrade the app; saved data was not overwritten.");
   if (state.recoveryRevision && state.schemaVersion !== 2) throw new Error("Recovery revision certificates require execution format 2. Saved evidence was not overwritten.");
   if (state.definitionRevision && state.schemaVersion !== 2) throw new Error("Definition revision certificates require execution format 2. Saved evidence was not overwritten.");
@@ -281,6 +282,7 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
     }
     for (const row of db.prepare("SELECT payload FROM execution_state").all() as { payload: string }[]) {
       const state = executionEnvelope.parse(JSON.parse(row.payload));
+      assertImplementationPlanningFormats(state as ExecutionState);
       if (state.schemaVersion !== executionSchemaVersion) throw new Error("Unsupported execution data format. Saved data was not overwritten.");
     }
     for (const row of db.prepare("SELECT payload FROM workflow_state").all() as { payload: string }[]) workflowSchema.parse(JSON.parse(row.payload));

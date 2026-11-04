@@ -606,7 +606,9 @@ test("spent attempts, cancellation, stale results and zero-duration actions cann
       } else {
         const job = await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task, signal: controller.signal });
         assert.equal(job.status, mode === "cancel" ? "cancelled" : mode === "stale" ? "stale" : "failed", job.diagnostic);
-        assert.equal(job.readinessWork!.attempts, 1); assert.equal(readinessStep(job.readinessWork!), 0);
+        assert.equal(job.readinessWork!.attempts, mode === "stale" ? 0 : 1);
+        assert.equal(readinessStep(job.readinessWork!), mode === "stale" ? 1 : 0);
+        if (mode === "stale") assert.equal(job.readinessWork!.receipts[0]!.attempt, 1, "A valid historical response retains its spent attempt, not current publication authority");
         if (mode === "malformed") {
           for (let i = 0; i < 4; i++) await service.analyze(f.project.id, f.project.revision, { readinessQuestions: f.task });
           assert.equal(calls, 4); assert.match(f.store.jobs(f.project.id).at(-1)!.diagnostic!, /exhausted.*allowance/);

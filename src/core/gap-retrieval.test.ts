@@ -364,7 +364,7 @@ test("paged searches survive disk recovery and unrelated revisions but cannot re
   } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
 });
 
-test("cancellation, stale revisions and expired leases prevent a returned continuation from being checkpointed", async () => {
+test("cancelled/expired continuations are rejected; valid stale continuations remain historical", async () => {
   for (const mode of ["cancel", "stale", "lease"] as const) {
     const f = fixture();
     try {
@@ -381,12 +381,46 @@ test("cancellation, stale revisions and expired leases prevent a returned contin
         return continuation(page);
       } }).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox", signal: stop.signal });
       assert.equal(calls, 2); assert.notEqual(job.status, "completed");
-      assert.equal(job.retrievalWork!.stages.length, 1); assert.equal(job.retrievalWork!.attempts, 2);
+      assert.equal(job.retrievalWork!.stages.length, mode === "stale" ? 2 : 1); assert.equal(job.retrievalWork!.attempts, 2);
       assert.equal(job.retrievalWork!.stages[0]!.searchResult!.records[0]!.id, "file-0");
       assert.deepEqual(f.store.get(f.p.id).requirements, f.p.requirements);
     } finally { f.dispose(); }
   }
 });
+
+for (const response of ["load", "search", "final"] as const) for (const related of [false, true])
+  test(`retrieval retains a validated ${response} after a ${related ? "related" : "unrelated"} edit across reopen`, async () => {
+    const f = fixture(); let store = f.store;
+    try {
+      let calls = 0;
+      const job = await new DiscoveryService(store, { async analyze() {
+        calls++;
+        const original = store.jobs(f.p.id).at(-1)!;
+        const forged = structuredClone(original.context!); forged.gapExploration = undefined;
+        assert.throws(() => store.checkpointRetrieval(original.id, original.retrievalWork!, forged), /original task/);
+        if (related) store.note(f.p.id, f.p.revision, "New mandatory order constraint", "inbox");
+        else unrelatedEdit(store, f.p.id);
+        return response === "load" ? request("file-0") : response === "search" ? search("exact static", 1) : empty();
+      } }).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox" });
+      assert.equal(calls, 1); assert.equal(job.status, "stale", job.diagnostic); assert.equal(job.leaseUntil, null);
+      assert.equal(job.retrievalWork!.attempts, 1); assert.equal(job.result, undefined);
+      assert.equal(job.retrievalWork!.stages.length, response === "final" ? 0 : 1);
+      assert.equal(!!job.retrievalWork!.final, response === "final");
+      assert.deepEqual(store.get(f.p.id).requirements, f.p.requirements);
+      for (let n = 0; n < 2; n++) { store.close(); store = new ProjectStore(f.path); assert.deepEqual(store.getJob(job.id), job); }
+      if (!related) {
+        const current = store.get(f.p.id); let resumedCalls = 0;
+        const done = await new DiscoveryService(store, { async analyze(_p, { context }) {
+          resumedCalls++;
+          if (response === "load") assert.ok(context.manifest.includedIDs.includes("file-0"));
+          if (response === "search") assert.ok((context.data as { savedEvidenceSearch?: unknown }).savedEvidenceSearch);
+          return empty();
+        } }).analyze(current.id, current.revision, { focusEpicID: "inbox" });
+        assert.equal(done.status, "completed", done.diagnostic); assert.equal(resumedCalls, response === "final" ? 0 : 1);
+        assert.deepEqual(store.getJob(job.id), job);
+      }
+    } finally { store.close(); rmSync(f.directory, { recursive: true, force: true }); }
+  });
 
 for (const basis of [false, true]) test(`legacy search receipts without paging metadata reopen and reuse without invented cursors or model replay (saved basis: ${basis})`, async () => {
   const f = fixture(true); let store = f.store;
@@ -555,7 +589,7 @@ test("search stages obey cancellation, stale revisions, leases and the two-stage
         return search();
       } }).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox", signal: stop.signal });
       assert.notEqual(job.status, "completed");
-      assert.equal(job.retrievalWork!.stages.length, mode === "stages" ? 2 : 0);
+      assert.equal(job.retrievalWork!.stages.length, mode === "stages" ? 2 : mode === "stale" ? 1 : 0);
       if (mode === "stages") { assert.equal(calls, 3); assert.match(job.diagnostic!, /stage limit/); }
       assert.deepEqual(f.store.get(f.p.id).requirements, f.p.requirements);
     } finally { f.dispose(); }
@@ -879,7 +913,7 @@ test("unseen citations, malformed requests, cancellation and stale stages never 
         return request(mode === "unknown" ? "hidden-arbitrary-id" : "file-0");
       } }).analyze(f.p.id, f.p.revision, { focusEpicID: "inbox", signal: stop.signal });
       assert.notEqual(job.status, "completed");
-      if (mode !== "citation") assert.equal(job.retrievalWork?.stages.length ?? 0, 0);
+      if (mode !== "citation") assert.equal(job.retrievalWork?.stages.length ?? 0, mode === "stale" ? 1 : 0);
       assert.deepEqual(f.store.get(f.p.id).requirements, f.p.requirements);
     } finally { f.dispose(); }
   }
@@ -922,7 +956,7 @@ test("saved final responses survive publication failure and future retrieval for
   } finally { f.dispose(); }
 });
 
-test("checkpoint transactions reject expired leases and changed revisions without replacing completed stages", () => {
+test("checkpoint transactions reject expired leases and retain historical work before stopping stale", () => {
   for (const mode of ["expired", "stale"] as const) {
     const f = fixture();
     try {
@@ -938,7 +972,11 @@ test("checkpoint transactions reject expired leases and changed revisions withou
       }
       const before = f.store.getJob(job.id);
       assert.throws(() => f.store.checkpointRetrieval(job.id, { ...work, attempts: 2 }, base.manifest));
-      assert.deepEqual(f.store.getJob(job.id), before);
+      if (mode === "expired") assert.deepEqual(f.store.getJob(job.id), before);
+      else {
+        const saved = f.store.getJob(job.id); assert.equal(saved.status, "stale"); assert.equal(saved.leaseUntil, null);
+        assert.deepEqual(saved.retrievalWork!.stages, before.retrievalWork!.stages); assert.equal(saved.retrievalWork!.attempts, 2);
+      }
       assert.deepEqual(f.store.get(f.p.id).requirements, f.p.requirements);
     } finally { f.dispose(); }
   }
@@ -1126,7 +1164,7 @@ test("continuation cancellation, malformed output and stale publication preserve
       } }).analyze(f.p.id, f.p.revision, { continueGapJobID: source!.id, signal: controller.signal });
       assert.equal(continued.status, mode === "malformed" ? "failed" : mode);
       assert.equal(continued.retrievalWork!.attempts, 4); assert.ok(continued.retrievalWork!.continuation);
-      assert.equal(continued.retrievalWork!.final, undefined); assert.equal(calls, 4);
+      assert.equal(!!continued.retrievalWork!.final, mode === "stale"); assert.equal(calls, 4);
       assert.deepEqual(f.store.get(f.p.id).requirements, f.p.requirements);
       if (mode !== "stale") {
         const retry = await new DiscoveryService(f.store, { async analyze() { calls++; return empty(); } })

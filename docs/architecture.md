@@ -1,5 +1,63 @@
 # Architecture outline
 
+`definition-baseline.ts` adds an optional exact original-collection envelope for new
+staged follow-ups. Storage binds the actual original publication/result, core compares
+the full guarded record inventory and schedules changed collection plus complete
+current verification, and the existing service/queue publishes only after all checks.
+Portable continuation retains compact publisher receipts and original snapshots;
+the renderer identifies the retained revision. No SQL migration, frozen v1 key change,
+fine-grained independence or verification skip is introduced. See
+[durable incremental workflows](workflow-resilience.md).
+
+Unfinished origins use cooperative exact-checkpoint replay and a content-addressed
+derived-draft cache, pinned for active workers. New pending collection plans pack
+changed/unread records separately from full verification; saved older schedules stay
+unchanged. Unpublished source ledgers and their bounded ancestry remain portable.
+
+`workflow-schedule.ts` derives a bounded question-scope dependency schedule for
+definition evidence reviews only. Optional local workflow snapshots retain waiting
+decision identities; current views recompute labels without writes. Storage supplies
+copy-safe compact checkpoint metadata cached with local/cross-connection invalidation.
+The existing coordinator owns dispatch/consent and readiness remains unchanged.
+
+Submission, readiness and refinement stage services validate replies against frozen
+materials before checkpointing. Their owned storage transactions retain original
+computation and stop stale after committing, rather than rolling back accepted
+responses on a concurrent revision. Publication still requires current inputs and
+complete replay; no new work format or changed-material reconciliation is implied.
+
+Retrieval checkpoints use the same commit-before-stale boundary for accepted
+navigation/final responses and staged epic receipts, with original task/policy/plan
+binding. Planning saves owned historical packages and exact staged receipts before
+current-input checks; only final proposed-plan publication uses revision/workspace
+checks. Execution leases and version CAS remain required for historical writes.
+
+New planning target-input receipts bind current supplied evidence/candidates,
+instructions/schema/skill and package digests. Explicit replacement planning may
+reuse proven-compatible targets across revisions while leaving the original plan
+immutable. Changed target inputs still need fresh work; the current replacement
+plan, not a stale historical plan, must pass review and approval. Single-context
+unrelated-source inventory counts alone are excluded from evidence identity.
+
+Staged planning format 2 adds a bounded, self-contained format-1 source witness and
+separate pending-collection/full-verification schedules for additive evidence changes.
+Source request replay authenticates retained reads; every current batch still verifies
+before a package is exposed. Formats 2/3 alone do not reconcile changed/removed records
+or structural/global/target changes. Format 3 extends additive continuation
+through a bounded, linear source-work chain (six snapshots / one-megabyte baseline
+witness). Accepted collection is accumulated across ancestors; verification still
+covers every current batch. Recursive schema descent is depth/cycle guarded, and
+source revisions must precede descendants. Witnesses stay out of model context.
+
+Format 4 handles changed/removed evidence under unchanged target/global envelopes
+and requirement guardrails. Retained read keys and exact evidence deltas are replayed;
+historical retirement entries are distinct from current records. Obsolete prerequisite
+proposals stay in the witness, not the active seed. Superseded IDs cannot authorize
+current dependencies, and every current batch verifies before explicit human review.
+Immediate-predecessor source selection still needs carry-forward for later targets
+that have not been prepared when an earlier target stops; compact portability does
+not export the full planning archive to hide that gap.
+
 Startup observers in `src/core/startup.ts` project actual store/upgrade/validation phases through
 the owned desktop worker. Electron creates a sandboxed local splash before backend startup,
 then navigates that same window to its owned loopback origin; progress is indeterminate, not

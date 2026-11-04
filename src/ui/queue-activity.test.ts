@@ -28,6 +28,7 @@ test("definition activity names the saved assessment area rather than the browse
 test("Continue specification consistently distinguishes consent, waiting decisions, active work and resumable allowances", () => {
   const workflow: WorkflowView = { lastRun: null, version: 0, enabled: false, paused: true, suspended: false, phase: "idle", message: "Not started",
     current: undefined, grant: undefined, limits: workflowLimits, active: false, decisions: [], definitionReviews: [], artifacts: [],
+    decisionSchedule: { format: 1, policy: "question-scoped-definition-scheduling-v1", revision: 1, inputKey: "a".repeat(64), status: "recorded", tasks: [], reason: "No waiting decisions" },
     outcome: followThroughOutcome({ project, submissions: [], definitions: [], artifacts: [], change: null, active: false, blocked: false, specificationChecked: false, readyToImplement: false }), readiness: {
       policy: "coordinated-checks-v1", revision: 1, requirementIDs: [], specificationChecked: false, readyToImplement: false,
       explanation: "Checks pending", limitation: "No coding authority" } };

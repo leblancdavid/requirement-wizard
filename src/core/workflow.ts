@@ -7,6 +7,7 @@ import { refinementIsStale } from "./resolution.js";
 import { coverage } from "./coverage.js";
 import type { ExecutionState } from "./execution.js";
 import { planningCurrent } from "./implementation-planning.js";
+import { workflowScheduleSchema } from "./workflow-schedule.js";
 
 export const workflowLimits = { requests: 8, durationMs: 300000, steps: 20 } as const;
 const hash = (value: unknown) => bytesToHex(sha256(JSON.stringify(value)));
@@ -28,6 +29,7 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
     key, target: z.string().optional(), jobIDs: z.array(z.string()).max(200), completed: z.boolean().optional() }).strict().optional(),
   discovery: z.object({ inputKey: key, jobID: z.string() }).strict().optional(),
   readiness: workflowReadinessSchema.optional(),
+  decisionSchedule: workflowScheduleSchema.optional(),
 }).strict();
 export type WorkflowState = z.infer<typeof workflowSchema>;
 export const emptyWorkflow = (): WorkflowState => ({ format: 1, version: 0, settingsVersion: 0, enabled: false,

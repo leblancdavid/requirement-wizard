@@ -7,6 +7,13 @@ import { definitionStopSummary, statusLabel } from "./user-messages.js";
 import { LogLink } from "./log-access.js";
 import { canRecoverDefinition } from "../core/definition-recovery.js";
 import { definitionEvidenceIssue } from "../core/definition-evidence-issue.js";
+import type { DefinitionBaseline } from "../core/definition-baseline.js";
+
+export function DefinitionBaselineNotice({ baseline }: { baseline: DefinitionBaseline }) {
+  const count = baseline.changedRecordIDs.length;
+  if (baseline.checkpoint) return <p>Unfinished review retained from revision {baseline.sourceRevision}: {baseline.checkpoint.acceptedStages} original {baseline.checkpoint.acceptedStages === 1 ? "step" : "steps"} saved. This follow-up reviews {count} changed {count === 1 ? "record" : "records"} and {baseline.checkpoint.unreadRecordIDs.length} unfinished original records, then checks all current evidence. Earlier findings are provisional, not a completed assessment.</p>;
+  return <p>Earlier assessment retained from revision {baseline.sourceRevision}. This follow-up reviews {count} changed {count === 1 ? "record" : "records"}, then checks all current evidence for consistency. The earlier findings remain saved; the unchanged collection pass is reused.</p>;
+}
 
 export function DefinitionProgress({ job, project }: { job: Job; project: Project }) {
   const task = job.context?.definitionAssessment, work = job.definitionWork;
@@ -28,6 +35,7 @@ export function DefinitionProgress({ job, project }: { job: Job; project: Projec
   return <section aria-label="Definition assessment progress">
     <p>Latest area assessment: {project.epics.find((e) => e.id === task.epicID)?.title ?? task.epicID} · {label}.</p>
     {work && <p>{work.receipts.length} of {steps.length} review steps saved. {job.status === "completed" ? "The review is finished. This is an estimate of how clearly the area is defined, not a guarantee that nothing is missing." : job.definitionBlock ? "The review needs attention before it can finish. Your progress score has not been updated with partial results." : "The progress score updates when the whole review finishes. Use Refresh definition coverage to continue; completed work is kept."}</p>}
+    {work?.baseline && <DefinitionBaselineNotice baseline={work.baseline} />}
     {work?.recovery && <p>{work.recovery.grants.filter((grant) => grant.spent).length} explicitly authorized recovery requests spent. Original attempts and completed checks are retained; Refresh does not grant more recovery requests.</p>}
     {job.status === "running" && step && <p role="status">{step.phase === "collect" ? "Reading your project information" : "Checking the findings against your project information"}. Larger reviews may need extra steps, so the step count can change.</p>}
     <LogLink target={job.id} />

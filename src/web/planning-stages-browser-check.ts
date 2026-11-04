@@ -8,6 +8,7 @@ import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
 import { command } from "../service/git-delivery.js";
 import { workspaceMenu } from "./menu-check-helpers.js";
+import { evidenceReviewQuestion } from "../service/planning-stages.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -25,7 +26,7 @@ assert.equal((await command(root, "git", ["init", "-b", "main"], AbortSignal.tim
 store.connectWorkspace(project.id, project.revision, root);
 const state = store.execution(project.id); state.config = executionConfigSchema.parse({ repository: "fixture/repo", strategy: "branch", branch: "delivery", providerID: "openai", modelID: "fixture", checks: ["node --version"] });
 store.saveExecution(project.id, state);
-let calls = 0, waiting = false, pauseOnce = true;
+let calls = 0, waiting = false, pauseOnce = true, pauseFollowup = false;
 const hashes: string[] = [];
 const app = await startApp({ store, port: 0,
   catalog: new OpenCodeCatalog("unused", async () => ({ connected: ["openai"], all: [{ id: "openai", name: "OpenAI", models: { fixture: { name: "Fixture" } } }] })),
@@ -33,11 +34,11 @@ const app = await startApp({ store, port: 0,
   executionAdapter: { async perform(request) {
     assert.equal(request.planning, true); assert.equal(request.coding, false);
     calls++; hashes.push(createHash("sha256").update(request.prompt).digest("hex"));
-    if (pauseOnce && calls === 2) {
-      pauseOnce = false; waiting = true;
+    if (pauseOnce && calls === 2 || pauseFollowup) {
+      pauseOnce = false; pauseFollowup = false; waiting = true;
       await new Promise((_resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true }));
     }
-    return JSON.stringify({ summary: "Proposed local persistence package", packages: [{ requirementID: target, title: "Keep progress", reason: "Approved restart behavior", steps: ["Implement the approved saved-state behavior"], verification: ["Restart restores saved progress"], prerequisites: [], questions: [] }] });
+    return JSON.stringify({ summary: "Proposed local persistence package", packages: [{ requirementID: target, title: "Keep progress", reason: "Approved restart behavior", steps: ["Implement the approved saved-state behavior"], verification: ["Restart restores saved progress"], prerequisites: [], questions: request.prompt.includes('"evidenceReconciliation"') ? [evidenceReviewQuestion] : [] }] });
   } },
 });
 const browser = await chromium.launch();
@@ -95,14 +96,82 @@ try {
   const paused = structuredClone(store.execution(project.id).planning!);
   assert.equal(paused.stageWork![target]!.receipts.length, 1);
   await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click(); assert.equal(calls, 2);
+  await expect.poll(() => store.executionActive(project.id)).toBe(false);
+  project = store.note(project.id, project.revision, "Keep offline progress after an interrupted save", "runtime");
+  pauseFollowup = true; waiting = false;
+  await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click();
+  assert.equal(calls, 2, "An edit/reload does not itself authorize planning");
+  await page.getByRole("button", { name: "Prepare plan", exact: true }).click();
+  await expect.poll(() => waiting).toBe(true);
+  await expect(planning).toContainText(`Earlier reads retained from checkpoint revision ${paused.revision}`);
+  await expect(planning).toContainText("every current batch still needs verification");
+  assert.equal(store.execution(project.id).planning!.stageWork![target]!.format, 2);
+  assert.equal(store.execution(project.id).planning!.output, undefined);
+  await page.getByRole("button", { name: "Stop implementation", exact: true }).click();
+  await expect.poll(() => store.execution(project.id).planning!.status).toBe("interrupted");
+  const followup = structuredClone(store.execution(project.id).planning!);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-planning-followup-mobile.png", fullPage: true });
+  await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click(); assert.equal(calls, 3);
+  await expect.poll(() => store.executionActive(project.id)).toBe(false);
+  project = store.note(project.id, project.revision, "An additional offline restart constraint", "runtime");
+  pauseFollowup = true; waiting = false;
+  await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click(); assert.equal(calls, 3);
+  await page.getByRole("button", { name: "Prepare plan", exact: true }).click();
+  await expect.poll(() => waiting).toBe(true);
+  const chainedWork = store.execution(project.id).planning!.stageWork![target]!;
+  assert.equal(chainedWork.format, 3); if (chainedWork.format !== 3) assert.fail();
+  assert.deepEqual(chainedWork.baseline.work, followup.stageWork![target]);
+  await expect(planning).toContainText(`Earlier reads retained from checkpoint revision ${followup.revision}`);
+  await expect(planning).toContainText("exact records");
+  await page.getByRole("button", { name: "Stop implementation", exact: true }).click();
+  await expect.poll(() => store.execution(project.id).planning!.status).toBe("interrupted");
+  const chainedPause = structuredClone(store.execution(project.id).planning!);
+  await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click(); assert.equal(calls, 4);
   await page.getByRole("button", { name: "Prepare plan", exact: true }).click();
   await expect.poll(() => store.execution(project.id).planning!.status, { timeout: 60000 }).toBe("proposed");
   assert.equal(hashes.filter((hash) => hash === hashes[0]).length, 1);
   assert.deepEqual(store.execution(project.id).planningHistory!.find((plan) => plan.id === paused.id), paused);
+  assert.deepEqual(store.execution(project.id).planningHistory!.find((plan) => plan.id === followup.id), followup);
+  assert.deepEqual(store.execution(project.id).planningHistory!.find((plan) => plan.id === chainedPause.id), chainedPause);
+  assert.equal(store.execution(project.id).planning!.stageWork![target]!.receipts[0]!.attempts, 2, "Interrupted follow-up attempt remains charged");
   await expect(planning).toContainText("cross-batch uncertainty");
   await expect(building.getByRole("button", { name: "Start implementation", exact: true })).toBeDisabled();
   await expect(preparation.getByRole("status", { name: "Implementation preparation next step", exact: true })).toContainText("Review the saved plan");
   assert.equal(store.execution(project.id).run, undefined, "Preparation never starts coding or approves the plan");
+  await expect.poll(() => store.executionActive(project.id)).toBe(false);
+  const sourceNote = store.get(project.id).sources.find((source) => source.kind === "note" && source.epicID === "runtime")!;
+  const beforeCorrection = structuredClone(store.execution(project.id).planning!);
+  // Curated externally revised evidence, not a new public source-editing workflow.
+  // Commit the current fixture through a normal revision write; old snapshots stay intact.
+  const get = store.get.bind(store);
+  store.get = (id, revision) => {
+    const snapshot = get(id, revision);
+    if (id === project.id && revision === undefined) snapshot.sources.find((source) => source.id === sourceNote.id)!.text = "Corrected recorded offline retention constraint";
+    return snapshot;
+  };
+  try { project = store.note(project.id, project.revision, "External evidence correction supplied for review", "runtime"); }
+  finally { store.get = get; }
+  const beforeCorrectionCalls = calls; pauseFollowup = true; waiting = false;
+  await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click(); assert.equal(calls, beforeCorrectionCalls);
+  await page.getByRole("button", { name: "Prepare plan", exact: true }).click(); await expect.poll(() => waiting).toBe(true);
+  const evidenceWork = store.execution(project.id).planning!.stageWork![target]!;
+  assert.equal(evidenceWork.format, 4); if (evidenceWork.format !== 4) assert.fail();
+  assert.ok(evidenceWork.delta.changed.includes(`evidence:${sourceNote.id}`));
+  assert.ok(!evidenceWork.retainedRecordKeys.includes(`evidence:${sourceNote.id}`));
+  await expect(planning).toContainText("Evidence changes require explicit review");
+  await page.getByRole("button", { name: "Stop implementation", exact: true }).click();
+  await expect.poll(() => store.execution(project.id).planning!.status).toBe("interrupted");
+  const evidencePause = structuredClone(store.execution(project.id).planning!);
+  await page.reload(); await page.getByRole("tab", { name: /Implement/ }).click(); assert.equal(calls, beforeCorrectionCalls + 1);
+  await page.getByRole("button", { name: "Prepare plan", exact: true }).click();
+  await expect.poll(() => store.execution(project.id).planning!.status, { timeout: 60000 }).toBe("proposed");
+  assert.equal(store.execution(project.id).planning!.stageWork![target]!.receipts[0]!.attempts, 2);
+  assert.deepEqual(store.execution(project.id).planningHistory!.find((plan) => plan.id === beforeCorrection.id), beforeCorrection);
+  assert.deepEqual(store.execution(project.id).planningHistory!.find((plan) => plan.id === evidencePause.id), evidencePause);
+  await expect(planning).toContainText("missing or superseded evidence does not establish independence");
+  assert.equal(store.execution(project.id).run, undefined);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-planning-stages-mobile.png", fullPage: true });
@@ -133,5 +202,5 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-implementation-preparation-mobile.png", fullPage: true });
   assert.deepEqual(errors, []);
-  console.log("Implementation preparation browser passed: separate preparation/build controls, inspection without dispatch, scoped check/preview/force routing, all-requirement planning, usage warning, saved-step progress, Stop/reload, exact-stage continuation, retained history, review gates and mobile. Check routes were intercepted; planning used the fixture service. No live model or GitHub calls.");
+  console.log("Implementation preparation browser passed: separate preparation/build controls, inspection without dispatch, scoped check/preview/force routing, all-requirement planning, usage warning, saved-step progress, Stop/reload, repeated additive/evidence-reconciliation follow-ups with full-current verification, current-authority warning, charged continuation, retained history, review gates and mobile. Evidence correction was a curated external snapshot transition, not a new source-editing UI. Check routes were intercepted; planning used the fixture service. No live model or GitHub calls.");
 } finally { await browser.close(); await app.close(); store.close(); await rm(root, { recursive: true, force: true }); }

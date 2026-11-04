@@ -1,5 +1,38 @@
 # Coordinated workflow preview (DEC-032)
 
+## Retain staged input and question work across edits (2026-11-03)
+
+Staged saved-answer processing, clarification and refinement now retain a valid
+completed response under its original inputs if another edit arrives mid-request.
+The worker then stops stale, without publishing or making another call. Compatible
+explicit continuation reuses the saved step; changed materials still need review.
+Invalid/cancelled/stopped/expired replies do not count as completed. Original human
+answers, proposal history and spent attempts are not overwritten or reapplied.
+See [compatibility and verification](migrations.md#preserve-staged-answer-clarification-and-refinement-responses-across-edits-2026-11-03).
+
+## Question-scoped review scheduling (2026-11-03)
+
+A pending question no longer necessarily stops every evidence review. Continue
+specification can review an area outside the question's recorded dependency/evidence
+scope using the existing grant. The question's area, its consumers, shared linked
+evidence and the project-wide review wait. Global/unclear questions and pending
+approvals, organization changes or input issues still hold all reviews. Exact
+question provenance, including superseding sources, is followed transitively;
+missing/ambiguous/oversized scope never grants an outside-scope request.
+
+This applies **only to definition evidence review**, not broad discovery, proposal
+refresh, new clarification, implementation planning or coding while waiting. It is
+not semantic independence or permission to skip verification. Saved input keeps its
+existing processing priority and separate consent. Technical failures still stop
+the coordinator rather than automatically retrying or bypassing the failed task.
+
+Processing & queue shows **Saved work and waiting decisions**: current reviews,
+saved reviews needing impact review, unfinished checkpoint steps and not-started
+reviews remain distinct from waiting dependencies. Details load lazily and paginate.
+These labels grant nothing; original dated reviews/ledgers and spent attempts remain
+unchanged. Restart remains suspended until explicit Continue. See
+[compatibility and limits](migrations.md#decision-aware-evidence-review-scheduling-and-retained-progress-2026-11-03).
+
 ## Bounded exact evidence bundles (2026-11-03)
 
 User-approved continuation can package directly linked question/answer/approval

@@ -59,6 +59,9 @@ export function finishDefinitionRequest(db: Database.Database, job: Job, request
 /** Called only after existing complete-area validation, in the SAME publication
  * transaction. No retroactive issuance, inference, grants or freshness changes. */
 function buildPublication(db: Database.Database, job: Job, input: Project, published: Project, contexts: DefinitionPublicationContext[], publishedAt: string) {
+  // v1 certificates attest that both phases read all current records. Baseline
+  // reconciliation deliberately reuses old collection; never issue that attestation.
+  if (job.definitionWork?.baseline) return;
   if (!job.context?.definitionAssessment || !contexts.length || contexts.length > limits.contexts) return;
   const proposal = job.result?.assessments?.[0]; if (!proposal || job.result!.assessments!.length !== 1) return;
   const citations = proposal.checks.flatMap((c) => c.evidenceIDs);

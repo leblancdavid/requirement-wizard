@@ -26,7 +26,7 @@ export async function runRefinementStages(store: ProjectStore, adapter: Discover
   }
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;
-  const current = () => { options.signal.throwIfAborted(); if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError(); };
+  const current = () => { options.signal.throwIfAborted(); if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError(); };
   for (;;) {
     current();
     const unchanged = refinementNoChangeComplete(w);
@@ -60,7 +60,7 @@ export async function runRefinementStages(store: ProjectStore, adapter: Discover
         onSession: (id) => { if (!signal.aborted) store.attachSession(job.id, id); },
         onTelemetry: (value) => { if (!signal.aborted) store.attachTelemetry(job.id, value); },
         onResearch: (evidence) => { if (evidence.length) throw new Error("Staged refinement forbids research."); }, onProgress: options.onProgress ?? (() => {}) }), interrupted]);
-      signal.throwIfAborted(); current();
+      signal.throwIfAborted();
       const next = acceptRefinementStage(m, w, draft, raw, job); draft = next.draft; blocked = next.blocked;
       store.checkpointRefinement(job.id, w, context.manifest);
     } catch (error) {

@@ -3,6 +3,7 @@ import type { WorkflowView } from "../service/workflow.js";
 import type { WorkflowDecision } from "../core/workflow.js";
 import { PagedList } from "./pagination.js";
 import { LogLink } from "./log-access.js";
+import { LazyDetails } from "./lazy-details.js";
 
 export const workflowLabels: Record<WorkflowView["phase"], string> = {
   idle: "Not started", working: "Working", "needs-decision": "Needs your decision", blocked: "Blocked",
@@ -16,7 +17,8 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
   openDecision?: (decision: WorkflowDecision) => void; settings?: boolean; guided?: boolean;
 }) {
   const mayContinue = mayContinueProject(workflow);
-  const relatedArtifacts = workflow.artifacts?.filter((item) => !workflow.decisions.some((decision) =>
+  const decisionSchedule = workflow.decisionSchedule;
+   const relatedArtifacts = workflow.artifacts?.filter((item) => !workflow.enabled || !workflow.decisions.some((decision) =>
     decision.kind === "refinement" && item.id === `refinement:${decision.id}`)) ?? [];
   return <section className="workflow-controls" aria-label={settings ? "Coordinated workflow settings" : "Project workflow"}>
     <h3>{settings ? "Specification workflow (preview)" : `Specification workflow · ${workflowLabels[workflow.phase]}`}</h3>
@@ -90,6 +92,26 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
           </article>}</PagedList>
         </details>
         <p>Opening this view starts no AI requests. Current reviews can still contain unresolved findings; they do not mean the specification is complete.</p>
+      </section>}
+      {decisionSchedule && <section aria-label="Decision-aware review progress">
+        <h4>Saved work and waiting decisions</h4>
+        <p>Only evidence reviews outside the waiting questions' declared dependency and evidence scope may continue under existing permission. Global or uncertain questions, approvals and input issues hold all reviews. This does not prove product independence, approve choices or skip verification.</p>
+        {decisionSchedule.status === "unavailable" ? <p>{decisionSchedule.reason}</p> : <>
+          <p>{decisionSchedule.tasks.filter((task) => task.availability === "waiting").length} areas waiting · {decisionSchedule.tasks.filter((task) => task.availability === "reviewable" && task.reviewState !== "current").length} evidence reviews available · {decisionSchedule.tasks.filter((task) => task.reviewState === "current").length} saved reviews current.</p>
+          <LazyDetails summary="Retained progress and waiting dependencies">{() => <>
+            <PagedList items={decisionSchedule.tasks} itemID={(task) => task.epicID} label="Decision-aware review areas">{(task) => <article className="queue-item">
+              <strong>{workflow.definitionReviews.find((area) => area.epicID === task.epicID)?.title ?? task.epicID} · {task.reviewState === "current" ? "Current review" : task.reviewState === "impact-review-needed" ? "Saved review needs impact review" : task.reviewState === "unfinished" ? "Unfinished—progress retained" : "Not started"}</strong>
+              <p>{task.reason}</p>
+              {task.savedReviewRevision && <p>Original saved review revision {task.savedReviewRevision} retained.</p>}
+              {task.checkpoint && <p>{task.checkpoint.acceptedStages} accepted steps retained from input revision {task.checkpoint.inputRevision}. Reuse still requires exact checkpoint validation; these are not current coverage or a count of requests saved.</p>}
+              {task.waitingOn.length > 0 && <LazyDetails summary={`Waiting for ${task.waitingOn.length} decisions`}>{() =>
+                <PagedList items={task.waitingOn} itemID={(item) => `${item.kind}:${item.id}`} label={`Waiting decisions for ${task.epicID}`}>{(item) =>
+                  <p>{workflow.decisions.find((decision) => decision.id === item.id && decision.kind === item.kind)?.title ?? `${item.kind}: ${item.id}`}</p>}
+                </PagedList>}</LazyDetails>}
+            </article>}</PagedList>
+          </>}</LazyDetails>
+        </>}
+        <p>Reading this progress starts no work or new allowance. Readiness still waits for every required decision and check.</p>
       </section>}
       {relatedArtifacts.length > 0 && <section aria-label="Related work follow-through"><h4>Related saved work</h4>
         <p>Suggestions and plans keep their original evidence. These notices explain what needs attention; viewing them starts no AI requests or coding.</p>

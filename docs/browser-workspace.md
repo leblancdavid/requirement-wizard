@@ -1,5 +1,67 @@
 # Browser workspace, epics, and estimated completeness
 
+## Waiting questions and retained work (2026-11-03)
+
+**Processing & queue → Saved work and waiting decisions** separates waiting reviews
+from current, impact-review-needed, unfinished and not-started evidence reviews.
+Open the lazy details to see original saved review revisions, accepted checkpoint
+steps and the exact decisions an area waits for. Reading the view starts nothing.
+Only definition evidence reviews outside a question's recorded dependency/provenance
+scope may continue under already-granted permission; global/unclear decisions and
+pending approvals/input issues still hold all reviews. This is not permission to
+skip verification or infer answers. See [coordinated workflow](coordinated-workflow.md#question-scoped-review-scheduling-2026-11-03).
+
+`npm run test:browser:workflow-schedule` exercises real Continue controls with a
+deterministic adapter: Billing review proceeds while Reports waits, its partial
+steps remain visible, and reload/server restart neither dispatches extra calls nor
+renews consent. Desktop/mobile checks include the lazy waiting-question details.
+Screenshot: `.reqwizit-state/browser-workflow-schedule-mobile.png` (inspected).
+The runner is included in `npm run test:browser`; it makes no live model calls.
+
+## Saved assessment collection after answers (2026-11-03)
+
+Eligible staged Continue specification/Refresh follow-ups retain a verified original
+assessment as their starting draft, collect every changed record and then check all
+current evidence. The queue identifies the original revision and number of changed
+records near the top, including after Pause/reload. This avoids duplicate unchanged
+collection, not full verification; original findings are not erased or automatically
+declared current. Incompatible scope/interpretation, removed evidence or unavailable
+origins still require complete collection with saved history retained. See
+[compatibility](migrations.md#saved-collection-baseline-with-complete-current-verification-2026-11-03)
+and [remaining workflow work](workflow-resilience.md).
+
+`npm run test:browser:definition-baseline` runs the deterministic desktop/mobile
+Pause/reload/explicit-resume flow, checks original findings and full verification,
+and asserts change collection is not repeated. It is included in `test:browser`.
+Screenshot: `.reqwizit-state/browser-definition-baseline-mobile.png`. No model calls.
+
+The focused npm command also runs the script with `--unfinished`: a first partial review receives a new
+answer, retains its completed original collection and reads only pending records.
+Pause/reload/resume verifies that no accepted collection repeats. Its queue notice
+explicitly calls the findings provisional. Screenshot:
+`.reqwizit-state/browser-definition-unfinished-mobile.png` (inspected on mobile).
+
+## Recalling cited evidence after linked pages (2026-11-03)
+
+A retained original check following completed linked-answer pages can now reload
+previously read, cited exact question/current-answer pairs named through the blocked
+records' exact relationships, without requiring prior dimension splitting. This is
+the existing bounded recall path, not a new answer or a precedence decision. Original
+page responses, lookup receipts and spent attempts remain saved; restart waits for
+explicit Continue specification. See
+[compatibility and checks](migrations.md#exact-recall-after-linked-pages-without-dimension-splitting-2026-11-03).
+
+## Combined oversized draft and linked graph (2026-11-03)
+
+Linked-answer page planning now falls back to complete selected-dimension sizing
+when a whole pair cannot fit beside all nine saved findings. It retains the old
+full-draft packing whenever possible. Evidence and findings are never shortened;
+all pairs and dimensions remain scheduled, followed by the original evidence check.
+Saved stage progress, charged cancellation/retry, portable continuation and explicit
+restart consent are unchanged. The reproduced 291-stage checkpoint now fits its
+first request at 82,269 characters; this is local packing verification, not completed
+AI review. See [compatibility and qualification](migrations.md#combined-linked-page-and-dimension-sizing-2026-11-03).
+
 ## Faster local assessment validation (2026-11-03)
 
 Schedule projection indexes active boundaries, and response validation caches only

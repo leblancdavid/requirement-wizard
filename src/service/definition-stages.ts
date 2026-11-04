@@ -24,6 +24,7 @@ import { upgradeDefinitionPartitionCapacity } from "../core/definition-stages.js
 import { definitionPartitionLimit } from "../core/definition-continuation.js";
 import { upgradeDefinitionEvidenceBundles } from "../core/definition-stages.js";
 import { definitionEvidenceRequests } from "../core/definition-budget.js";
+import { definitionBaselineScopeMatches } from "../core/definition-baseline.js";
 
 /** Ephemeral estimates shared across one explicit refresh, never a new allowance. */
 export type DefinitionSchedule = { deadline: number; collectMs: number; verifyMs: number };
@@ -34,15 +35,27 @@ export function definitionRequestReserve(schedule: DefinitionSchedule, phase: "c
 export async function runDefinitionStages(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job,
   epicID: string, options: { signal: AbortSignal; onProgress?: (message: string) => void; measurement?: DiscoveryMeasurement;
     limits?: { requests: number; durationMs: number }; requestTimeoutMs?: number; schedule?: DefinitionSchedule; continuous?: boolean; protocolRecovery?: boolean; recoveryJobID?: string; onRequest?: () => void }): Promise<Job> {
+  try {
   const local = <T>(phase: Parameters<DiscoveryMeasurement["local"]>[0], run: () => T) => options.measurement ? options.measurement.local(phase, run) : run();
   const checkpoint = (manifest: NonNullable<Job["context"]>, renewal: { leaseUntil?: number } = { leaseUntil: Date.now() + 360_000 }) => local("checkpoint", () => store.checkpointDefinition(job.id, work, manifest, renewal));
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = options.continuous ? Infinity : Date.now() + limits.durationMs;
   const lease = () => options.continuous ? { leaseUntil: Date.now() + 360_000 } : {};
-  const prior = store.definitionHistory(project.id, epicID, definitionInputKey(project, epicID)).find((j) => j.id !== job.id);
+  const candidates = store.definitionHistory(project.id, epicID, definitionInputKey(project, epicID)).filter((j) => j.id !== job.id);
+  // New baseline work also guards shared interpretation. A genuine change to
+  // that broader guard must fall back, not trap ordinary same-v1-key continuation
+  // on an unusable prior plan forever. Preserve the old job verbatim.
+  const prior = candidates.find((j) => !j.definitionWork?.baseline || definitionBaselineScopeMatches(project, j.definitionWork.baseline));
+  const checkpointBaseline = !prior || prior.definitionWork?.baseline?.checkpoint
+    ? await store.definitionCheckpointBaseline(project, epicID, { signal: options.signal,
+      ownerJobID: job.id, onBoundary: () => store.renewDefinitionLease(job.id, Date.now() + 360_000), onProgress: options.onProgress,
+      ...(prior?.definitionWork?.baseline?.checkpoint ? { baseline: prior.definitionWork.baseline } : {}) }) : undefined;
   const preparationStarted = Date.now();
   options.onProgress?.(`Preparing definition evidence for ${project.epics.find((e) => e.id === epicID)?.title ?? epicID} · ${prior?.definitionWork?.receipts.length ?? 0} saved stages available. Gathering exact area, project-wide and declared dependency evidence; no model request is running yet.`);
   const work = local("preparation", () => prior?.definitionWork ? { ...structuredClone(prior.definitionWork), originJobID: prior.id }
-    : planDefinitionStages(project, epicID, (progress) => options.onProgress?.(`Preparing exact definition batches · ${progress.prepared} / ${progress.total} evidence records packaged · ${progress.probes} exact size checks. Local preparation only; no model request is running yet.`)));
+    : planDefinitionStages(project, epicID, (progress) => options.onProgress?.(`Preparing exact definition batches · ${progress.prepared} / ${progress.total} evidence records packaged · ${progress.probes} exact size checks. Local preparation only; no model request is running yet.`), checkpointBaseline ?? store.definitionBaseline(project, epicID)));
+  if (work.baseline?.checkpoint) options.onProgress?.(`Retaining the unfinished review from revision ${work.baseline.sourceRevision} · ${work.baseline.checkpoint.acceptedStages} original steps saved. Collecting ${work.baseline.changedRecordIDs.length} changed records and ${work.baseline.checkpoint.unreadRecordIDs.length} unfinished original records, then checking every current evidence batch. Earlier findings are provisional, not a completed assessment.`);
+  else if (work.baseline) options.onProgress?.(`Retaining the saved assessment from revision ${work.baseline.sourceRevision}. Collecting ${work.baseline.changedRecordIDs.length} changed evidence records, then checking every current evidence batch. Earlier findings remain historical until all checks finish; no unchanged evidence collection is repeated.`);
+  else if (!prior && project.assessments.some((a) => a.epicID === epicID)) options.onProgress?.("The earlier assessment remains saved. A complete evidence collection is needed because its original publication or compatible scope/evidence could not be verified for reuse. No old findings were erased or marked current.");
   delete work.paused;
   let draft: Analysis | undefined, calls = 0;
   const replay = iterateDefinitionStages(project, work);
@@ -184,7 +197,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   options.onProgress?.(`Definition evidence prepared in ${((Date.now() - preparationStarted) / 1000).toFixed(1)} seconds · ${work.receipts.length} stages reused · ${definitionSteps(work).length} planned read/check stages. Additional exact subdivisions may be needed if findings grow.`);
   for (;;) {
     options.signal.throwIfAborted();
-    if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
+    if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError();
     if (work.blocked) return store.blockDefinition(job.id, work.blocked, work.blockedKind);
     if (definitionPhase(work) === "complete") return local("publication", () => store.finishJob(job.id, completedDefinitionAssessment(project, work)));
     if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline)) return store.pauseDefinition(job.id, calls >= limits.requests ? "request-limit" : "time-limit", limits.durationMs);
@@ -228,7 +241,8 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     finally { clearInterval(heartbeat); }
     if (options.schedule) options.schedule[step.phase === "collect" ? "collectMs" : "verifyMs"] = Date.now() - requestStarted;
     options.signal.throwIfAborted();
-    if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
+    // Validate against the immutable request inputs before the checkpoint stops
+    // stale work. A concurrent decision must not discard a completed valid reply.
     if (raw && typeof raw === "object" && "definitionEvidence" in raw) {
       try { local("validation", () => requestDefinitionEvidence(project, work, draft, raw, job.id)); }
       catch (error) {
@@ -280,6 +294,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
       context = next;
     }
   }
+  } finally { store.releaseDefinitionCheckpointBaseline(job.id); }
 }
 
 export { DefinitionEvidenceBlocked };

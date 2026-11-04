@@ -632,7 +632,6 @@ export class DiscoveryService {
             work.attempts++; callsThisRun++; checkpoint();
             const raw = await requestModel(context);
             controller.signal.throwIfAborted();
-            if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
             if (JSON.stringify(raw)?.length > 12000) return block("Staged response exceeds the 12,000-character draft allowance; no proposals were published or truncated.");
             if (raw && typeof raw === "object" && "reviewBlocked" in raw) return block(epicReviewBlockedSchema.parse(raw).reviewBlocked.reason, true);
             const phase = staged.phase, batch = staged.nextBatch;
@@ -687,7 +686,6 @@ export class DiscoveryService {
           work.attempts++; checkpoint();
           const raw = await requestModel(context);
           controller.signal.throwIfAborted();
-          if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
           if (raw && typeof raw === "object" && "reviewBlocked" in raw) return block(epicReviewBlockedSchema.parse(raw).reviewBlocked.reason, true);
           if (raw && typeof raw === "object" && "searchEvidence" in raw) return block("Search/paging is not available in epic review. Supply or link the specific missing evidence instead.");
           if (raw && typeof raw === "object" && "retrieveEvidence" in raw) {
@@ -809,7 +807,6 @@ export class DiscoveryService {
           report(`Evidence stage ${stage + 1}: ${work.stages.length} navigation stages saved; request ${work.attempts} of ${maxRequests}, ${context.manifest.characters} / ${context.manifest.budget} characters. Unseen evidence cannot support proposals.`);
           output = await requestModel(context);
           controller.signal.throwIfAborted();
-          if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
           if (!output || typeof output !== "object" || !("retrieveEvidence" in output || "searchEvidence" in output)) {
             if (JSON.stringify(output)?.length > 96000) throw new Error("Final gap response exceeds the 96,000-character saved-output bound.");
             const parsed = parseDiscoveryAnalysis(output).result;

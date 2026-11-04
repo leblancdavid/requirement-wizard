@@ -321,7 +321,7 @@ test("staged drafts remain unpublished across an explicit action-budget pause, r
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-for (const failure of ["cancelled", "stale"] as const) test(`staged ${failure} response cannot checkpoint drafts or publish`, async () => {
+for (const failure of ["cancelled", "stale"] as const) test(`staged ${failure} response cannot publish; only valid stale drafts are retained`, async () => {
   const store = new ProjectStore(":memory:"); const controller = new AbortController();
   try {
     const p = sharedHeavy(store);
@@ -332,12 +332,42 @@ for (const failure of ["cancelled", "stale"] as const) test(`staged ${failure} r
     } });
     const job = await service.analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", signal: controller.signal });
     assert.equal(job.status, failure, job.diagnostic);
-    assert.equal(job.retrievalWork!.attempts, 1); assert.equal(job.retrievalWork!.epicStages!.receipts.length, 0);
+    assert.equal(job.retrievalWork!.attempts, failure === "stale" ? 0 : 1);
+    assert.equal(job.retrievalWork!.epicStages!.receipts.length, failure === "stale" ? 1 : 0);
     assert.equal(job.result, undefined);
     assert.deepEqual(store.get(p.id).requirements, p.requirements);
     if (failure === "cancelled") assert.deepEqual(store.get(p.id), p);
     else assert.notEqual(planEpicReview(store.get(p.id), store.epicReviewHistory(p.id), "orders").task!.review.inputKey, job.context!.epicReview!.inputKey);
   } finally { store.close(); }
+});
+
+for (const stopAt of ["draft", "final"] as const) test(`staged epic ${stopAt} reply survives an unrelated edit and restart without repeated calls`, async () => {
+  const directory = mkdtempSync(join(resolve(".reqwizit-state/tests"), "epic-late-reply-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = sharedHeavy(store), seen = new Set<string>(); let edited = false;
+    const adapter = { async analyze(_p: Project, { context }: import("../service/discovery.js").DiscoveryOptions) {
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number; batches: number } }).stagedGuardrailReview;
+      const key = `${stage.phase}-${stage.batch}`; assert.ok(!seen.has(key), "Accepted original requests cannot repeat"); seen.add(key);
+      if (!edited && (stopAt === "draft" || stage.phase === "validate" && stage.batch === stage.batches)) {
+        edited = true; store.note(p.id, p.revision, "Independent billing choice", "billing");
+      }
+      return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+    } };
+    const job = await new DiscoveryService(store, adapter).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(job.status, "stale", job.diagnostic); assert.equal(edited, true); assert.equal(job.result, undefined);
+    const work = job.retrievalWork!.epicStages!;
+    assert.equal(work.receipts.length, stopAt === "draft" ? 1 : work.batches * 2);
+    validateEpicStages(p, job.context!.epicReview!, work);
+    assert.deepEqual(store.get(p.id).requirements, p.requirements);
+    store.close(); store = new ProjectStore(path); assert.deepEqual(store.getJob(job.id), job);
+    const before = seen.size, current = store.get(p.id);
+    const done = await new DiscoveryService(store, adapter).analyze(p.id, current.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(done.status, "completed", done.diagnostic);
+    if (stopAt === "final") assert.equal(seen.size, before, "Saved final verification needs no extra request");
+    assert.deepEqual(done.retrievalWork!.epicStages!.receipts.slice(0, work.receipts.length), work.receipts);
+    assert.deepEqual(store.getJob(job.id), job);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("malformed staged responses retain spent attempts and never publish partial drafts", async () => {
@@ -934,6 +964,27 @@ test("single batched load leaves room for final review and is checkpointed", asy
   } finally { store.close(); }
 });
 
+for (const response of ["load", "final"] as const) test(`ordinary epic ${response} survives an unrelated edit without replay`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 7), target = planEpicReview(p, [], "orders").task!, hidden = p.requirements.find((r) => r.epicID === "orders" && !target.review.recordIDs.includes(r.id))!;
+    let calls = 0;
+    const first = await new DiscoveryService(store, { async analyze() {
+      calls++; store.note(p.id, p.revision, "Independent billing choice", "billing");
+      return response === "load" ? { retrieveEvidence: { format: 1, recordIDs: [hidden.id], reason: "Compare exact recovery behavior" } } : empty();
+    } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(first.status, "stale", first.diagnostic); assert.equal(calls, 1); assert.equal(first.result, undefined);
+    assert.equal(first.retrievalWork!.stages.length, response === "load" ? 1 : 0);
+    assert.equal(!!first.retrievalWork!.final, response === "final");
+    const current = store.get(p.id);
+    const done = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      calls++; assert.equal(response, "load"); assert.ok(context.manifest.includedIDs.includes(hidden.id)); return empty();
+    } }).analyze(p.id, current.revision, { gapMode: "epic", focusEpicID: "orders" });
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(calls, response === "load" ? 2 : 1);
+    assert.deepEqual(store.getJob(first.id), first);
+  } finally { store.close(); }
+});
+
 test("epic review constrains proposal areas and rejects out-of-scope output before checkpointing", async () => {
   const store = new ProjectStore(":memory:");
   try {
@@ -1013,7 +1064,7 @@ for (const response of ["final", "blocked"] as const) for (const mode of ["cance
     assert.equal(job.status, mode === "lease" ? "interrupted" : mode);
     assert.equal(job.retrievalWork!.attempts, 1); assert.equal(job.epicReviewReport!.reviewed, 0);
     assert.deepEqual(store.get(p.id).requirements, p.requirements);
-    assert.equal(job.retrievalWork!.final, undefined);
+    assert.equal(!!job.retrievalWork!.final, mode === "stale" && response === "final");
   } finally { store.close(); }
 });
 

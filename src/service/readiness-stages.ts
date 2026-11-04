@@ -31,7 +31,7 @@ export async function runReadinessStages(store: ProjectStore, adapter: Discovery
   let calls = 0;
   const current = () => {
     options.signal.throwIfAborted();
-    if (store.get(project.id).revision !== project.revision) throw new StaleRevisionError();
+    if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError();
   };
   const contextForCompletion = (): ContextPack => {
     const prefix = { ...work, receipts: work.receipts.slice(0, -1), attempts: work.receipts.at(-1)!.attempt };
@@ -70,7 +70,7 @@ export async function runReadinessStages(store: ProjectStore, adapter: Discovery
         onResearch: (value) => { if (value.length) throw new Error("Staged clarification does not authorize research."); },
         onProgress: (message) => { if (!signal.aborted) options.onProgress?.(message); } }), signal);
       raw = options.measurement ? await options.measurement.request(request, context, signal) : await request();
-      signal.throwIfAborted(); current();
+      signal.throwIfAborted();
     } catch (error) {
       if (timeout.aborted && !options.signal.aborted) return store.pauseReadiness(job.id,
         "Clarification request timed out; completed steps and the spent request are saved. Continue clarification explicitly; no partial questions were published.");

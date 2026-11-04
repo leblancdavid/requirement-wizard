@@ -911,8 +911,8 @@ for (const outcome of ["cancelled", "stale", "malformed", "oversized"] as const)
       return empty();
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false, signal: controller.signal });
     assert.equal(job.status, outcome === "cancelled" || outcome === "stale" ? outcome : "failed", job.diagnostic);
-    assert.equal(job.retrievalWork!.attempts, 1);
-    assert.equal(job.retrievalWork!.epicStages!.receipts.length, 0);
+    assert.equal(job.retrievalWork!.attempts, outcome === "stale" ? 0 : 1);
+    assert.equal(job.retrievalWork!.epicStages!.receipts.length, outcome === "stale" ? 1 : 0);
     assert.equal(job.retrievalWork!.epicStages!.contextPolicy, "staged-headroom-v2");
     assert.deepEqual(store.get(p.id).requirements, before.requirements);
     if (outcome !== "stale") assert.deepEqual(store.get(p.id).sources, before.sources);

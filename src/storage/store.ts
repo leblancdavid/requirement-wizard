@@ -28,9 +28,12 @@ import { continuationState, decodePortable, portableDigest } from "./portable.js
 import { dirname, join } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
-import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionInputKey, definitionInputDocument } from "../core/definition-identity.js";
+import { definitionBaselineKey, definitionBaselineLimits, prepareDefinitionBaseline, prepareDefinitionCheckpointBaseline, definitionCheckpointScopeCompatible, type DefinitionBaseline } from "../core/definition-baseline.js";
+import { iterateDefinitionStages } from "../core/definition-stages.js";
+import { setImmediate as yieldDefinitionReplay } from "node:timers/promises";
 import { assertImplementationPlanningFormats } from "../core/implementation-planning.js";
-import { definitionTaskSchema, definitionContext, validateDefinitionAssessment } from "../core/definition-assessment.js";
+import { definitionTaskSchema, definitionContext, validateDefinitionAssessment, validateDefinitionResult } from "../core/definition-assessment.js";
 import type { ContextPack } from "../core/context.js";
 import { definitionPublicationContext, type DefinitionPublicationContext } from "../core/definition-publication.js";
 import { beginDefinitionRequest, finishDefinitionRequest, saveDefinitionPublication, readDefinitionPublication } from "./definition-publication.js";
@@ -134,6 +137,7 @@ function readStoredJob(payload: string): Job {
   if (job.definitionWork !== undefined) {
     const work = definitionWorkSchema.parse(job.definitionWork), task = job.context?.definitionAssessment;
     if (task?.epicID !== work.epicID || task.inputKey !== work.inputKey || task.staged?.planKey !== work.planKey) throw new Error("Definition checkpoint does not match its saved task policy; original evidence was not overwritten.");
+    if (task.staged.baselineKey !== (work.baseline ? definitionBaselineKey(work.baseline) : undefined)) throw new Error("Definition baseline does not match its original task; saved work was not overwritten.");
   }
   if (job.definitionBlock !== undefined) z.object({ format: z.literal(1), reason: z.string().min(1).max(1200), kind: definitionBlockedSchema.shape.definitionBlocked.shape.kind }).strict().parse(job.definitionBlock);
   if (job.definitionInterruption !== undefined) definitionInterruptionSchema.parse(job.definitionInterruption);
@@ -186,6 +190,12 @@ function applyScanResults(project: Project, scan: NonNullable<Job["scan"]>, outp
 export class ProjectStore {
   private readonly db: Database.Database;
   private readonly deferredWorkspaceSync = new Map<string, number>();
+  // Content-addressed derived drafts, not model-call results or new authority.
+  // Keep four unowned assessments plus active workers' pinned origins (at most
+  // sixteen per candidate); never retain the historical request bodies.
+  private readonly definitionCheckpointDrafts = new Map<string, DefinitionBaseline["assessment"]>();
+  private readonly definitionCheckpointOwners = new Map<string, Set<string>>();
+  private readonly workflowCheckpointViews = new Map<string, { stamp: string; rows: Map<string, { jobID: string; inputRevision: number; inputKey: string; acceptedStages: number }> }>();
 
   constructor(path: string, private readonly startupProgress?: StartupProgress) {
     reportStartup(startupProgress, "opening-data");
@@ -487,6 +497,7 @@ export class ProjectStore {
         .run(id, snapshot.revision, "Retained portable continuation evidence", JSON.stringify(snapshot));
       imported.execution.version = existing ? this.execution(id).version + 1 : 1;
       if (imported.execution.planning) imported.execution.planning.bindingID = binding.bindingID!;
+      for (const source of Object.values(imported.execution.planning?.pendingSources ?? {})) source.bindingID = binding.bindingID!;
       for (const run of imported.execution.assessmentRuns ?? []) run.bindingID = binding.bindingID!;
       this.db.prepare("INSERT INTO execution_state VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET version=excluded.version,payload=excluded.payload")
         .run(id, imported.execution.version, JSON.stringify(imported.execution));
@@ -1379,15 +1390,31 @@ export class ProjectStore {
 
   /** A checkpoint is evidence of a completed navigation call, never a gap check. */
   checkpointRetrieval(id: string, input: RetrievalWork, context: NonNullable<Job["context"]>, leaseUntil?: number) {
-    this.db.transaction(() => {
+    const stale = this.db.transaction(() => {
       const job = this.getJob(id);
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Retrieval worker is no longer live.");
-      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
-      job.retrievalWork = retrievalWorkSchema.parse(input);
+      if (context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      const work = retrievalWorkSchema.parse(input);
+      if (job.retrievalWork && (job.retrievalWork.research !== work.research
+        || job.retrievalWork.epicStages?.planKey !== work.epicStages?.planKey
+        || JSON.stringify(job.context?.gapExploration) !== JSON.stringify(context.gapExploration)
+        || job.context?.epicReview?.packageID !== context.epicReview?.packageID
+        || job.context?.epicReview?.inputKey !== context.epicReview?.inputKey))
+        throw new Error("Retrieval checkpoint cannot replace its original task, policy or stage plan.");
+      const changed = this.projectRevision(job.projectID) !== job.expectedRevision;
+      job.retrievalWork = work;
       job.context = context;
-      if (leaseUntil !== undefined) job.leaseUntil = Math.max(job.leaseUntil!, z.number().int().min(Date.now() + 1).max(Date.now() + 360000).parse(leaseUntil));
-      this.saveJob(job);
+      if (leaseUntil !== undefined) {
+        const renewal = z.number().int().min(Date.now() + 1).max(Date.now() + 360000).parse(leaseUntil);
+        if (!changed) job.leaseUntil = Math.max(job.leaseUntil!, renewal);
+      }
+      if (changed) {
+        job.status = "stale"; job.leaseUntil = null;
+        job.diagnostic = "Project changed during discovery. Validated navigation, draft/check receipts and final responses remain attached to their original evidence and spent attempts; no proposals were published. Changed evidence still requires review.";
+      }
+      this.saveJob(job); return changed;
     }).immediate();
+    if (stale) throw new StaleRevisionError();
   }
 
   retrievalHistory(projectID: string, revision: number, exploration: NonNullable<Job["context"]>["gapExploration"], research: boolean, model: Job["model"], focusEpicID: string | null): Job[] {
@@ -1794,32 +1821,40 @@ export class ProjectStore {
   }
 
   checkpointReadiness(id: string, input: ReadinessWork, context: NonNullable<Job["context"]>) {
-    this.db.transaction(() => {
+    const stale = this.db.transaction(() => {
       const job = this.getJob(id), work = readinessWorkSchema.parse(input);
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Clarification worker is no longer live.");
-      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (context.revision !== job.expectedRevision) throw new StaleRevisionError();
       if (JSON.stringify(context.readinessQuestions) !== JSON.stringify(work.task) || context.readinessStage?.planKey !== work.planKey)
         throw new Error("Clarification checkpoint requires its exact task and plan.");
-      job.readinessWork = structuredClone(work); job.context = context;
-      job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 360000); this.saveJob(job);
+      if (job.readinessWork && (job.readinessWork.planKey !== work.planKey || job.readinessWork.materialKey !== work.materialKey))
+        throw new Error("Clarification checkpoint cannot replace its original material or plan.");
+      job.readinessWork = structuredClone(work);
+      return this.saveRetainedStageCheckpoint(job, context, "Clarification");
     }).immediate();
+    if (stale) throw new StaleRevisionError();
   }
 
   checkpointRefinement(id: string, input: RefinementWork, context: NonNullable<Job["context"]>, requestStarted = false) {
-    this.db.transaction(() => {
+    const stale = this.db.transaction(() => {
       const job = this.getJob(id), work = refinementWorkSchema.parse(input);
       refinementStageSchema.parse(context.refinementStage);
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Refinement worker is no longer live.");
-      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (context.revision !== job.expectedRevision) throw new StaleRevisionError();
       if (!context.refinementOnly || !sameRefinementTask({ ...job, context }, work.requirementID, work.pair) || context.refinementStage?.policy !== work.policy || context.submissionIDs?.length || context.readinessQuestions || context.definitionAssessment
         || context.gapExploration || context.epicReview || job.submissionWork || job.readinessWork || job.definitionWork || job.retrievalWork
         || context.refinementStage?.planKey !== work.planKey)
         throw new Error("Refinement checkpoint requires its exact target and plan.");
+      if (job.refinementWork && (job.refinementWork.planKey !== work.planKey || job.refinementWork.materialKey !== work.materialKey
+        || JSON.stringify(job.context?.refinementTarget) !== JSON.stringify(context.refinementTarget)
+        || JSON.stringify(job.context?.refinementPair) !== JSON.stringify(context.refinementPair)))
+        throw new Error("Refinement checkpoint cannot replace its original target, material or plan.");
       if (!job.refinementWork) job.refinementRequests = 0;
       if (requestStarted && job.refinementRequests !== undefined) job.refinementRequests++;
-      job.refinementWork = structuredClone(work); job.context = context;
-      job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 360000); this.saveJob(job);
+      job.refinementWork = structuredClone(work);
+      return this.saveRetainedStageCheckpoint(job, context, "Refinement");
     }).immediate();
+    if (stale) throw new StaleRevisionError();
   }
 
   recordRefinementRequest(id: string) {
@@ -1841,14 +1876,31 @@ export class ProjectStore {
   }
 
   checkpointSubmission(id: string, input: SubmissionWork, context: NonNullable<Job["context"]>) {
-    this.db.transaction(() => {
+    const stale = this.db.transaction(() => {
       const job = this.getJob(id), work = submissionWorkSchema.parse(input);
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Saved-response worker is no longer live.");
-      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (context.revision !== job.expectedRevision) throw new StaleRevisionError();
       if (context.submissionStage?.planKey !== work.planKey || JSON.stringify(context.submissionIDs) !== JSON.stringify([work.submissionID])) throw new Error("Saved-response checkpoint requires its original task and plan.");
-      job.submissionWork = structuredClone(work); job.context = context;
-      job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 360000); this.saveJob(job);
+      if (job.submissionWork && (job.submissionWork.planKey !== work.planKey || job.submissionWork.materialKey !== work.materialKey
+        || job.submissionWork.submissionID !== work.submissionID || JSON.stringify(job.submissionWork.task) !== JSON.stringify(work.task)))
+        throw new Error("Saved-response checkpoint cannot replace its original task, material or plan.");
+      job.submissionWork = structuredClone(work);
+      return this.saveRetainedStageCheckpoint(job, context, "Saved-response follow-up");
     }).immediate();
+    if (stale) throw new StaleRevisionError();
+  }
+
+  /** Called inside the owning checkpoint transaction after live-worker and exact
+   * task validation. Commit original computation before reporting staleness: a
+   * throw inside the transaction would discard the completed accepted response. */
+  private saveRetainedStageCheckpoint(job: Job, context: NonNullable<Job["context"]>, label: string) {
+    const changed = this.projectRevision(job.projectID) !== job.expectedRevision;
+    job.context = context;
+    if (changed) {
+      job.status = "stale"; job.leaseUntil = null;
+      job.diagnostic = `${label}: project changed while work was running. Validated stages and spent attempts are retained under their original inputs; no questions, proposals or specification changes were published. Changed evidence still requires review.`;
+    } else job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 360000);
+    this.saveJob(job); return changed;
   }
 
   /** Explicit extra allowance, never a reset or an automatic retry. Metadata-only
@@ -1926,17 +1978,22 @@ export class ProjectStore {
       const binding = this.workspace(job.projectID);
       if ((job.leaseUntil ?? 0) <= Date.now()) {
         job.status = "interrupted"; job.diagnostic = "Scan lease expired. Resume explicitly.";
-      } else if (this.get(job.projectID).revision !== job.expectedRevision || !binding || binding.bindingID !== work.bindingID || workspaceScanKey(binding.path) !== job.scan.workspaceKey) {
-        job.status = "stale"; job.diagnostic = "Project or connected folder changed. Scan was not applied. Start a new scan.";
       } else {
+        const completed = work.batches.flatMap((batch) => batch.output ? [batch.output] : []);
+        const saved = job.scanWork?.batches.flatMap((batch) => batch.output ? [batch.output] : []) ?? [];
+        // Validate historical observations against the inputs that produced them,
+        // never against a newer decision. Keep them even when publication is stale.
+        if (JSON.stringify(completed) !== JSON.stringify(saved)) applyScanResults(this.get(job.projectID, job.expectedRevision), job.scan, completed);
+        job.scanWork = work;
+        if (this.projectRevision(job.projectID) !== job.expectedRevision || !binding || binding.bindingID !== work.bindingID || workspaceScanKey(binding.path) !== job.scan.workspaceKey) {
+          job.status = "stale"; job.diagnostic = "Project or connected folder changed. Validated batches and spent attempts remain saved against the original inputs; no scan proposals were applied. Start a new scan; reconciling changed inputs is not yet supported.";
+          job.leaseUntil = null; this.saveJob(job); return false;
+        }
         if (options.leaseUntil !== undefined) {
           if (!Number.isSafeInteger(options.leaseUntil) || options.leaseUntil <= Date.now()) throw new Error("Scan lease renewal must have a future deadline.");
           job.leaseUntil = Math.max(job.leaseUntil!, options.leaseUntil);
         }
-        const completed = work.batches.flatMap((batch) => batch.output ? [batch.output] : []);
-        const saved = job.scanWork?.batches.flatMap((batch) => batch.output ? [batch.output] : []) ?? [];
-        if (JSON.stringify(completed) !== JSON.stringify(saved)) applyScanResults(this.get(job.projectID), job.scan, completed);
-        job.scanWork = work; this.saveJob(job); return true;
+        this.saveJob(job); return true;
       }
       job.leaseUntil = null; this.saveJob(job); return false;
     }).immediate();
@@ -2025,6 +2082,7 @@ export class ProjectStore {
         const published = this.mutate(job.projectID, job.expectedRevision, `AI proposals from job ${id}`, (project) => {
           if (job.context?.definitionAssessment) {
             definitionInput = structuredClone(project);
+            if (job.definitionWork?.baseline) this.assertDefinitionBaseline(project, job.definitionWork);
             const verified = job.definitionWork ? completedDefinitionAssessment(project, job.definitionWork, (context, receipt, phase) => {
               const fact = definitionPublicationContext(context, receipt.response, receipt.jobID, phase);
               if (fact) definitionContexts.push(fact); else definitionCoverageAvailable = false;
@@ -2261,6 +2319,202 @@ export class ProjectStore {
       AND json_extract(payload, '$.definitionWork.inputKey') = ? ORDER BY rowid DESC LIMIT 20`).all(projectID, epicID, inputKey) as { payload: string }[]).map((row) => readStoredJob(row.payload));
   }
 
+  /** Compact progress only: no request bodies or derived findings are decoded.
+   * Scheduling must still validate the exact task on dispatch/publication. */
+  workflowDefinitionCheckpoints(projectID: string) {
+    // Local writes AND other SQLite connections invalidate this read-only cache.
+    // Never rescan the job archive on unchanged browser polls, or cache solely by
+    // project revision (checkpoint progress does not increment it).
+    const stamp = `${this.db.pragma("data_version", { simple: true })}:${(this.db.prepare("SELECT total_changes() AS count").get() as { count: number }).count}`;
+    const cached = this.workflowCheckpointViews.get(projectID);
+    if (!this.db.inTransaction && cached?.stamp === stamp) return structuredClone(cached.rows);
+    const rows = this.db.prepare(`SELECT id AS jobID, json_extract(payload, '$.definitionWork.epicID') AS epicID,
+      json_extract(payload, '$.expectedRevision') AS inputRevision, json_extract(payload, '$.definitionWork.inputKey') AS inputKey,
+      json_array_length(payload, '$.definitionWork.receipts') AS acceptedStages FROM jobs WHERE project_id = ? AND rowid IN
+      (SELECT max(rowid) FROM jobs WHERE project_id = ? AND json_extract(payload, '$.definitionWork.epicID') IS NOT NULL
+      GROUP BY json_extract(payload, '$.definitionWork.epicID')) AND json_extract(payload, '$.status') != 'completed'`)
+      .all(projectID, projectID) as { jobID: string; epicID: string; inputRevision: number; inputKey: string; acceptedStages: number }[];
+    const projected = new Map(rows.map(({ epicID, ...checkpoint }) => [epicID, checkpoint]));
+    if (this.db.inTransaction) return projected;
+    this.workflowCheckpointViews.delete(projectID); this.workflowCheckpointViews.set(projectID, { stamp, rows: projected });
+    while (this.workflowCheckpointViews.size > 8) this.workflowCheckpointViews.delete(this.workflowCheckpointViews.keys().next().value!);
+    return structuredClone(projected);
+  }
+
+  /** One bounded original publication snapshot, not a scan of the activity archive.
+   * Missing older provenance keeps the existing full-review path available. */
+  definitionBaseline(project: Project, epicID: string): DefinitionBaseline | undefined {
+    const saved = project.assessments.find((a) => a.epicID === epicID);
+    if (!saved || saved.atRevision >= project.revision) return;
+    const original = this.definitionBaselineSource(project.id, saved.atRevision);
+    const job = original && this.definitionBaselineJob(original, epicID);
+    return original && job && prepareDefinitionBaseline(original, project, epicID, job.id);
+  }
+
+  /** Cooperatively validate a quiescent original checkpoint. This starts no model
+   * request and never modifies the source job. The caller renews only its own live
+   * worker between receipts; no transaction is held across a yield. */
+  async definitionCheckpointBaseline(project: Project, epicID: string, options: {
+    signal: AbortSignal; onBoundary: () => void; onProgress?: (message: string) => void; baseline?: DefinitionBaseline; ownerJobID?: string;
+  }): Promise<DefinitionBaseline | undefined> {
+    const active = new Set<string>();
+    const ownerJobID = options.ownerJobID ?? randomUUID();
+    const prepare = async (current: Project, area: string, required?: DefinitionBaseline): Promise<DefinitionBaseline | undefined> => {
+      options.signal.throwIfAborted(); options.onBoundary();
+      const publishedRevision = current.assessments.find((a) => a.epicID === area)?.atRevision ?? 0;
+      const ids = required ? [required.sourceJobID] : (this.db.prepare(`SELECT id FROM jobs WHERE project_id = ?
+        AND json_extract(payload, '$.definitionWork.epicID') = ? AND json_extract(payload, '$.expectedRevision') < ?
+        AND json_extract(payload, '$.expectedRevision') >= ? AND json_array_length(payload, '$.definitionWork.receipts') > 0
+        AND json_extract(payload, '$.status') IN ('failed', 'cancelled', 'interrupted', 'stale') ORDER BY rowid DESC LIMIT 4`)
+        .all(current.id, area, current.revision, publishedRevision) as { id: string }[]).map((r) => r.id);
+      for (const id of ids) {
+        if (active.has(id) || active.size >= 16) throw new Error("Definition checkpoint ancestry is cyclic or exceeds sixteen origins. Saved work was not changed.");
+        active.add(id);
+        try {
+          const source = this.definitionCheckpointSource(current.id, id);
+          if (!source || source.job.definitionWork!.epicID !== area) { if (required) throw new Error("Original unfinished definition checkpoint is unavailable."); continue; }
+          const { job, original, cacheKey } = source, work = job.definitionWork!;
+          if (!definitionCheckpointScopeCompatible(original, current, area)) {
+            if (required) throw new Error("Original checkpoint scope/evidence is incompatible with this follow-up. Saved work was retained.");
+            continue;
+          }
+          if (work.baseline) {
+            if (work.baseline.checkpoint) await prepare(original, area, work.baseline);
+            this.assertDefinitionBaseline(original, work);
+          }
+          let assessment = this.definitionCheckpointDrafts.get(cacheKey);
+          if (!assessment) {
+            const replay = iterateDefinitionStages(original, work);
+            for (;;) {
+              options.signal.throwIfAborted(); await yieldDefinitionReplay(); options.signal.throwIfAborted(); options.onBoundary();
+              const next = replay.next();
+              if (next.done) { assessment = next.value?.assessments?.[0]; break; }
+              options.onProgress?.(`Validating original saved review · ${next.value} / ${work.receipts.length} stages. Local evidence replay only; no model call is running.`);
+            }
+            if (!assessment) continue;
+            this.definitionCheckpointDrafts.set(cacheKey, structuredClone(assessment));
+          }
+          const pinned = this.definitionCheckpointOwners.get(ownerJobID) ?? new Set<string>(); pinned.add(cacheKey);
+          this.definitionCheckpointOwners.set(ownerJobID, pinned);
+          this.trimDefinitionCheckpointDrafts();
+          const baseline = prepareDefinitionCheckpointBaseline(original, current, work, job.id, assessment);
+          if (required && (!baseline || definitionBaselineKey(baseline) !== definitionBaselineKey(required)))
+            throw new Error("Saved partial baseline differs from its exact original checkpoint. No call or publication was authorized.");
+          if (baseline) return baseline;
+        } finally { active.delete(id); }
+      }
+      if (required) throw new Error("Original unfinished definition draft could not be verified. Saved work was retained.");
+      return undefined;
+    };
+    try { return await prepare(project, epicID, options.baseline); }
+    finally { if (!options.ownerJobID) this.releaseDefinitionCheckpointBaseline(ownerJobID); }
+  }
+
+  releaseDefinitionCheckpointBaseline(ownerJobID: string) {
+    this.definitionCheckpointOwners.delete(ownerJobID); this.trimDefinitionCheckpointDrafts();
+  }
+
+  private trimDefinitionCheckpointDrafts() {
+    const pinned = new Set([...this.definitionCheckpointOwners.values()].flatMap((keys) => [...keys]));
+    const unowned = [...this.definitionCheckpointDrafts.keys()].filter((key) => !pinned.has(key));
+    for (const key of unowned.slice(0, Math.max(0, unowned.length - 4))) this.definitionCheckpointDrafts.delete(key);
+  }
+
+  private definitionCheckpointSource(projectID: string, jobID: string) {
+    // New local-only source-read bound. Existing context/request/attempt limits do
+    // not change; a larger saved source remains retained but unavailable here.
+    const row = this.db.prepare(`SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM jobs
+      WHERE project_id = ? AND id = ? AND json_extract(payload, '$.kind') IS NULL AND json_extract(payload, '$.helpRequest') IS NULL
+      AND json_extract(payload, '$.status') IN ('failed', 'cancelled', 'interrupted', 'stale')`)
+      .get(64 * 1024 * 1024, projectID, jobID) as { payload: string | null } | undefined;
+    if (!row?.payload) return;
+    const job = readStoredJob(row.payload), work = job.definitionWork;
+    if (!work?.receipts.length || job.projectID !== projectID || job.id !== jobID) return;
+    const original = this.definitionBaselineSource(projectID, job.expectedRevision); if (!original) return;
+    return { job, original, cacheKey: definitionBaselineKey([definitionBaselineKey(original), definitionBaselineKey(work)]) };
+  }
+
+  private definitionBaselineJob(original: Project, epicID: string, jobID?: string) {
+    // A published snapshot plus its matching completed assessment-only result is
+    // the origin. Do not deserialize/replay hundreds of historical request bodies
+    // merely to reuse a collection that was already validated at publication.
+    const rows = this.db.prepare(`SELECT id, json_extract(payload, '$.context.definitionAssessment') AS task,
+      CASE WHEN length(CAST(json_extract(payload, '$.result') AS BLOB)) <= ? THEN json_extract(payload, '$.result') END AS result,
+      json_extract(payload, '$.definitionWork.format') AS work_format, json_extract(payload, '$.definitionWork.policy') AS work_policy,
+      json_extract(payload, '$.definitionWork.blocked') AS blocked FROM jobs
+      WHERE project_id = ? AND json_extract(payload, '$.status') = 'completed' AND json_extract(payload, '$.expectedRevision') = ?
+      AND json_extract(payload, '$.kind') IS NULL AND json_extract(payload, '$.helpRequest') IS NULL
+      AND json_extract(payload, '$.context.definitionAssessment.epicID') = ? ORDER BY rowid DESC LIMIT 2`)
+      .all(definitionBaselineLimits.snapshotBytes, original.id, original.revision - 1, epicID) as {
+        id: string; task: string; result: string | null; work_format: number | null; work_policy: string | null; blocked: string | null;
+      }[];
+    const source = original.assessments.find((a) => a.epicID === epicID);
+    if (!source) return;
+    for (const row of rows) {
+      if (!row.result || jobID && row.id !== jobID || row.blocked) continue;
+      if (row.work_format !== null && (row.work_format !== 1 || row.work_policy !== "exact-batches-v1"))
+        throw new Error("Unsupported original definition work format. Saved history was not overwritten.");
+      const task = definitionTaskSchema.parse(JSON.parse(row.task)), result = stagedDefinitionAnalysisSchema.parse(JSON.parse(row.result)), assessment = result.assessments?.[0];
+      if (result.assessments?.length !== 1 || !assessment || !this.definitionBaselineInputMatches(original, epicID, task.inputKey)) continue;
+      validateDefinitionResult(original, epicID, [...original.sources, ...original.questions, ...original.requirements, ...original.research].map((r) => r.id), result);
+      if (definitionBaselineKey(assessment) === definitionBaselineKey({ epicID, confidence: source.confidence,
+        explanation: source.explanation, checks: source.checks })) return { id: row.id };
+    }
+  }
+
+  private definitionBaselineInputMatches(published: Project, epicID: string, inputKey: string) {
+    if (inputKey === definitionInputKey(published, epicID)) return true;
+    // Older serialization can bind the original property order. Prove that exact
+    // historical key AND identical guarded values, rather than rehashing today's
+    // decisions or recollecting solely because an equivalent representation changed.
+    const row = this.db.prepare("SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?")
+      .get(definitionBaselineLimits.snapshotBytes, published.id, published.revision - 1) as { payload: string | null } | undefined;
+    if (!row?.payload) return false;
+    const raw = JSON.parse(row.payload) as Project, parsed = projectSchema.safeParse(raw);
+    return parsed.success && raw.id === published.id && raw.revision === published.revision - 1
+      && definitionBaselineKey(raw) === definitionBaselineKey(parsed.data)
+      && definitionInputKey(raw, epicID) === inputKey
+      && definitionBaselineKey(definitionInputDocument(raw, epicID)) === definitionBaselineKey(definitionInputDocument(published, epicID));
+  }
+
+  private definitionBaselineSource(projectID: string, revision: number) {
+    const row = this.db.prepare("SELECT CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM revisions WHERE project_id = ? AND revision = ?")
+      .get(definitionBaselineLimits.snapshotBytes, projectID, revision) as { payload: string | null } | undefined;
+    if (!row?.payload) return;
+    const original = projectSchema.safeParse(JSON.parse(row.payload));
+    if (!original.success || original.data.id !== projectID || original.data.revision !== revision) return;
+    // Same read-only compatibility projection as get(): derive missing legacy
+    // bases ONLY from their own original publication, never today's decisions.
+    for (const assessment of original.data.assessments) if (!assessment.inputBasis && assessment.atRevision === revision)
+      assessment.inputBasis = { format: 1, key: definitionInputKey(original.data, assessment.epicID, assessment.checks.flatMap((c) => c.evidenceIDs)) };
+    return original.data;
+  }
+
+  private assertDefinitionBaseline(project: Project, work: DefinitionWork, ancestry = new Set<string>()) {
+    const baseline = work.baseline!;
+    if (ancestry.has(baseline.sourceJobID) || ancestry.size >= 16)
+      throw new Error("Definition checkpoint ancestry is cyclic or exceeds sixteen origins. Saved work was not changed.");
+    ancestry.add(baseline.sourceJobID);
+    if (baseline.checkpoint) {
+      const source = this.definitionCheckpointSource(project.id, baseline.sourceJobID);
+      if (source?.job.definitionWork?.baseline) this.assertDefinitionBaseline(source.original, source.job.definitionWork, ancestry);
+      const assessment = source && this.definitionCheckpointDrafts.get(source.cacheKey);
+      const expected = source && assessment && prepareDefinitionCheckpointBaseline(source.original, project, source.job.definitionWork!, source.job.id, assessment);
+      if (!expected || definitionBaselineKey(expected) !== definitionBaselineKey(baseline))
+        throw new Error("Original partial definition checkpoint must be validated before continuing. Saved work was retained.");
+      return;
+    }
+    const original = this.definitionBaselineSource(project.id, baseline.sourceRevision);
+    const source = original?.assessments.find((a) => a.epicID === work.epicID);
+    const job = original && this.definitionBaselineJob(original, work.epicID, baseline.sourceJobID);
+    // Today's assessment may already have been refreshed by a compatible complete
+    // job. Authenticate this baseline's own original, never rebase its findings.
+    const expected = original && source && job && prepareDefinitionBaseline(original,
+      { ...project, assessments: [...project.assessments.filter((a) => a.epicID !== work.epicID), source] }, work.epicID, job.id);
+    if (!expected || definitionBaselineKey(expected) !== definitionBaselineKey(baseline))
+      throw new Error("Saved definition baseline cannot be verified against its original assessed revision. Original work retained; no repeated call or publication.");
+  }
+
   logHistory(projectID: string, query: unknown) { return logHistory(this.db, projectID, query); }
 
   /** Local replay owns no new model allowance. Renewal never revives expired,
@@ -2269,24 +2523,39 @@ export class ProjectStore {
     this.db.transaction(() => {
       const job = this.getJob(id), now = Date.now();
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= now) throw new Error("Definition worker is no longer live; saved work retained.");
-      if (this.get(job.projectID).revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (this.projectRevision(job.projectID) !== job.expectedRevision) throw new StaleRevisionError();
       if (!Number.isSafeInteger(leaseUntil) || leaseUntil <= now) throw new Error("Definition lease renewal must have a future deadline.");
       job.leaseUntil = Math.max(job.leaseUntil!, leaseUntil); this.saveJob(job);
     }).immediate();
   }
 
   checkpointDefinition(id: string, input: DefinitionWork, context: NonNullable<Job["context"]>, options: { leaseUntil?: number } = {}) {
-    this.db.transaction(() => {
+    const stale = this.db.transaction(() => {
       const job = this.getJob(id), work = definitionWorkSchema.parse(input);
       if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Definition worker is no longer live; saved work retained.");
-      if (this.get(job.projectID).revision !== job.expectedRevision || context.revision !== job.expectedRevision) throw new StaleRevisionError();
-      if (context.definitionAssessment?.staged?.planKey !== work.planKey) throw new Error("Definition checkpoint requires its saved exact plan.");
+      if (context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (context.definitionAssessment?.staged?.planKey !== work.planKey
+        || context.definitionAssessment.epicID !== work.epicID || context.definitionAssessment.inputKey !== work.inputKey
+        || context.definitionAssessment.staged.baselineKey !== (work.baseline ? definitionBaselineKey(work.baseline) : undefined)
+        || job.definitionWork && (job.definitionWork.planKey !== work.planKey || job.definitionWork.inputKey !== work.inputKey
+          || definitionBaselineKey(job.definitionWork.baseline ?? null) !== definitionBaselineKey(work.baseline ?? null)))
+        throw new Error("Definition checkpoint requires its saved exact plan.");
+      if (work.baseline && !job.definitionWork) this.assertDefinitionBaseline(this.get(job.projectID, job.expectedRevision), work);
+      const changed = this.projectRevision(job.projectID) !== job.expectedRevision;
       if (options.leaseUntil !== undefined) {
         if (!Number.isSafeInteger(options.leaseUntil) || options.leaseUntil <= Date.now()) throw new Error("Definition lease renewal must have a future deadline.");
-        job.leaseUntil = Math.max(job.leaseUntil!, options.leaseUntil);
+        if (!changed) job.leaseUntil = Math.max(job.leaseUntil!, options.leaseUntil);
       }
-      job.definitionWork = work; job.context = context; this.saveJob(job);
+      // Historical computation is not publication. Commit the validated response
+      // under its original task before stopping; throwing inside rolls it back.
+      job.definitionWork = work; job.context = context;
+      if (changed) {
+        job.status = "stale"; job.leaseUntil = null;
+        job.diagnostic = "Project changed while assessment was running. Saved stages, validated responses and spent attempts remain attached to the original inputs; no assessment was published. Changed evidence still needs review.";
+      }
+      this.saveJob(job); return changed;
     }).immediate();
+    if (stale) throw new StaleRevisionError();
   }
 
   blockDefinition(id: string, reason: string, kind?: NonNullable<Job["definitionBlock"]>["kind"]): Job {

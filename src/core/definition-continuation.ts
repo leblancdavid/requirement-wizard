@@ -39,9 +39,9 @@ export const dimensionReviewEnabled = (work: DefinitionWork) => {
 export const definitionExecutionLimit = (work: DefinitionWork) => definitionExecutionPolicyEnabled(work) ? definitionCellExecutionStageLimit
   : dimensionReviewEnabled(work) ? definitionExecutionStageLimit : definitionStageLimit;
 export function definitionEvidenceStages(work: DefinitionWork, phase?: "collect" | "verify") {
-  if (!dimensionReviewEnabled(work)) return work.batches.length * 2 + (work.continuation?.splits.length ?? 0)
+  if (!dimensionReviewEnabled(work)) return collectionBatches(work).length + work.batches.length + (work.continuation?.splits.length ?? 0)
     + (work.linkedAnswerReviews?.reduce((sum, review) => sum + review.pages.length, 0) ?? 0);
-  const steps = definitionSteps(work), partitions = { collect: work.batches.length, verify: work.batches.length };
+  const steps = definitionSteps(work), partitions = { collect: collectionBatches(work).length, verify: work.batches.length };
   for (const split of work.continuation?.splits ?? []) partitions[steps[split.fromStage]!.phase]++;
   for (const review of work.supplementalReviews ?? []) {
     if (review.fromStage < work.receipts.length || review.fromStage === work.receipts.length
@@ -62,6 +62,13 @@ export function definitionLinkedPagePartitions(work: DefinitionWork, phase: "col
  * receipt boundary, so earlier request hashes remain byte-identical. */
 type DefinitionStep = { phase: "collect" | "verify"; batch: number; ids: string[]; evidenceStage?: number; linkedReview?: number; linkedReviewed?: number; dimensions?: readonly string[];
   supplementalPage?: number; supplementalPaged?: number; units?: string[][] };
+function collectionBatches(work: DefinitionWork) {
+  if (work.collectionBatches) return work.collectionBatches.map((ids, batch) => ({ phase: "collect" as const, batch: batch + 1, ids }));
+  if (!work.baseline) return work.batches.map((ids, batch) => ({ phase: "collect" as const, batch: batch + 1, ids }));
+  const changed = new Set([...work.baseline.changedRecordIDs, ...work.baseline.checkpoint?.unreadRecordIDs ?? []]);
+  return work.batches.map((ids, batch) => ({ phase: "collect" as const, batch: batch + 1, ids: ids.filter((id) => changed.has(id)) }))
+    .filter((step) => step.ids.length);
+}
 let projectionCache: WeakMap<DefinitionWork, Map<number, DefinitionStep[]>> | undefined;
 /** A synchronous, read-only rendering scope. Never retain projections across
  * mutations, requests, yields or replay boundaries. */
@@ -73,8 +80,7 @@ export function withDefinitionProjectionCache<T>(read: () => T): T {
 export function definitionSteps(work: DefinitionWork, through = work.receipts.length) {
   const cached = projectionCache?.get(work)?.get(through);
   if (cached) return cached;
-  const steps: DefinitionStep[] =
-    (["collect", "verify"] as const).flatMap((phase) => work.batches.map((ids, batch) => ({ phase, batch: batch + 1, ids })));
+  const steps: DefinitionStep[] = [...collectionBatches(work), ...work.batches.map((ids, batch) => ({ phase: "verify" as const, batch: batch + 1, ids }))];
   const splits = work.continuation?.splits ?? [];
   const reviews = work.linkedAnswerReviews ?? [];
   const scopes = work.dimensionReviews ?? [];
@@ -100,7 +106,7 @@ export function definitionSteps(work: DefinitionWork, through = work.receipts.le
   const scopeBoundaries = new Map([...scopePositions].map(([key, positions]) => [key, [...positions].sort((a, b) => a - b)]));
   let previous = -1;
   let evidenceStages = steps.length;
-  const partitions = { collect: work.batches.length, verify: work.batches.length };
+  const partitions = { collect: collectionBatches(work).length, verify: work.batches.length };
   const linkedPages = { collect: 0, verify: 0 };
   // A later capacity policy cannot retrospectively authorize an oversized old
   // schedule event, including events earlier in the same unfinished stage.

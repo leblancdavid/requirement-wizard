@@ -14,6 +14,7 @@ import { definitionEvidenceRequests, definitionEvidenceRequestLimit, definitionR
 import { encodeDefinitionSnapshots } from "./definition-wire.js";
 import { definitionPartitionLimit, definitionExpandedPartitionLimit, definitionExpandedSplitLimit as maxSplits } from "./definition-continuation.js";
 import { bundleDefinitionEvidence } from "./definition-evidence-bundles.js";
+import { definitionBaselineSchema, definitionBaselineDraft, definitionBaselineKey, validateDefinitionBaseline, definitionBaselineCollectionIDs, type DefinitionBaseline } from "./definition-baseline.js";
 export { definitionSteps, splitDefinitionStage } from "./definition-continuation.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -48,6 +49,8 @@ const citationFailureBoundarySchema = z.object({
 export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-batches-v1"),
   epicID: z.string().min(1), inputKey: z.string().regex(/^[a-f0-9]{64}$/), planKey: z.string().regex(/^[a-f0-9]{64}$/),
   batches: z.array(z.array(z.string().min(1)).max(10000)).min(1).max(maxBatches),
+  baseline: definitionBaselineSchema.optional(),
+  collectionBatches: z.array(z.array(z.string().min(1)).min(1).max(10000)).min(1).max(maxBatches).optional(),
   originJobID: z.string().optional(), attempts: z.number().int().min(0).max(definitionRequestLimit),
   allowancePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages),
     legacyRecoveryStages: z.array(z.number().int().min(0).max(maxStages - 1)).max(1) }).strict().optional(),
@@ -186,6 +189,7 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   paused: z.enum(["request-limit", "time-limit"]).optional(), blocked: z.string().min(1).max(1000).optional(),
   blockedKind: z.enum(definitionBlockKinds).optional(),
 }).strict().superRefine((work, ctx) => {
+  if (work.collectionBatches && !work.baseline) ctx.addIssue({ code: "custom", message: "Separate collection batches require a bound baseline." });
   const bundle = work.evidenceBundlePolicy;
   if (bundle && (!work.exactWirePolicy || !work.supplementalScopePolicy || bundle.fromStage > work.receipts.length
     || bundle.priorAttempts > (work.receipts[bundle.fromStage]?.attempts ?? work.attempts)
@@ -347,7 +351,10 @@ function exactIDs(project: Project, epicID: string) {
   try { return definitionContext(project, epicID).manifest.includedIDs; }
   catch (error) { if (error instanceof ContextBudgetError) return error.manifest.includedIDs; throw error; }
 }
-const planKey = (work: Pick<DefinitionWork, "epicID" | "inputKey" | "batches">) => digest(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches]);
+const planKey = (work: Pick<DefinitionWork, "epicID" | "inputKey" | "batches" | "baseline" | "collectionBatches">) => work.baseline
+  ? work.collectionBatches ? digest(["definition-baseline-collection-plan-v1", work.epicID, work.inputKey, work.batches, definitionBaselineKey(work.baseline), work.collectionBatches])
+    : digest(["definition-baseline-recheck-v1", work.epicID, work.inputKey, work.batches, definitionBaselineKey(work.baseline)])
+  : digest(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches]);
 export const definitionPhase = (work: DefinitionWork) => definitionSteps(work)[work.receipts.length]?.phase ?? "complete";
 const boundedWireDraft = (work: DefinitionWork) => !!work.draftPolicy && work.receipts.length >= work.draftPolicy.fromStage;
 const compactResponse = (work: DefinitionWork) => !!work.responsePolicy && work.receipts.length >= work.responsePolicy.fromStage;
@@ -450,9 +457,15 @@ function withDefinitionReadCaches<T>(read: () => T): T {
   finally { completedPairCache = previous; }
 }
 function completedLinkedPairs(project: Project, work: DefinitionWork) {
+  // Preserve historical context projection: ordinary graph omission only became
+  // active with dimension reviews. Explicit recall can independently inspect
+  // receipt-proven pairs from completed linked pages without changing old contexts.
+  if (!boundaryEnabled(work, work.dimensionReviews?.[0])) return new Set<string>();
+  return readCompletedLinkedPairs(project, work);
+}
+function readCompletedLinkedPairs(project: Project, work: DefinitionWork) {
   const cached = completedPairCache?.get(work);
   if (cached) return cached;
-  if (!boundaryEnabled(work, work.dimensionReviews?.[0])) return new Set<string>();
   const steps = definitionSteps(work), step = steps[work.receipts.length]!;
   const pairs = new Set<string>();
   for (const [index, previous] of steps.slice(0, work.receipts.length).entries()) {
@@ -490,7 +503,7 @@ const stageEvidenceIDs = (project: Project, work: DefinitionWork) => [...new Set
 function linkedAnswerRecallCandidates(project: Project, work: DefinitionWork, draft: Analysis | undefined, reason: string) {
   const loaded = new Set(stageEvidenceIDs(project, work));
   const anchorIDs = [...loaded].filter((id) => reason.includes(id));
-  const anchors = new Set(anchorIDs), planned = new Set(work.batches.flat()), read = completedLinkedPairs(project, work);
+  const anchors = new Set(anchorIDs), planned = new Set(work.batches.flat()), read = readCompletedLinkedPairs(project, work);
   const cited = new Set(draft?.assessments?.flatMap((a) => a.checks.flatMap((c) => c.evidenceIDs)) ?? []);
   const sources = new Map(project.sources.map((s) => [s.id, s]));
   const superseded = new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
@@ -508,7 +521,8 @@ function linkedAnswerRecallCandidates(project: Project, work: DefinitionWork, dr
  * live consent. A local exact reload earns no successful-request credit. */
 export function recallDefinitionLinkedAnswers(project: Project, work: DefinitionWork, draft: Analysis | undefined,
   reason: string, jobID: string, source: "saved-block" | "returned-block") {
-  if (!linkedAnswersEnabled(work) || !work.dimensionReviews?.length || !work.attempts || definitionPhase(work) === "complete"
+  if (!linkedAnswersEnabled(work) || !work.attempts || definitionPhase(work) === "complete"
+    || !work.dimensionReviews?.length && definitionSteps(work)[work.receipts.length]?.linkedReviewed === undefined
     || definitionSteps(work)[work.receipts.length]?.supplementalPage !== undefined
     || work.blocked && (work.blockedKind !== "evidence-lookup" || work.blocked !== reason)) return false;
   const candidates = linkedAnswerRecallCandidates(project, work, draft, reason);
@@ -947,7 +961,7 @@ export function upgradeDefinitionDraftPolicy(work: DefinitionWork) {
 
 /** Each exact record appears once. Links may cross batches; they never grant
  * citation authority before their record is read. No record or human text is cut. */
-export function planDefinitionStages(project: Project, epicID: string, onProgress?: (progress: { prepared: number; total: number; probes: number }) => void): DefinitionWork {
+export function planDefinitionStages(project: Project, epicID: string, onProgress?: (progress: { prepared: number; total: number; probes: number }) => void, baseline?: DefinitionBaseline): DefinitionWork {
   const ids = exactIDs(project, epicID);
   const records = new Map([...project.sources, ...project.requirements, ...project.questions, ...project.research].map((r) => [r.id, r]));
   if (ids.some((id) => !records.has(id))) throw new DefinitionEvidenceBlocked("Required linked evidence is missing from saved records. Restore or correct that evidence before assessing this area; no model call was made.");
@@ -968,15 +982,17 @@ export function planDefinitionStages(project: Project, epicID: string, onProgres
   let probes = 0;
   const fits = (candidate: string[]) => {
     probes++;
-    const probe = { ...work, batches: [candidate] };
+    const probe = { ...work, baseline: undefined, collectionBatches: undefined, batches: [candidate] };
     try { return definitionStageContext(project, probe).manifest.characters + definitionDraftLimit + 2048 <= 96000; }
     catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
   };
   // Probe growing prefixes instead of rendering/compressing once per record.
   // Every chosen prefix is measured exactly. Compression need not be monotonic:
   // a missed larger fit can only create smaller batches, never omit evidence.
+  const pack = (ordered: string[], report: boolean) => {
+  const batches: string[][] = [];
   for (let start = 0; start < ordered.length;) {
-    if (work.batches.length >= maxBatches) throw new DefinitionEvidenceBlocked("Complete area assessment needs more than sixteen exact evidence batches. No evidence was dropped and no model call was made.");
+    if (batches.length >= maxBatches) throw new DefinitionEvidenceBlocked("Complete area assessment needs more than sixteen exact evidence batches. No evidence was dropped and no model call was made.");
     if (!fits(ordered.slice(start, start + 1))) throw new DefinitionEvidenceBlocked("One indivisible exact evidence record cannot fit the 96,000-character assessment request with its draft reserve. No evidence was truncated and no model call was made.");
     let end = start + 1, upper = end;
     for (let size = 2; end < ordered.length; size *= 2) {
@@ -989,10 +1005,26 @@ export function planDefinitionStages(project: Project, epicID: string, onProgres
       if (fits(ordered.slice(start, middle))) end = middle;
       else upper = middle;
     }
-    work.batches.push(ordered.slice(start, end)); start = end;
-    onProgress?.({ prepared: start, total: ordered.length, probes });
+    batches.push(ordered.slice(start, end)); start = end;
+    if (report) onProgress?.({ prepared: start, total: ordered.length, probes });
   }
-  if (!work.batches.length) work.batches.push([]);
+  return batches.length ? batches : [[]];
+  };
+  work.batches = pack(ordered, true);
+  // Partition exact evidence using the unchanged sizing algorithm first. Large
+  // baseline findings can then use whole-dimension views at stage zero, never
+  // force repeated collection or truncate findings merely to fit the first probe.
+  if (baseline) {
+    try {
+      validateDefinitionBaseline(project, baseline, ids); work.baseline = baseline;
+      const pending = definitionBaselineCollectionIDs(baseline);
+      work.collectionBatches = pack(ordered.filter((id) => pending.has(id)), false);
+    }
+    catch {
+      delete work.baseline; delete work.collectionBatches;
+      // Conservative full collection when changed scope/evidence cannot qualify.
+    }
+  }
   work.planKey = planKey(work);
   return definitionWorkSchema.parse(work);
 }
@@ -1007,6 +1039,13 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
     || work.receipts.some((r, stage) => r.attempts > 3 && (!work.allowancePolicy || stage < work.allowancePolicy.fromStage))) throw new Error("Expanded definition attempts require the versioned allowance policy.");
   if (work.inputKey !== definitionInputKey(project, work.epicID) || work.planKey !== planKey(work)) throw new Error("Saved definition assessment inputs changed. Previous stages remain historical; no stale assessment was published.");
   const expected = new Set(exactIDs(project, work.epicID)), flat = work.batches.flat();
+  if (work.baseline) validateDefinitionBaseline(project, work.baseline, [...expected]);
+  if (work.collectionBatches) {
+    const pending = definitionBaselineCollectionIDs(work.baseline!), collected = work.collectionBatches.flat();
+    if (collected.length !== pending.size || new Set(collected).size !== collected.length || collected.some((id) => !pending.has(id)))
+      throw new Error("Definition collection must cover every changed and unread original record exactly once.");
+  }
+  if (work.baseline && work.baseline.assessment.epicID !== work.epicID) throw new Error("Definition baseline belongs to a different area.");
   if (flat.length !== expected.size || new Set(flat).size !== flat.length || flat.some((id) => !expected.has(id))) throw new Error("Staged definition plan does not cover the complete area's exact evidence.");
   if (work.continuation?.splits.some((split) => split.fromStage > work.receipts.length)) throw new Error("Definition subdivision begins after its saved receipt boundary.");
   if (work.receipts.length > definitionSteps(work).length) throw new Error("Definition receipt count exceeds its saved plan.");
@@ -1084,7 +1123,7 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
       linkedAnswerReviews: work.linkedAnswerReviews?.slice(0, review.linkedReviewCount),
       evidenceRequests: work.evidenceRequests?.slice(0, review.priorRequests), evidenceFollowups: work.evidenceFollowups?.slice(0, review.priorFollowups),
       ...(work.continuation ? { continuation: { ...work.continuation, splits: work.continuation.splits.slice(0, review.splitCount) } } : {}) };
-    if (!review.fromStage || !definitionSteps(before)[review.fromStage]
+    if (!review.fromStage && !work.baseline || !definitionSteps(before)[review.fromStage]
       || JSON.stringify(review.groups.flat()) !== JSON.stringify(scopedDimensions(before) ?? dimensions)) {
       throw new Error("Dimension review must preserve every unfinished dimension exactly once, in order, after an existing assessment.");
     }
@@ -1119,6 +1158,7 @@ export function definitionStageContext(project: Project, work: DefinitionWork, d
 }
 
 function renderDefinitionStageContext(project: Project, work: DefinitionWork, draft?: Analysis): ContextPack {
+  draft ??= definitionBaselineDraft(work.baseline);
   const step = definitionSteps(work)[work.receipts.length];
   if (!step) throw new Error("Definition assessment has no unfinished evidence stage.");
   const { phase } = step, evidencePage = step.supplementalPage !== undefined;
@@ -1135,6 +1175,11 @@ function renderDefinitionStageContext(project: Project, work: DefinitionWork, dr
     sources: labelRecords(project.sources.filter((r) => included.has(r.id)).sort(byID)), requirements: labelRecords(project.requirements.filter((r) => included.has(r.id)).sort(byID)),
     questions: labelRecords(project.questions.filter((r) => included.has(r.id)).sort(byID)), research: labelRecords(project.research.filter((r) => included.has(r.id)).sort(byID)),
     definitionStage: { policy: work.policy, phase, batch: step.batch, batches: work.batches.length,
+      ...(work.baseline ? { baselineReview: { policy: work.baseline.policy, sourceRevision: work.baseline.sourceRevision,
+        changedRecords: work.baseline.changedRecordIDs.length,
+        ...(work.baseline.checkpoint ? { unfinishedOriginalRecords: work.baseline.checkpoint.unreadRecordIDs.length,
+          checkpointInstruction: "UNFINISHED ORIGINAL REVIEW. The starting findings are a saved provisional draft, NOT a completed assessment or current coverage. Collection must read every original record not fully collected across all nine dimensions, plus all changed evidence. Previously accepted original reads remain saved; every current record still needs verification. Do not treat partial source checks or old blockers as a product decision, approval, full review or current consistency proof." } : {}),
+        instruction: "SAVED BASELINE COLLECTION, NOT CURRENT AUTHORITY. The original nine findings are retained verbatim as the starting draft. Collect ALL changed records, checking their effects across ALL nine dimensions, not only their categories/citations. Then EVERY current evidence batch independently verifies the updated draft before publication. Nothing is assumed independent or automatically current. New or changed positive findings need exact supplied supporting evidence; request indispensable original records before updating them. Preserve old supported constraints, but explicitly revise contradictions established by the changed evidence. Later verification may only downgrade or raise importance; if it exposes a needed positive correction, retain uncertainty rather than invent it. No approvals, new product preferences or readiness follow from this reuse." } } : {}),
       ...(evidenceEnabled(work) ? { evidencePolicy: "exact-cross-batch-v1", evidenceInstruction:
         "This instruction permits app-local exact evidence requests despite the generic no-retrieval instruction. If an indispensable earlier decision or superseding relationship is not supplied in this batch, request its exact saved records with {definitionEvidence:{recordIDs:[canonical record IDs],reason}} BEFORE returning definitionBlocked or replacing supported constraints. Use IDs from retained draft citations or explicit record links; do not guess. One request of at most 20 distinct records per stage is allowed, within the existing attempt and 96k bounds. The app supplies full records, not summaries, without changing human decisions. After supplementation, assess the combined exact evidence; if still unsafe, block. Missing unread evidence is not a product gap. No tools or external retrieval are authorized." } : {}),
       ...(suppliedSupplementalRequest(work) ? {
@@ -1227,7 +1272,8 @@ function renderDefinitionStageContext(project: Project, work: DefinitionWork, dr
   const manifest: NonNullable<Job["context"]> = { version: "definition-exact-batches-v1", revision: project.revision,
     focusEpicID: work.epicID, characters, budget: 96000, includedIDs: ids,
     omittedIDs: work.batches.flat().filter((id) => !included.has(id)), epicIDs: [work.epicID], partial: true,
-    definitionAssessment: { format: 1, epicID: work.epicID, inputKey: work.inputKey, staged: { policy: work.policy, planKey: work.planKey } },
+    definitionAssessment: { format: 1, epicID: work.epicID, inputKey: work.inputKey, staged: { policy: work.policy, planKey: work.planKey,
+      ...(work.baseline ? { baselineKey: definitionBaselineKey(work.baseline) } : {}) } },
     sectionCharacters: Object.fromEntries(Object.entries(wire as object).map(([key, value]) => [key, JSON.stringify(value).length])) };
   if (characters > 96000) throw new ContextBudgetError(manifest);
   return { data: wire, manifest };
@@ -1248,24 +1294,39 @@ export function pageDefinitionLinkedAnswers(project: Project, work: DefinitionWo
   const pageCapacity = definitionExecutionPolicyEnabled(work) ? maxEvidenceStages - definitionLinkedPagePartitions(work, step.phase) : maxStages;
   if (pageCapacity < 1) return false;
   const probe = (pages: string[][]) => ({ ...work, linkedAnswerReviews: [...work.linkedAnswerReviews ?? [], { ...review, pages }] });
+  let scopedPages = false;
   const fits = (pages: string[][]) => {
-    try { definitionStageContext(project, probe(pages), draft); return true; }
-    catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
+    const candidate = probe(pages);
+    try { definitionStageContext(project, candidate, draft); return true; }
+    catch (error) { if (!(error instanceof ContextBudgetError)) throw error; }
+    // A linked page and the retained original step can each use the existing
+    // complete-dimension views. Requiring the whole nine-check draft here would
+    // reject even one tiny pair once the accumulated draft itself exceeds 96k.
+    // This is only a sizing probe: normal preparation records the exact dimension
+    // schedule before dispatch, retaining every check and every whole pair.
+    return scopedPages && scopeDefinitionDraft(project, candidate, draft) === true;
   };
   // The original evidence must fit either with its whole draft or with complete
   // dimension groups. Do not spend the evidence-partition limit merely because
   // two independent overheads (linked graph and AI draft) need separate bounds.
   if (!fits([]) && scopeDefinitionDraft(project, probe([]), draft) !== true) return false;
-  let page: string[] = [];
-  for (const pair of pairs) {
-    const ids = [pair.questionID, pair.answerID];
-    if (!fits([[...page, ...ids]])) {
-      if (!page.length || !fits([ids])) return false;
-      review.pages.push(page); page = [];
+  const pack = () => {
+    review.pages = [];
+    let page: string[] = [];
+    for (const pair of pairs) {
+      const ids = [pair.questionID, pair.answerID];
+      if (!fits([[...page, ...ids]])) {
+        if (!page.length || !fits([ids])) return false;
+        review.pages.push(page); page = [];
+      }
+      page.push(...ids);
     }
-    page.push(...ids);
-  }
-  if (page.length) review.pages.push(page);
+    if (page.length) review.pages.push(page);
+    return true;
+  };
+  // Preserve the existing full-draft packing whenever it works. Only fall back
+  // when even one whole pair needs the already-supported dimension views.
+  if (!pack()) { scopedPages = true; if (!pack()) return false; }
   if (review.pages.length > pageCapacity) return false;
   if ((!work.dimensionReviews?.length && definitionEvidenceStages(work) + review.pages.length > maxEvidenceStages)
     || definitionSteps(work).length + review.pages.length > definitionExecutionLimit(work)) return false;
@@ -1350,7 +1411,7 @@ export function pageDefinitionSupplementalEvidence(project: Project, work: Defin
  * check remains verbatim; app-side merging preserves all omitted checks exactly. */
 export function scopeDefinitionDraft(project: Project, work: DefinitionWork, draft?: Analysis): boolean | "stage-limit" {
   const step = definitionSteps(work)[work.receipts.length], selected = step?.dimensions ?? [...dimensions];
-  if (!step || !draft || work.blocked || !work.receipts.length || selected.length < 2
+  if (!step || !draft || work.blocked || !work.receipts.length && !work.baseline || selected.length < 2
     || !compactResponse(work) || !additiveCollectionCitations(work) || !boundedWireDraft(work)) return false;
   const review = { format: 1 as const, fromStage: work.receipts.length,
     priorRequests: work.evidenceRequests?.length ?? 0, priorFollowups: work.evidenceFollowups?.length ?? 0,
@@ -1382,6 +1443,7 @@ function advanceDraft(project: Project, work: DefinitionWork, draft: Analysis | 
 }
 
 function advanceDefinitionDraft(project: Project, work: DefinitionWork, draft: Analysis | undefined, raw: unknown): Analysis {
+  draft ??= definitionBaselineDraft(work.baseline);
   raw = resolveCitations(project, work, draft, raw);
   const ids = stageEvidenceIDs(project, work);
   const scope = scopedDimensions(work);
@@ -1465,7 +1527,7 @@ export function replayDefinitionStages(project: Project, work: DefinitionWork, v
  * owned workers to renew leases, observe cancellation and report local progress. */
 export function* iterateDefinitionStages(project: Project, work: DefinitionWork, visit?: DefinitionStageVisitor): Generator<number, Analysis | undefined> {
   validateDefinitionPlan(project, work);
-  let draft: Analysis | undefined;
+  let draft: Analysis | undefined = definitionBaselineDraft(work.baseline);
   for (let index = 0; index < work.receipts.length; index++) {
     const receipt = work.receipts[index]!;
     const prefix = { ...work, receipts: work.receipts.slice(0, index), attempts: receipt.attempts };
@@ -1600,7 +1662,7 @@ function validateLinkedAnswerRecalls(project: Project, work: DefinitionWork, dra
     const before = evidenceFailurePrefix(work, recall.fromStage, recall);
     if (recall.contextKey !== digest(definitionStageContext(project, before, draft).data)) throw new Error("Saved linked-answer recall differs from its original exact context.");
     const candidates = linkedAnswerRecallCandidates(project, before, draft, recall.reason);
-    if (!linkedAnswersEnabled(before) || !before.dimensionReviews?.length
+    if (!linkedAnswersEnabled(before) || !before.dimensionReviews?.length && definitionSteps(before)[before.receipts.length]?.linkedReviewed === undefined
       || JSON.stringify(candidates.anchorIDs) !== JSON.stringify(recall.anchorIDs) || JSON.stringify(candidates.pairs) !== JSON.stringify(recall.pairs)) {
       throw new Error("Saved linked-answer recall must preserve all exact previously reviewed linked pairs.");
     }

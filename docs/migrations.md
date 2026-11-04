@@ -1,5 +1,706 @@
 # Data migrations and upgrade compatibility
 
+## Planning evidence revision/removal reconciliation (2026-11-04)
+
+**New staged-work format 4; no SQLite or execution-envelope rewrite.** Database
+schema stays 23, execution format 2 and planning envelope format 1. Work format 4 /
+`planning-reconcile-evidence-verify-all-v1` adds explicit retained-record keys and an
+evidence delta (changed/removed keys and superseded, historical-only IDs). Its
+self-contained baseline can contain work formats 1–4. Formats 1–3 keep their original
+request/replay rules and input keys; no old receipt, attempt, approval or completed
+work is rewritten at startup. Strict older readers reject format 4, and unsupported
+nested policies fail without overwriting saved data. Material/input identity versions
+remain separate from optimistic concurrency and work-format versions.
+
+Eligible explicit preparation can now retain unchanged completed reads while
+recollecting changed source/question/research records and reading additions/unread
+records. A record that left the mandatory context gets a bounded historical review
+entry, not current-evidence credit or a product-removal decision. Exact before/after
+bodies and historical retirement entries are supplied only in their collection batch;
+they are not added to every verification prompt. Retired-entry keys never count as
+read current records. All current mandatory records still verify before a package is
+exposed. Target wording/acceptance, project/global envelope, requirement guardrails and
+settings/model/workspace must remain compatible; structural requirement or envelope
+changes still take the conservative fresh-work path. This does not prove semantic
+independence or permit verification to be skipped based on matching citations.
+
+Original drafts/dependencies remain immutable in the source witness. The active seed
+removes prerequisite proposals supported by changed/removed or superseded evidence
+and adds an app-owned unresolved review question: missing evidence is not proof of
+independence. This does not remove previously reviewed dependencies from execution
+settings. Superseded IDs are historical-only even when their exact bodies remain in
+the current context; retired/superseded bodies cannot be cited as current dependency
+proof. Changed same-ID records can be cited only after their current version is
+supplied/read. Later additive follow-ups retain these stricter authority rules.
+Earlier questions and the mandatory warning cannot be silently dropped. If a bounded
+question list cannot preserve the warning, preparation blocks rather than truncating
+questions or granting another model request. Current packages remain proposals and
+require explicit human resolution/approval, not automatic specification/coding changes.
+
+Existing six-snapshot / 1,000,000-JSON-character baseline bounds, 32 collection plus
+32 verification batches, 32 staged requests per action, three attempts per unfinished
+stage, context preflights, cancellation and owned version-CAS saves remain. Exact
+change pairs are packed against the actual seeded prompt; an indivisible change or
+oversized retained draft blocks before inference without discarding the source.
+Malformed/obsolete-reference replies and invalid verification retain charged attempts,
+not completion credit. Current deltas and retained keys are recomputed during replay,
+including before package exposure. Known source-plan creation/finish dates are copied
+into new witnesses and portable state; missing historical timestamps are left absent,
+never manufactured. UI/logs distinguish effective retained records from changed or
+retired context records and expose the required evidence-review boundary.
+
+All **101** focused planning/implementation/migration tests and type checking passed.
+Coverage includes changed/removed/superseded/question evidence, unchanged-only read
+reuse, exact before/after review, full-current verification, obsolete-citation refusal,
+mandatory warning preservation, charged failure/retry, cancellation, invalid
+verification, source tampering, target/global/guardrail fallback, oversized-draft
+blocking, mixed-format repeated startup and nested future-policy failure/recovery.
+Owned prepared-target tests exercise reopen, actual portable adoption, another
+follow-up, re-export/replay, stable source dates and unchanged reviewed dependencies.
+The enhanced planning-browser runner passed changed-evidence status, review warnings,
+Stop/reload/explicit continuation, retained history and mobile. Evidence edits/removals
+in these checks use curated old/current snapshots or explicit external-transition
+fixtures; no new public source-editing UI is implied. `npm test` passed **886 pretests
+and 770 main tests**. All **22** default browser runners, the enhanced planning runner,
+UI build, type and diff checks passed; the existing bundle-size warning remains.
+No live model/GitHub calls, installed desktop rebuild or
+real-user-project changes were performed.
+
+**Remaining source-selection gap:** a replacement interrupted before preparing a
+later target can leave that target's original source only in planning history. The
+current selector uses the immediate predecessor, and portable projection excludes
+the full history, so later unprepared targets may repeat older collection. This slice
+qualifies already-prepared reconciliation targets; it does not close that carry-forward
+gap or claim universal cross-target recovery. Source retention/selection for those
+targets, broader target/global reconciliation, scan observation reuse and other
+workflow audits remain outstanding. Ordinary answer/review gates are unchanged:
+evidence changes that move a requirement out of approved status still need human review.
+
+## Repeated additive planning follow-ups with bounded ancestry (2026-11-04)
+
+**New staged-work format 3; no SQLite or execution-envelope rewrite.** Database
+schema remains 23, execution format 2 and planning envelope format 1. Existing
+format-1 and format-2 work, context keys, drafts, receipts, spent attempts and valid
+plans are not rewritten or reset. New repeated follow-ups use format 3 /
+`planning-chain-pending-verify-all-v1`, with baseline format 2 pointing to a complete
+earlier work witness. Source work may be format 1, 2 or 3. Existing format-2 baseline
+format 1 remains restricted to its original format-1 source, preserving old replay
+semantics and strict-reader compatibility. Older readers reject new marked work;
+unsupported descendant formats/policies fail without replacing saved data.
+
+The prior additive-evidence eligibility gates remain: exact target/global policy,
+guardrails, assessment metadata and old records; additions must be supplied evidence.
+Only unrelated omitted-source inventory counts are ignored. Every ancestor request
+ledger and material/runtime identity is replayed. The new collection schedule excludes
+only records covered by completely accepted collection batches in that lineage;
+verification receipts never add collection credit. The latest available draft remains
+an untrusted proposal. An interrupted follow-up with no accepted new response can
+therefore retain older reads/drafts without treating its spent requests as completed.
+
+Every changed-input follow-up still verifies all current mandatory batches. Old
+verification is not reused as current verification. Missing original snapshots,
+incompatible runtime/settings/model/workspace, changed/removed old evidence or changed
+target/global/structural inputs remain conservative fresh-work paths. Same-input
+retries retain their own receipt/attempt ledgers and do not extend ancestry. New input
+creates separate current work while the original source attempts remain unchanged.
+Questions cannot silently disappear; current-plan approval/cancellation/ownership/CAS
+and finite request/context limits are unchanged.
+
+Ancestry is bounded to **six work snapshots including the current work** and the
+existing **1,000,000-character complete baseline witness cap per target**. A shallow
+depth/cycle guard runs before recursive schema descent. Source revisions must strictly
+precede descendant revisions. At the depth bound, explicit preparation uses fresh
+collection and explains that the original work remains in history. The witness is a
+linear embedded chain, not a branching history export; only the latest provisional
+draft and current batch enter model context. Execution history itself is still
+serialized by the existing store; this slice does not introduce history deduplication
+or claim bounded total historical database size.
+
+Portable state carries the bounded self-contained chain without credentials or
+execution sessions. Tests cover clone/adoption followed by another relevant edit,
+portable re-export/replay, repeated startup, nested future-policy rejection and
+recovery without rewriting saved bytes. UI progress names the source checkpoint
+revision and retained exact-record count; logs include ancestry depth. These are
+retained-read counts, not current readiness or delivered-code claims.
+
+All **89** focused planning/implementation/migration tests and type checking passed.
+Additional checks cover multiple partial follow-ups, zero-new-response ancestors,
+inventory-only zero-collection schedules, pending-only reads, every-current-batch
+verification, charged retry, ancestor tampering, depth/cycle refusal and explained
+depth-limit fresh collection with unchanged predecessor history. The enhanced planning
+browser runner passed two relevant edits and repeated Stop/reload/explicit continuation
+with retained ancestry, review gates and mobile layout. `npm test` passed **874 pretests
+and 770 main tests**; type and diff checks passed. All **22** default browser runners
+and the UI build passed as well; the existing bundle-size warning remains.
+No live inference, GitHub calls, installed desktop
+rebuild or real-user-project changes were performed.
+
+Remaining: reconciliation for changed/removed original evidence or target/global
+changes, submission/refinement/clarification reconciliation, reusable scan observations,
+general single-request discovery outcome preservation and live/desktop qualification.
+
+## Additive-evidence planning collection follow-ups (2026-11-04)
+
+**New staged-work format 2; no SQLite or execution-envelope rewrite.** Database
+schema stays 23, execution format 2 and planning envelope format 1. Existing staged
+format 1 / `exact-planning-batches-v1` ledgers, request identities, approvals and
+attempts remain byte-compatible and are not rewritten on startup. New follow-ups use
+format 2 / `planning-collect-pending-verify-all-v1`, separate `collectionBatches`, and
+a bounded original-input witness. Older local/portable readers reject the new marked
+work instead of interpreting its shorter collection schedule as a full original read.
+Unsupported future formats/policies fail before writes; restoring an unsupported row
+permits startup retry without losing original work. No historical proof is backfilled.
+
+Explicit Prepare plan may create a follow-up from the immediately previous staged
+format-1 plan when its exact-input receipt, settings/model/workspace and original
+snapshot validate. Target/global policy, guardrails, assessment metadata and original
+records must remain identical; only added evidence records and unrelated-source
+inventory counts may differ. Replaced/deleted records, changed target behavior,
+changed global context or structural additions fall back to full current collection.
+Missing original snapshots/compatible runtime proof also fall back conservatively.
+The original source plan remains immutable in history.
+
+The new work embeds the original materials and exact format-1 ledger, source plan ID,
+revision and input receipt. The witness is capped at 1,000,000 JSON characters per
+target and cannot recursively contain another follow-up. Original collected records
+are authenticated by exact request replay; partial original batches do not count as
+read. The last original output is an **untrusted provisional draft**, never current
+verification or a human decision. The new schedule independently packs every added
+or unread record for collection, then verifies **every current mandatory batch**.
+No original verification is credited toward the changed-input check. Earlier questions
+cannot be silently dropped during collection; explicit human resolution remains
+required. Verification retains its existing no-rewrite/no-positive-addition rules.
+
+Replay checks original material/runtime identities, the complete original ledger,
+unchanged record contents, exact pending collection coverage and full verification
+coverage. It runs again before exposing a package. Omitted records/citation IDs alone
+cannot justify independence or skipped verification. Existing limits remain: at most
+32 collection and 32 verification batches, three attempts per unfinished current stage,
+32 staged requests per action, bounded context and live owner/version-CAS writes.
+Original spent attempts remain in the embedded source ledger; retries of the same
+follow-up retain their charged attempts. A genuinely changed input gets separate work,
+not a reset of the original checkpoint. Cancellation, malformed replies and invalid
+verification do not publish or erase saved work. Current-plan approval stays explicit.
+
+Portable continuation retains the self-contained witness, original IDs/revision,
+draft/receipts and attempts without exporting model sessions or a full execution
+archive. Reopen and clone/adoption do not launch calls. The planning UI/logs count
+the separate schedules correctly and distinguish retained original reads from
+still-required current verification.
+
+All **85** focused planning/implementation/migration tests and type checking passed.
+The enhanced planning-browser runner passed with a relevant added note, retained-read
+status, charged Stop/reload/resume, unchanged history, review gates and mobile layout.
+Other new checks cover partial/completed origins, changed/unread-only collection,
+all-current verification, tampered source requests, missing collection work, changed
+target/global/original evidence fallback, cancelled/malformed replies, exhausted
+attempts, invalid verification, lost questions, repeated startup, future-witness
+rejection/recovery and actual portable adoption. `npm test` passed **870 pretests and
+770 main tests**; type and diff checks passed. All **22** default browser regression
+runners and the UI build also passed; the existing bundle-size warning remains.
+No live inference, GitHub calls, installed desktop
+rebuild or real-user-project writes were performed.
+
+At this initial slice, repeated edits to a format-2 follow-up required a separate
+full-collection plan. The subsequent format-3 slice above adds bounded additive
+chaining without rewriting that format-2 work. Arbitrary changed/removed evidence,
+scan observation reuse and single-request discovery outcome preservation remain
+separate work.
+
+## Exact-input implementation planning across revisions (2026-11-04)
+
+**Additive execution payload extension; no SQLite migration.** Database schema stays
+23, execution format stays 2, and planning format stays 1. New `targetInputs` entries
+use format 1 / `exact-planning-inputs-v1`, with request mode, input digest, original
+plan ID/revision and an optional completed-package digest. Identities are saved
+before dispatch; a package digest is attached only with a validated saved package.
+Existing plans, approvals, assessments, delivery evidence, sessions, stage receipts,
+attempts and concurrency versions are not rewritten on startup. Missing historical
+request identities are not invented. Older compatible same-revision continuation
+keeps its existing behavior; new cross-revision reuse requires the new proof.
+
+An explicit **Prepare plan** creates a current replacement plan and archives the
+previous plan unchanged. For the immediately previous failed/interrupted/generating
+or proposed plan, each current approved target may retain its package or partial
+staged ledger only if workspace binding, execution settings, model and full target
+input identity match. Approved/dismissed plans are not cross-revision reuse sources.
+Current target evidence, global policy, dependency guardrails, optional candidate
+behavior/selection, omission warnings, assessment current/status metadata, runtime
+instructions, output schema and bundled skill text participate in identity checks.
+Single-context identity canonicalizes object keys and excludes only the count of
+unrelated omitted sources, which is non-evidentiary inventory. It does not exclude
+their contents if they enter the current mandatory closure, omit dependency candidate
+behavior, or establish semantic independence from shared citations/categories.
+Staged inputs retain the complete existing material key, including inventory counts;
+all saved receipts replay against current materials before reuse. A changed staged
+material key starts a separate target plan, not a rewritten old ledger.
+
+Retained packages are digest-checked and revalidated against current supplied IDs and
+prerequisite scope. Corrupt compatible saved packages/ledgers fail closed without
+silently repeating completed requests. Changed inputs/models/settings or legacy
+missing proof follow the existing fresh-target path. Previously spent stage attempts
+remain spent for identical work; genuinely different inputs have separate work in the
+new plan. Same-revision publication, worker ownership/CAS, cancellation, approval and
+coding gates remain. A stale plan never becomes approvable just because one package
+can be reused. Current replacement plans still require human review and explicit
+question-resolution/approval; no settings, reviewed dependencies or delivery state
+change during preparation.
+
+Portable planning includes the optional receipts with stable origin IDs/revisions,
+but no additional credentials or execution sessions. Older strict portable readers
+reject the new optional field rather than treating it as known. New local startup,
+execution reads/writes and portable decode reject unsupported receipt policies/formats
+without overwriting saved work. No ordered data rewrite or model-backed backfill is
+needed; restoring an unsupported row permits startup retry with original work intact.
+
+All **77** focused planning/implementation/migration tests and type checking passed.
+New checks cover unrelated/relevant/global edits, model changes, mixed retained/fresh
+targets, stale approval refusal, corrupt package receipts, older saved plans, repeated
+startup, unsupported format/recovery, partial-stage charged retry across a revision,
+portable adoption and repeated compatible follow-ups without model calls. `npm test`
+passed **862 pretests and 770 main tests**. The UI build and focused planning-browser
+runner passed using the fixture service (no live model/GitHub calls); its normal
+bundle-size warning remains. Type and diff checks passed. No live inference, installed
+desktop rebuild or real-user-project changes were performed.
+
+Remaining: changed-material collection reconciliation, changed-file scan reuse,
+general single-request discovery outcome preservation and live/desktop qualification.
+This is exact-input target reuse across a changed project, not semantic reconciliation
+of a target whose own supplied inputs changed.
+
+## Preserve retrieval and implementation-planning replies across edits (2026-11-03)
+
+**No persisted format or fingerprint migration.** SQLite remains 23; retrieval and
+planning work keep their existing format, task/evidence keys, receipts and budgets.
+Startup does not rewrite historical jobs or reconstruct previously lost responses.
+Older saved work remains subject to the original replay and publication checks.
+
+Discovery now validates completed exact-load/search/final replies and staged epic
+draft/verdict replies against their frozen original evidence before checkpointing.
+An owned, unexpired retrieval transaction saves that work, marks the job stale and
+clears its lease when the project has changed, then throws **after commit**. It does
+not renew a stale lease, publish proposals or dispatch another request. Once work is
+attached, checkpoints reject replacement of the original research policy, gap task,
+epic package/input identity or staged plan. Cancelled/expired/stopped workers and
+invalid replies retain no newly accepted response. Existing request accounting and
+explicit continuation consent remain unchanged.
+
+Implementation planning similarly separates cancellation/ownership checks from
+current-input publication checks. Single-context packages and exact staged receipts
+are validated against the original project and saved using live execution ownership
+and version CAS before reporting changed inputs. Only final proposed-plan publication
+uses the current revision/workspace-checked save. Historical output remains failed or
+interrupted, not an approvable current plan; approval still requires current inputs.
+Normal public product edits are blocked during planning. Tests of changed inputs
+therefore deliberately simulate an **external database mutation**, not a supported
+concurrent public edit. Cancellation, expired leases, replaced ownership and malformed
+output cannot save late packages/receipts.
+
+Tests cover retrieval load/search/final responses after unrelated/relevant edits,
+original-task rebinding, repeated reopen, compatible continuation without repeated
+accepted requests, ordinary epic load/final recovery and staged epic initial/final
+recovery across restart. Planning tests cover original collection/final receipt
+retention, compatible explicit replay without repeated calls, single/staged external
+changes, cancellation, lease expiry/replacement, malformed output and reopen. Existing
+portable planning/retrieval coverage remains in the full suite; newly stale discovery
+portable adoption is not separately qualified by this slice. All **137** focused
+retrieval/epic/planning tests, **53** resilience tests and type checking passed.
+The **67** legacy refinement/implementation tests also pass after updating stale
+expectations: replies invalid against original inputs fail validation even when an
+edit also arrived; valid historical planning output is retained but not proposed.
+`npm test` passed **851 pretests and 770 main tests**. The UI build and all **22**
+default browser runners also passed (fixture adapters, no live inference). The
+existing bundle-size warning remains. No live inference, installed desktop rebuild
+or real-project writes.
+
+Limits: general single-request discovery outcomes outside retrieval/staged workflows,
+changed-input reconciliation, changed-file scan reuse and incremental replanning
+remain separate work. Planning remains revision-conservative; preserving historical
+packages is not authority to reuse them after arbitrary changed product inputs.
+
+## Preserve staged answer, clarification and refinement responses across edits (2026-11-03)
+
+**No persisted format or fingerprint migration.** SQLite remains 23. Submission,
+readiness and refinement work retain their existing schema versions, exact material
+and plan keys, receipt fields and finite request limits. `stale` was already a valid
+job status. Original completed/failed/partial jobs and valid publication evidence are
+not rewritten at startup. Older saved attempts without an accepted response remain
+spent; missing past responses are not reconstructed or credited back.
+
+Previously these services checked the current project revision immediately after a
+model reply, before accepting/checkpointing it. Their checkpoint transactions also
+threw on concurrent edits before saving. A valid completed response could therefore
+be lost even though its request had been charged. They now validate against the
+original frozen materials, commit that accepted response under the original task,
+then mark the live job stale and clear its lease before throwing to stop the caller.
+No questions, proposal, answer processing or specification changes publish from that
+stale job, and it cannot dispatch the next request. Throwing happens **after** the
+transaction commits so the historical checkpoint is not rolled back.
+
+Checkpoint writes still require a running, unexpired owner and the original context
+revision. Once attached, their material/plan identity cannot change within that job;
+refinement target/pair and submission task bindings are also preserved. Cancelled,
+externally stopped, expired and malformed replies do not become accepted receipts.
+An accepted response moves its spent attempt into the original receipt using the
+existing accounting contract; this is not an attempt reset or extra permission.
+Revision-only gates use `projectRevision`, avoiding full project decoding.
+
+Explicit continuation can reuse the exact receipt when current mandatory materials
+are compatible, including after restart and portable adoption. Complete verification
+already saved before an unrelated edit can publish on explicit continuation with
+**zero** additional calls after ordinary replay/publication validation. Human answers
+are not reapplied or duplicated. Related changed materials still reject old work as
+current (or start the existing separate explicit refinement plan); changed-material
+incremental reconciliation is **not** introduced by this slice. Compatible portable
+ledgers follow existing selection/snapshot rules; this is not full history export.
+
+The 53 focused resilience tests pass, including all three processes with unrelated
+and relevant edits, repeated reopen, compatible portable continuation, final-verdict
+recovery without calls, forged material rebinding, malformed output, cancellation,
+external Stop and expired leases. Existing cancellation tests retain their original
+expectations; old stale-result tests now assert accepted original receipts instead of
+expecting the completed response to be discarded. `npm test` passed all **837
+pretests and 760 main tests**; all **91** focused submission/refinement/clarification
+tests and type checking also passed. All **22** default browser runners and the UI
+build passed. Existing bundle-size/React-key warnings remain; no workspace artifact
+failure recurred in this slice.
+No live model calls, installed desktop rebuild or real-project writes were
+performed. Ordinary discovery/retrieval response-loss windows and changed-input
+reconciliation for these processes remain separate work in the resilience plan.
+
+## Decision-aware evidence-review scheduling and retained progress (2026-11-03)
+
+**Additive local workflow metadata; no SQL or assessment-key migration.** SQLite
+remains 23, workflow state remains 1, and all existing readiness policies, grants,
+jobs/checkpoints and publication identities retain their representation. An optional
+strict `decisionSchedule` snapshot uses format 1 and policy
+`question-scoped-definition-scheduling-v1`, with revision/input key, per-area task
+keys, waiting decision identities and separate review/progress states. This is dated
+scheduling evidence, not a readiness receipt, independent-finding certificate or
+permission grant. Old state without it loads unchanged. New snapshots are saved
+only by an owned authorized coordinator; reading/polling recomputes current labels
+without writes or calls. Unsupported future nested formats reject without replacing
+saved state. No data reset, repeated assessment or retrospective receipt rewrite is
+required to upgrade. Older strict readers may reject marked state; do not downgrade
+while new workflow metadata is present.
+
+An unanswered/deferred/delegated question holds its area, declared transitive
+dependencies' consumers, exact linked evidence and shared provenance. Project-wide
+reviews wait for every decision. Global/inbox questions, missing provenance/bodies,
+invalid dependency graphs, ambiguous record IDs, pending approvals/refinements,
+organization changes and saved-input issues hold all affected/uncertain reviews.
+Question evidence is followed transitively, including superseding sources; unchanged
+categories/citations do not establish semantic independence. Only definition evidence
+reviews outside these recorded scopes may proceed under the **same** existing grant.
+No broad discovery, proposal refresh, clarification, planning, approval or coding is
+newly scheduled while waiting. Every current batch still needs ordinary verification
+and stale-publication checks. This is the first conservative scheduling slice, not
+general concurrent or decision-independent execution.
+
+Schedules are bounded to 256 active areas, 2,000 decisions, 32,000 records/total question
+provenance visits, 64,000 evidence references and 16,000 potential area/decision relations. Exceeded or uncertain
+inventory holds work; no omitted dependencies authorize requests. Progress identifies
+saved review revisions and latest checkpoint stage counts separately from validity.
+An eight-project read-only metadata cache avoids repeatedly inspecting history on
+unchanged polls, invalidates on local writes and SQLite `data_version` from other
+connections, and is not reused/populated inside transactions. Request bodies are
+not decoded for these counts; consumers get copies, not mutable cached objects.
+This is not an end-to-end performance benchmark.
+
+The snapshot is machine-local workflow state, not portable authority. Portable
+projects retain their original assessments and partial ledgers under the existing
+rules; adoption/restart recomputes scope and still requires explicit continuation.
+Model/provider routing, manual/guided consent, spent attempts, worker leases and
+coding/delivery permissions remain unchanged. Readiness still requires every decision
+and required check; no pending question is guessed or marked resolved.
+
+Verification: `npm test` passed all **837 pretests and 736 main tests**. The final
+focused workflow/UI run passed all **61** tests. All **22** default browser runners,
+the final focused scheduling browser run, UI build and type checking passed.
+Existing bundle-size and React-key warnings remain. No workspace artifact failure
+recurred in these runs.
+
+Focused checks cover scope/dependencies/shared/transitive
+evidence, global/unknown blockers, bounded spending, Pause/stale output, immutable
+progress and equal-revision cross-connection updates, repeated reopen, legacy state
+and rejected future snapshots. A deterministic desktop/mobile browser flow exercises
+the actual Continue action, waiting dependencies, retained partial steps, reload and
+server restart without extra calls or renewed consent. The initial browser check
+exposed hidden progress before workflow opt-in; the read-only plan is now visible
+without granting work, and the desktop/mobile flow passed. No live inference, desktop
+deployment or actual-user-project recovery has been performed for this slice.
+
+## Unfinished assessment continuation after an answer (2026-11-03)
+
+**Additive source/target formats:** existing definition work format 1 and SQLite 23
+remain unchanged. New follow-ups may bind baseline policy
+`checkpoint-collect-pending-verify-all-v1` and its strict `checkpoint` envelope:
+original work digest, accepted-stage count and unread original record IDs. A saved
+provisional draft is reconstructed only by replaying its exact original receipts.
+It is not a published assessment. Original jobs, inputs, findings and spent attempts
+remain immutable; a genuinely changed input creates separate follow-up work.
+
+Collection covers all changed records plus original records not completely collected
+across all nine dimensions. Linked/supplemental evidence pages alone do not establish
+collection. Inherited baseline reads count only when unchanged and already fully
+collected. All current evidence still needs complete downgrade-only verification.
+New optional `collectionBatches` packs pending records independently from verification
+batches, bound by `definition-baseline-collection-plan-v1`. Existing checkpoints
+without that field retain their original plan key/schedule and replay unchanged.
+No retrospective repartitioning, attempt reset or v1 fingerprint change is performed.
+
+Preparation reads at most four quiescent source candidates, each bounded to 64 MiB,
+and follows at most sixteen nested origins; original snapshots retain the 16 MiB
+bound. Replay yields between receipts, checks cancellation and renews only the
+caller's lease. Content-addressed derived drafts avoid repeated local replay; four
+unowned entries plus active-worker pinned origins are retained, with pins released
+on every service exit. Publication freshly authenticates the source digest, so a
+cached draft cannot hide changed source work; required unfinished ancestry is also
+freshly authenticated at publication. Unsupported or invalid required
+origins stop without publication or automatic repeated calls; unavailable optional
+sources can fall back to ordinary collection. Saved evidence is never deleted.
+
+Portable export retains required unpublished source ledgers and ancestry rather than
+compacting them into completed-publication receipts. It also retains up to four
+candidate partial sources per area when an answer is exported before its follow-up
+starts. Originals and semantic IDs survive adoption; machine-local sessions remain
+excluded. The existing format's strict schemas reject unsupported future policies.
+Missing originals in older exports are not invented. No reset or model calls are
+needed merely to upgrade or reopen compatible work.
+
+Focused checks cover first unfinished review → answer → pending-only collection,
+full verification, repeated partial follow-ups, repeated startup, portable ancestry,
+export-before-follow-up, partial dimension reads, cancellation during replay, source
+tampering, cache pin/release and legacy plans without separate collection batches.
+The 29 focused resilience tests and type checking passed. Both published-baseline
+and unfinished-review browser modes passed, including mobile notice inspection.
+The pretest suite passed 831 tests; the final main-suite rerun passed all 736 tests
+(`npm --ignore-scripts test`). All 21 default browser runners passed, with the
+unfinished variant additionally run explicitly. Earlier main runs caught two new
+test-fixture mistakes (missing receipt job ID, and expecting a failed job when future
+formats correctly reject before job creation); both fixtures were corrected before
+the clean rerun. No workspace-artifact failure recurred in this slice. Browser checks use a
+fixture adapter, not live inference. Desktop deployment and real-user recovery
+remain unqualified; narrower verification and other workflow slices remain future work.
+
+## Saved collection baseline with complete current verification (2026-11-03)
+
+**Additive checkpoint policy; no SQL schema migration or v1 fingerprint rewrite.**
+SQLite remains 23 and definition work remains 1. New eligible work can contain an
+optional strict `baseline` envelope with policy
+`baseline-collect-changes-verify-all-v1`: original publication revision/job, original
+input/assessment/scope identities, the exact nine original findings, original record
+digest inventory and every changed current record ID. The staged task also binds
+`baselineKey`; the plan key includes that envelope. Old work without a baseline keeps
+its exact schedule, contexts, receipts, limits and saved attempts. Never attach this
+policy retrospectively to an already attempted ordinary plan.
+
+Baseline selection reads the actual original published revision and a matching
+completed assessment-only publisher/result. It does not accept assessments emitted
+by generic discovery, mixed/combined origins, incomplete findings, removed evidence,
+changed scope/dependencies/origin/global interpretation, missing cited bodies or a
+missing original publisher as a collection shortcut. Missing legacy input-basis
+metadata is projected read-only from its own original snapshot, like existing `get`.
+An older publisher key can qualify through its exact original raw input key plus
+canonical equality of all guarded values; a property-order repair cannot hide a
+real evidence change. History is not rewritten or fingerprinted from today's decisions. Unsupported
+future policy formats reject without overwriting stored work.
+
+The new plan reuses the original collection draft, collects **every** added/updated
+guarded record, then verifies **every current evidence batch and all nine dimensions**
+before publication. No citation/category-based independence or verification skip is
+enabled. Each change can affect any dimension. Exact indispensable supporting text
+must still be requested; verification remains downgrade-only. Source finding text,
+IDs and original dates stay in immutable history. New assessment dates describe the
+new complete verification, not fabricated original dates. Original publisher checks
+run before first dispatch and again inside publication; subsequent checkpoints bind
+the immutable baseline. Existing stale/cancellation/lease/allowance rules still apply.
+
+Source lookup projects a bounded publisher result/task from SQLite instead of loading
+all original response bodies or replaying the original model calls. Record comparison
+uses exact digests and set/map indexes. Existing 16 MiB source-snapshot, 8,000-record,
+96,000-character request and batch/partition/execution bounds remain. Baseline finding
+views may split by complete dimensions at stage zero; no finding or human text is
+truncated to make the first request fit. Single-request reviews keep their existing
+one-call path; this optimization targets staged reviews and adds no extra consent.
+
+Portable continuation now retains the original publication snapshot and a compact,
+dated completed-publisher receipt for required old baselines, not the old request
+archive. Current unfinished ledgers remain exact; account routing/session data stay
+excluded. The compact receipt retains the exact assessment-only result/task and is
+not a replayable original ledger or publication certificate. Current ordinary
+assessment origins are kept for later answer-driven reuse on a clone. Missing older
+origins remain honestly unavailable. Existing portable format versions remain; older
+readers reject new baseline/task fields through their strict nested schemas rather
+than silently interpreting a shorter schedule as a complete old protocol. Do not
+downgrade an app while marked work is present.
+
+V1 publication certificates attest that both phases read all current records, so
+baseline-based publication intentionally does **not** issue such a certificate. Valid
+old certificates, assessments and checkpoints are untouched; no invented attestation
+or automatic finding-level skip is introduced. See [resilience plan](workflow-resilience.md).
+
+Verification: all 19 focused resilience tests, type checking, UI build and the 21
+default browser runners passed. The final pretest run passed all 831 tests. Its
+concurrent main/browser run had one workspace progress-artifact assertion failure
+(725/726 main passed); all 16 workspace tests and the complete 726-test main suite
+passed on isolated reruns without code/test changes. The intermittent artifact
+failure's cause is not established; do not label it fixed by baseline reuse.
+
+Focused deterministic checks cover cross-dimensional
+effects, full verification coverage, fewer dispatches than full recollection,
+restart/adoption, immutable originals, forged/omitted origins, complete dimension
+views, failures/cancellation/stale output and spent retry limits. Live interpretation,
+actual-user recovery and packaged desktop deployment are not qualified by fixtures.
+The initial focused browser test exposed the notice missing from the main queue;
+it was added and the desktop/mobile Pause/reload/resume check passed. The mobile
+screenshot was inspected. Existing UI chunk-size/React-key warnings remain.
+
+## Historical response preservation during concurrent edits (2026-11-03)
+
+**No schema, persisted-format or fingerprint change:** SQLite remains 23,
+definition work and scan work remain 1. Existing checkpoints need no conversion,
+model calls, allowance reset or reassessment on upgrade. Already-discarded replies
+cannot be reconstructed. Original job/task/revision identities and all attempts
+remain unchanged; newer decisions are never stamped onto historical findings.
+
+Definition processing now validates a returned response against the original
+request snapshot before its checkpoint detects a concurrent project edit. A live
+worker commits that checkpoint and marks the job stale atomically, then raises the
+stale-revision error **outside** the transaction so the saved reply is not rolled
+back. No subsequent request or publication is allowed. Cancelled/expired workers,
+wrong context revisions and replacement task identities remain rejected. This does
+not allow arbitrary changed-input reuse: existing exact-input history/replay gates
+remain authoritative. A compatible unrelated-area edit can resume saved stages;
+a relevant edit retains historical work but still needs the planned reconciliation.
+
+Scan checkpoints likewise validate new batch outputs on a disposable original
+project revision and save them before stopping on a project/folder mismatch. No
+proposals publish. Existing scan resume still rejects changed project inputs; this
+slice preserves work for future reconciliation, not a changed-input publisher.
+Previously saved jobs/receipts are untouched across repeated startup. No full
+history replay or new model call is added to checkpointing; the original project
+snapshot is loaded only when scan output validation was already required.
+
+Definition loop, lease-renewal and checkpoint revision checks now query the SQLite
+revision column directly instead of decoding/validating the entire current project
+just to compare its counter. Checks still run on every boundary; no cross-request
+cache or weaker freshness rule is introduced. This removes repeated full-project
+reads, not evidence replay, and does not establish a measured total-runtime speedup.
+
+See [implementation plan and remaining gaps](workflow-resilience.md). Changed-key
+definition history is still local history, not automatically retained in the portable
+continuation projection; portable baseline retention needs a separately versioned
+compatibility design in the next slice. Qualification below is deterministic, not
+recovery of the user's project or live model interpretation.
+
+Verification: type checking, all eight new resilience regressions, 27 focused
+definition preservation/cancellation/recovery checks and diff whitespace checking
+passed. The initial full pretest run exposed 11 old assertions requiring stale
+replies to be discarded; those were updated to require original-input retention
+while preserving cancellation and no-publication checks. A broad focused run also
+hit its 120-second command limit before completion. The final full-suite rerun
+passed all **831 pretests and 715 main tests (1,546 total)**. Browser/desktop
+packaging and live/user-project recovery were not run. Existing React list-key
+warnings remain non-blocking; no live inference was used.
+
+## Exact recall after linked pages without dimension splitting (2026-11-03)
+
+**No persisted-format, fingerprint or assessment-semantic change:** SQLite remains
+23 and definition work remains 1. Existing format-1 linked-answer recall can now
+operate on the retained original step after completed linked pages, even when no
+dimension split was needed. Previously both receipt inspection and recall required
+a dimension-review ledger, so a smaller draft could omit a previously read, cited
+reconciliation pair and then be unable to recall it at an evidence-lookup block.
+
+Recall still requires a currently supplied canonical anchor named by the blocker,
+an exact reverse evidence-ID link, a complete current question/answer pair in the
+frozen plan, same-phase completed receipt evidence, and both records cited in the
+saved draft. It supplies all qualifying candidates or none (at most ten pairs).
+It cannot clear product-decision/technical blockers, infer preference precedence,
+substitute findings for evidence, refund attempts or grant calls. Whole recalled
+evidence must fit the normal request budget, potentially through existing complete-
+dimension views; genuinely indivisible joint evidence still blocks safely.
+
+Historical context projection retains its original dimension-gated graph omission.
+Receipt inspection for explicit recall is separate: the new path cannot silently
+change old context hashes or completed findings. New work appends an existing recall
+event at the unfinished boundary after exact replay, preserving the dated blocker,
+all receipts, original loads and spent attempts. No data rewrite, reset, reassessment
+or repeated completed model call is required. Restart still requires explicit consent.
+
+Three new regressions cover exact page-only recall, unchanged old context bytes,
+forged/uncited pairs and product blockers, two SQLite reopens, portable continuation,
+and a charged bounded retry without repeated pages. Eleven targeted recall checks
+passed. Read-only reproduction replayed the 15-stage blocked real job; an isolated
+copy recalled the exact qualifying cited pair, preserved all four spent attempts and
+all original loads/receipts, then fit its first complete-dimension view at 91,578
+characters. This is packaging verification, **not a model verdict** about the human
+choices. No live inference or real-project writes were performed.
+
+Full deterministic verification passed: `npm run check`, all **831 pretests plus
+707 main tests**, and all **20 default browser runners**. Browser adapters are
+fixtures, not live model qualification. The existing UI chunk-size warning remains.
+
+After the user's fresh fully-quit confirmation, the staged desktop was rebuilt;
+`npm run test:desktop` and `npx tsx src/desktop/startup-check.ts` passed with isolated
+data, saved-work continuity and no inference. Installer generation and the next live
+evidence verdict were not performed. Explicit Continue specification uses the saved
+unfinished check rather than repeating completed pages.
+
+The final read-only historical compatibility check also passed: all 412 original
+responses of the completed skating assessment, two other completed 16-response
+assessments, and the blocked 15-response slice assessment replayed with original
+hashes unchanged. Completed-assessment publication guards passed for all three
+completed jobs; the blocked job retained its four attempts. The 412-response job
+took 369,333 ms for both replay and completed-publication validation together while
+other checks ran; this is not a startup or speedup benchmark. No saved job was
+modified and no inference was performed.
+
+## Combined linked-page and dimension sizing (2026-11-03)
+
+**No format, fingerprint or assessment-semantic change:** SQLite remains 23 and
+definition work remains 1. Full-draft linked-page packing remains the first choice
+and produces the same schedule when it fits. If even one whole linked question/
+answer pair cannot fit with the full accumulated draft, the planner now tests the
+existing complete-dimension views while packing pages. Normal preparation records
+the dimension schedule before dispatch. Every question/options/current-answer pair
+and complete selected check remains intact; all nine dimensions remain scheduled.
+The original evidence check still follows all linked pages, with indispensable
+joint reads required as before. No bounds, request allowances or failure limits change.
+
+Previously, original-step sizing considered dimension views but linked-page sizing
+required all nine findings at once. Thus a large draft plus large linked graph could
+defeat both independent remedies even when their combination fits. The generic
+"one indivisible evidence record" diagnostic did not establish that the record itself
+was large: the reproduced base record was 167 characters and the complete retained
+draft was 155,019 characters. No saved text is shortened to fix this planner gap.
+
+Compatibility/recovery: append existing format-1 linked-page/dimension events only
+at the unfinished boundary after exact replay. Old receipts, load ledgers, IDs,
+attempts and dated blockers remain unchanged. No saved-data rewrite, reset or
+completed model-call repetition is required. Resume remains explicit after restart;
+an interruption retains accepted page/dimension responses and charges its in-flight
+attempt. Genuinely indivisible oversized pairs still stop without partial publication.
+
+Verification: three new regressions cover combined sizing with exact complete bodies,
+all dimensions, replay/publication gates, indivisible refusal, cancellation, two
+SQLite reopens and portable adoption with a charged retry. Type checking, all 828
+pretests plus 707 main tests, and all 20 default browser runners passed. An isolated
+291-stage real checkpoint replay retained every original receipt/load and its zero
+current attempts. The first request fits at 82,269 characters instead of 184,567;
+two whole-pair pages (18 pairs and two pairs) were mechanically exercised through
+seven dimension views, all at or below 95,618 characters. The subsequent original
+check's first dimension view fits at 79,590 characters. Future empty verdicts in this
+isolated check were synthetic sizing fixtures, **not AI verification or completion**.
+No live inference or real-project writes were performed.
+
+Desktop delivery after the user's fresh fully-quit confirmation: the staged app was
+rebuilt and `npm run test:desktop` plus `npx tsx src/desktop/startup-check.ts` passed
+with isolated saved data and no inference. `git diff --check` passed. The existing
+UI chunk-size warning remains; installer generation and live completion were not
+repeated. Reopen the staged desktop and explicitly Continue specification to resume.
+
 ## Indexed replay/validation and historical bundle-probe boundaries (2026-11-03)
 
 **No persisted format, fingerprint or assessment-semantic change:** SQLite remains

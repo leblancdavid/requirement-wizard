@@ -1,5 +1,42 @@
 # Milestone backlog
 
+The user-approved [workflow resilience plan](workflow-resilience.md) prioritizes
+durable baselines, explicit change reconciliation and measured efficiency across
+long-running processes. The first slice preserves completed definition/scan replies
+on concurrent edits without stale publication. Delta-only verification,
+cross-workflow reconciliation and actual-user recovery remain pending;
+this does not complete the milestone exits below. Eligible staged reviews now reuse
+a published collection baseline and collect only changes, while still verifying all
+current evidence. Eligible unfinished-first-review collection now continues too;
+narrower verification and actual-user qualification remain incomplete. A conservative
+decision-aware scheduling slice now runs only definition evidence reviews outside
+waiting questions' declared dependency/provenance scope, under the same grant.
+Global/uncertain decisions still hold all reviews; scheduling other workflow types
+remains incomplete. Saved review/partial progress is shown separately from validity.
+
+Staged answer follow-up, clarification and refinement also retain valid replies
+across concurrent edits before stopping stale. Compatible explicit continuation can
+reuse them. Retrieval/epic review and planning now also preserve valid original
+responses before stopping stale; changed-material reconciliation, ordinary
+single-request discovery outcomes, changed-file scans and changed-material planning
+remain outstanding. See the resilience
+plan for the boundaries; no milestone exit is implied by this preservation fix.
+
+Exact-input planning receipts now permit per-target reuse across a changed project
+revision while retaining original plans/attempts. Changed target materials still need
+fresh work; this is not semantic reconciliation or a completed milestone exit.
+
+An initial additive-evidence planning follow-up also retains original reads/drafts,
+collects added/unread records and verifies every current batch. Repeated additive
+follow-ups retain a bounded ancestry; broader requirement/global reconciliation remains
+a fresh-collection path. No additional milestone exit is
+qualified by the deterministic/browser checks alone.
+
+Prepared staged plans now reconcile changed/retired evidence with full-current
+verification and explicit review. Cross-target carry-forward for sources not yet
+prepared before interruption remains unimplemented; this is not universal planning
+recovery or a milestone exit.
+
 DEC-032 coordinated-workflow preview sequences existing specification checks with
 bounded consent and a decision inbox while preserving checkpoints. It reaches a
 specification-check/planning boundary, not autonomous planning or coding. M4 baseline

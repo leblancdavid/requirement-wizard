@@ -11,7 +11,11 @@ import { DiscoveryService, type DiscoveryAdapter } from "./discovery.js";
 import { dimensions } from "../core/epics.js";
 import { emptyExecution, executionConfigSchema } from "../core/execution.js";
 import { planningConfigFingerprint } from "../core/implementation-planning.js";
-import { workflowInputKey, workflowReadiness, workflowLimits, emptyWorkflow, workflowSchema } from "../core/workflow.js";
+import { workflowInputKey, workflowReadiness, workflowLimits, emptyWorkflow, workflowSchema, workflowAreas, workflowDecisions } from "../core/workflow.js";
+import { planWorkflowSchedule, workflowScheduleSchema } from "../core/workflow-schedule.js";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { WorkflowControls } from "../ui/workflow-controls.js";
 import type { Analysis, Project } from "../core/model.js";
 import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } from "../core/follow-through.js";
 import { coverage } from "../core/coverage.js";
@@ -217,6 +221,177 @@ function checks(calls: string[], defined = true): DiscoveryAdapter {
   } };
 }
 function grant(workflow: ProjectWorkflow, store: ProjectStore, id: string) { workflow.configure(id, store.projectRevision(id), workflow.view(id).version, "continue"); }
+
+function scopedQuestionProject(store: ProjectStore) {
+  let p = seed(store);
+  p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "billing", title: "Billing", purpose: "Billing evidence", dependencies: [] },
+    { type: "upsert", epicID: "dependent", title: "Report delivery", purpose: "Depends on report decisions", dependencies: ["reports"] }]);
+  p = store.note(p.id, p.revision, "Exact report-only retention decision", "reports");
+  const sourceID = p.sources.at(-1)!.id;
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { ...empty(), questions: [{ epicID: "reports", text: "How long should reports be retained?", whyItMatters: "Local retention choice",
+    evidenceIDs: [sourceID], options: [{ label: "30 days", consequence: "Short retention" }, { label: "One year", consequence: "Long retention" }] }],
+    requirements: ["billing", "dependent"].map((epicID) => ({ epicID, statement: `Record ${epicID} behavior`, rationale: "Original idea",
+      acceptance: [`Reopen ${epicID} records`], sourceIDs: [p.sources[0]!.id] })) });
+  p = store.get(p.id);
+  for (const r of p.requirements.filter((r) => r.status === "proposed")) p = store.review(p.id, p.revision, r.id, "accepted", "");
+  return p;
+}
+
+test("waiting scoped questions hold their dependency closure, not outside-scope evidence reviews", async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, checks(calls));
+  try {
+    const p = scopedQuestionProject(store), decisions = workflowDecisions(p, []);
+    const schedule = planWorkflowSchedule(p, workflowInputKey(p), decisions, workflowAreas(p));
+    assert.equal(schedule.tasks.find((task) => task.epicID === "billing")!.availability, "reviewable");
+    for (const epicID of ["project", "reports", "dependent"]) {
+      const task = schedule.tasks.find((task) => task.epicID === epicID)!;
+      assert.equal(task.availability, "waiting"); assert.deepEqual(task.waitingOn, [{ kind: "question", id: p.questions[0]!.id }]);
+    }
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.deepEqual(calls, ["definition:billing"]);
+    assert.equal(workflow.view(p.id).phase, "needs-decision"); assert.equal(store.workflow(p.id).grant!.used, 1);
+    assert.equal(store.workflow(p.id).paused, false); assert.equal(workflow.view(p.id).readiness.specificationChecked, false);
+    assert.deepEqual(store.get(p.id).questions, p.questions); assert.deepEqual(store.get(p.id).requirements, p.requirements);
+    const saved = store.workflow(p.id), jobs = store.jobs(p.id);
+    workflow.tick(p.id); await workflow.wait(p.id); assert.deepEqual(calls, ["definition:billing"]);
+    assert.deepEqual(store.workflow(p.id), saved); assert.deepEqual(store.jobs(p.id), jobs);
+    const view = workflow.view(p.id), markup = renderToStaticMarkup(createElement(WorkflowControls, { workflow: view, disabled: false, pending: false, configure() {} }));
+    assert.match(markup, /Saved work and waiting decisions/); assert.match(markup, /How long should reports be retained/);
+    assert.match(markup, /saved reviews current/); assert.match(markup, /not prove product independence/);
+    assert.equal(store.workflow(p.id).grant!.id, saved.grant!.id); assert.deepEqual(store.jobs(p.id), jobs, "Rendering grants no inference");
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("global, ambiguous and cross-linked decisions conservatively hold affected evidence reviews", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const original = scopedQuestionProject(store);
+    for (const scenario of ["global", "inbox", "missing-provenance", "missing-evidence", "missing-source", "initial-evidence", "approval", "organization", "input"] as const) {
+      const p = structuredClone(original), question = p.questions[0]!;
+      if (scenario === "global") question.epicID = "project";
+      if (scenario === "inbox") question.epicID = "inbox";
+      if (scenario === "missing-provenance") delete question.evidenceIDs;
+      if (scenario === "missing-evidence") question.evidenceIDs = ["missing"];
+      if (scenario === "missing-source") question.sourceID = "missing";
+      if (scenario === "initial-evidence") question.evidenceIDs = [p.sources[0]!.id];
+      const decisions = scenario === "approval" ? [{ kind: "requirement" as const, id: p.requirements[0]!.id, title: "Approval" }]
+        : scenario === "organization" || scenario === "input" ? [{ kind: scenario, id: "needs-attention", title: "Scope or input issue" }]
+          : workflowDecisions(p, []);
+      const schedule = planWorkflowSchedule(p, workflowInputKey(p), decisions, workflowAreas(p));
+      assert.ok(schedule.tasks.every((task) => task.availability === "waiting"), scenario);
+    }
+    const p = structuredClone(original);
+    p.requirements.find((r) => r.epicID === "billing")!.sourceIDs.push(p.questions[0]!.evidenceIDs![0]!);
+    const schedule = planWorkflowSchedule(p, workflowInputKey(p), workflowDecisions(p, []), workflowAreas(p));
+    assert.equal(schedule.tasks.find((task) => task.epicID === "billing")!.availability, "waiting", "Exact evidence links override area labels");
+    const transitive = structuredClone(original);
+    transitive.questions[0]!.evidenceIDs = [transitive.requirements.find((r) => r.epicID === "reports")!.id];
+    assert.equal(planWorkflowSchedule(transitive, workflowInputKey(transitive), workflowDecisions(transitive, []), workflowAreas(transitive)).tasks
+      .find((task) => task.epicID === "billing")!.availability, "waiting", "Shared provenance reached transitively is not independent");
+    const superseded = structuredClone(original);
+    superseded.sources.push({ id: "linked-billing-correction", epicID: "billing", kind: "note", text: "Related correction", supersedes: superseded.questions[0]!.evidenceIDs![0]! });
+    assert.equal(planWorkflowSchedule(superseded, workflowInputKey(superseded), workflowDecisions(superseded, []), workflowAreas(superseded)).tasks
+      .find((task) => task.epicID === "billing")!.availability, "waiting", "Superseding evidence remains in the waiting scope");
+    const cyclic = structuredClone(original); cyclic.epics.find((epic) => epic.id === "billing")!.dependencies = ["billing"];
+    assert.equal(planWorkflowSchedule(cyclic, workflowInputKey(cyclic), workflowDecisions(cyclic, []), workflowAreas(cyclic)).tasks
+      .find((task) => task.epicID === "billing")!.availability, "waiting");
+    assert.equal(workflowScheduleSchema.safeParse({ ...schedule, format: 99 }).success, false);
+    const forged = structuredClone(schedule); forged.tasks.find((task) => task.epicID === "billing")!.availability = "reviewable";
+    assert.equal(workflowScheduleSchema.safeParse(forged).success, false);
+    assert.equal(planWorkflowSchedule(p, workflowInputKey(p), workflowDecisions(p, []), Array.from({ length: 257 }, () => ({ epicID: "billing", assessed: false, stale: false }))).status, "unavailable");
+    const oversized = structuredClone(original); oversized.requirements[0]!.sourceIDs = Array<string>(64001).fill(oversized.sources[0]!.id);
+    assert.equal(planWorkflowSchedule(oversized, workflowInputKey(oversized), workflowDecisions(oversized, []), workflowAreas(oversized)).status, "unavailable");
+  } finally { store.close(); }
+});
+
+test("decision dependencies survive reopen without arming old grants or changing legacy readiness", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "workflow-schedule-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path), workflow: ProjectWorkflow | undefined;
+  try {
+    const p = scopedQuestionProject(store), calls: string[] = [];
+    workflow = new ProjectWorkflow(store, checks(calls)); grant(workflow, store, p.id); await workflow.wait(p.id); await workflow.close(); workflow = undefined;
+    const saved = store.workflow(p.id); assert.ok(saved.decisionSchedule); assert.equal(saved.grant!.used, 1);
+    const legacy = { ...saved }; delete legacy.decisionSchedule; assert.equal(workflowSchema.safeParse(legacy).success, true);
+    assert.equal(workflowSchema.safeParse({ ...saved, decisionSchedule: { ...saved.decisionSchedule, policy: "future" } }).success, false);
+    assert.throws(() => store.saveWorkflow(p.id, { ...saved, decisionSchedule: { ...saved.decisionSchedule!, format: 99 } } as unknown as typeof saved));
+    assert.deepEqual(store.workflow(p.id), saved, "Unsupported scheduling data cannot overwrite the original grant or snapshot");
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(path);
+      workflow = new ProjectWorkflow(store, { async analyze() { assert.fail("Restart/poll cannot authorize work"); } });
+      assert.deepEqual(store.workflow(p.id), saved); assert.equal(workflow.view(p.id).suspended, true);
+      workflow.tick(p.id); await workflow.wait(p.id); assert.deepEqual(store.workflow(p.id), saved);
+      assert.equal(workflow.view(p.id).readiness.specificationChecked, false);
+      await workflow.close(); workflow = undefined;
+    }
+  } finally { await workflow?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("checkpoint progress uses immutable metadata and invalidates across equal-revision writes from another connection", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "workflow-progress-")), path = join(directory, "state.sqlite");
+  const store = new ProjectStore(path); let other: ProjectStore | undefined;
+  try {
+    const p = scopedQuestionProject(store), work = planDefinitionStages(p, "reports"), job = store.beginJob(p.id, p.revision).job;
+    store.claimJob(job.id, Date.now() + 60000);
+    const context = definitionStageContext(p, work); store.checkpointDefinition(job.id, work, context.manifest);
+    const before = store.workflowDefinitionCheckpoints(p.id); assert.equal(before.get("reports")!.acceptedStages, 0);
+    before.get("reports")!.acceptedStages = 100;
+    assert.equal(store.workflowDefinitionCheckpoints(p.id).get("reports")!.acceptedStages, 0);
+    other = new ProjectStore(path); work.attempts = 1;
+    acceptDefinitionStage(p, work, undefined, { definitionAssessment: { epicID: "reports", confidence: "medium", explanation: "Original partial review",
+      checks: dimensions.map((dimension) => ({ dimension, status: "partial", importance: "important", explanation: "Provisional finding", evidenceIDs: [p.sources[0]!.id] })) } }, job.id);
+    other.checkpointDefinition(job.id, work, context.manifest);
+    const progress = store.workflowDefinitionCheckpoints(p.id); assert.equal(progress.get("reports")!.acceptedStages, 1);
+    assert.equal(store.projectRevision(p.id), p.revision);
+    const schedule = planWorkflowSchedule(p, workflowInputKey(p), workflowDecisions(p, []), workflowAreas(p), progress);
+    assert.equal(schedule.tasks.find((task) => task.epicID === "reports")!.reviewState, "unfinished");
+    assert.equal(schedule.tasks.find((task) => task.epicID === "reports")!.checkpoint!.acceptedStages, 1);
+    assert.deepEqual(store.get(p.id).assessments, p.assessments);
+  } finally { other?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("outside-scope scheduling preserves stale-result and Pause boundaries", async () => {
+  for (const action of ["edit", "pause"] as const) {
+    const store = new ProjectStore(":memory:"); let workflow: ProjectWorkflow | undefined, calls = 0;
+    try {
+      const p = scopedQuestionProject(store);
+      const adapter = checks([]);
+      workflow = new ProjectWorkflow(store, { async analyze(snapshot, options) {
+        calls++;
+        assert.equal(options.context.manifest.definitionAssessment?.epicID, "billing");
+        if (action === "edit") store.note(p.id, p.revision, "A concurrent project-wide decision", "project");
+        else workflow!.stop(p.id);
+        return adapter.analyze(snapshot, options);
+      } });
+      grant(workflow, store, p.id); await workflow.wait(p.id);
+      assert.equal(calls, 1); assert.equal(store.workflow(p.id).grant!.used, 1); assert.equal(store.workflow(p.id).paused, true);
+      assert.equal(store.get(p.id).assessments.length, 0); assert.deepEqual(store.get(p.id).questions, p.questions);
+      workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls, 1);
+    } finally { await workflow?.close(); store.close(); }
+  }
+});
+
+test("outside-scope evidence work cannot renew or exceed a bounded workflow grant", async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, checks(calls));
+  try {
+    let p = scopedQuestionProject(store);
+    p = store.organize(p.id, p.revision, Array.from({ length: 8 }, (_, n) => ({ type: "upsert" as const, epicID: `extra-${n}`, title: `Extra ${n}`, purpose: "Separate saved evidence", dependencies: [] })));
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.finishJob(job.id, { ...empty(), requirements: Array.from({ length: 8 }, (_, n) => ({ epicID: `extra-${n}`, statement: `Save extra record ${n}`,
+      rationale: "Recorded idea", sourceIDs: [p.sources[0]!.id], acceptance: [`Reopen record ${n}`] })) });
+    p = store.get(p.id);
+    for (const r of p.requirements.filter((r) => r.status === "proposed")) p = store.review(p.id, p.revision, r.id, "accepted", "");
+    grant(workflow, store, p.id); const grantID = store.workflow(p.id).grant!.id; await workflow.wait(p.id);
+    assert.equal(workflow.view(p.id).phase, "paused"); assert.equal(store.workflow(p.id).grant!.id, grantID);
+    assert.equal(store.workflow(p.id).grant!.used, calls.length); assert.ok(calls.length <= workflowLimits.requests);
+    assert.ok(calls.length < 9, "At least one outside-scope review must remain for later consent");
+    assert.equal(new Set(calls).size, calls.length, "No current area is checked twice");
+    const before = calls.length; workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, before);
+    assert.deepEqual(store.get(p.id).questions, p.questions); assert.equal(workflow.view(p.id).readiness.specificationChecked, false);
+  } finally { await workflow.close(); store.close(); }
+});
 
 function blockedWorkflowDefinition(store: ProjectStore, scenario: "drift" | "exhausted" | "decision") {
   let p = seed(store);

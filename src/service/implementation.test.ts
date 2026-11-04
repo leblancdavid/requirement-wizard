@@ -204,8 +204,9 @@ test("planning rejects stale and malformed responses, supports cancellation, and
           assert.throws(() => store.note(p.id, p.revision, "An ordinary concurrent edit is blocked."), /implementation is running/);
           // Simulate a newer snapshot arriving from an external integration despite
           // the normal mutation guard, exercising the defensive stale-result check.
-          const get = store.get.bind(store);
+          const get = store.get.bind(store), projectRevision = store.projectRevision.bind(store);
           store.get = (id) => { const current = get(id); return { ...current, revision: current.revision + 1 }; };
+          store.projectRevision = (id) => projectRevision(id) + 1;
           release();
         }
         else service.stop(p.id);
@@ -213,7 +214,10 @@ test("planning rejects stale and malformed responses, supports cancellation, and
       await until(service, p.id);
       const state = store.execution(p.id);
       assert.equal(state.planning?.status, scenario === "cancel" ? "interrupted" : "failed");
-      assert.equal(state.planning?.output, undefined);
+      if (scenario === "stale") {
+        assert.equal(state.planning!.output!.packages.length, 1, "Validated original package survives without becoming a proposed plan");
+        assert.equal(state.planning!.revision, p.revision);
+      } else assert.equal(state.planning?.output, undefined);
       assert.deepEqual(state.config, original); assert.deepEqual(state.assessments, {}); assert.deepEqual(state.delivered, {}); assert.equal(state.run, undefined);
       if (scenario === "stale") assert.match(state.planning!.diagnostic!, /changed during planning/);
       if (scenario === "oversized") { assert.equal(calls, 0); assert.match(state.planning!.diagnostic!, /Context blocked before inference/); }

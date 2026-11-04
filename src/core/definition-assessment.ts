@@ -7,7 +7,8 @@ import { ContextBudgetError, type ContextPack } from "./context.js";
 import { definitionInputKey } from "./definition-identity.js";
 
 export const definitionTaskSchema = z.object({ format: z.literal(1), epicID: z.string().min(1), inputKey: z.string().regex(/^[a-f0-9]{64}$/),
-  staged: z.object({ policy: z.literal("exact-batches-v1"), planKey: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional() }).strict();
+  staged: z.object({ policy: z.literal("exact-batches-v1"), planKey: z.string().regex(/^[a-f0-9]{64}$/),
+    baselineKey: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict().optional() }).strict();
 
 function definitionRecords(project: Project, epicID: string) {
   return [...project.requirements.filter((r) => r.status !== "rejected"),

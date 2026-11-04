@@ -226,7 +226,9 @@ test("refinements reject missing evidence, malformed output, rejected targets an
       store.note(snapshot.id, snapshot.revision, "A newer human decision");
       return { ...empty(), refinements: [proposal(snapshot)] };
     } });
-    assert.equal((await service.analyze(p.id, p.revision)).status, "stale");
+    const invalidHistorical = await service.analyze(p.id, p.revision);
+    assert.equal(invalidHistorical.status, "failed", "A reply invalid against its original rejected target is not accepted merely because an edit also arrived");
+    assert.equal(invalidHistorical.retrievalWork?.final, undefined);
     assert.equal(store.get(p.id).refinements.length, 0);
   } finally { store.close(); }
 });

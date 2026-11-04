@@ -16,6 +16,7 @@ import { definitionAbortReason } from "../core/definition-interruption.js";
 import { readinessQuestionTask } from "../core/readiness-questions.js";
 import { dimensionLabels } from "../core/epics.js";
 import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } from "../core/follow-through.js";
+import { planWorkflowSchedule } from "../core/workflow-schedule.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Run = { controller: AbortController; promise: Promise<void> };
@@ -58,6 +59,7 @@ export class ProjectWorkflow {
     const readiness = workflowReadiness(project, submissions, state, execution, bindingID, areas);
     const definitions = definitionFollowThrough(areas), artifacts = artifactFollowThrough(project, execution, bindingID), active = this.active(id);
     const decisions = workflowDecisions(project, submissions);
+    const decisionSchedule = decisions.length ? planWorkflowSchedule(project, workflowInputKey(project), decisions, areas, this.store.workflowDefinitionCheckpoints(id)) : undefined;
     const outcome = followThroughOutcome({ project, submissions, definitions, artifacts, active, decisions, blocked: state.phase === "blocked",
       change: this.store.latestSpecificationChange(id, project.revision), specificationChecked: readiness.specificationChecked, readyToImplement: readiness.readyToImplement });
     const guided = this.store.processingPolicy(id).mode === "guided", enabled = state.enabled || guided;
@@ -70,10 +72,10 @@ export class ProjectWorkflow {
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
       current: state.current && { kind: state.current.kind, target: state.current.target },
       grant: state.grant && { used: state.grant.used, remainingMs: remainingMs!, continuous: !!state.grant.continuous }, limits: workflowLimits,
-      decisions: enabled ? decisions : [], readiness, active, outcome,
+       decisions, readiness, active, outcome,
       definitionReviews: definitions.map((area) => ({ ...area,
         title: project.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID })),
-      artifacts, lastRun: this.store.latestWorkflowRun(id) };
+       artifacts, decisionSchedule, lastRun: this.store.latestWorkflowRun(id) };
   }
   configure(id: string, revision: number, version: number, action: "continue" | "continue-continuous" | "pause" | "disable") {
     let state = this.store.workflow(id);
@@ -210,13 +212,24 @@ export class ProjectWorkflow {
           queue.resume(id, { processOnly: true, research: false, submissionIDs: permitted.map((s) => s.id) }); await queue.wait(id);
           if (!continuous && owned().grant!.used > workflowLimits.requests - 3) throw new WorkflowBudgetPause("Workflow burst allowance reached; saved input and follow-up checkpoints are retained.");
         } else {
+          const decisions = workflowDecisions(project, submissions);
+          if (decisions.length) {
+            const schedule = planWorkflowSchedule(project, workflowInputKey(project), decisions, workflowAreas(project), this.store.workflowDefinitionCheckpoints(id));
+            const latest = owned(); latest.decisionSchedule = schedule; this.store.saveWorkflow(id, latest);
+            const review = schedule.status === "recorded" ? schedule.tasks.find((task) => task.availability === "reviewable" && task.reviewState !== "current") : undefined;
+            if (!review) {
+              stop("needs-decision", `${decisions.length} product decisions or saved-input issues need your attention. All presently reviewable outside-scope evidence checks are saved; affected or uncertain work waits. Answer or resolve the decisions to continue within the remaining allowance.`); return;
+            }
+            record("definition", project, review.epicID);
+            if (!check(await service.analyze(id, project.revision, { definitionEpicID: review.epicID, research: false, signal: controller.signal }))) return;
+            const finished = owned(); if (finished.current) finished.current.completed = true; this.store.saveWorkflow(id, finished);
+            continue;
+          }
           const stale = project.refinements.find((p) => p.status === "pending" && refinementIsStale(project, p));
           if (stale) {
             record("refine", project, stale.id); queue.resume(id, { refinementOnly: true, refreshProposalID: stale.id, research: false }); await queue.wait(id);
             const last = this.store.jobs(id).at(-1)!; if (!check(last)) return;
           } else {
-            const decisions = workflowDecisions(project, submissions);
-            if (decisions.length) { stop("needs-decision", `${decisions.length} product decisions or saved-input issues need your attention. Answer or resolve them in the decision inbox; routine checks continue afterward within the remaining allowance.`); return; }
             const requirements = workflowRequirements(project), jobs = this.store.jobs(id);
             if (!requirements.length) {
               record("interpret", project); const job = await service.analyze(id, project.revision, { signal: controller.signal, research: false }); if (!check(job)) return;

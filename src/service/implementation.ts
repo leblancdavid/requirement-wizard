@@ -14,9 +14,12 @@ import { directoryKey } from "../storage/workspace.js";
 import { assessmentPrompt, assessmentContextFingerprint, checkExecutionContext, executionContextPolicy, ExecutionContextError, requirementTaskContext, type ExecutionContextManifest } from "../core/execution-context.js";
 import { assessmentSkill } from "../core/execution-skills.js";
 import { assessmentCompatibility } from "../core/assessment-identity.js";
-import { planningConfigFingerprint, planningCurrent, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanning } from "../core/implementation-planning.js";
-import { implementationPlanningContext, PlanningContextOverflow } from "./planning-context.js";
-import { runImplementationStages, PlanningBudgetPause } from "./planning-stages.js";
+import { planningConfigFingerprint, planningCurrent, planningAncestryLimit, planningWorkDepth, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanning } from "../core/implementation-planning.js";
+import { PlanningContextOverflow } from "./planning-context.js";
+import { runImplementationStages, replayImplementationStages, planImplementationFollowup, planImplementationStages, planningStageMaterials, planningStageTotal, PlanningBudgetPause } from "./planning-stages.js";
+import { planningTargetInput, planningReuseKey } from "./planning-reuse.js";
+import { capturePlanningSources } from "./planning-sources.js";
+import type { PlanningTargetSource } from "../core/implementation-planning.js";
 import { implementationRevisionMatches } from "../core/implementation-revisions.js";
 
 const codeResult = z.object({ outcome: z.enum(["complete", "blocked"]), summary: z.string().min(1).max(12000) }).strict();
@@ -113,8 +116,13 @@ export class ImplementationService {
     if (operation !== "continue" && !eligibleRequirements(this.store.get(id)).some((r) => (!scope.epicID || r.epicID === scope.epicID) && (!scope.requirementID || r.id === scope.requirementID))) throw new Error("No approved requirements in the selected scope. Approve requirements in Review or choose another feature before assessing.");
     const owner = randomUUID();
     this.store.claimExecution(id, `startup:${id}`, owner);
+    let sources: Record<string, PlanningTargetSource> = {};
+    try {
+      if (operation === "plan") sources = capturePlanningSources(this.store.get(id), this.store.execution(id), this.store.workspace(id)!.bindingID!,
+        (revision) => this.store.get(id, revision), () => this.store.renewExecution(id, owner));
+    } catch (error) { this.store.releaseExecution(id, owner); throw error; }
     const controller = new AbortController();
-    const promise = operation === "plan" ? this.preparePlan(id, revision, controller.signal, owner)
+    const promise = operation === "plan" ? this.preparePlan(id, revision, controller.signal, owner, sources)
       : this.perform(id, revision, operation, scope, controller.signal, options.force ?? false, options.preview ?? false, owner);
     this.work.set(id, { controller, promise, operation });
     void promise.catch(() => this.store.pauseQueue(id, true))
@@ -122,16 +130,24 @@ export class ImplementationService {
   }
   isActive(id: string) { return this.work.has(id) || this.store.executionActive(id); }
   operation(id: string) { return this.work.get(id)?.operation; }
-  private async preparePlan(id: string, revision: number, signal: AbortSignal, owner: string) {
+  private async preparePlan(id: string, revision: number, signal: AbortSignal, owner: string, sources: Record<string, PlanningTargetSource>) {
     const state = this.store.execution(id), project = this.store.get(id), binding = this.store.workspace(id)!;
     const previous = state.planning;
     const resumable = previous && ["failed", "interrupted", "generating"].includes(previous.status) && planningCurrent(project, state, binding.bindingID);
     if (state.planning) (state.planningHistory ??= []).push(structuredClone(state.planning));
-    const plan: ImplementationPlanning = state.planning = { format: 1, id: randomUUID(), revision, bindingID: binding.bindingID!, createdAt: new Date().toISOString(),
-      status: "generating", configFingerprint: planningConfigFingerprint(state), output: resumable ? structuredClone(previous.output) : undefined,
-      sessions: resumable ? [...previous.sessions ?? []] : [], stageWork: resumable ? structuredClone(previous.stageWork) : undefined,
+    const plan: ImplementationPlanning = state.planning = { format: 2, id: randomUUID(), revision, bindingID: binding.bindingID!, createdAt: new Date().toISOString(),
+      status: "generating", configFingerprint: planningConfigFingerprint(state),
+      sessions: resumable ? [...previous.sessions ?? []] : [], pendingSources: sources,
+      // Legacy same-revision work without receipts keeps its original continuation
+      // path; never retrofit an input receipt onto completed historical work.
+      output: resumable ? { ...previous.output!, packages: previous.output?.packages.filter((p) => !sources[p.requirementID]) ?? [], summary: previous.output?.summary ?? "Retained packages" } : undefined,
+      stageWork: resumable ? Object.fromEntries(Object.entries(previous.stageWork ?? {}).filter(([id]) => !sources[id])) : undefined,
+      targetInputs: resumable ? Object.fromEntries(Object.entries(previous.targetInputs ?? {}).filter(([id]) => !sources[id])) : undefined,
+      targetMaterials: resumable ? Object.fromEntries(Object.entries(previous.targetMaterials ?? {}).filter(([id]) => !sources[id])) : undefined,
       model: { providerID: state.config!.providerID, modelID: state.config!.modelID } };
     const save = (checkInputs = false) => this.store.saveExecution(id, state, owner, checkInputs ? { revision, bindingID: binding.bindingID } : undefined);
+    let ancestryRestart = false;
+    const ancestryRestartReason = `Earlier collection reached the bounded planning ancestry (${planningAncestryLimit} saved snapshots). Original work remains in history; affected targets use fresh collection.`;
     const timer = setInterval(() => { try { this.store.renewExecution(id, owner); } catch { this.stop(id); } }, 30_000);
     try {
       save();
@@ -142,30 +158,82 @@ export class ImplementationService {
       let stagedRequests = 0;
       const current = () => {
         signal.throwIfAborted();
-        if (this.store.get(id).revision !== revision || this.store.workspace(id)?.bindingID !== binding.bindingID) throw new Error("Specification or workspace changed during planning. Prepare a new plan.");
+        if (this.store.projectRevision(id) !== revision || this.store.workspace(id)?.bindingID !== binding.bindingID) throw new Error("Specification or workspace changed during planning. Original validated packages and stage receipts remain saved as historical work; prepare a current plan.");
       };
       // Prefer one bounded request per target; oversized mandatory evidence uses
       // resumable exact read/check stages. Omitted scope requires human review.
       for (const r of requirements) {
         current();
         if (plan.output?.packages.some((p) => p.requirementID === r.id)) continue;
+        const retained = plan.pendingSources?.[r.id], priorInput = retained?.input;
+        const legacyWork = !retained && !!plan.stageWork?.[r.id] && !plan.targetInputs?.[r.id];
+        const prepared = planningTargetInput(project, state, r.id, !!plan.stageWork?.[r.id] || priorInput?.mode === "staged");
+        if (priorInput && priorInput.mode === prepared.mode && priorInput.inputKey === prepared.inputKey) {
+          const stages = retained?.mode === "staged" ? retained.work : undefined;
+          if (prepared.mode === "staged" && stages) {
+            replayImplementationStages(project, retained!.mode === "staged" ? retained!.materials as ReturnType<typeof planningStageMaterials> : prepared.materials, stages);
+            (plan.stageWork ??= {})[r.id] = structuredClone(stages);
+            (plan.targetMaterials ??= {})[r.id] = structuredClone(retained!.mode === "staged" ? retained!.materials : prepared.materials);
+          }
+          const savedPackage = retained?.package;
+          if (savedPackage && priorInput.packageKey !== planningReuseKey(savedPackage))
+            throw new Error("Saved package no longer matches its exact-input receipt. Original planning history was retained; no completed request was repeated.");
+          if (savedPackage) {
+            if (prepared.mode === "staged" && (!stages || stages.receipts.length !== planningStageTotal(stages)))
+              throw new Error("Saved package has unfinished staged verification. Original planning history was retained.");
+            const evidenceIDs = prepared.mode === "single" ? prepared.context.evidenceIDs
+              : [r.id, ...prepared.materials.records.map((record) => record.record.id), ...project.epics.map((epic) => epic.id)];
+            const output = validateImplementationPlanning({ summary: "Retained exact-input package", packages: [savedPackage] }, project, evidenceIDs, [r.id]);
+            const allowedRequirements = prepared.mode === "single" ? prepared.context.requirementIDs
+              : new Set([r.id, ...prepared.materials.records.filter((record) => record.field === "guardrails" || record.field === "supportingRequirements").map((record) => record.record.id)]);
+            if (output.packages[0]!.prerequisites.some((dependency) => !allowedRequirements.has(dependency.requirementID)))
+              throw new Error("Saved package references omitted behavior. Original planning history was retained.");
+            plan.output ??= { summary: "Exact-input packages retained; review dependencies and order before coding.", packages: [] };
+            plan.output.packages.push(...output.packages);
+            (plan.targetInputs ??= {})[r.id] = structuredClone(priorInput);
+            delete plan.pendingSources![r.id];
+            save(); current(); continue;
+          }
+        }
+        if (priorInput?.mode === "staged" && prepared.mode === "staged" && priorInput.inputKey !== prepared.inputKey) {
+          const source = retained?.mode === "staged" ? retained.work : undefined;
+          if (source && planningWorkDepth(source) >= planningAncestryLimit) ancestryRestart = true;
+          if (source && retained?.mode === "staged") {
+              const followup = planImplementationFollowup(project, prepared.materials, retained.materials as ReturnType<typeof planningStageMaterials>,
+                source, retained.sourcePlanID, retained.sourceRevision, priorInput.inputKey,
+                { createdAt: retained.sourceCreatedAt, finishedAt: retained.sourceFinishedAt }, priorInput);
+              if (followup) (plan.stageWork ??= {})[r.id] = followup;
+          }
+        }
+        if (!legacyWork) (plan.targetInputs ??= {})[r.id] = priorInput && priorInput.inputKey === prepared.inputKey && plan.stageWork?.[r.id]
+          ? structuredClone(priorInput) : { format: 1, policy: "exact-planning-inputs-v1", mode: prepared.mode,
+             inputKey: prepared.inputKey, originPlanID: plan.id, originRevision: revision, originPlanCreatedAt: plan.createdAt };
+        if (prepared.mode === "staged") {
+          (plan.targetMaterials ??= {})[r.id] ??= structuredClone(prepared.materials);
+          (plan.stageWork ??= {})[r.id] ??= planImplementationStages(prepared.materials);
+        }
+        // Attach the complete current packet and consume its source in one owned
+        // save. Preparation errors above leave the pending source intact.
+        delete plan.pendingSources![r.id];
+        save();
         const request = (prompt: string) => this.adapter.perform({ directory: binding.path, config: state.config!, prompt, coding: false, planning: true, signal, requirementID: r.id,
           onSession: (sessionID) => { plan.sessionID = sessionID; plan.sessions!.push(sessionID); save(); }, onProgress: () => {} });
         let output: ReturnType<typeof validateImplementationPlanning>, reviewQuestion: string | undefined;
         try {
-          if (plan.stageWork?.[r.id]) throw new PlanningContextOverflow("Resume saved exact stages");
-          const context = implementationPlanningContext(project, state, r.id);
+          if (prepared.mode === "staged") throw new PlanningContextOverflow("Resume exact stages");
+          const context = prepared.context;
           checkExecutionContext(context.prompt, false, r.id, 0, true);
-          const result = await request(context.prompt); current();
+          save(); // Persist the supplied-input identity before dispatch, never retrofit old replies.
+          const result = await request(context.prompt); signal.throwIfAborted();
           output = validateImplementationPlanning(JSON.parse(result), project, context.evidenceIDs, [r.id]);
           if (output.packages.some((p) => p.prerequisites.some((d) => !context.requirementIDs.has(d.requirementID)))) throw new Error("Planning prerequisite references behavior omitted from the supplied context.");
           reviewQuestion = context.reviewQuestion;
         } catch (error) {
           if (!(error instanceof PlanningContextOverflow)) throw error;
-          ({ output, reviewQuestion } = await runImplementationStages(project, state, r.id, () => save(true), current, request, () => {
+          ({ output, reviewQuestion } = await runImplementationStages(project, state, r.id, () => save(), current, request, () => {
             if (stagedRequests >= 32) throw new PlanningBudgetPause("Planning paused after 32 staged requests. Completed packages and exact checks are saved. Choose Prepare plan explicitly to continue; completed calls will not repeat.");
             stagedRequests++;
-          }));
+          }, () => signal.throwIfAborted(), plan.targetMaterials?.[r.id] as ReturnType<typeof planningStageMaterials> | undefined));
         }
         // App-owned limitation cannot be suppressed by a model returning no questions.
         // Keep within the existing format's twelve-question bound.
@@ -179,17 +247,26 @@ export class ImplementationService {
           else questions.push(reviewQuestion);
         }
         plan.output ??= { summary: "Dependency proposals and requirement-linked work packages. Review prerequisites and order before coding.", packages: [] };
+        if (ancestryRestart && !plan.output.summary.includes(ancestryRestartReason)) plan.output.summary += ` ${ancestryRestartReason}`;
+        signal.throwIfAborted();
         plan.output.packages.push(...output.packages);
-        try { save(true); } catch (error) { plan.output.packages.pop(); throw error; }
+        if (plan.targetInputs?.[r.id]) plan.targetInputs[r.id]!.packageKey = planningReuseKey(output.packages[0]);
+        // An owned historical checkpoint is not a current/proposed plan. Preserve
+        // validated original computation before the revision/workspace guard; only
+        // final publication below may use the input-checked save(true) boundary.
+        save(); current();
       }
       // Cycles are reviewable proposals; approval validates the selected graph.
       if (plan.output) try {
         const order = suggestedPlanningOrder(project, state, plan.output);
         plan.output.packages.sort((a, b) => order.indexOf(a.requirementID) - order.indexOf(b.requirementID));
       } catch { /* Retain cyclic hard-edge proposals for explicit review. */ }
-      plan.status = "proposed"; plan.finishedAt = new Date().toISOString(); save(true);
+      if (Object.keys(plan.pendingSources ?? {}).length) throw new Error("Planning sources remain unprocessed; the plan cannot be published.");
+      plan.status = "proposed"; plan.finishedAt = new Date().toISOString();
+      for (const input of Object.values(plan.targetInputs ?? {})) if (input.originPlanID === plan.id) input.originPlanFinishedAt = plan.finishedAt;
+      save(true);
     } catch (error) {
-      plan.status = signal.aborted || error instanceof PlanningBudgetPause ? "interrupted" : "failed"; plan.finishedAt = new Date().toISOString(); plan.diagnostic = safeMessage(error instanceof Error ? error.message : error); save();
+      plan.status = signal.aborted || error instanceof PlanningBudgetPause ? "interrupted" : "failed"; plan.finishedAt = new Date().toISOString(); plan.diagnostic = (ancestryRestart ? `${ancestryRestartReason} ` : "") + safeMessage(error instanceof Error ? error.message : error); save();
       throw error;
     } finally { clearInterval(timer); }
   }

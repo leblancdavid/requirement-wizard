@@ -5,6 +5,84 @@ decisions; it is not readiness, code completeness, or verified delivery to main.
 
 ## Refresh the overall view
 
+### Keep completed clarification work when another edit arrives (2026-11-03)
+
+A staged Design clarification now saves a valid reply against its original evidence
+before stopping for a concurrent edit. Questions remain unpublished while stale.
+Explicit compatible continuation resumes the unfinished check rather than repeating
+that accepted read; a complete saved check can finish without a new request.
+Changed evidence still requires review, and cancelled/expired replies are not accepted.
+The same preservation boundary now applies to staged answer follow-up and refinement;
+see [compatibility](migrations.md#preserve-staged-answer-clarification-and-refinement-responses-across-edits-2026-11-03).
+
+### Reuse the saved collection after an answer (2026-11-03)
+
+Eligible staged follow-ups now start from a verified original assessment rather than
+collecting all unchanged evidence again. They collect all added/updated guarded
+records, consider effects across all nine dimensions, then check every current
+evidence batch before publishing a new review. Continue specification and explicit
+Refresh share this path; no new advanced-tool action is needed. Pause/restart keeps
+the exact follow-up ledger, and progress identifies the retained assessment revision.
+
+This is **collection reuse, not independent-finding or verification skipping**. An
+indispensable relationship still requires exact supporting evidence. Changed
+scope/dependencies/global interpretation, removed evidence, unavailable original
+publication or unsupported provenance uses the existing full collection path, with
+the earlier findings retained. Eligible unfinished first reviews and interrupted
+follow-ups can now reuse their provisional draft and fully collected original reads.
+They collect every changed or unread original record; partial dimension reads and
+supplemental evidence loads alone cannot skip collection. The queue names the
+unfinished original revision without presenting it as a completed assessment.
+Full verification can remain expensive; no fixed total-runtime reduction is promised.
+See [compatibility and portable origins](migrations.md#saved-collection-baseline-with-complete-current-verification-2026-11-03).
+
+### Retain completed replies when a decision arrives mid-request (2026-11-03)
+
+Staged definition reviews now validate and checkpoint a completed reply against its
+original inputs before stopping for a concurrent project edit. The job remains
+stale and cannot publish or dispatch another request. Explicit continuation can
+reuse that stage when the area's exact guarded inputs are unchanged; relevant
+changes still need review and do not make old findings current. Invalid replies,
+cancelled responses and expired workers do not acquire accepted-stage status.
+
+This closes a response-loss window, **not** the larger answer-triggered rechecking
+cycle. The [resilience plan](workflow-resilience.md) covers baseline-plus-change
+review, decision-aware scheduling, other processes and measured efficiency. See
+[compatibility boundaries](migrations.md#historical-response-preservation-during-concurrent-edits-2026-11-03).
+
+### Recall after linked pages without dimension splitting (2026-11-03)
+
+The final original check after linked-answer pages can now recall a previously read,
+cited complete question/answer pair even if the draft did not need dimension
+splitting. The old dimension-ledger guard accidentally disabled this recovery for
+smaller drafts. Recall uses exact links from blocker-named supplied records, not
+prose similarity or latest-answer precedence. Same-phase read receipts, both cited
+records, original evidence, attempts and all existing request bounds remain required.
+
+The Industrial playable slice blocker reproduced this gap: reconciliation evidence
+had been read and cited but was absent from the final request. Isolated recall plus
+existing dimension sizing supplied the exact qualifying pair at 91,578 characters,
+retaining all 15 completed responses and four attempts. Only the model's next review
+can establish its interpretation; no product choice or completion was inferred.
+See [compatibility and verification](migrations.md#exact-recall-after-linked-pages-without-dimension-splitting-2026-11-03).
+
+### Combined large-draft and linked-graph sizing (2026-11-03)
+
+When linked-answer pages cannot fit even one whole pair beside the complete draft,
+their sizing now considers the existing complete-dimension views. This combines two
+already-supported bounds rather than truncating evidence or findings. Existing
+full-draft packing is preferred when it fits. Every pair and selected check stays
+whole, all nine dimensions remain scheduled, and the original evidence check still
+follows the pages. Separate reads cannot establish indispensable joint consistency.
+
+The reproduced 291-response blocker involved a 167-character base record, a
+155,019-character retained draft and a large linked graph, not an oversized record
+alone. Isolated preparation now fits its first request at 82,269 characters instead
+of 184,567. All 291 original responses and load receipts replay unchanged. Mechanical
+empty-verdict sizing checks do not establish live model interpretation or completion.
+No completed calls must be repeated; after restart, explicitly continue saved work.
+See [compatibility and checks](migrations.md#combined-linked-page-and-dimension-sizing-2026-11-03).
+
 ### Faster exact local validation (2026-11-03)
 
 The running review advanced beyond collection into verification, but its measured
