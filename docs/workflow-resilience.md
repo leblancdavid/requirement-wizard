@@ -5,6 +5,47 @@ claim that incremental continuation is already available throughout the app.
 
 ## Contract
 
+Source-backed change-check continuation is now implemented under explicit v2
+work/receipt formats. The model can request exact missing bodies; accepted lookups
+and spent attempts survive interruption, reopening and portable adoption. Missing
+evidence is no longer limited to the old final-only `review-needed` response path.
+All findings/changes remain supplied and currentness still requires a validated
+semantic verdict. Oversized cumulative evidence pauses rather than being truncated
+or silently treated as independent. See the [migration/verification ledger](migrations.md#source-backed-resumable-change-checks-2026-11-04).
+
+**Real-project finding before v2 (2026-11-04):** answering a project-wide Design question
+still changes every area's conservative guard. The present delta-only change-impact
+request often omits the original cited evidence, so its safe `review-needed` fallback
+can lead back to broad reassessment. Read-only investigation found this pattern in
+23 assessed areas, including multiple live completed impact responses reporting
+missing evidence. The memory mitigations do not solve it. A bounded, durable
+on-demand evidence-loading protocol was needed and is now implemented above; neither relabeling the UI nor
+graph/citation-based independence claims are a substitute. See
+[observed limits](definition-coverage.md#check-decision-impact-before-repeating-completed-reviews-2026-11-04).
+
+Memory-pressure mitigation, 2026-11-04: a user-reported native V8 heap allocation
+failure during Continue specification is confirmed, but its exact application
+callsite remains unknown. Scheduling now retains compact validated receipts rather
+than full job ledgers across inference; initialization/completion use scoped reads,
+and portable publication encodes one historical assessment snapshot at a time.
+Saved evidence, attempts, hashes and continuation identities are unchanged. The
+128-MiB capped-heap synthetic publication check passed; this is not reproduction
+of the user's crash or a universal memory bound. See [desktop findings](desktop.md#assessment-memory-pressure-mitigation-2026-11-04)
+and the [compatibility ledger](migrations.md#assessment-memory-pressure-reduction-2026-11-04).
+
+The 2026-11-04 change-impact slice now integrates with Continue specification:
+eligible added-answer deltas get a bounded semantic comparison against all nine
+original findings before full refresh. Exact unaffected receipts preserve current
+compatibility separately from original findings/dates; affected or uncertain areas
+take the existing full-review path. Eligible checks run ahead of potentially long
+full reviews. No startup calls or extra consent workflow are introduced. Three
+charged attempts survive explicit retry; validated saved replies can publish after
+recovery without repeating inference. Database 24 / portable state 4 protect the
+new evidence. See [migration ledger](migrations.md#dated-definition-change-impact-reviews-2026-11-04)
+and [eligibility limits](definition-coverage.md#check-decision-impact-before-repeating-completed-reviews-2026-11-04).
+Deterministic integration/browser checks pass; live semantic and actual-user desktop
+qualification remain outstanding. This is not general delta-only verification.
+
 A decision may invalidate a conclusion, not erase the work that produced it.
 Preserve original inputs, IDs, exact evidence, dated outputs, checkpoints, spent
 attempts, and coding artifacts. Keep saved progress distinct from current validity.
@@ -40,7 +81,7 @@ require broad review, with a specific explanation.
    each a frozen baseline and explicit reconciliation boundary, with no duplicate
    application of proposals/answers. Preserve validated responses on interruption
    where worker ownership and cancellation semantics allow it.
-5. **Scans and implementation planning (response preservation, exact-input reuse and bounded evidence follow-ups implemented; cross-target source carry-forward and broader reconciliation pending).** Separate reusable file capture/observation
+5. **Scans and implementation planning (response preservation, exact-input reuse, bounded evidence follow-ups and cross-target source carry-forward implemented; broader reconciliation pending).** Separate reusable file capture/observation
    from current-project interpretation and publication. Resume only changed file or
    planning tasks when compatible; model/context changes must not mix unverified
    outputs. Preserve complete earlier snapshots, package drafts and dependencies.
@@ -338,10 +379,33 @@ Target/global-envelope or requirement-guardrail changes still require fresh work
 normal approval gates remain. Existing-record human content is preserved in original
 snapshots/witnesses, not overwritten by AI reconciliation.
 
-New audit finding: if replacement preparation stops before visiting later targets,
+Audit finding at that slice: if replacement preparation stops before visiting later targets,
 their original reusable work may remain only in history. Immediate-predecessor
 selection and compact portable projection do not yet carry those unprepared sources
 forward. Already-prepared target recovery is verified, but cross-target source
 retention/selection is the next planning gap. Full-history serialization/deduplication,
 scan observation reuse, other workflow reconciliation and general single-request
 discovery outcome preservation remain separate work.
+
+### Unvisited planning target recovery (2026-11-04)
+
+Planning envelope 2 now captures eligible per-target historical sources under the
+owned startup lease before replacing the plan or making any request. Separate pending
+capsules survive repeated early failures, restart and portable adoption without the
+full archive. Nearest touched targets, review decisions and settings/binding/model
+epochs bound history selection; newer attempts cannot be bypassed for older successes.
+Current target packets consume sources atomically only after validation/preparation.
+Frozen materials preserve exact partial request identity; changed evidence retains
+its source receipt and still verifies current inputs. Pending sources never count as
+current packages and block publication until processed.
+
+Formats/fingerprints already saved remain unchanged; original snapshots supply legacy
+materials only where available. Capture errors leave the old plan intact and make no
+model request. The [migration ledger](migrations.md#unvisited-planning-target-source-carry-forward-2026-11-04)
+records portable binding changes and compatibility. All **109** focused tests, **894
+pretests and 770 main tests**, type/diff checks, UI build, enhanced planning-browser
+checks and all **22** default browser runners passed. Multi-target recovery itself is
+qualified by deterministic service/storage/portable tests, not a new browser scenario
+or live inference.
+This closes the identified unvisited-target carry-forward gap, not broader target/global
+reconciliation, scan reuse or whole-history serialization/deduplication.

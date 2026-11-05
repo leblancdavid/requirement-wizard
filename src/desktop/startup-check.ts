@@ -10,7 +10,7 @@ const directory = await mkdtemp(resolve(".reqwizit-state/startup-check-")), path
 const seed = new ProjectStore(path), p = seed.create("Startup continuity fixture", "Keep original work", { providerID: "openai", modelID: "fixture" }); seed.close();
 const lock = new Database(path);
 const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE"));
-const launch = () => _electron.launch({ args: [resolve("dist/desktop-app"), "--data-dir", directory], env, timeout: 30000 });
+const launch = () => _electron.launch({ args: [resolve(process.env.REQWIZIT_DESKTOP_APP_DIRECTORY ?? "dist/desktop-app"), "--data-dir", directory], env, timeout: 30000 });
 let desktop: Awaited<ReturnType<typeof launch>> | undefined, locked = false;
 try {
   // An isolated SQLite writer deliberately delays backend initialization. No real

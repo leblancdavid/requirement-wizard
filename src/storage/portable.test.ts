@@ -387,6 +387,34 @@ test("cached continuation comparisons preserve legacy delta bytes and exact olde
   } finally { f.cleanup(); }
 });
 
+test("many assessment publications fit a capped heap without retaining all full historical projects", () => {
+  const result = spawnSync(process.execPath, ["--max-old-space-size=128", "--import", "tsx", "scripts/check-portable-memory.ts"],
+    { cwd: resolve("."), encoding: "utf8", timeout: 90000, maxBuffer: 256000, windowsHide: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, `Capped-heap publication failed: ${result.stderr.slice(-2000)}`);
+  assert.match(result.stdout, /96 independent 2-MiB publication snapshots/);
+});
+
+test("optional assessment origins are loaded once in revision order and missing required history still fails closed", () => {
+  const f = fixture();
+  try {
+    const current = structuredClone(f.project); current.revision = 100;
+    current.assessments = [3, 1, 2, 3].map((atRevision, index) => ({ epicID: `area-${index}`, atRevision, confidence: "medium" as const,
+      explanation: "Saved review", answerVersions: {}, checks: Array.from({ length: 9 }, () => ({ dimension: "rules" as const, importance: "important" as const,
+        status: "partial" as const, explanation: "Retained", evidenceIDs: [current.sources[0]!.id] })) }));
+    const reads: number[] = [];
+    const work = continuationState(current, [], [], (revision) => {
+      reads.push(revision); if (revision === 2) throw new Error("Project or revision not found.");
+      return { ...structuredClone(current), revision };
+    });
+    assert.deepEqual(reads, [1, 2, 3]); assert.deepEqual(Object.keys(work.snapshots), ["1", "3"]);
+    const job = { id: "required-original", projectID: current.id, expectedRevision: 2, status: "failed" as const, model: selection, leaseUntil: null,
+      context: { revision: 2, focusEpicID: null, characters: 0, budget: 100, includedIDs: [], omittedIDs: [], refinementOnly: true } };
+    assert.throws(() => continuationState(current, [job], [], () => { throw new Error("Project or revision not found."); }), /not found/);
+    assert.throws(() => continuationState(current, [], [], () => { throw new Error("Database read failed"); }), /Database read failed/);
+  } finally { f.cleanup(); }
+});
+
 test("interrupted source scans continue in another folder/account without repeating saved batches", async () => {
   const f = fixture(), target = join(f.directory, "scan-clone"), consumer = new ProjectStore(":memory:"); mkdirSync(target);
   let calls = 0, resumed = 0;

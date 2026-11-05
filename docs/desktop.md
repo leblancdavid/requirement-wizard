@@ -1,5 +1,121 @@
 # Electron desktop application
 
+## Indexed startup history checks (2026-11-04)
+
+Reported logs entered `opening-data` at 1,183 ms, `upgrading-data` at 1,225 ms and
+`checking-data` at 1,226 ms. These are cumulative phase-entry times: the migration
+apply step was fast, but the transaction cannot commit until validation succeeds.
+The log alone does not measure the eventual validation duration.
+
+Investigation found that every launch scanned full project/revision payloads to
+find change-review receipts, including large historical snapshots with no such
+receipts. Database migration 26 now builds covering expression indexes for that
+validation path. Warm-start checks read the extracted review arrays from the index,
+not full historical project bodies; their supported-format and size checks remain.
+Repeated identical arrays share only a bounded in-process digest cache. No historical
+work or receipts are deleted, trusted merely by age/revision, or made current.
+
+**First updated start can still take time:** building the index requires one archive
+read. The splash/console now distinguish “Indexing saved review history once for
+faster future starts” from indexed history checks, saved-work checkpoints and saved
+definition evidence. Later starts do not rebuild the index. Other validators may
+still take time; actual large-project end-to-end timings remain unmeasured. Keep the
+complete startup phase log if another phase is slow rather than resetting the data.
+
+All 48 focused tests, 105 forensic/migration regressions, `npm test` (899 pretests,
+774 main tests and 34 posttests), type/diff checks, the isolated real Electron suite
+and dedicated startup/close-during-startup tests passed.
+The ordinary `npm run test:desktop` staging install was blocked by the still-running
+development app locking its native SQLite module. Checks instead used an independent
+ignored stage with pinned dependencies and isolated data. No user process was stopped,
+no installed app rebuilt and no user database migrated for verification.
+`REQWIZIT_DESKTOP_APP_DIRECTORY` is now supported by both desktop test runners so
+an isolated stage can be tested without rebuilding the running app's directory.
+After closing the current development instance, `npm run desktop` rebuilds the
+source application normally. See [migration/recovery details](migrations.md#indexed-startup-review-validation-2026-11-04).
+
+## Assessment memory-pressure mitigation (2026-11-04)
+
+A subsequent native terminal trace reports `CALL_AND_RETRY_LAST Allocation failed -
+JavaScript heap out of memory` after roughly 68 minutes. This confirms a fatal V8
+allocation failure, but its native stack does not identify an application callsite
+or prove that all available memory was exhausted. The exact real-project assessment
+crash has not been reproduced. A native fatal abort can terminate before JavaScript
+worker-error callbacks run; it may therefore leave no new `backend-failure.json`.
+Read-only metadata inspection found 2,644 local jobs
+totalling approximately 147 million JSON characters; current project payloads were up to
+8.8 million characters. No project text or credentials were read into diagnostics.
+A broader revisions-size scan reached its diagnostic timeout; it did not establish
+a history size breakdown.
+
+Concrete bulk-retention paths were removed without raising the heap limit:
+
+- Coordinator scheduling reads validated, explicitly typed compact receipts
+  (task keys/targets, lifecycle status, original revision and necessary verdict/summary)
+  directly from SQLite. It does not hold full context, response or stage ledgers
+  across assessment/model awaits. Original jobs are still validated by dispatch.
+- Initialization uses a scan-existence query instead of decoding all jobs. Completion
+  reconciliation loads only original pair-check jobs; readiness continuation loads
+  only original clarification jobs. No relevant rows are limited to an arbitrary
+  recent page, and no scheduling projection is treated as a complete job.
+- Original definition candidates are decoded one at a time under the same newest-first
+  20-candidate policy. The cursor closes before replay/inference. Full archive reads
+  elsewhere stream raw JSON into the validated result list rather than keeping a
+  second complete raw-string array.
+- Portable publication reads and encodes one assessment-origin snapshot at a time
+  instead of retaining every area's entire historical project simultaneously.
+  Exact deltas/object hashes and selection rules remain compatible; missing optional
+  legacy publication snapshots stay missing, while missing required history still fails.
+
+The synthetic memory check encodes 96 independently parsed 2-MiB publication snapshots
+in an isolated Node process capped at 128 MiB old-space:
+
+```powershell
+node --max-old-space-size=128 --import tsx scripts/check-portable-memory.ts
+```
+
+That check and type checking passed, as did the real Electron isolated-data suite
+(including the UI/desktop build), coordinated-workflow and continuous-definition
+browser checks, diff checking, and `npm test` (899 pretests, 772 main tests and 17
+posttests). The 284 focused portable/workflow/definition/store/completion tests also
+passed. These checks do not reproduce the user's long-running crash or
+establish a universal heap ceiling. No live model calls, application launch against
+the user's data, installed-app rebuild, history deletion, data reset or reassessment
+was performed. Restart `npm run desktop` to load the rebuilt source application;
+interrupted work still requires explicit continuation. See the
+[compatibility ledger](migrations.md#assessment-memory-pressure-reduction-2026-11-04).
+
+## Backend crash diagnostics (2026-11-04)
+
+The unexpected-stop dialog identifies a backend worker failure after startup, not
+its cause. A reported crash occurred during Continue specification assessment from
+`npm run desktop`; its terminal output contained only successful startup stages.
+The previous worker host discarded the error object and exit code. That report
+alone did not establish memory exhaustion, serialization failure or a model
+failure. The subsequent native trace and mitigations are recorded above; the exact
+assessment crash has not been reproduced against the user's project.
+
+The host now reports one safe failure record to the owner before shutdown. The
+launching terminal receives `Desktop backend failure:` and the desktop writes the
+latest record to `<data directory>/desktop/backend-failure.json` (format 1). The
+dialog includes the category, an allowlisted Node/SQLite error code or exit code,
+and whether the diagnostic was saved. Memory/string-size/stack-overflow categories
+are recognized error signatures, not a substitute for reproducing the failing
+operation. Records contain a timestamp, failure kind, safe error class/code and at
+most eight source basenames with line/column numbers. Raw exception messages,
+function names, full paths, SQL/project text, provider responses and credentials
+are excluded. Diagnostic write/display failure cannot prevent owned cleanup.
+
+This is an additive local diagnostic only: no SQLite, portable, settings or saved
+job migration; no assessments or attempts are reset or replayed. A source launch
+must be restarted with `npm run desktop` to load it. No installed app was rebuilt.
+Type checking, all eight worker tests and `npm run test:desktop` passed. Tests cover
+safe classification/redaction and a synthetic worker error carrying the memory
+error code, not actual memory exhaustion. The real Electron runner covers normal
+launch/IPC/relaunch/cleanup on isolated data; native crash-dialog/file behavior and
+the reported assessment crash remain unqualified. No live inference or user-project
+writes were performed during diagnosis/testing; only local file metadata was inspected.
+
 ## Visible startup (2026-10-31)
 
 The desktop shows its own window **before** opening/checking the SQLite store, rather than

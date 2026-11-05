@@ -211,6 +211,11 @@ function seed(store: ProjectStore) {
 function checks(calls: string[], defined = true): DiscoveryAdapter {
   return { async analyze(p, { context, research }) {
     assert.equal(research, false); const task = context.manifest.definitionAssessment;
+    if (context.manifest.definitionChangeReview) {
+      calls.push(`change:${context.manifest.focusEpicID}`);
+      return { taskKey: context.manifest.definitionChangeReview.taskKey, outcome: "review-needed", explanation: "Fixture requires deeper verification after the answer",
+        checks: dimensions.map((dimension) => ({ dimension, outcome: "review-needed", reason: "Inspect the current full evidence before updating this finding", evidenceIDs: [] })) };
+    }
     if (task) {
       calls.push(`definition:${task.epicID}`);
       return { ...empty(), assessments: [{ epicID: task.epicID, confidence: "medium", explanation: "Saved human decision",
@@ -221,6 +226,69 @@ function checks(calls: string[], defined = true): DiscoveryAdapter {
   } };
 }
 function grant(workflow: ProjectWorkflow, store: ProjectStore, id: string) { workflow.configure(id, store.projectRevision(id), workflow.view(id).version, "continue"); }
+
+test("coordinated specification assessment does not deserialize the full job archive for scheduling or initialization", async () => {
+  const store = new ProjectStore(":memory:"), p = seed(store), calls: string[] = [];
+  const jobs = store.jobs.bind(store), archiveLoads: string[] = [];
+  store.jobs = (id, limit) => { if (limit === undefined) archiveLoads.push(new Error("Archive read").stack!); return jobs(id, limit); };
+  const workflow = new ProjectWorkflow(store, checks(calls, false));
+  try {
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.ok(calls.some((call) => call.startsWith("definition:")), JSON.stringify({ calls, state: store.workflow(p.id).message }));
+    assert.equal(archiveLoads.length, 0, `The coordinator and definition dispatch use exact scoped job reads, not bulk ledgers: ${archiveLoads.join("\n")}`);
+    const full = jobs(p.id), expected = full.filter((job) => job.context?.refinementOnly || job.context?.refinementTarget || job.context?.refinementPair || job.context?.readinessQuestions);
+    assert.deepEqual(store.specificationWorkflowJobs(p.id), expected, "Full original scheduling receipts and their chronological order are preserved");
+    assert.deepEqual(store.specificationWorkflowJobs(p.id, "resolution"), full.filter((job) => job.context?.refinementPair));
+    assert.deepEqual(store.specificationWorkflowJobs(p.id, "readiness"), full.filter((job) => job.context?.readinessQuestions));
+    const receipts = full.filter((job) => job.context?.refinementTarget || job.context?.refinementPair || job.context?.readinessQuestions)
+      .map((job) => ({ id: job.id, expectedRevision: job.expectedRevision, status: job.status,
+        context: { refinementTarget: job.context?.refinementTarget, refinementPair: job.context?.refinementPair, readinessQuestions: job.context?.readinessQuestions },
+        result: job.result ? { summary: job.result.summary, resolutionCheck: job.result.resolutionCheck } : undefined }));
+    assert.deepEqual(JSON.parse(JSON.stringify(store.workflowJobReceipts(p.id))), JSON.parse(JSON.stringify(receipts)), "Compact receipts preserve every scheduling/proof input, not every output/evidence body");
+    assert.equal(store.hasScanJob(p.id), full.some((job) => job.kind === "scan"));
+    assert.deepEqual(jobs(p.id, 2), full.slice(-2));
+  } finally { await workflow.close(); store.close(); }
+});
+
+for (const affected of [false, true]) test(`Continue specification checks exact decision impact before ${affected ? "refreshing only the affected area" : "retaining unchanged findings without full reassessment"}`, async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = [];
+  let p = seed(store);
+  const base = checks([]);
+  for (const epicID of ["project", "reports"]) {
+    const service = new DiscoveryService(store, base);
+    const done = await service.analyze(p.id, p.revision, { definitionEpicID: epicID });
+    assert.equal(done.status, "completed", done.diagnostic); p = store.get(p.id);
+  }
+  const original = structuredClone(p.assessments);
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { ...empty(), questions: [{ epicID: "project", text: "When should notification colors become visible?", whyItMatters: "A newly discovered choice",
+    evidenceIDs: [p.sources[0]!.id], options: [{ label: "Next launch", consequence: "Use on restart" }, { label: "Immediately", consequence: "Apply now" }] }] });
+  p = store.get(p.id); p = store.answer(p.id, p.revision, p.questions.at(-1)!.id, { kind: "answer", text: "Next launch" });
+  const generic = checks(calls);
+  const workflow = new ProjectWorkflow(store, { async analyze(snapshot, options) {
+    const marker = options.context.manifest.definitionChangeReview;
+    if (!marker) return generic.analyze(snapshot, options);
+    const data = options.context.data as { epicID: string; changes: { id: string }[]; assessment: { checks: unknown[] }; evidence: { id: string }[] };
+    calls.push(`change:${data.epicID}`); assert.equal(data.assessment.checks.length, 9); assert.ok(data.changes.length >= 2);
+    const touched = affected && data.epicID === "reports";
+    return { taskKey: marker.taskKey, outcome: touched ? "review-needed" : "unaffected", explanation: "Fixture-only comparison of exact delta and complete retained findings",
+      checks: dimensions.map((dimension, i) => ({ dimension, outcome: touched && i === 0 ? "review-needed" : "unaffected",
+        reason: touched && i === 0 ? "This finding may be affected; inspect full evidence" : "No change to the complete finding under the exact supplied decision", evidenceIDs: [data.evidence[0]!.id] })) };
+  } });
+  try {
+    workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, 0, "Opening/polling cannot arm model work");
+    grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.equal(calls.filter((c) => c === "change:project").length, 1);
+    assert.equal(calls.filter((c) => c === "change:reports").length, 1);
+    assert.equal(calls.filter((c) => c === "definition:project").length, 0);
+    assert.equal(calls.filter((c) => c === "definition:reports").length, affected ? 1 : 0);
+    const now = store.get(p.id);
+    assert.deepEqual(now.assessments.find((a) => a.epicID === "project"), original.find((a) => a.epicID === "project"));
+    if (!affected) assert.deepEqual(now.assessments, original);
+    assert.equal(coverage(now).epics.find((a) => a.epicID === "project")!.stale, false);
+    assert.equal(store.jobs(p.id).filter((j) => j.kind === "definition-change-review").length, 2);
+  } finally { await workflow.close(); store.close(); }
+});
 
 function scopedQuestionProject(store: ProjectStore) {
   let p = seed(store);

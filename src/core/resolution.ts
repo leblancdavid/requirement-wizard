@@ -132,7 +132,7 @@ export function refinementStaleReason(project: Project, proposal: Project["refin
   return undefined;
 }
 
-export function resolutionPairEligible(project: Project, ids: [string, string], jobs: Job[], options: { includeUnapproved?: boolean; triggerSourceIDs?: string[] } = {}) {
+export function resolutionPairEligible(project: Project, ids: [string, string], jobs: readonly { status: Job["status"]; context?: Pick<NonNullable<Job["context"]>, "refinementPair">; result?: Pick<Analysis, "resolutionCheck"> }[], options: { includeUnapproved?: boolean; triggerSourceIDs?: string[] } = {}) {
   if (ids.some((id) => !project.requirements.some((r) => r.id === id && (options.includeUnapproved ? r.status !== "rejected" : r.status === "accepted") && project.epics.some((e) => e.id === r.epicID && !e.archived)))) return false;
   if (pairQuestions(project, ids).some((q) => ["pending", "deferred", "delegated"].includes(q.status))) return false;
   if (project.refinements.some((p) => p.resolution && p.status === "pending" && !refinementIsStale(project, p)

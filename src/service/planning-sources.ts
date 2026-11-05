@@ -72,6 +72,16 @@ export function capturePlanningSources(project: Project, state: ExecutionState, 
       || source.configFingerprint !== planningConfigFingerprint(state) || source.model.providerID !== state.config!.providerID
       || source.model.modelID !== state.config!.modelID || source.package && (source.package.requirementID !== id || source.input.packageKey !== planningReuseKey(source.package)))
       throw new Error("Retained planning source context or package receipt changed. Original plan was not replaced.");
+    // An approval-population change is incompatibility, not evidence corruption.
+    // Do not replay historical dependencies as though rejected/removed behavior
+    // were still approved; this target needs fresh collection, not older history.
+    let cursor = source.mode === "staged" ? source.work : undefined;
+    let obsoleteRequirement = source.package?.prerequisites.some((dependency) => !needed.has(dependency.requirementID)) ?? false;
+    while (cursor) {
+      obsoleteRequirement ||= cursor.receipts.some((receipt) => receipt.output.packages.some((item) => item.prerequisites.some((dependency) => !needed.has(dependency.requirementID))));
+      cursor = cursor.format === 1 ? undefined : cursor.baseline.work;
+    }
+    if (obsoleteRequirement) { delete result[id]; continue; }
     if (source.mode === "staged") {
       const materials = source.materials as ReturnType<typeof planningStageMaterials>;
       assertPlanningStageMaterials(materials);

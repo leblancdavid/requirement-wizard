@@ -3,6 +3,7 @@ import { folderPreviewSchema } from "./folder-preview.js";
 import type { GapReport, gapCheckSchema } from "./gap-types.js";
 import { wordingKey } from "./similarity.js";
 import { definitionFindingIdentityKey } from "./definition-finding-identity.js";
+import { definitionChangeReceiptSchema } from "./definition-change-schema.js";
 import { dimensions, epicSchema, initialEpics, organizationSchema, organizationReviewSchema, assessmentSchema, assessmentProposal, accumulatedAssessmentProposal } from "./epics.js";
 
 const text = z.string().trim().min(1).max(12000);
@@ -122,6 +123,8 @@ export const projectFields = z.object({
   origin: z.object({ mode: z.literal("existing"), preview: folderPreviewSchema, descriptionEdited: z.boolean(), nameEdited: z.boolean() }).optional(),
   epics: z.array(epicSchema).default(initialEpics),
   assessments: z.array(assessmentSchema).default([]),
+  /** Dated change-only reviews; never rewrite original findings or input bases. */
+  definitionChangeReviews: z.array(definitionChangeReceiptSchema).max(256).optional(),
   organizationReviews: z.array(organizationReviewSchema).default([]),
   roundChanges: z.array(z.string()).default([]),
   scopeAssessment: z.object({ confidence: z.enum(["low", "medium", "high"]), explanation: text }).nullable().default(null),
@@ -139,6 +142,9 @@ export const projectFields = z.object({
   })).default([]),
 });
 export const projectSchema = projectFields.superRefine((project, ctx) => {
+  if (new Set(project.definitionChangeReviews?.map((r) => r.epicID)).size !== (project.definitionChangeReviews?.length ?? 0)
+    || project.definitionChangeReviews?.some((r) => r.projectID !== project.id || r.reviewedRevision > project.revision))
+    ctx.addIssue({ code: "custom", message: "Change reviews require distinct area identities and original dated revisions." });
   for (const [index, assessment] of project.assessments.entries()) {
     const mixed = assessment.mixedReview;
     if (mixed && (!assessment.inputBasis || assessment.stagedReview || assessment.combinedReview || assessment.confidence !== "low"
@@ -299,7 +305,7 @@ export type Job = {
   /** Recorded lifecycle times, optional for older/portable saved jobs. */
   createdAt?: string; startedAt?: string; finishedAt?: string;
   id: string; projectID: string; expectedRevision: number;
-  kind?: "scan" | "definition-joint-review" | "definition-scope-review" | "definition-mixed-review";
+  kind?: "scan" | "definition-joint-review" | "definition-scope-review" | "definition-mixed-review" | "definition-change-review";
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
   model: ModelSelection; leaseUntil: number | null;
   /** Portable completed-check ledger, not a full runtime/navigation transcript. */
@@ -315,6 +321,7 @@ export type Job = {
     gapRetrieval?: boolean;
     epicReview?: import("./epic-review-types.js").EpicReview;
     definitionAssessment?: { format: 1; epicID: string; inputKey: string; staged?: { policy: "exact-batches-v1"; planKey: string; baselineKey?: string } };
+    definitionChangeReview?: { format: 1 | 2; taskKey: string; currentInputKey: string };
     definitionJointReview?: { format: 1; policy: "definition-joint-review-v1"; candidateKey: string; contextKey: string; snapshotKey: string };
     definitionScopeReview?: { format: 1; policy: "definition-review-scope-v1"; scopeKey: string; contextKey: string; snapshotKey: string };
     definitionMixedReview?: { format: 1; policy: "definition-mixed-review-v1"; requestKey: string; assemblyKey: string; contextKey: string; snapshotKey: string };
@@ -348,6 +355,7 @@ export type Job = {
   scan?: { workspaceKey: string; snapshot: Project["scans"][number]; sources: Project["sources"] };
   scanWork?: ScanWork;
   definitionWork?: import("./definition-stages.js").DefinitionWork;
+  definitionChangeWork?: import("./definition-change-schema.js").DefinitionChangeWork;
   readinessWork?: import("./readiness-stages.js").ReadinessWork;
   submissionWork?: import("./submission-stages.js").SubmissionWork;
   refinementWork?: import("./refinement-stages.js").RefinementWork;

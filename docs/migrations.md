@@ -1,5 +1,276 @@
 # Data migrations and upgrade compatibility
 
+## Indexed startup review validation (2026-11-04)
+
+**Database 25 → 26 adds derived expression indexes only.** It does not rewrite
+project/revision/job payloads, findings, dates, input fingerprints, settings, attempts,
+leases or portable formats. `startup_projects_change_reviews` and
+`startup_revisions_change_reviews` contain the extracted change-review arrays for
+rows that need this validator, rather than rereading whole historical projects at
+every launch. The SELECT expression and partial predicate deliberately match the
+index expressions; tests inspect both the query plan and SQLite bytecode to confirm
+that warm validation reads no revision-table columns. SQLite updates the indexes on
+inserts, edits and deletes, including changes to older historical rows by another
+connection. No revision-number-only cache or permanent “already trusted” flag is used.
+
+The first upgrade must read the archive once to build the indexes. This can still
+be slow on a large/cold database. Index creation, migration history, schema version
+and validation commit together; interruption or unsupported review evidence rolls
+the transaction back. Retrying can rebuild the derived indexes but never repeats a
+model call or resets saved work. Subsequent starts do not rebuild them. Old readers
+retain the existing future-database-version rejection rather than writing through
+an unknown migration.
+
+All selected arrays still pass the same format/policy, 2-MiB, 256-review and distinct
+area checks. Identical extracted arrays share validation within one launch using a
+bounded cache of 128 SHA-256 digests only (no retained project bodies or persistent
+validation decisions). A different or newly edited unsupported array still fails
+closed without overwrite. Guarded index expressions allow existing forensic tests
+and readers to retain malformed historical data: malformed data without a change
+marker keeps its prior lazy-reader handling; malformed marked review evidence is
+included as an invalid value and rejected at startup. Valid escaped JSON field names
+are recognized by the JSON path rather than missed by a raw substring filter.
+
+Startup reports the one-time `indexing-review-history` phase separately from
+`checking-review-history`, `checking-saved-work` and `checking-definition-evidence`.
+These are actual stage-entry notifications, not estimated completion percentages.
+The observer remains allowlisted, best-effort and unable to change migration behavior.
+
+All **48** focused migration/change-work/worker tests, **105** forensic/migration
+regressions, `npm test` (**899 pretests, 774 main tests and 34 posttests**), type/diff
+checks, isolated Electron desktop checks and the dedicated visible-startup/close-during-startup
+checks passed. Tests preserve payload bytes/live jobs, cover repeated startup,
+indexed candidate selection, no full snapshot reads, invalid edits after indexing,
+future-evidence rollback and repair/retry. No real-user database was opened for
+upgrade or modified. Real cold-index duration and end-to-end startup on the user's
+large archive remain unmeasured; other saved-work/evidence validators still run.
+The standard desktop staging rebuild was blocked by the running development app's
+native SQLite file lock. An independent ignored staging directory with the same
+pinned dependencies was compiled/tested instead; the user's process was not stopped.
+
+## Source-backed, resumable change checks (2026-11-04)
+
+**Database 24 → 25 is a capability boundary only.** The ordered transactional
+migration adds no tables and rewrites no project, job, history, grant, assessment,
+receipt, attempt or lease. Existing change-work/receipts format 1 keep their exact
+task/context identities and final-only protocol. A matching unfinished v1 job is
+resumed under v1, including a saved reply or exhausted three-attempt ledger; upgrade
+does not grant a new attempt or require repeating an accepted response. Completed
+unaffected v1 receipts stay valid. A completed v1 `review-needed` receipt remains
+dated evidence; an explicitly continued workflow can run a distinct, source-backed
+v2 task, not reinterpret the old verdict as unaffected. Original findings and dates
+are never rebased. Read-only qualification inspection accepts the new known database
+version without changing its cases, manifests or previously saved results.
+
+New change-work/markers format 2 / `definition-change-evidence-v2` add a bounded
+lookup ledger. Each accepted lookup retains its original request context hash,
+requested IDs, spent attempts, originating job and selected model. Full source bodies
+are rebuilt from the exact saved project revision; no bodies or provenance are
+invented on reopen. A compact original-citation index is navigation, not evidence.
+Explicitly partial navigation prefixes help select records but cannot authorize
+citations; prefixes shrink or disappear before any mandatory finding/change is
+omitted. The model may request up to eight exact guarded IDs per lookup, six lookups per task,
+with three attempts per unfinished request. The existing workflow request/time grant
+is charged before each dispatch. Continuous work uses per-request timeouts and
+renews only its live job lease, not a hidden whole-check five-minute cutoff. Earlier
+bounded grants still honor their remaining active time. Accepted reads do not repeat on Pause/restart or
+explicit retry; malformed requests/replies remain spent. Matching saved final replies
+publish without inference. Cancellation and dead/expired workers cannot accept late
+replies. Valid owned concurrent-edit replies/loads remain historical, not current.
+
+Loaded whole records and their complete current question/answer units remain in
+every later request beside all nine original findings and every exact change.
+Lookup IDs must be distinct, available and unread; index-only or guessed IDs cannot
+authorize a final citation. Superseded bodies cannot authorize current citations.
+Every request remains within 96,000 context characters. If indispensable cumulative
+evidence cannot fit, the accepted lookup stays durable and the check pauses before
+another request; retry does not repeat that lookup or truncate evidence. A valid
+final semantic verdict is still necessary: actual effects/uncertainty can require
+deeper review. Six lookups are not proof that all needed evidence was inspected.
+Work remains bounded to 65,536 UTF-8 bytes; final responses to 48,000 bytes.
+
+V2 receipts separately retain loaded IDs and the final evidence-context hash, plus
+original/current input identities and original response provenance. Currentness
+still requires exact matching guards and an unaffected verdict. Product requirements,
+approval/review gates, findings and confidence are unchanged. Pending global answers
+can still put every potentially affected area into a pending-check state; this
+change adds source-backed checking rather than suppressing honest pending status.
+
+New exports containing any change-review state (including retained v1 work) use
+**portable state format 5**, with explicit exact ID ordering for epics, sources,
+questions, requirements, research and scans. Investigation exposed that feature-grouped
+files could otherwise reorder the current arrays used as historical delta bases,
+breaking question/answer continuation on a clone. Format 5 validates complete,
+duplicate-free ordering before reconstructing snapshots. Formats 1–4 remain readable;
+missing original ordering in old exports is not guessed or rewritten. Unsupported
+future work/receipt policies, marker mismatches and malformed format-5 ordering fail
+closed. Explicit adoption retains lookup/final-response identities and local account
+routing without exporting account IDs, credentials or full activity history.
+
+Focused deterministic and browser tests pass for requested-source-before-verdict,
+Pause/reload and charged final retry without repeating the lookup, exact full linked
+question/answer restoration, repeat reopen and actual portable adoption, old-v1 saved
+reply/exhausted-attempt preservation, catalog-only citation refusal, malformed/budget
+checks, stale/cancelled/dead replies, oversized joint-context pause, tampered request
+identity and future-policy migration rollback/recovery. **122 focused tests**, all
+of `npm test` (**899 pretests, 772 main tests and 34 posttests**), type/diff checks,
+UI/desktop builds, real Electron isolated-data checks, all **22** default browser
+runners and the enhanced source-backed-change/workflow browser checks passed.
+The first default-browser run raced concurrent UI builds and returned a root-page
+404; the rerun after builds were serialized passed. The existing bundle-size warning
+remains. No real-user project upgrade/write, live model call or installed-desktop
+rebuild was performed. Fixture success does not qualify semantic effectiveness on
+the reported large project; genuinely necessary joint evidence beyond the context
+bound remains a supported pause, not a completed fix for every broad recheck.
+
+## Assessment memory-pressure reduction (2026-11-04)
+
+**No persisted-format/fingerprint change or additional migration required.** The
+current database version (24, from the separate change-impact slice), project, job,
+work-ledger, settings and portable formats are unchanged by this optimization. No
+old job, assessment, stage receipt, attempt, source identity, approval, history record
+or human evidence is rewritten, dropped or marked current. There is no model-call
+or reset requirement to adopt it.
+
+Coordinator-only receipts are an ephemeral validated SQL projection, not a new
+persisted job representation. They include all fields used by requirement-proof,
+pair-check and readiness scheduling, in the original chronological order, without
+carrying unused context/response/stage bodies through long asynchronous actions.
+The separate full-job queries for completion/clarification retain every matching
+original record, not a last-N cutoff. Initialization uses an equivalent scan-existence
+query. Full archive reads decode from a cursor to avoid retaining all raw JSON strings
+as well as all parsed jobs. Definition source selection lazily decodes the same
+newest-first twenty candidates and closes the cursor before asynchronous work;
+scope compatibility and spent-attempt rules are unchanged.
+
+Portable publication no longer preloads a map of full assessment publication
+snapshots. It reads each distinct required/optional revision once, encodes it in
+the existing sorted order and releases its unused original fields before reading
+the next. The same exact delta/object encoder and hashes are retained; existing
+byte-equivalence/reconstruction tests remain applicable. Missing optional assessment
+origins are skipped only for the existing missing-revision error. Required origins,
+including applied-submission and saved-work revisions, still fail closed; unrelated
+read failures are not interpreted as optional missing evidence. Retry/startup/export
+therefore use the same saved evidence without reassessment or manufactured provenance.
+
+A capped-heap regression passed for 96 independently parsed 2-MiB publication
+snapshots under 128 MiB old-space. Additional tests assert no full-archive scheduling
+or initialization read in coordinated assessment, compact/full receipt equivalence,
+one-at-a-time optional origin reads, repeated revision deduplication, and required
+history/read-failure preservation. All 284 focused tests and `npm test` (899 pretests,
+772 main tests and 17 posttests), type/diff checks, UI/desktop build, real Electron
+isolated-data checks and the coordinated-workflow/continuous-definition browser
+checks passed. These are
+memory-pressure reductions, not reproduction or complete resolution of the reported
+fatal allocation: [observations and verification](desktop.md#assessment-memory-pressure-mitigation-2026-11-04).
+Whole-history/database growth, the size of genuinely distinct portable evidence and
+other callers that still require full archives remain separate limits.
+
+## Dated definition change-impact reviews (2026-11-04)
+
+**Database 23 → 24 is a capability boundary, not a payload rewrite.** Existing
+assessments, original input keys, review dates, jobs, history, grants and live leases
+remain unchanged. No startup inference, retroactive receipt or reassessment is
+introduced. Ordered transactional migration and validation roll back together on
+unsupported new evidence; repair the incompatible source with a compatible app
+before retrying. Older applications reject database 24 rather than stripping the
+new authority on their next write.
+
+Optional project `definitionChangeReviews` retain dated format-1 semantic reviews,
+exact project/assessment/original/current/global keys, task/context hashes and
+originating response job/model. Only an exact matching unaffected receipt can
+establish compatibility; it never rebases the original assessment. Saved jobs retain
+exclusive change-review markers/work, reservations (maximum three), and validated
+responses for no-call recovery. Publication is atomic. Historical stale responses
+remain historical; cancellation never accepts late replies. Responses are bounded
+to 48,000 UTF-8 bytes, work to 65,536 bytes and project receipt arrays to 2 MiB.
+Startup checks new envelopes without parsing unmarked invalid legacy history.
+
+Portable state **4** protects current/historical receipts and current change-work
+checkpoints from older readers. Formats 1–3 remain readable without rewriting;
+new evidence in an older envelope is rejected. Continuation retains needed original
+snapshots and response provenance, not machine-local sessions or full activity.
+
+Executed: dedicated upgrade/reopen/rollback/preservation and portable tests, the
+legacy oversized-history regression, scope qualification tests and the deterministic
+Continue/Pause/retry/reload/mobile browser check. Live semantic accuracy and desktop
+delivery are not qualified by these fixtures.
+
+Final deterministic `npm test` passed: 898 pretests, 770 main tests and 17
+change-review posttests (1,685 total). Existing React list-key warnings remain;
+they are not test failures. Type checking, UI build, CLI help and diff checks passed.
+The full `npm run test:browser` suite and its change-impact postcheck also passed,
+as did the separate coordinated-workflow browser runner. All used deterministic
+adapters; the existing UI bundle-size warning remains.
+
+## Desktop worker failure diagnostics (2026-11-04)
+
+No persisted-project format or schema changes. The desktop now writes a bounded
+latest-failure diagnostic at `desktop/backend-failure.json`, format 1, separate
+from SQLite, settings, workspace artifacts and portable exports. It contains only
+allowlisted failure metadata and bounded source locations, never raw error text or
+credentials. A failed write does not change saved work or prevent shutdown. Existing
+projects, jobs, approvals and spent attempts require no migration or reassessment.
+See [desktop diagnostics](desktop.md#backend-crash-diagnostics-2026-11-04) for the
+observed crash, executed checks and remaining reproduction/native-failure gaps.
+
+## Unvisited planning target source carry-forward (2026-11-04)
+
+**Planning envelope 1 → 2 on explicit preparation; database schema stays 23 and
+execution format stays 2.** Startup accepts both envelopes without rewriting old
+plans, receipts, stage formats 1–4 or input fingerprints. Envelope 2 adds frozen
+`targetMaterials` and separate `pendingSources`: version-1 /
+`retained-planning-target-v1` capsules holding the original target receipt, work,
+materials, optional completed package, source plan/revision/dates and execution
+binding/settings/model. Single-request capsules require their completed package.
+New receipts retain known origin-plan dates; older missing dates stay absent.
+
+Preparation synchronously captures all eligible target sources under its owned
+lease **before** replacing the previous plan or dispatching a request. Capture can
+recover a target from compatible local history if intervening plans never touched
+it. The nearest touched target is a boundary: it cannot bypass newer spent attempts,
+missing legacy provenance, approved/dismissed plans or incompatible settings epochs.
+Legacy staged materials come from the original saved revision when available;
+missing snapshots are not invented. Capture checks material/input identity,
+package digests and original stage replay. Failure leaves the old plan unchanged,
+releases only the owned lease and surfaces the error without inference.
+
+All sources are saved in the replacement plan before Git preflight or the target
+loop. Each remains historical, not a published current package. Per-target preparation
+validates current inputs, supplied references and source replay before atomically
+attaching the current receipt/material/stage/package packet and consuming the capsule.
+Preparation failure retains the capsule. Exact partial continuation uses frozen
+original materials and preserves request identity, accepted replies and spent attempts;
+changed evidence retains the original source receipt in its bounded follow-up witness
+and still verifies every current batch. Incompatible target/global inputs use fresh
+collection, not historical authority. Publication refuses remaining pending sources.
+Existing lease/CAS, cancellation, context and ancestry/attempt limits remain.
+
+Portable execution includes these capsules and frozen materials, strips execution
+sessions as before, and rewrites capsule bindings to `portable`; explicit workspace
+adoption rebinds them to the new local binding. It still does **not** export the full
+planning history. Thus an early failure cannot strand later targets' sources only
+in an archive excluded from portability. Unsupported envelope/source/work policies
+fail closed without overwriting saved work. No data reset or model reassessment is
+required solely for this compatible representation change. Same-revision legacy
+work without receipts retains its original continuation path, without manufacturing
+cross-revision provenance.
+
+All **109** focused planning/implementation/migration tests and `npm test` (**894
+pretests and 770 main tests**) passed, as did type checking, UI build, the enhanced
+planning-browser check, all **22** default browser runners and diff checking. The
+existing bundle-size warning remains. Added deterministic cases cover later
+completed/partial targets through repeated early failures, reopen and actual portable
+adoption; no repeated accepted requests; retained source receipts/attempts; single-request
+carry-forward; nearest-source/review/settings boundaries; capture failure and retry;
+format-1 repeated startup, missing snapshots and future pending-policy rejection/recovery.
+Changed approval populations make obsolete dependency work incompatible rather than
+blocking fresh collection or bypassing the boundary for older successes. Source
+preparation failure retains pending provenance without attaching a partial packet.
+No live model/GitHub calls, installed-desktop rebuild or real-user-project edits.
+Whole-history serialization remains undeduplicated and is not globally size-bounded;
+this change bounds selected sources to eligible targets, not all local archive costs.
+
 ## Planning evidence revision/removal reconciliation (2026-11-04)
 
 **New staged-work format 4; no SQLite or execution-envelope rewrite.** Database
@@ -66,7 +337,7 @@ UI build, type and diff checks passed; the existing bundle-size warning remains.
 No live model/GitHub calls, installed desktop rebuild or
 real-user-project changes were performed.
 
-**Remaining source-selection gap:** a replacement interrupted before preparing a
+**Source-selection gap at this slice (addressed by the envelope-2 slice above):** a replacement interrupted before preparing a
 later target can leave that target's original source only in planning history. The
 current selector uses the immediate predecessor, and portable projection excludes
 the full history, so later unprepared targets may repeat older collection. This slice

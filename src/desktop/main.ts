@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, session, shell } from "electron";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeFileSync } from "node:fs";
 import { defaultDataDirectory } from "../storage/paths.js";
 import { DesktopBackend } from "./backend-host.js";
 import { desktopSplash } from "./splash.js";
@@ -77,9 +78,15 @@ else {
     };
     // Stable preferred origin retains Chromium UI preferences. A busy browser port
     // must not prevent the desktop from opening its own authenticated backend.
-    backend = new DesktopBackend(directory, join(app.getAppPath(), "web"), () => {
+    backend = new DesktopBackend(directory, join(app.getAppPath(), "web"), (failure) => {
       if (!shuttingDown) {
-        if (window && workspaceReady) dialog.showErrorBox("Reqwizit stopped unexpectedly", "Reopen the app to continue. Previously saved work is still available; check whether your latest changes were saved before continuing.");
+        const diagnostic = { format: 1, at: new Date().toISOString(), ...failure };
+        console.error("Desktop backend failure:", JSON.stringify(diagnostic));
+        let saved = false;
+        try { writeFileSync(join(directory, "desktop", "backend-failure.json"), JSON.stringify(diagnostic, null, 2), { encoding: "utf8", mode: 0o600 }); saved = true; }
+        catch { console.error("Desktop backend diagnostic could not be saved."); }
+        const detail = `${failure.category}${failure.code ? ` (${failure.code})` : ""}${failure.exitCode !== undefined ? ` (exit ${failure.exitCode})` : ""}`;
+        if (window && workspaceReady) dialog.showErrorBox("Reqwizit stopped unexpectedly", `Reopen the app to continue. Previously saved work is still available; check whether your latest changes were saved before continuing.\n\nBackend failure: ${detail}. ${saved ? "Safe diagnostic saved to desktop/backend-failure.json in the local app data directory." : "See the launching terminal for the safe diagnostic."}`);
         setImmediate(() => { void shutdown(); });
       }
     }, undefined, progress);

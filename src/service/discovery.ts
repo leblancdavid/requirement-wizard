@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WorkflowBudgetPause } from "../core/workflow.js";
 import { StaleRevisionError, parseDiscoveryAnalysis, reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Telemetry, type ResearchEvidence } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
 import { safeMessage } from "../runtime/contract.js";
@@ -77,7 +78,7 @@ export class DiscoveryService {
 
   requiresInitialization(projectID: string) {
     const project = this.store.get(projectID);
-    return !project.scans.length && (!!project.origin || this.store.jobs(projectID).some((job) => job.kind === "scan"));
+    return !project.scans.length && (!!project.origin || this.store.hasScanJob(projectID));
   }
   /** Explicit one-request validation only. Never called by automatic coordination,
    * never publishes findings, and completed/returned equivalent work is reused. */
@@ -125,6 +126,62 @@ export class DiscoveryService {
   }
   assertCanDiscover(projectID: string) {
     if (this.requiresInitialization(projectID)) throw new Error("Initialization incomplete. Complete a folder scan and review its baseline before exploring missing requirements.");
+  }
+
+  /** Owned Continue-specification grant only. No startup inference, extra burst,
+   * product edits or publication of replacement findings. */
+  async reviewDefinitionChanges(projectID: string, revision: number, epicID: string, signal: AbortSignal): Promise<Job> {
+    if (!this.navigation.workflow) throw new Error("Change-impact checks require an owned Continue specification grant.");
+    signal.throwIfAborted(); this.assertCanDiscover(projectID);
+    const allowance = this.navigation.workflow.beforeJob();
+    const { job, project } = this.store.beginJob(projectID, revision, undefined, false, this.navigation.workflow.owner);
+    const controller = new AbortController(), duration = Math.min(300000, allowance.durationMs);
+    const deadline = this.navigation.workflow.continuous ? Infinity : Date.now() + allowance.durationMs;
+    const abort = () => controller.abort(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let violation = false;
+    try {
+      this.store.claimJob(job.id, Date.now() + duration + 30000);
+      const prepared = this.store.definitionChangeTask(projectID, epicID);
+      if (!prepared) throw new Error("Change-impact inputs are unavailable; use the retained full evidence review.");
+      this.store.beginDefinitionChangeReview(job.id, epicID, prepared.taskKey);
+      let used = 0;
+      while (!this.store.getJob(job.id).definitionChangeWork?.response) {
+        controller.signal.throwIfAborted();
+        const request = this.store.definitionChangeRequest(job.id);
+        if (used >= allowance.requests) throw new WorkflowBudgetPause("Change check paused at its request allowance. Exact loaded evidence and spent attempts remain saved; continue explicitly.");
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new WorkflowBudgetPause("Change check paused at its bounded active-time allowance. Loaded evidence and spent attempts remain saved.");
+        this.navigation.workflow.beforeRequest(job.id);
+        this.store.reserveDefinitionChangeReview(job.id);
+        used++;
+        controller.signal.throwIfAborted();
+        timer = setTimeout(() => controller.abort(new DOMException("Change-impact request timed out", "TimeoutError")), Math.min(duration, remaining));
+        let interrupt: () => void = () => {};
+        const stopped = new Promise<never>((_, reject) => { interrupt = () => reject(controller.signal.reason); controller.signal.addEventListener("abort", interrupt, { once: true }); });
+        try {
+          const response = await Promise.race([this.adapter.analyze(project, { context: request.context, research: false, signal: controller.signal,
+            onProgress: () => {}, onSession: (id) => this.store.attachSession(job.id, id),
+            onTelemetry: (value) => { if (value.actualModel.providerID !== project.model.providerID || value.actualModel.modelID !== project.model.modelID) { violation = true; throw new Error("Change review used a different model."); } this.store.attachTelemetry(job.id, value); },
+            onResearch: (evidence) => { if (evidence.length) { violation = true; throw new Error("Change review cannot authorize research."); } },
+          }), stopped]);
+          controller.signal.throwIfAborted();
+          if (violation) throw new Error("Change review violated its model/research profile.");
+          const saved = this.store.recordDefinitionChangeResponse(job.id, response);
+          if (saved.status === "stale") return saved;
+        } finally { clearTimeout(timer); timer = undefined; controller.signal.removeEventListener("abort", interrupt); }
+      }
+      controller.signal.throwIfAborted();
+      return this.store.finishDefinitionChangeReview(job.id);
+    } catch (error) {
+      const current = this.store.getJob(job.id);
+      if (["pending", "running"].includes(current.status)) this.store.failJob(job.id,
+         controller.signal.aborted ? signal.aborted ? "cancelled" : "interrupted" : error instanceof WorkflowBudgetPause ? "interrupted" : error instanceof StaleRevisionError ? "stale" : "failed",
+        controller.signal.aborted ? "Change-impact check stopped. Original findings, any saved response and spent attempts are retained."
+          : error instanceof z.ZodError ? schemaDiagnostic(error) : safeMessage(error instanceof Error ? error.message : error));
+      return this.store.getJob(job.id);
+    } finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
   }
 
   assertGapContinuation(projectID: string, revision: number, jobID: string): Job {
@@ -297,7 +354,8 @@ export class DiscoveryService {
         || options.definitionLimits?.requests !== 1) throw new Error("Recovery requires a separate manual one-request definition action.");
       const snapshot = this.store.get(projectID);
       if (snapshot.revision !== expectedRevision) throw new StaleRevisionError();
-      const latest = this.store.definitionHistory(projectID, options.definitionEpicID, definitionInputKey(snapshot, options.definitionEpicID))[0];
+      const candidates = this.store.definitionHistoryCandidates(projectID, options.definitionEpicID, definitionInputKey(snapshot, options.definitionEpicID));
+      const latest = candidates.next().value; candidates.return(undefined);
       if (!latest || latest.id !== options.definitionRecoveryJobID || !canRecoverDefinition(latest)) throw new Error("This assessment is no longer eligible for recovery. Refresh before continuing.");
     }
     if (options.continuousDefinition !== undefined) z.boolean().parse(options.continuousDefinition);
@@ -443,7 +501,7 @@ export class DiscoveryService {
         const task = options.readinessQuestions;
         const source = task.format !== 1 && task.blockedJobID ? this.store.getJob(task.blockedJobID) : undefined;
         if (task.format === 3) this.store.assertSubmissionClarification(project, source!);
-        const staged = this.store.jobs(projectID).some((j) => j.id !== job.id && j.readinessWork && JSON.stringify(j.readinessWork.task) === JSON.stringify(task));
+        const staged = this.store.specificationWorkflowJobs(projectID, "readiness").some((j) => j.id !== job.id && j.readinessWork && JSON.stringify(j.readinessWork.task) === JSON.stringify(task));
         const run = async (overflow?: ContextBudgetError) => {
           clearTimeout(timer);
           // Ordinary/explicitly continuous question preparation runs to completion;

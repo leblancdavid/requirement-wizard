@@ -4,7 +4,8 @@ import Database from "better-sqlite3";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ProjectStore } from "./store.js";
-import { upgradeExecutionPayload, databaseSchemaVersion } from "./migrations.js";
+import { upgradeExecutionPayload, databaseSchemaVersion, changeReviewValidationQuery, migrateDatabase } from "./migrations.js";
+import { dimensions } from "../core/definition-dimensions.js";
 import { assessmentContextFingerprint, requirementTaskContext } from "../core/execution-context.js";
 import { legacyAssessmentSkillDocument } from "./fixtures/assessment-skill-v1.js";
 import { assessmentCompatibility, canonicalJSON } from "../core/assessment-identity.js";
@@ -18,12 +19,94 @@ test("startup distinguishes actual upgrades from saved-data checks and failed di
   try {
     const first = new ProjectStore(path, (phase) => { phases.push(phase); if (phase === "upgrading-data") throw new Error("Upgrade display unavailable"); });
     const p = first.create("Startup fixture", "Retain original choices", { providerID: "openai", modelID: "fixture" }); first.close();
-    assert.deepEqual(phases, ["opening-data", "upgrading-data", "checking-data"]);
+    assert.deepEqual(phases, ["opening-data", "upgrading-data", "indexing-review-history", "checking-data", "checking-review-history", "checking-saved-work", "checking-definition-evidence"]);
     phases.length = 0;
     const reopened = new ProjectStore(path, (phase) => { phases.push(phase); throw new Error("Display unavailable"); });
-    try { assert.deepEqual(reopened.get(p.id), p); assert.deepEqual(phases, ["opening-data", "checking-data"]); }
+    try { assert.deepEqual(reopened.get(p.id), p); assert.deepEqual(phases, ["opening-data", "checking-data", "checking-review-history", "checking-saved-work", "checking-definition-evidence"]); }
     finally { reopened.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+function startupReview(project: Project) {
+  const taskKey = "e".repeat(64);
+  return { format: 1, policy: "definition-change-review-v1", projectID: project.id, epicID: "project",
+    assessmentKey: "a".repeat(64), originalInputKey: "b".repeat(64), currentInputKey: "c".repeat(64), globalKey: "d".repeat(64),
+    taskKey, contextKey: "f".repeat(64), originalRevision: 1, reviewedRevision: 2, jobID: randomUUID(), responseJobID: randomUUID(),
+    responseModel: { providerID: "openai", modelID: "fixture" }, reviewedAt: "2026-11-04T00:00:00.000Z",
+    response: { taskKey, outcome: "unaffected", explanation: "Curated historical validation fixture, not a semantic qualification",
+      checks: dimensions.map((dimension) => ({ dimension, outcome: "unaffected", reason: "Fixture retained finding", evidenceIDs: [project.sources[0]!.id] })) } };
+}
+
+test("25 to 26 indexes historical review projections without reading full snapshot payloads on warm startup", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const dir = mkdtempSync(resolve(".reqwizit-state/tests/startup-index-")), path = join(dir, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const project = store.create("Startup index fixture", "Retain every original record", { providerID: "openai", modelID: "fixture" });
+    const live = store.beginJob(project.id, project.revision).job; store.claimJob(live.id, Date.now() + 600000); store.close();
+    let db = new Database(path); const review = startupReview(project);
+    const large = { ...project, sources: [{ ...project.sources[0]!, text: "Exact historical human evidence. ".repeat(4096) }] };
+    for (let revision = 2; revision <= 52; revision++) {
+      const snapshot = { ...large, revision, ...(revision >= 49 ? { definitionChangeReviews: [review] } : {}) };
+      db.prepare("INSERT INTO revisions VALUES (?, ?, ?, ?)").run(project.id, revision, "Curated historical snapshot", JSON.stringify(snapshot));
+    }
+    const current = { ...large, revision: 53, definitionChangeReviews: [review] };
+    db.prepare("UPDATE projects SET revision=?, payload=? WHERE id=?").run(53, JSON.stringify(current), project.id);
+    const tables = ["projects", "revisions", "jobs"], before = tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    db.exec("DROP INDEX startup_projects_change_reviews; DROP INDEX startup_revisions_change_reviews; DELETE FROM migration_history WHERE version >= 26; PRAGMA user_version = 25"); db.close();
+    const phases: string[] = []; store = new ProjectStore(path, (phase) => phases.push(phase));
+    assert.ok(phases.includes("indexing-review-history")); assert.equal(store.getJob(live.id).status, "running"); store.close();
+    db = new Database(path);
+    assert.deepEqual(tables.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), before);
+    const query = changeReviewValidationQuery("revisions");
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${query}`).all() as { detail: string }[];
+    assert.ok(plan.some((row) => /USING INDEX startup_revisions_change_reviews/.test(row.detail)), JSON.stringify(plan));
+    const root = (db.prepare("SELECT rootpage FROM sqlite_schema WHERE type='table' AND name='revisions'").get() as { rootpage: number }).rootpage;
+    const bytecode = db.prepare(`EXPLAIN ${query}`).all() as { opcode: string; p1: number; p2: number }[];
+    const cursor = bytecode.find((row) => row.opcode === "OpenRead" && row.p2 === root)?.p1;
+    assert.ok(cursor === undefined || !bytecode.some((row) => row.opcode === "Column" && row.p1 === cursor), "The covering expression index must not read full revision-table columns");
+    assert.equal(db.prepare(query).all().length, 4, "Unrelated history never enters the validation read stream");
+    const old = (db.prepare("SELECT payload FROM revisions WHERE project_id=? AND revision=3").get(project.id) as { payload: string }).payload;
+    const changed = JSON.parse(old); changed.definitionChangeReviews = [{ ...review, format: 99 }];
+    const invalid = JSON.stringify(changed);
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=3").run(invalid, project.id);
+    assert.throws(() => migrateDatabase(db), "An old row modified after indexing must still be checked");
+    assert.equal((db.prepare("SELECT payload FROM revisions WHERE project_id=? AND revision=3").get(project.id) as { payload: string }).payload, invalid);
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=3").run(old, project.id); migrateDatabase(db);
+    const fourth = (db.prepare("SELECT payload FROM revisions WHERE project_id=? AND revision=4").get(project.id) as { payload: string }).payload;
+    const escaped = JSON.stringify({ ...JSON.parse(fourth), definitionChangeReviews: [{ ...review, format: 99 }] })
+      .replace('"definitionChangeReviews":', '"\\u0064efinitionChangeReviews":');
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=4").run(escaped, project.id);
+    assert.throws(() => migrateDatabase(db), "Escaped JSON keys cannot hide unsupported receipts from the index");
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=4").run('{"definitionChangeReviews":[', project.id);
+    assert.throws(() => migrateDatabase(db), "Malformed marked review data stays invalid, not absent");
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=4").run("{unmarked-corrupt-history", project.id);
+    assert.doesNotThrow(() => migrateDatabase(db), "Unmarked malformed history retains its existing lazy forensic handling");
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=4").run(fourth, project.id); migrateDatabase(db); db.close();
+    const reopenedPhases: string[] = []; store = new ProjectStore(path, (phase) => reopenedPhases.push(phase));
+    assert.ok(!reopenedPhases.includes("indexing-review-history")); assert.equal(store.getJob(live.id).status, "running");
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("index migration rolls back on future historical receipts and retries without rewriting or resetting saved work", () => {
+  mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
+  const dir = mkdtempSync(resolve(".reqwizit-state/tests/startup-index-recovery-")), path = join(dir, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const project = store.create("Index recovery fixture", "Keep unsupported evidence untouched", { providerID: "openai", modelID: "fixture" }); store.close();
+    let db = new Database(path);
+    const invalid = JSON.stringify({ ...project, definitionChangeReviews: [{ ...startupReview(project), format: 99 }] });
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(invalid, project.id, project.revision);
+    db.exec("DROP INDEX startup_projects_change_reviews; DROP INDEX startup_revisions_change_reviews; DELETE FROM migration_history WHERE version>=26; PRAGMA user_version=25"); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path);
+    assert.equal(db.pragma("user_version", { simple: true }), 25);
+    assert.equal(db.prepare("SELECT 1 FROM migration_history WHERE version=26").get(), undefined);
+    assert.equal(db.prepare("SELECT 1 FROM sqlite_schema WHERE name='startup_revisions_change_reviews'").get(), undefined);
+    assert.equal((db.prepare("SELECT payload FROM revisions WHERE project_id=? AND revision=?").get(project.id, project.revision) as { payload: string }).payload, invalid);
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(JSON.stringify(project), project.id, project.revision); db.close();
+    for (let attempt = 0; attempt < 2; attempt++) { store = new ProjectStore(path); assert.deepEqual(store.get(project.id), project); store.close(); }
+    store = new ProjectStore(path);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("13 to 14 preserves old completed and live receipts byte-for-byte without inventing retained-review provenance", () => {

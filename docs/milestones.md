@@ -1,5 +1,13 @@
 # Milestone backlog
 
+The 2026-11-04 decision-impact slice adds bounded change checks to Continue
+specification before full definition refresh. Exact unaffected receipts retain
+original findings and review dates; affected/uncertain areas still need deeper
+review. Upgrade/recovery and deterministic browser checks passed. General narrower
+verification, live semantic accuracy and actual-user desktop delivery remain
+unqualified; this does not complete the milestone exits below. See
+[coverage limits](definition-coverage.md#check-decision-impact-before-repeating-completed-reviews-2026-11-04).
+
 The user-approved [workflow resilience plan](workflow-resilience.md) prioritizes
 durable baselines, explicit change reconciliation and measured efficiency across
 long-running processes. The first slice preserves completed definition/scan replies
@@ -33,9 +41,10 @@ a fresh-collection path. No additional milestone exit is
 qualified by the deterministic/browser checks alone.
 
 Prepared staged plans now reconcile changed/retired evidence with full-current
-verification and explicit review. Cross-target carry-forward for sources not yet
-prepared before interruption remains unimplemented; this is not universal planning
-recovery or a milestone exit.
+verification and explicit review. Cross-target sources not yet prepared before early
+interruption now carry forward in planning envelope 2; focused/full deterministic,
+planning/default browser, build and type/diff checks passed. This is not universal
+planning recovery or a milestone exit.
 
 DEC-032 coordinated-workflow preview sequences existing specification checks with
 bounded consent and a decision inbox while preserving checkpoints. It reaches a

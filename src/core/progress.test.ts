@@ -43,8 +43,8 @@ test("saved answers are visible independently of absent or outdated definition c
   const definition = coverage(project);
   const outdated = { ...definition, percent: 40, epics: definition.epics.map((e) => ({ ...e, assessed: true, stale: true })) };
   const old = projectProgress(project, emptyExecution(), outdated);
-  assert.equal(progressLabel(old.stages[0]!), "Assessment outdated");
-  assert.equal(progressLabel(old.stages[0]!.epics[0]!), "Assessment outdated");
+  assert.equal(progressLabel(old.stages[0]!), "Change check needed");
+  assert.equal(progressLabel(old.stages[0]!.epics[0]!), "Change check needed");
   assert.equal(old.stages[0]!.percent, 40, "Saved score remains available for the existing overall estimate");
   const current = projectProgress(project, emptyExecution(), { ...outdated, stale: false, epics: outdated.epics.map((e) => ({ ...e, stale: false })) });
   assert.equal(progressLabel(current.stages[0]!), "40%");
@@ -60,7 +60,7 @@ test("definition summary separates current gaps, previous flags and unknown area
   const before = JSON.stringify(project);
   const stage = projectProgress(project, emptyExecution()).stages[0]!;
   assert.equal(stage.status, "Definition assessment incomplete");
-  assert.match(stage.detail, /0 current · 2 outdated · 1 not assessed/);
+  assert.match(stage.detail, /0 current · 2 awaiting change review · 1 not assessed/);
   assert.match(stage.detail, /10 previously flagged critical areas need rechecking/);
   assert.match(stage.detail, /gaps unknown/);
   assert.match(stage.detail, /No open questions recorded/);
@@ -80,7 +80,7 @@ test("current completed areas plus unassessed areas are incomplete, not mislabel
   project.assessments.push({ epicID: "runtime", atRevision: project.revision, confidence: "medium", explanation: "Current runtime evidence", checks: [], answerVersions: {} });
   const stage = projectProgress(project, emptyExecution()).stages[0]!;
   assert.equal(stage.assessmentState, "incomplete"); assert.equal(progressLabel(stage), "Assessment incomplete");
-  assert.match(stage.detail, /1 current · 0 outdated · 1 not assessed/);
+  assert.match(stage.detail, /1 current · 0 awaiting change review · 1 not assessed/);
   assert.equal(stage.epics.find((e) => e.epicID === "runtime")!.assessmentState, "current");
 });
 

@@ -240,9 +240,10 @@ every current batch, and require explicit resolution of an evidence-review warni
 Old dependency proposals and superseded citations are not current authority; reviewed
 execution dependencies are not silently removed. This is not a source-editing UI or
 automatic product-change approval. Target/global-envelope and requirement-guardrail
-changes still require fresh preparation. A later target not yet prepared when an
-earlier target stops may still need older source selection/carry-forward; portable
-recovery for already-prepared targets does not qualify that remaining gap. See the
+changes still require fresh preparation. Planning envelope 2 retains separate historical
+sources for later targets before the loop starts, including across restart/portable
+adoption; they are validated before becoming current work, not counted as current
+packages. See the [source carry-forward ledger](migrations.md#unvisited-planning-target-source-carry-forward-2026-11-04) and the
 [evidence reconciliation ledger](migrations.md#planning-evidence-revisionremoval-reconciliation-2026-11-04).
 
 Verification includes deterministic wire round trips, complete record read/check

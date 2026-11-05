@@ -1,4 +1,7 @@
 import Database from "better-sqlite3";
+import { definitionChangeReceipt, prepareDefinitionChangeReview, validateDefinitionChangeResponse, makeDefinitionChangeReceipt } from "../core/definition-change-review.js";
+import { definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
+import { prepareDefinitionChangeEvidence, definitionChangeEvidenceContext, makeDefinitionChangeEvidenceReceipt } from "../core/definition-change-evidence.js";
 import { definitionReviewHistory } from "./definition-review-history.js";
 import { logHistory } from "./log-history.js";
 import { activityPage, activitySnapshot, latestSpecificationChange, saveActivity } from "./activity.js";
@@ -82,6 +85,7 @@ import { epicPlanningCheckpointSchema, epicContextCheckpointSchema, epicPlanning
 import { removeRequirementAsDuplicate, reviewRefinement } from "../core/refinement.js";
 import { decisionAvailability, decisionContextKey } from "../core/decision-availability.js";
 import { readinessQuestionTaskSchema, submissionQuestionBlock, validateReadinessQuestions } from "../core/readiness-questions.js";
+import { workflowJobReceiptSchema, type WorkflowJobReceipt } from "../core/workflow-receipts.js";
 import { reconcileCompletedReview, type AppliedInputChange } from "../core/review-completion.js";
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
@@ -95,7 +99,7 @@ import { questionReviewFingerprint, reviewFingerprint, validateRequirementEviden
 /** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
 function readStoredJob(payload: string): Job {
   const job = JSON.parse(payload) as Job;
-  if (job.kind !== undefined && !["scan", "definition-joint-review", "definition-scope-review", "definition-mixed-review"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
+  if (job.kind !== undefined && !["scan", "definition-joint-review", "definition-scope-review", "definition-mixed-review", "definition-change-review"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
   if (job.kind === "definition-mixed-review" || job.context?.definitionMixedReview) {
     definitionMixedReviewMarkerSchema.parse(job.context?.definitionMixedReview);
     if (job.kind !== "definition-mixed-review") throw new Error("Mixed review marker cannot masquerade as ordinary discovery. Saved evidence was not overwritten.");
@@ -106,6 +110,15 @@ function readStoredJob(payload: string): Job {
     if (job.kind !== "definition-scope-review") throw new Error("Scoped review marker cannot masquerade as ordinary discovery. Saved work was not overwritten.");
   }
   if (job.portableReceipt !== undefined && job.portableReceipt !== 1) throw new Error("Unsupported portable checkpoint receipt. Upgrade the app; saved work was not overwritten.");
+  if (job.definitionChangeWork || job.kind === "definition-change-review" || job.context?.definitionChangeReview) {
+    const work = definitionChangeWorkSchema.parse(job.definitionChangeWork);
+    const marker = definitionChangeMarkerSchema.parse(job.context?.definitionChangeReview);
+    if (job.kind !== "definition-change-review" || work.taskKey !== marker.taskKey || work.epicID !== job.context?.focusEpicID || job.context.revision !== job.expectedRevision
+      || work.contextKey.length !== 64 || marker.format !== work.format || job.result || job.definitionWork || job.retrievalWork)
+       throw new Error("Change review must retain its exclusive exact task. Saved work was not overwritten.");
+    if (work.format === 2 && work.loads.some((load) => load.model.providerID !== job.model.providerID || load.model.modelID !== job.model.modelID))
+      throw new Error("Loaded change evidence must retain its original selected model. Saved work was not overwritten.");
+  }
   if (job.discoveryMetrics !== undefined) discoveryMetricsSchema.parse(job.discoveryMetrics);
   if (job.refinementRequests !== undefined) z.number().int().nonnegative().parse(job.refinementRequests);
   const envelopes = [...(job.result?.resolutionCheck ? [job.result.resolutionCheck] : []),
@@ -1031,6 +1044,132 @@ export class ProjectStore {
     return this.mutate(id, revision, "Model selection changed", (project) => { project.model = modelSelection.parse(selection); });
   }
 
+  definitionChangeTask(id: string, epicID: string) {
+    const project = this.get(id), assessment = project.assessments.find((a) => a.epicID === epicID);
+    const receipt = definitionChangeReceipt(project, epicID);
+    if (!assessment || receipt && (receipt.response.outcome === "unaffected" || receipt.format === 2)) return;
+    try {
+      const original = this.get(id, assessment.atRevision), legacy = prepareDefinitionChangeReview(original, project, epicID);
+      if (!legacy) return;
+      // Finish/retry original v1 work under its exact protocol. An app upgrade
+      // must not invalidate a saved reply or reset its three spent attempts.
+      if (!receipt && this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ? AND json_extract(payload, '$.definitionChangeWork.format') = 1
+        AND json_extract(payload, '$.definitionChangeWork.taskKey') = ? LIMIT 1`).get(id, legacy.taskKey)) return legacy;
+      return prepareDefinitionChangeEvidence(original, project, epicID);
+    }
+    catch { return; } // Missing/unsupported provenance takes the existing full review.
+  }
+
+  private boundDefinitionChangeTask(job: Job) {
+    const work = job.definitionChangeWork!;
+    const snapshot = this.get(job.projectID, job.expectedRevision), assessment = snapshot.assessments.find((a) => a.epicID === work.epicID)!;
+    const original = this.get(job.projectID, assessment.atRevision);
+    const task = work.format === 1 ? prepareDefinitionChangeReview(original, snapshot, work.epicID) : prepareDefinitionChangeEvidence(original, snapshot, work.epicID);
+    if (!task || task.taskKey !== work.taskKey || task.contextKey !== work.contextKey || task.fields.assessmentKey !== work.assessmentKey)
+      throw new Error("Change review original context no longer matches.");
+    return task;
+  }
+
+  definitionChangeRequest(id: string) {
+    const job = this.getJob(id), work = job.definitionChangeWork!, task = this.boundDefinitionChangeTask(job);
+    if (work.format === 1) return { context: task.context, contextKey: task.contextKey };
+    if (!("records" in task)) throw new Error("Change evidence protocol differs from its source task.");
+    return definitionChangeEvidenceContext(task, work);
+  }
+
+  definitionChangeProgress(projectID: string, id: string) {
+    return this.db.prepare(`SELECT json_array_length(payload, '$.definitionChangeWork.loads') AS lookups,
+      json_extract(payload, '$.definitionChangeWork.attempts') AS attempts FROM jobs WHERE project_id = ? AND id = ?
+      AND json_extract(payload, '$.definitionChangeWork.format') = 2`).get(projectID, id) as { lookups: number; attempts: number } | undefined;
+  }
+
+  beginDefinitionChangeReview(jobID: string, epicID: string, taskKey: string) {
+    return this.db.transaction(() => {
+      const job = this.getJob(jobID), task = this.definitionChangeTask(job.projectID, epicID);
+      if (!task || task.taskKey !== taskKey || job.expectedRevision !== this.projectRevision(job.projectID)) throw new StaleRevisionError();
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now() || job.kind || job.context) throw new Error("Change review requires an exclusive live worker.");
+      const row = this.db.prepare(`SELECT id FROM jobs WHERE project_id = ? AND id != ?
+        AND json_extract(payload, '$.definitionChangeWork.taskKey') = ? ORDER BY rowid DESC LIMIT 1`).get(job.projectID, jobID, taskKey) as { id: string } | undefined;
+      const priorJob = row ? this.getJob(row.id) : undefined, prior = priorJob?.definitionChangeWork;
+      if (priorJob && (priorJob.model.providerID !== job.model.providerID || priorJob.model.modelID !== job.model.modelID
+        || priorJob.model.connectionID !== undefined && priorJob.model.connectionID !== job.model.connectionID))
+        throw new Error("Saved change review uses a different model/connection. Original evidence and attempts remain saved.");
+      if (prior && prior.contextKey !== task.contextKey) throw new Error("Saved change review context differs; original work was retained.");
+      if (prior && !prior.response && prior.attempts >= 3) throw new Error("This exact change review exhausted its three attempts. Saved work and findings remain retained.");
+      job.kind = "definition-change-review"; job.context = task.context.manifest;
+      job.definitionChangeWork = prior ? { ...structuredClone(prior), sourceJobID: row!.id }
+        : { ...(task.context.manifest.definitionChangeReview!.format === 1 ? { format: 1 as const, policy: "definition-change-review-v1" as const }
+          : { format: 2 as const, policy: "definition-change-evidence-v2" as const, loads: [] }), epicID, assessmentKey: task.fields.assessmentKey, taskKey,
+          contextKey: task.contextKey, attempts: 0 };
+      if (job.definitionChangeWork.format === 2 && job.definitionChangeWork.response && "records" in task)
+        job.context = definitionChangeEvidenceContext(task, job.definitionChangeWork).context.manifest;
+      this.saveJob(job); return { task, job };
+    }).immediate();
+  }
+
+  reserveDefinitionChangeReview(id: string) {
+    return this.db.transaction(() => {
+      const job = this.getJob(id), work = job.definitionChangeWork;
+      if (!work || work.response || work.attempts >= 3 || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Change review cannot reserve another request.");
+      if (this.projectRevision(job.projectID) !== job.expectedRevision) throw new StaleRevisionError();
+      if (work.format === 2) {
+        const task = this.boundDefinitionChangeTask(job);
+        if (!("records" in task)) throw new Error("Change evidence protocol differs from its source task.");
+        job.context = definitionChangeEvidenceContext(task, work).context.manifest;
+      }
+      job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 330000);
+      work.attempts++; this.saveJob(job);
+    }).immediate();
+  }
+
+  recordDefinitionChangeResponse(id: string, raw: unknown) {
+    return this.db.transaction(() => {
+      const job = this.getJob(id), work = job.definitionChangeWork;
+      if (!work || !work.attempts || work.response || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Change review worker is no longer live.");
+      const task = this.boundDefinitionChangeTask(job);
+      const model = { providerID: job.model.providerID, modelID: job.model.modelID };
+      if (work.format === 2 && "records" in task) {
+        const request = definitionChangeEvidenceContext(task, work);
+        if (raw && typeof raw === "object" && "loadEvidenceIDs" in raw) {
+          const lookup = request.validateLookup(raw);
+          work.loads.push({ contextKey: request.contextKey, requestedIDs: lookup.loadEvidenceIDs, attempts: work.attempts, jobID: job.id, model });
+          work.attempts = 0;
+        } else {
+          work.response = validateDefinitionChangeResponse({ taskKey: task.taskKey, context: { ...request.context, manifest: { ...request.context.manifest, includedIDs: request.citationIDs } } }, raw);
+          work.responseContextKey = request.contextKey; work.responseJobID = job.id; work.responseModel = model;
+        }
+      } else {
+        work.response = validateDefinitionChangeResponse(task, raw); work.responseJobID = job.id; work.responseModel = model;
+      }
+      this.saveJob(job);
+      if (this.projectRevision(job.projectID) !== job.expectedRevision) {
+        job.status = "stale"; job.leaseUntil = null; job.diagnostic = "Project changed. Valid change-review response retained under its original inputs; no current findings were certified."; this.saveJob(job);
+      }
+      return job;
+    }).immediate();
+  }
+
+  finishDefinitionChangeReview(id: string) {
+    return this.db.transaction(() => {
+      const job = this.getJob(id), work = job.definitionChangeWork;
+      if (!work?.response || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Change review needs a live worker and a saved validated response.");
+      const task = this.boundDefinitionChangeTask(job);
+      const request = work.format === 2 && "records" in task ? definitionChangeEvidenceContext(task, work) : { context: task.context, citationIDs: task.context.manifest.includedIDs };
+      const response = validateDefinitionChangeResponse({ taskKey: task.taskKey, context: { ...request.context, manifest: { ...request.context.manifest, includedIDs: request.citationIDs } } }, work.response);
+      this.mutate(job.projectID, job.expectedRevision, `Definition change-impact review ${id}`, (project) => {
+        const current = this.definitionChangeTask(project.id, work.epicID);
+        if (!current || current.taskKey !== task.taskKey) throw new StaleRevisionError();
+        const receipt = work.format === 2 && "records" in task ? makeDefinitionChangeEvidenceReceipt(task, work, id, project.revision)
+          : makeDefinitionChangeReceipt(task as NonNullable<ReturnType<typeof prepareDefinitionChangeReview>>, response, id, project.revision, work.responseJobID!, work.responseModel!);
+        project.definitionChangeReviews = [...project.definitionChangeReviews?.filter((r) => r.epicID !== work.epicID) ?? [], receipt];
+        if (new TextEncoder().encode(JSON.stringify(project.definitionChangeReviews)).byteLength > 2097152) throw new Error("Dated change-review evidence exceeds its supported bound. Original findings and the saved response remain retained.");
+        project.roundChanges = [response.outcome === "unaffected" ? "Change-impact check retained the original assessment and review date. No findings or product decisions changed."
+          : "Change-impact check requires deeper evidence review. Original findings and decisions retained."];
+      });
+      job.status = "completed"; job.leaseUntil = null; this.saveJob(job); return job;
+    }).immediate();
+  }
+
   answer(id: string, revision: number, questionID: string, input: Answer, scope?: AnswerScope) {
     const answer = answerSchema.parse(input);
     return this.mutate(id, revision, "Human question response", (project) => {
@@ -1132,10 +1271,53 @@ export class ProjectStore {
   }
 
   jobs(projectID: string, limit?: number): Job[] {
+    // Do not retain every raw JSON string alongside every parsed/validated job.
     const rows = limit === undefined
-      ? this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid").all(projectID)
-      : this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid DESC LIMIT ?").all(projectID, Math.max(1, Math.min(200, limit))).reverse();
-    return (rows as Array<{ payload: string }>).map((row) => readStoredJob(row.payload));
+      ? this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid").iterate(projectID)
+      : this.db.prepare("SELECT payload FROM jobs WHERE project_id = ? ORDER BY rowid DESC LIMIT ?").iterate(projectID, Math.max(1, Math.min(200, limit)));
+    const jobs: Job[] = [];
+    for (const row of rows as IterableIterator<{ payload: string }>) jobs.push(readStoredJob(row.payload));
+    return limit === undefined ? jobs : jobs.reverse();
+  }
+
+  /** Exact original records used by coordinator scheduling/proofs, never a
+   * truncated archive or a projected record masquerading as a complete job.
+   * Definition/retrieval/scan ledgers are loaded by their own dispatch paths. */
+  specificationWorkflowJobs(projectID: string, scope: "all" | "resolution" | "readiness" = "all"): Job[] {
+    const predicates = {
+      all: `json_extract(payload, '$.context.refinementOnly') = 1 OR json_type(payload, '$.context.refinementTarget') = 'object'
+        OR json_type(payload, '$.context.refinementPair') = 'object' OR json_type(payload, '$.context.readinessQuestions') = 'object'`,
+      resolution: "json_type(payload, '$.context.refinementPair') = 'object'",
+      readiness: "json_type(payload, '$.context.readinessQuestions') = 'object'",
+    } as const;
+    const rows = this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND (${predicates[scope]}) ORDER BY rowid`).iterate(projectID);
+    return Array.from(rows as IterableIterator<{ payload: string }>, (row) => readStoredJob(row.payload));
+  }
+
+  hasScanJob(projectID: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM jobs WHERE project_id = ? AND json_extract(payload, '$.kind') = 'scan' LIMIT 1").get(projectID);
+  }
+
+  workflowJobReceipts(projectID: string): WorkflowJobReceipt[] {
+    // SQLite extracts only scheduling inputs. No full context, result bodies or
+    // staged ledgers are ever copied into JS for this coordinator view.
+    const rows = this.db.prepare(`SELECT id, json_extract(payload, '$.expectedRevision') AS revision,
+      json_extract(payload, '$.status') AS status, json_extract(payload, '$.context.refinementTarget') AS target,
+      json_extract(payload, '$.context.refinementPair') AS pair, json_extract(payload, '$.context.readinessQuestions') AS readiness,
+      json_type(payload, '$.result') AS resultType, json_extract(payload, '$.result.summary') AS summary,
+      json_extract(payload, '$.result.resolutionCheck') AS resolution FROM jobs WHERE project_id = ? AND (
+      json_type(payload, '$.context.refinementTarget') = 'object' OR json_type(payload, '$.context.refinementPair') = 'object'
+      OR json_type(payload, '$.context.readinessQuestions') = 'object') ORDER BY rowid`).iterate(projectID);
+    const receipts: WorkflowJobReceipt[] = [];
+    const decode = (value: string | null) => value === null ? undefined : JSON.parse(value);
+    for (const raw of rows) {
+      const row = raw as { id: string; revision: number; status: string; target: string | null; pair: string | null; readiness: string | null;
+        resultType: string | null; summary: string | null; resolution: string | null };
+      receipts.push(workflowJobReceiptSchema.parse({ id: row.id, expectedRevision: row.revision, status: row.status,
+        context: { refinementTarget: decode(row.target), refinementPair: decode(row.pair), readinessQuestions: decode(row.readiness) },
+        result: row.resultType === "object" ? { summary: row.summary, resolutionCheck: decode(row.resolution) } : undefined }));
+    }
+    return receipts;
   }
 
   definitionReviewHistory(projectID: string, query: unknown = {}) {
@@ -2285,13 +2467,13 @@ export class ProjectStore {
           if (omittedConcepts) project.roundChanges.push(`Omitted ${omittedConcepts} malformed concept annotations; question wording was preserved.`);
           if (job.context?.refinementOnly) project.roundChanges.push(`Requirement refinement (bounded working set): ${result.summary}`);
           if (interpretation) Object.assign(project, interpretation);
-          reconcileCompletedReview(before, project, { ...job, result }, this.completionInputs(job, submissions), submissions, this.jobs(project.id));
+          const reviewJobs = this.specificationWorkflowJobs(project.id, "resolution");
+          reconcileCompletedReview(before, project, { ...job, result }, this.completionInputs(job, submissions), submissions, reviewJobs);
           if (!job.context?.refinementOnly) {
             // The receipt commits with discovery. A crash cannot lose the pair
             // stage or require replaying a successful (possibly paid) round.
-            const jobs = this.jobs(project.id);
             for (const item of this.submissions(project.id).filter((s) => s.applied && job.context?.submissionIDs?.includes(s.id))) {
-              const receipt = planIncrementalResolution(before, project, item, job.id, jobs);
+              const receipt = planIncrementalResolution(before, project, item, job.id, reviewJobs);
               if (receipt) {
                 item.overlapFollowup = receipt;
                 item.response = result.reviewResponses?.find((r) => r.sourceID === item.appliedSourceID)?.text;
@@ -2314,9 +2496,14 @@ export class ProjectStore {
     }).immediate();
   }
 
+  *definitionHistoryCandidates(projectID: string, epicID: string, inputKey: string): Generator<Job> {
+    const rows = this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND json_extract(payload, '$.definitionWork.epicID') = ?
+      AND json_extract(payload, '$.definitionWork.inputKey') = ? ORDER BY rowid DESC LIMIT 20`).iterate(projectID, epicID, inputKey);
+    for (const row of rows as IterableIterator<{ payload: string }>) yield readStoredJob(row.payload);
+  }
+
   definitionHistory(projectID: string, epicID: string, inputKey: string): Job[] {
-    return (this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND json_extract(payload, '$.definitionWork.epicID') = ?
-      AND json_extract(payload, '$.definitionWork.inputKey') = ? ORDER BY rowid DESC LIMIT 20`).all(projectID, epicID, inputKey) as { payload: string }[]).map((row) => readStoredJob(row.payload));
+    return [...this.definitionHistoryCandidates(projectID, epicID, inputKey)];
   }
 
   /** Compact progress only: no request bodies or derived findings are decoded.

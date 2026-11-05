@@ -2,6 +2,7 @@ import { dimensions, dimensionLabels } from "./epics.js";
 import type { Project } from "./model.js";
 import { definitionInputKey } from "./definition-identity.js";
 import { definitionCombinedEvidenceKey } from "./definition-combined-assessment.js";
+import { definitionChangeReceipt } from "./definition-change-review.js";
 
 export function coverage(project: Project) {
   const combinedKey = project.assessments.some((a) => a.combinedReview || a.mixedReview) ? definitionCombinedEvidenceKey(project) : null;
@@ -28,6 +29,7 @@ export function coverage(project: Project) {
   };
   const epics = project.epics.filter((item) => !item.archived).map((epic) => {
     const assessment = project.assessments.find((item) => item.epicID === epic.id);
+    const changeReview = definitionChangeReceipt(project, epic.id);
     let earned = 0, total = 0;
     const checks = dimensions.map((dimension) => {
       const check = assessment?.checks.find((item) => item.dimension === dimension);
@@ -47,9 +49,11 @@ export function coverage(project: Project) {
     const criticalGaps = checks.filter((item) => item.importance === "critical" && !["defined", "not-applicable"].includes(item.status)).length;
     return { epicID: epic.id, percent: total ? Math.round(100 * earned / total) : 0,
       assessed: !!assessment, stale: !assessment || (assessment.inputBasis
-        ? assessment.inputBasis.key !== definitionInputKey(project, epic.id, assessment.checks.flatMap((c) => c.evidenceIDs))
+         ? assessment.inputBasis.key !== definitionInputKey(project, epic.id, assessment.checks.flatMap((c) => c.evidenceIDs))
+           && changeReview?.response.outcome !== "unaffected"
         : assessment.atRevision !== project.revision) || !!assessment?.combinedReview && assessment.combinedReview.guardKey !== combinedKey
           || !!assessment?.mixedReview && assessment.mixedReview.assembly.guardKey !== combinedKey,
+      ...(changeReview ? { changeReview: { outcome: changeReview.response.outcome, reviewedAt: changeReview.reviewedAt, originalRevision: changeReview.originalRevision } } : {}),
       confidence: assessment?.confidence ?? "low", explanation: assessment?.explanation ?? "Discover this area to identify its requirements and gaps.",
       checks, criticalGaps, openQuestions };
   });

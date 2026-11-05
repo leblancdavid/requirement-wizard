@@ -1,5 +1,14 @@
 # Architecture outline
 
+`definition-change-review.ts` adds a separate bounded semantic change-impact task
+before full definition refresh under the existing Continue-specification owner/grant.
+It compares every complete saved dimension finding with every exact delta and
+bounded whole provenance/question-answer records. Matching dated receipts can retain
+unaffected findings without modifying their original basis/date; affected or uncertain
+areas use the existing evidence review. Storage owns durable charged attempts,
+response retention and atomic publication; coverage consumes exact receipt identity,
+not citation-graph independence. See [migration 24](migrations.md#dated-definition-change-impact-reviews-2026-11-04).
+
 `definition-baseline.ts` adds an optional exact original-collection envelope for new
 staged follow-ups. Storage binds the actual original publication/result, core compares
 the full guarded record inventory and schedules changed collection plus complete
@@ -54,9 +63,11 @@ and requirement guardrails. Retained read keys and exact evidence deltas are rep
 historical retirement entries are distinct from current records. Obsolete prerequisite
 proposals stay in the witness, not the active seed. Superseded IDs cannot authorize
 current dependencies, and every current batch verifies before explicit human review.
-Immediate-predecessor source selection still needs carry-forward for later targets
-that have not been prepared when an earlier target stops; compact portability does
-not export the full planning archive to hide that gap.
+Planning envelope 2 separates pending historical target-source capsules from current
+work. Owned startup captures nearest compatible sources before plan replacement;
+per-target validation atomically attaches current work and consumes its capsule.
+Frozen materials preserve exact partial replay. Portable projection retains capsules
+and rebinds their workspace identity on explicit adoption, without the full archive.
 
 Startup observers in `src/core/startup.ts` project actual store/upgrade/validation phases through
 the owned desktop worker. Electron creates a sandboxed local splash before backend startup,
@@ -66,6 +77,33 @@ a fabricated completion percentage. The store's verification/transaction behavio
 dialog. Empty source catalogs are explained without fabricated origins, model calls or resets.
 No persisted format change is involved. See [startup](desktop.md#visible-startup-2026-10-31)
 and [navigation](browser-workspace.md#simpler-progress-and-optional-assessment-tools-2026-10-31).
+
+Database 26 adds covering expression indexes for startup change-review validation.
+They project review arrays rather than full project/revision payloads and remain
+maintained by SQLite on historical edits. A bounded, launch-local digest cache avoids
+parsing identical arrays repeatedly without permanently trusting saved data. One-time
+indexing and later history/work/evidence checks have separate allowlisted startup
+phases. Full evidence/fingerprint semantics and portable formats are unchanged; the
+first index build still reads the archive and other validators remain active.
+
+`workflow-receipts.ts` defines an ephemeral scheduling/proof view, not a saved job.
+The coordinator reads its necessary task/verdict fields directly from SQLite instead
+of retaining whole histories across inference. Completion/clarification still load
+the matching original full records. Definition candidates are decoded lazily with
+the existing selection window and no cursor held over awaits. Portable assessment
+origins are encoded one snapshot at a time, retaining only the exact output deltas
+and interned differences. These changes reduce heap pressure without truncating
+saved evidence, changing fingerprints or resetting attempts. They do not bound all
+archive/export costs; see [the allocation-failure investigation](desktop.md#assessment-memory-pressure-mitigation-2026-11-04).
+
+`definition-change-evidence.ts` adds app-owned exact source lookup turns to change
+checks; it grants no native tools or research. Versioned lookup ledgers bind request
+hashes and attempts to original snapshots. All loaded bodies, original findings and
+changes remain in the bounded joint context; publication separately binds the final
+context and verdict. Database 25 is a capability-only forward boundary. Portable
+state 5 records exact current record ordering before applying historical deltas,
+preserving linked source/question identities across grouped feature files. Legacy
+v1 work retains its original protocol and paid results; no upgrade-time inference.
 
 `definition-mixed-publication.ts` in core/storage and its UI component add exact supported-source
 publication previews, immutable local review history, separate eligibility/consent and idempotent

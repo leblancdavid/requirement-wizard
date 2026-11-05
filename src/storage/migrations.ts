@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { definitionChangeReceiptSchema, definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
 import { decisionIdentity, executionSchemaVersion } from "../core/assessment-identity.js";
 import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
@@ -24,7 +25,17 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 23;
+export const databaseSchemaVersion = 26;
+const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
+const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
+  ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
+/** Keep the SELECT expression and partial predicate identical to migration 26's
+ * covering expression indexes. No full historical project payload is needed. */
+export function changeReviewValidationQuery(table: "projects" | "revisions") {
+  return `SELECT CASE WHEN length(CAST((${changeReviewValue}) AS BLOB)) <= 2097152
+    THEN (${changeReviewValue}) END AS reviews FROM ${table} INDEXED BY startup_${table}_change_reviews
+    WHERE ${changeReviewPredicate}`;
+}
 // Frozen digest of the shipped v1 assessment SKILL.md. Never derive historical
 // compatibility from the current skill: future edits must not broaden this rule.
 const legacySkillDigest = "d36316a1c3184a2bd065e710e46d7f8748157c2d2fdd8e2db36f4910ef63cc37";
@@ -203,6 +214,14 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
     CREATE INDEX IF NOT EXISTS definition_mixed_saved_area ON definition_mixed_saved_reviews(project_id, epic_id);
     CREATE TABLE IF NOT EXISTS definition_mixed_publications (project_id TEXT NOT NULL REFERENCES projects(id), review_id TEXT PRIMARY KEY REFERENCES definition_mixed_saved_reviews(review_id),
     payload TEXT NOT NULL);`);
+} }, { version: 24, name: "dated-definition-change-reviews-v1", apply() {
+  // Capability boundary only. Old evidence, jobs and completed assessments are
+  // unchanged; older applications must not strip new review authority on write.
+} }, { version: 25, name: "resumable-definition-change-evidence-v2", apply() {
+  // Capability boundary only: preserve old responses, attempts, findings and live leases.
+} }, { version: 26, name: "indexed-startup-change-review-validation", apply(db: Database.Database) {
+  for (const table of ["projects", "revisions"]) db.exec(`CREATE INDEX IF NOT EXISTS startup_${table}_change_reviews
+    ON ${table}((${changeReviewValue})) WHERE ${changeReviewPredicate}`);
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -213,6 +232,7 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
     if (version > databaseSchemaVersion) throw new Error("Unsupported project database version.");
     if (version < databaseSchemaVersion) reportStartup(progress, "upgrading-data");
     for (const migration of migrations) if (version < migration.version) {
+      if (migration.version === 26) reportStartup(progress, "indexing-review-history");
       migration.apply(db);
       db.prepare("INSERT INTO migration_history VALUES (?, ?, ?)").run(migration.version, migration.name, new Date().toISOString());
       db.pragma(`user_version = ${migration.version}`);
@@ -220,6 +240,32 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
     }
     // Refuse future/corrupt payloads even when the database schema is supported.
     reportStartup(progress, "checking-data");
+    reportStartup(progress, "checking-review-history");
+    const validatedReviews = new Set<string>();
+    for (const table of ["projects", "revisions"] as const) {
+      for (const row of db.prepare(changeReviewValidationQuery(table)).iterate() as Iterable<{ reviews: string | null }>) {
+        if (typeof row.reviews !== "string" || !row.reviews) throw new Error("Saved change-review evidence is unsupported or exceeds its supported bound. Nothing was overwritten.");
+        const key = createHash("sha256").update(row.reviews).digest("hex");
+        if (validatedReviews.has(key)) continue;
+        const reviews = z.array(definitionChangeReceiptSchema).max(256).parse(JSON.parse(row.reviews));
+        if (new Set(reviews.map((r) => r.epicID)).size !== reviews.length) throw new Error("Saved change-review identities are ambiguous.");
+        validatedReviews.add(key);
+        if (validatedReviews.size > 128) validatedReviews.delete(validatedReviews.values().next().value!);
+      }
+    }
+    reportStartup(progress, "checking-saved-work");
+    for (const row of db.prepare(`SELECT json_extract(payload, '$.kind') AS kind,
+      CASE WHEN length(CAST(json_extract(payload, '$.context.definitionChangeReview') AS BLOB)) <= 2048
+        THEN json_extract(payload, '$.context.definitionChangeReview') END AS marker,
+      CASE WHEN length(CAST(json_extract(payload, '$.definitionChangeWork') AS BLOB)) <= 65536
+        THEN json_extract(payload, '$.definitionChangeWork') END AS work FROM jobs
+      WHERE json_type(payload, '$.definitionChangeWork') IS NOT NULL OR json_type(payload, '$.context.definitionChangeReview') IS NOT NULL
+        OR json_extract(payload, '$.kind') = 'definition-change-review'`).iterate() as Iterable<{ kind: string; marker: string; work: string | null }>) {
+      if (!row.work) throw new Error("Unsupported change-review checkpoint. Saved work was not overwritten.");
+      const work = definitionChangeWorkSchema.parse(JSON.parse(row.work));
+      const marker = definitionChangeMarkerSchema.parse(JSON.parse(row.marker));
+      if (row.kind !== "definition-change-review" || work.taskKey !== marker.taskKey || work.format !== marker.format) throw new Error("Change-review checkpoint binding differs.");
+    }
     for (const row of db.prepare("SELECT project_id, review_id FROM definition_mixed_saved_reviews").iterate() as Iterable<{ project_id: string; review_id: string }>) {
       if (readMixedSavedReview(db, row.project_id, row.review_id).status !== "recorded") throw new Error(`Saved mixed review is unsupported or exceeds ${definitionMixedSavedReviewBytes} bytes. Saved evidence was not overwritten.`);
     }
@@ -291,6 +337,7 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
     for (const row of db.prepare("SELECT run_id, payload FROM workflow_runs").all() as { run_id: string; payload: string }[]) {
       if (workflowRunSchema.parse(JSON.parse(row.payload)).id !== row.run_id) throw new Error("Specification run receipt identity mismatch. Saved data was not overwritten.");
     }
+    reportStartup(progress, "checking-definition-evidence");
     for (const row of db.prepare("SELECT project_id, job_id, request_id, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload END AS payload FROM definition_request_witnesses")
       .iterate(definitionPublicationLimits.payloadBytes) as Iterable<{ project_id: string; job_id: string; request_id: string; payload: string | null }>) {
       if (!row.payload) throw new Error("Definition request witness exceeds its supported read bound. Saved data was not overwritten.");

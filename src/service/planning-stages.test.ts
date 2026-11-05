@@ -118,6 +118,44 @@ test("source selection respects the nearest touched target, settings epochs, rev
   } finally { store.close(); }
 });
 
+test("source capture cannot bypass a newer exhausted ledger for an older completed package", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, state, id } = seed(store), plan = state.planning!;
+    plan.configFingerprint = planningConfigFingerprint(state);
+    await runImplementationStages(p, state, id, () => {}, () => {}, async () => JSON.stringify(output(id)));
+    const prepared = planningTargetInput(p, state, id, true);
+    plan.targetInputs = { [id]: { format: 1, policy: "exact-planning-inputs-v1", mode: "staged", inputKey: prepared.inputKey,
+      originPlanID: plan.id, originRevision: p.revision, packageKey: planningReuseKey(output(id).packages[0]) } };
+    plan.output = output(id); plan.status = "proposed";
+    state.planningHistory = [structuredClone(plan)];
+    plan.id = "newer-exhausted-ledger"; plan.status = "failed"; plan.output = undefined;
+    delete plan.targetInputs[id]!.packageKey;
+    plan.stageWork![id]!.receipts = []; plan.stageWork![id]!.attempts = 3;
+    const source = capturePlanningSources(p, state, "fixture", () => p)[id]!;
+    assert.equal(source.sourcePlanID, plan.id); assert.equal(source.mode, "staged"); if (source.mode !== "staged") assert.fail();
+    assert.equal(source.work.attempts, 3); assert.equal(source.work.receipts.length, 0); assert.equal(source.package, undefined);
+    state.planning = { ...plan, stageWork: { [id]: source.work } };
+    await assert.rejects(runImplementationStages(p, state, id, () => {}, () => {}, async () => assert.fail("Exhausted original attempts cannot be reset")), /exhausted three attempts/);
+  } finally { store.close(); }
+});
+
+test("a changed approval population makes historical dependency work incompatible rather than blocking fresh collection", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = await evidencePlanningFixture(store), plan = f.state.planning!;
+    plan.configFingerprint = planningConfigFingerprint(f.state);
+    plan.output = structuredClone(f.source.receipts.at(-1)!.output); plan.status = "proposed";
+    plan.targetInputs = { [f.id]: { format: 1, policy: "exact-planning-inputs-v1", mode: "staged",
+      inputKey: planningStageInputKey(f.materials.inputKey), originPlanID: plan.id, originRevision: f.original.revision,
+      packageKey: planningReuseKey(plan.output.packages[0]) } };
+    const current = structuredClone(f.original); current.revision++;
+    current.requirements.find((requirement) => requirement.id === f.dependency)!.status = "rejected";
+    assert.deepEqual(capturePlanningSources(current, f.state, "fixture", () => f.original), {});
+    assert.equal(plan.output.packages[0]!.prerequisites[0]!.requirementID, f.dependency, "Historical proposal remains untouched");
+  } finally { store.close(); }
+});
+
 test("capture failures preserve the old plan, release only the owned lease, and permit explicit retry", async () => {
   const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
   const dir = mkdtempSync(join(parent, "planning-capture-failure-")), path = join(dir, "state.sqlite");
@@ -137,6 +175,79 @@ test("capture failures preserve the old plan, release only the owned lease, and 
     good.version = before.version; store.saveExecution(p.id, good);
     service.start(p.id, p.revision, "plan"); await until(service, p.id);
     assert.equal(store.execution(p.id).planning!.status, "proposed"); assert.equal(calls, count);
+  } finally { await service?.close(); store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("format-1 planning upgrades without rewriting receipts; missing snapshots stay unknown and future pending policies fail closed", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, "planning-source-upgrade-")), path = join(dir, "state.sqlite");
+  let store = new ProjectStore(path); let service: ImplementationService | undefined;
+  try {
+    const { p, state, id } = seed(store); store.connectWorkspace(p.id, p.revision, dir);
+    const git = () => ({ async localPreflight() {}, async git() { return dir; } }) as unknown as GitDelivery;
+    service = new ImplementationService(store, { async perform() { return JSON.stringify(output(id)); } }, git);
+    service.configure(p.id, p.revision, state.config!); service.start(p.id, p.revision, "plan"); await until(service, p.id);
+    const old = store.execution(p.id); old.planning!.format = 1; delete old.planning!.targetMaterials; delete old.planning!.pendingSources;
+    delete old.planning!.targetInputs![id]!.originPlanCreatedAt; delete old.planning!.targetInputs![id]!.originPlanFinishedAt;
+    store.saveExecution(p.id, old); const original = structuredClone(old.planning!);
+    await service.close();
+    for (let n = 0; n < 2; n++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.execution(p.id).planning, original, "Startup must not rewrite old work or dates");
+    }
+    const saved = store.execution(p.id), binding = store.workspace(p.id)!.bindingID!;
+    const captured = capturePlanningSources(p, saved, binding, (revision) => store.get(p.id, revision));
+    assert.deepEqual(captured[id]!.input, original.targetInputs![id]); assert.equal(captured[id]!.mode, "staged");
+    assert.deepEqual(capturePlanningSources(p, saved, binding, () => { throw new Error("Project or revision not found."); }), {});
+    assert.throws(() => capturePlanningSources(p, saved, binding, () => { throw new Error("Read failure"); }), /Read failure/);
+    saved.planning = { ...saved.planning!, format: 2, pendingSources: captured, output: undefined, stageWork: undefined, targetInputs: undefined };
+    store.saveExecution(p.id, saved); store.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.execution(p.id).planning!.pendingSources, JSON.parse(JSON.stringify(captured)));
+    const db = new Database(path);
+    const row = db.prepare("SELECT payload FROM execution_state WHERE project_id=?").get(p.id) as { payload: string };
+    const future = JSON.parse(row.payload); future.planning.pendingSources[id].policy = "future-source-policy";
+    const payload = JSON.stringify(future);
+    db.prepare("UPDATE execution_state SET payload=? WHERE project_id=?").run(payload, p.id);
+    store.close(); assert.throws(() => new ProjectStore(path), /future-source-policy|retained-planning-target-v1|Invalid literal/);
+    assert.equal((db.prepare("SELECT payload FROM execution_state WHERE project_id=?").get(p.id) as { payload: string }).payload, payload);
+    db.prepare("UPDATE execution_state SET payload=? WHERE project_id=?").run(row.payload, p.id); db.close();
+    store = new ProjectStore(path); assert.deepEqual(store.execution(p.id).planning!.pendingSources, JSON.parse(JSON.stringify(captured)));
+  } finally { await service?.close(); store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("target preparation failure retains its pending source without attaching an incomplete current packet", async () => {
+  const parent = resolve(".reqwizit-state/tests"); mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, "planning-pending-failure-")), store = new ProjectStore(":memory:");
+  let service: ImplementationService | undefined;
+  try {
+    let { p, state, id } = seed(store); store.connectWorkspace(p.id, p.revision, dir);
+    const git = () => ({ async localPreflight() {}, async git() { return dir; } }) as unknown as GitDelivery;
+    let calls = 0;
+    service = new ImplementationService(store, { async perform() {
+      calls++; const value = output(id);
+      value.packages[0]!.steps = Array.from({ length: 12 }, (_, n) => `${n}`.padEnd(2000, "x"));
+      value.packages[0]!.verification = Array.from({ length: 12 }, (_, n) => `${n}`.padEnd(2000, "y"));
+      return JSON.stringify(value);
+    } }, git);
+    service.configure(p.id, p.revision, state.config!); service.start(p.id, p.revision, "plan"); await until(service, p.id);
+    const original = structuredClone(store.execution(p.id).planning!); assert.equal(calls, 1);
+    // Curated external evidence correction, not a public source-editing API.
+    const get = store.get.bind(store);
+    store.get = (projectID, revision) => {
+      const snapshot = get(projectID, revision);
+      if (projectID === p.id && revision === undefined) snapshot.sources.find((source) => source.kind === "note")!.text = "Corrected current evidence";
+      return snapshot;
+    };
+    try { p = store.note(p.id, p.revision, "An additional current constraint", "runtime"); }
+    finally { store.get = get; }
+    for (let n = 0; n < 2; n++) {
+      service.start(p.id, p.revision, "plan"); await until(service, p.id);
+      const plan = store.execution(p.id).planning!, source = plan.pendingSources![id]!;
+      assert.equal(plan.status, "failed"); assert.equal(calls, 1);
+      assert.equal(source.sourcePlanID, original.id); assert.equal(source.mode, "staged"); if (source.mode !== "staged") assert.fail();
+      assert.deepEqual(source.work, original.stageWork![id]);
+      assert.equal(plan.targetInputs?.[id], undefined); assert.equal(plan.stageWork?.[id], undefined); assert.equal(plan.targetMaterials?.[id], undefined);
+    }
   } finally { await service?.close(); store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -215,16 +326,20 @@ test("a changed target is replanned while another exact-input package is retaine
       requirements: [{ epicID: "billing", statement: "Save invoices", rationale: "Human request", sourceIDs: [p.sources[0]!.id], acceptance: ["Reopen invoices"] }] });
     p = store.get(p.id); const billing = p.requirements.find((r) => r.epicID === "billing")!.id;
     p = store.review(p.id, p.revision, billing, "accepted", ""); store.connectWorkspace(p.id, p.revision, dir);
+    let pause = false;
     const calls: string[] = [], fakeGit = () => ({ async localPreflight() {}, async git() { return dir; } }) as unknown as GitDelivery;
-    service = new ImplementationService(store, { async perform(request) { calls.push(request.requirementID!); return JSON.stringify(output(request.requirementID!)); } }, fakeGit);
+    service = new ImplementationService(store, { async perform(request) { calls.push(request.requirementID!); if (pause) throw new Error("Stop before visiting the retained single-request target"); return JSON.stringify(output(request.requirementID!)); } }, fakeGit);
     service.configure(p.id, p.revision, state.config!); service.start(p.id, p.revision, "plan"); await until(service, p.id);
     const original = structuredClone(store.execution(p.id).planning!); assert.equal(calls.length, 2);
     p = store.note(p.id, p.revision, "Runtime must preserve offline progress", "runtime");
     const stale = store.execution(p.id);
     assert.throws(() => service!.reviewPlan(p.id, p.revision, stale.version, original.id, "approve", [], ""), /stale|unavailable/i);
+    pause = true; service.start(p.id, p.revision, "plan"); await until(service, p.id);
+    assert.equal(store.execution(p.id).planning!.pendingSources![billing]!.mode, "single");
+    assert.equal(store.execution(p.id).planning!.status, "failed"); pause = false;
     service.start(p.id, p.revision, "plan"); await until(service, p.id);
     const current = store.execution(p.id), plan = current.planning!;
-    assert.deepEqual(calls, [id, billing, id]); assert.equal(plan.status, "proposed", plan.diagnostic);
+    assert.deepEqual(calls, [id, billing, id, id]); assert.equal(plan.status, "proposed", plan.diagnostic);
     assert.deepEqual(plan.targetInputs![billing], original.targetInputs![billing]);
     assert.equal(plan.targetInputs![id]!.originPlanID, plan.id); assert.equal(plan.targetInputs![id]!.originRevision, p.revision);
     assert.deepEqual(current.config!.dependencies, {}); assert.equal(current.run, undefined);

@@ -11,6 +11,10 @@ else {
   parentPort.postMessage({ type: "startup", phase: "checking-data" });
   parentPort.postMessage({ type: "ready", origin: "http://127.0.0.1:12345" });
   if (workerData.directory === "runtime-failure") setTimeout(() => { throw new Error("Fixture runtime failure"); }, 30);
+  if (workerData.directory === "runtime-memory-error") setTimeout(() => {
+    const error = new Error("Worker terminated due to reaching memory limit: JS heap out of memory. Bearer private-fixture-token");
+    error.code = "ERR_WORKER_OUT_OF_MEMORY"; throw error;
+  }, 30);
   parentPort.on("message", (message) => {
     if (message.type !== "close") return;
     const until = Date.now() + 100;

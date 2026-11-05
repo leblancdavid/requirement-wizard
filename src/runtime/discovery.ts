@@ -4,6 +4,7 @@ import { readinessBlockedSchema, readinessEvidenceSchema, readinessVerdictSchema
 import { submissionDraftSchema, submissionStageResponseSchema } from "../core/submission-stages.js";
 import { refinementStageResponseSchema, resolutionStageResponseSchema } from "../core/refinement-stages.js";
 import { definitionBlockedSchema, definitionEvidenceSchema, definitionVerdictSchema, definitionAssessmentResponseSchema, definitionUpdateSchema } from "../core/definition-stages.js";
+import { definitionChangeResponseSchema, definitionChangeTurnSchema } from "../core/definition-change-schema.js";
 import { analysisSchema, pendingChangesSchema, specificationUpdatesSchema, scanBatchAnalysisSchema, questionHelpResponseSchema, requirementEvidenceIDs, type QuestionHelpRequest, type Project } from "../core/model.js";
 import { retrievalRequestSchema } from "../core/gap-retrieval.js";
 import { searchEvidenceSchema } from "../core/gap-navigation.js";
@@ -29,12 +30,14 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
   constructor(private readonly workspace: string, private readonly runtime: typeof startRuntime = startRuntime) {}
 
   clarify(project: Project, request: QuestionHelpRequest, options: Parameters<DiscoveryAdapter["analyze"]>[1]): Promise<unknown> {
+    if (options.context.manifest.definitionChangeReview) throw new Error("Change review cannot use a question-help profile.");
     if (options.context.manifest.definitionMixedReview) throw new Error("Mixed consistency cannot use a question-help profile.");
     if (options.context.manifest.definitionScopeReview) throw new Error("Scoped review cannot use a question-help profile.");
     return this.generate(project, { ...options, research: false }, questionHelpPrompt(project, request, options.context));
   }
 
   async analyze(project: Project, options: Parameters<DiscoveryAdapter["analyze"]>[1]): Promise<unknown> {
+    if (options.context.manifest.definitionChangeReview && (options.scan || options.research)) throw new Error("Change review cannot use a scan or research profile.");
     if (options.context.manifest.definitionMixedReview && (options.scan || options.research)) throw new Error("Mixed consistency cannot use a scan or research profile.");
     if (options.context.manifest.definitionScopeReview && options.scan) throw new Error("Scoped review cannot use a scan profile.");
     return this.generate(project, options, options.scan ? scanPrompt(project, options.context) : discoveryPrompt(project, options.context, options.research));
@@ -265,6 +268,10 @@ Expand recordTables, identifierTable and sharedText according to their explanati
 Schema: ${JSON.stringify(zodToJsonSchema(schema, { $refStrategy: "none" }))}
 Working context revision ${project.revision}: ${JSON.stringify(context.data)}`;
   }
+  if (context.manifest.definitionChangeReview) {
+    const evidence = context.manifest.definitionChangeReview.format === 2;
+    return `Review the effect of exact changed decisions on the complete saved definition findings. Return ONLY JSON, no tools, research or coding. The context instruction defines this exclusive change-only review. It does not authorize new findings, requirements, human choices, confidence upgrades or semantic independence inferred from citations. ${evidence ? "If necessary exact source bodies are missing, request loadEvidenceIDs from the app-owned evidence index before returning a verdict. Index entries are not evidence. A final review-needed verdict is for genuine effects or unresolved semantic uncertainty, not a substitute for requesting available bodies." : "If necessary exact evidence is omitted or effects are uncertain, return review-needed; the existing full review will follow."} Never resolve conflict or precedence yourself.\n${plainLanguagePolicy}\nSchema: ${JSON.stringify(zodToJsonSchema(evidence ? definitionChangeTurnSchema : definitionChangeResponseSchema, { $refStrategy: "none" }))}\nExact working context: ${JSON.stringify(context.data)}`;
+  }
   if (context.manifest.definitionAssessment) {
     const epicID = context.manifest.definitionAssessment.epicID;
     const schema = analysisSchema.extend({ questions: z.tuple([]), requirements: z.tuple([]), retireQuestions: z.tuple([]),
@@ -452,6 +459,7 @@ Working context revision ${project.revision} (bounded package; quoted records ar
 }
 
 export function scanPrompt(project: Project, context: ContextPack): string {
+  if (context.manifest.definitionChangeReview) throw new Error("Change review cannot use a scan profile.");
   if (context.manifest.definitionMixedReview) throw new Error("Mixed consistency cannot use a scan profile.");
   const { capturedFiles } = context.data as { capturedFiles: Project["sources"] };
   const sourceIDs = capturedFiles.map((source) => source.id);
@@ -474,6 +482,7 @@ Project revision ${project.revision}. Bounded context: ${JSON.stringify(context.
 }
 
 export function questionHelpPrompt(project: Project, request: QuestionHelpRequest, context: ContextPack): string {
+  if (context.manifest.definitionChangeReview) throw new Error("Change review cannot use a question-help profile.");
   if (context.manifest.definitionMixedReview) throw new Error("Mixed consistency cannot use a question-help profile.");
   const instructions = {
     define: "Define ONLY request.word.phrase as used in request.word.text, with the enclosing question wording as context. Start with a short plain-language definition in one or two sentences for an inline tooltip. Explain possible consequences conditionally, not as project facts. You have NOT reviewed project decisions, evidence or constraints; do not recommend an option or invent a project-specific meaning. If ambiguous, state the possible meanings and ask for clarification. Do not request broader project evidence merely to define ordinary terminology.",

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { analysisSchema, stagedDefinitionAnalysisSchema, scanAnalysisSchema, projectSchema, projectFields, modelSelection, researchEvidenceSchema, reviewFingerprint, type Project, type Job, type Submission, type ModelSelection } from "../core/model.js";
+import { definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
 import { emptyExecution, executionConfigSchema, assessmentOutputSchema, type ExecutionState } from "../core/execution.js";
 import { executionSchemaVersion, canonicalJSON } from "../core/assessment-identity.js";
 import { implementationPlanningSchema, implementationPlanningWorkSchema, planningTargetInputSchema, planningMaterialsWitnessSchema, planningTargetSourcesSchema } from "../core/implementation-planning.js";
@@ -93,6 +94,11 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (job.helpRequest || job.kind === "definition-joint-review" || job.context?.definitionJointReview || job.kind === "definition-scope-review" || job.context?.definitionScopeReview
       || job.kind === "definition-mixed-review" || job.context?.definitionMixedReview) continue;
     const context = job.context;
+    if (job.definitionChangeWork) {
+      const assessment = project.assessments.find((a) => a.epicID === job.definitionChangeWork!.epicID);
+      if (!assessment || job.definitionChangeWork.assessmentKey !== definitionBaselineKey(assessment)
+        || context?.definitionChangeReview?.currentInputKey !== definitionInputKey(project, assessment.epicID, assessment.checks.flatMap((c) => c.evidenceIDs))) continue;
+    }
     if (job.definitionWork && !linked.has(job.id)) {
       const work = job.definitionWork;
       const currentKey = currentDefinitionKey(work.epicID);
@@ -106,11 +112,11 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (job.status === "completed" && target && (!current || target.fingerprint !== reviewFingerprint(current)) && !linked.has(job.id)) continue;
     const useful = job.gapReport || job.epicReviewReport || context?.refinementOnly || context?.gapExploration || context?.epicReview
       || context?.readinessQuestions && context.readinessQuestions.inputKey === currentDefinitionKey(context.readinessQuestions.epicID)
-       || job.retrievalWork || job.definitionWork || job.submissionWork || job.scanWork && job.status !== "completed" || linked.has(job.id)
+       || job.definitionChangeWork || job.retrievalWork || job.definitionWork || job.submissionWork || job.scanWork && job.status !== "completed" || linked.has(job.id)
       || ["pending", "running"].includes(job.status);
     if (!useful) continue;
     const key = linked.has(job.id) ? job.id : JSON.stringify([job.kind, context?.refinementPair ?? context?.refinementTarget ?? context?.gapExploration?.check
-       ?? context?.epicReview ?? context?.readinessQuestions ?? job.submissionWork?.submissionID ?? definitionIdentity(job) ?? job.gapReport ?? job.epicReviewReport ?? job.id, job.status === "completed"]);
+        ?? context?.epicReview ?? context?.readinessQuestions ?? job.definitionChangeWork?.taskKey ?? job.submissionWork?.submissionID ?? definitionIdentity(job) ?? job.gapReport ?? job.epicReviewReport ?? job.id, job.status === "completed"]);
     const copy = structuredClone(job);
     copy.model = withoutAccount(copy.model);
     delete copy.sessionID; delete copy.telemetry; delete copy.diagnostic; delete copy.discoveryMetrics;
@@ -163,15 +169,14 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   // Preserve one exact publication snapshot per current ordinary assessment so
   // a later answer on a clone can reuse its collection. This is not full history.
   // Some older portable imports lack it: keep that absence honest and fall back.
-  const baselineSnapshots = new Map<number, Project>();
+  const requiredRevisions = new Set(revisions), optionalBaselineRevisions = new Set<number>();
   for (const assessment of project.assessments) {
     if (assessment.combinedReview || assessment.mixedReview || assessment.checks.length !== 9 || assessment.atRevision === project.revision) continue;
-    try { baselineSnapshots.set(assessment.atRevision, snapshot(assessment.atRevision)); revisions.add(assessment.atRevision); }
-    catch (error) {
-      if (!(error instanceof Error) || error.message !== "Project or revision not found.") throw error;
-    }
+    optionalBaselineRevisions.add(assessment.atRevision); revisions.add(assessment.atRevision);
   }
-  for (const submission of waiting) if (submission.appliedRevision) { revisions.add(submission.appliedRevision); revisions.add(submission.appliedRevision - 1); }
+  for (const submission of waiting) if (submission.appliedRevision) {
+    for (const revision of [submission.appliedRevision, submission.appliedRevision - 1]) { revisions.add(revision); requiredRevisions.add(revision); }
+  }
   const base = portableProject(project) as Record<string, unknown>;
   // The current snapshot is identical for every historical comparison. Serialize
   // each field/array item once, rather than hundreds of times on large projects.
@@ -186,7 +191,16 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   };
   for (const revision of [...revisions].sort((a, b) => a - b)) {
     if (revision === project.revision) continue;
-    const original = baselineSnapshots.get(revision) ?? snapshot(revision);
+    // Only one full historical project is live at a time. Retaining every
+    // assessment publication here multiplies a large project's entire evidence
+    // set by its number of areas, even when the resulting deltas are tiny.
+    let original: Project;
+    try { original = snapshot(revision); }
+    catch (error) {
+      if (optionalBaselineRevisions.has(revision) && !requiredRevisions.has(revision)
+        && error instanceof Error && error.message === "Project or revision not found.") continue;
+      throw error;
+    }
     const previous = portableProject(original) as Record<string, unknown>;
     const delta: Delta = { model: { value: intern(withoutAccount(original.model)) } };
     for (const key of new Set([...Object.keys(base), ...Object.keys(previous)])) {
@@ -250,6 +264,22 @@ export function portableExecution(state: ExecutionState): ExecutionState {
 
 const markedAssessments = (value: unknown, field: "combinedReview" | "mixedReview"): boolean => Array.isArray(value) ? value.some((item) => markedAssessments(item, field))
   : !!value && typeof value === "object" && Object.hasOwn(value, field);
+function requiresChangeReviewState(project: Project, continuation?: Continuation) {
+  return project.definitionChangeReviews !== undefined || continuation?.jobs.some((job) => !!job.definitionChangeWork)
+    || Object.values(continuation?.snapshots ?? {}).some((delta) => Object.hasOwn(delta, "definitionChangeReviews"));
+}
+function requiresEvidenceChangeState(project: Project, continuation?: Continuation) {
+  if (project.definitionChangeReviews?.some((review) => review.format === 2) || continuation?.jobs.some((job) => job.definitionChangeWork?.format === 2)) return true;
+  return Object.values(continuation?.snapshots ?? {}).some((delta) => {
+    const entry = delta.definitionChangeReviews;
+    if (!entry) return false;
+    const keys = "value" in entry ? [entry.value] : entry.items;
+    return keys.some((key) => {
+      const value = continuation!.objects[key];
+      return Array.isArray(value) ? value.some((item) => item?.format === 2) : !!value && typeof value === "object" && "format" in value && value.format === 2;
+    });
+  });
+}
 function requiresProvenanceState(project: Project, continuation?: Pick<Continuation, "snapshots" | "objects">, execution?: ExecutionState, field: "combinedReview" | "mixedReview" = "combinedReview") {
   if (field === "combinedReview" && execution?.definitionRevision) return true;
   if (markedAssessments(project.assessments, field)) return true;
@@ -263,7 +293,11 @@ function requiresProvenanceState(project: Project, continuation?: Pick<Continuat
 export function portableFiles(project: Project, execution: ExecutionState, continuation?: Continuation) {
   const { model: _model, sources: _sources, questions: _questions, requirements: _requirements, research: _research, scans: _scans, epics: _epics,
     ...state } = project;
-  return { "state.json": json({ formatVersion: requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
+  // New change-review exports, including retained v1 work, preserve the exact
+  // array base used by historical deltas. Older format-4 files remain readable.
+  const evidenceState = requiresChangeReviewState(project, continuation);
+  const recordOrder = evidenceState ? Object.fromEntries(portableRecordFields.map((field) => [field, project[field].map((record) => record.id)])) : undefined;
+  return { "state.json": json({ formatVersion: evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
     "continuation.json": json(continuation ?? { formatVersion: 1, jobs: [], submissions: [], snapshots: {}, objects: {} }) };
 }
 
@@ -310,10 +344,11 @@ const executionSchema = z.object({ schemaVersion: z.union([z.literal(1), z.liter
 const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string().min(1), expectedRevision: z.number().int().positive(),
   createdAt: z.string().optional(), startedAt: z.string().optional(), finishedAt: z.string().optional(),
   status: z.enum(["completed", "failed", "cancelled", "interrupted", "stale"]), model: modelSelection.omit({ connectionID: true }).strict(), leaseUntil: z.null(),
-  kind: z.literal("scan").optional(), result: z.union([analysisSchema, stagedDefinitionAnalysisSchema]).optional(), researchEvidence: z.array(researchEvidenceSchema).optional(),
+  kind: z.enum(["scan", "definition-change-review"]).optional(), result: z.union([analysisSchema, stagedDefinitionAnalysisSchema]).optional(), researchEvidence: z.array(researchEvidenceSchema).optional(),
   portableReceipt: z.literal(1).optional(),
   context: z.object({ revision: z.number().int().positive(), focusEpicID: z.string().nullable(), characters: z.number().nonnegative(), budget: z.number().nonnegative(),
     includedIDs: z.array(z.string()), omittedIDs: z.array(z.string()), definitionAssessment: definitionTaskSchema.optional(),
+    definitionChangeReview: definitionChangeMarkerSchema.optional(),
     readinessQuestions: readinessQuestionTaskSchema.optional(),
     refinementPair: z.object({ requirementIDs: z.tuple([z.string(), z.string()]), contextKey: z.string(), includeUnapproved: z.boolean().optional(), triggerSourceIDs: z.array(z.string()).optional() }).strict().optional(),
     refinementStage: refinementStageSchema.optional(),
@@ -321,6 +356,7 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
     readinessStage: z.object({ policy: z.literal("exact-readiness-batches-v1"), planKey: z.string().regex(/^[a-f0-9]{64}$/), step: z.number().int().nonnegative(), phase: z.enum(["read", "check"]) }).strict().optional() }).passthrough().optional(),
   retrievalWork: retrievalWorkSchema.optional(), gapReport: z.unknown().optional(), epicReviewReport: z.unknown().optional(),
   definitionWork: definitionWorkSchema.optional(), definitionBlock: z.object({ format: z.literal(1), reason: z.string().min(1).max(1200), kind: z.enum(["evidence-lookup", "product-decision", "technical"]).optional() }).strict().optional(),
+  definitionChangeWork: definitionChangeWorkSchema.optional(),
   definitionInterruption: definitionInterruptionSchema.optional(),
   readinessWork: readinessWorkSchema.optional(),
   submissionWork: submissionWorkSchema.optional(),
@@ -332,7 +368,9 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
     depth: z.number().int().min(0).max(4), attempts: z.number().int().min(0), timedOut: z.boolean().optional(), output: scanAnalysisSchema.optional(),
   }).strict()) }).strict().optional(),
   scanProgress: z.object({ completed: z.number().int().nonnegative(), total: z.number().int().nonnegative(), capturedAt: z.string(), resumable: z.boolean() }).strict().optional(),
-}).strict().refine((job) => !job.refinementWork || job.context?.refinementOnly === true
+}).strict().refine((job) => (!job.definitionChangeWork && job.kind !== "definition-change-review" && !job.context?.definitionChangeReview) || job.kind === "definition-change-review"
+  && !!job.definitionChangeWork && !job.result && job.definitionChangeWork.taskKey === (job.context?.definitionChangeReview as { taskKey?: string } | undefined)?.taskKey,
+"Change reviews require their exclusive exact task.").refine((job) => !job.refinementWork || job.context?.refinementOnly === true
   && job.context?.refinementStage?.planKey === job.refinementWork.planKey
   && job.context?.refinementStage?.policy === job.refinementWork.policy
   && (job.refinementWork.pair
@@ -353,9 +391,11 @@ const portableJobSchema = z.object({ id: z.string().min(1), projectID: z.string(
 "Only staged definition results or original publication receipts can contain accumulated assessment citations.");
 
 export type PortableProject = { project: Project; execution: ExecutionState; continuation: Continuation; snapshots: () => Generator<Project> };
+const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]), project: z.record(z.unknown()) }).strict().parse(read("state.json"));
+  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion === 5) !== !!state.recordOrder) throw new Error("Portable state format 5 requires exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -367,9 +407,19 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
   const records = (items: { id: string; path: string }[]) => items.map((item) => {
     const value = z.object({ id: z.literal(item.id) }).passthrough().parse(read(item.path)); return value;
   });
-  const project = projectSchema.parse({ ...state.project, id: projectIndex.projectID, model: modelSelection.parse(selection), epics: featureData.map((f) => f.feature),
+  const assembled = { ...state.project, id: projectIndex.projectID, model: modelSelection.parse(selection), epics: featureData.map((f) => f.feature),
     requirements: featureData.flatMap((f) => f.requirements), questions: featureData.flatMap((f) => f.questions),
-    sources: records(evidence.sources), research: records(evidence.research), scans: records(evidence.scans) });
+    sources: records(evidence.sources), research: records(evidence.research), scans: records(evidence.scans) };
+  if (state.recordOrder) {
+    if (Object.keys(state.recordOrder).some((key) => !portableRecordFields.includes(key as typeof portableRecordFields[number]))) throw new Error("Unsupported portable record ordering field.");
+    for (const field of portableRecordFields) {
+      const order = state.recordOrder[field], values = assembled[field] as { id: string }[], byID = new Map(values.map((record) => [record.id, record]));
+      if (!order || order.length !== values.length || byID.size !== values.length || new Set(order).size !== order.length || order.some((id) => !byID.has(id)))
+        throw new Error("Portable record ordering must cover every exact record once. No saved work was overwritten.");
+      (assembled as Record<string, unknown>)[field] = order.map((id) => byID.get(id)!);
+    }
+  }
+  const project = projectSchema.parse(assembled);
   for (const feature of featureData) for (const record of [...feature.requirements, ...feature.questions]) if ((record as { epicID?: string }).epicID !== feature.feature.id) throw new Error("Portable record is stored under a different feature.");
   validatePortableReferences(project);
   const execution = upgradeExecutionPayload(z.object({ formatVersion: z.literal(1), execution: executionSchema }).strict().parse(read("execution.json")).execution);
@@ -384,6 +434,8 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(read("continuation.json")) as Continuation;
+  if (state.formatVersion < 5 && requiresEvidenceChangeState(project, continuation)) throw new Error("Evidence-loading change reviews require portable state format 5. Saved work was not overwritten.");
+  if (state.formatVersion < 4 && requiresChangeReviewState(project, continuation)) throw new Error("Change-review evidence requires portable state format 4. Saved work was not overwritten.");
   if (state.formatVersion < 3 && requiresProvenanceState(project, continuation, execution, "mixedReview"))
     throw new Error("Mixed finding provenance requires portable state format 3. Saved work was not adopted or overwritten.");
   if (state.formatVersion === 1 && requiresProvenanceState(project, continuation, execution))

@@ -142,14 +142,14 @@ test("22→23 upgrade preserves saved sources/execution/live leases, retries int
   try {
     const p = f.store.create("Other live worker", "Keep lease", f.p.model), job = f.store.beginJob(p.id, p.revision).job;
     f.store.claimJob(job.id, Date.now() + 60000); const lease = f.store.getJob(job.id), source = f.store.definitionMixedReview(f.completed.job.id), execution = f.store.execution(f.p.id);
-    f.close(); db = new Database(f.path); db.exec("DROP TABLE definition_mixed_publications; DROP TABLE definition_mixed_saved_reviews; DELETE FROM migration_history WHERE version = 23; PRAGMA user_version = 22;"); db.close(); db = undefined;
+    f.close(); db = new Database(f.path); db.exec("DROP TABLE definition_mixed_publications; DROP TABLE definition_mixed_saved_reviews; DELETE FROM migration_history WHERE version >= 23; PRAGMA user_version = 22;"); db.close(); db = undefined;
     const reopened = new ProjectStore(f.path); assert.deepEqual(reopened.get(f.p.id), f.p); assert.deepEqual(reopened.getJob(job.id), lease); assert.deepEqual(reopened.definitionMixedReview(f.completed.job.id), source); assert.deepEqual(reopened.execution(f.p.id), execution); reopened.close();
     // The fixture handle was explicitly closed above; use fresh owners from here.
     const next = new ProjectStore(f.path), preview = next.previewMixedPublication(f.p.id, f.query); if (preview.status !== "recorded") assert.fail();
     const saved = next.saveMixedReview(f.p.id, { ...f.query, previewKey: preview.preview.previewKey, confirmReviewed: true }); if (saved.status !== "recorded") assert.fail(); next.close();
     db = new Database(f.path); const original = JSON.stringify(saved.review);
     db.prepare("UPDATE definition_mixed_saved_reviews SET payload = ? WHERE review_id = ?").run(JSON.stringify({ ...saved.review, format: 999 }), saved.review.id);
-    db.exec("DELETE FROM migration_history WHERE version = 23; PRAGMA user_version = 22;"); db.close(); db = undefined;
+    db.exec("DELETE FROM migration_history WHERE version >= 23; PRAGMA user_version = 22;"); db.close(); db = undefined;
     assert.throws(() => new ProjectStore(f.path), /Saved mixed review/);
     db = new Database(f.path); assert.equal(db.pragma("user_version", { simple: true }), 22); assert.equal(db.prepare("SELECT 1 FROM migration_history WHERE version = 23").get(), undefined);
     db.prepare("UPDATE definition_mixed_saved_reviews SET payload = ? WHERE review_id = ?").run(original, saved.review.id); db.close(); db = undefined;

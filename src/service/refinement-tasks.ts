@@ -37,7 +37,7 @@ export function refinementContextKey(project: Project, target: Project["requirem
 
 /** Legacy hashes cannot be projected. Verify the original immutable snapshot
  * before comparing new scoped identities; retain the original job/key verbatim. */
-export function refinementCheckCurrent(project: Project, target: Project["requirements"][number], job: Job, original: () => Project): boolean {
+export function refinementCheckCurrent(project: Project, target: Project["requirements"][number], job: { context?: Pick<NonNullable<Job["context"]>, "refinementTarget"> }, original: () => Project): boolean {
   const check = job.context?.refinementTarget;
   if (!check?.contextKey || check.requirementID !== target.id || check.fingerprint !== reviewFingerprint(target)) return false;
   if (check.contextKey === refinementContextKey(project, target) || check.contextKey === legacyRefinementContextKey(project, target)) return true;

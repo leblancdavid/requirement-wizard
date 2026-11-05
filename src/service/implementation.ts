@@ -14,12 +14,11 @@ import { directoryKey } from "../storage/workspace.js";
 import { assessmentPrompt, assessmentContextFingerprint, checkExecutionContext, executionContextPolicy, ExecutionContextError, requirementTaskContext, type ExecutionContextManifest } from "../core/execution-context.js";
 import { assessmentSkill } from "../core/execution-skills.js";
 import { assessmentCompatibility } from "../core/assessment-identity.js";
-import { planningConfigFingerprint, planningCurrent, planningAncestryLimit, planningWorkDepth, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanning } from "../core/implementation-planning.js";
+import { planningConfigFingerprint, planningCurrent, planningAncestryLimit, planningWorkDepth, reviewedPlanningConfig, suggestedPlanningOrder, validateImplementationPlanning, type ImplementationPlanning, type PlanningTargetSource } from "../core/implementation-planning.js";
 import { PlanningContextOverflow } from "./planning-context.js";
 import { runImplementationStages, replayImplementationStages, planImplementationFollowup, planImplementationStages, planningStageMaterials, planningStageTotal, PlanningBudgetPause } from "./planning-stages.js";
 import { planningTargetInput, planningReuseKey } from "./planning-reuse.js";
 import { capturePlanningSources } from "./planning-sources.js";
-import type { PlanningTargetSource } from "../core/implementation-planning.js";
 import { implementationRevisionMatches } from "../core/implementation-revisions.js";
 
 const codeResult = z.object({ outcome: z.enum(["complete", "blocked"]), summary: z.string().min(1).max(12000) }).strict();
@@ -134,13 +133,14 @@ export class ImplementationService {
     const state = this.store.execution(id), project = this.store.get(id), binding = this.store.workspace(id)!;
     const previous = state.planning;
     const resumable = previous && ["failed", "interrupted", "generating"].includes(previous.status) && planningCurrent(project, state, binding.bindingID);
+    const legacyPackages = resumable ? previous.output?.packages.filter((p) => !sources[p.requirementID]) : undefined;
     if (state.planning) (state.planningHistory ??= []).push(structuredClone(state.planning));
     const plan: ImplementationPlanning = state.planning = { format: 2, id: randomUUID(), revision, bindingID: binding.bindingID!, createdAt: new Date().toISOString(),
       status: "generating", configFingerprint: planningConfigFingerprint(state),
       sessions: resumable ? [...previous.sessions ?? []] : [], pendingSources: sources,
       // Legacy same-revision work without receipts keeps its original continuation
       // path; never retrofit an input receipt onto completed historical work.
-      output: resumable ? { ...previous.output!, packages: previous.output?.packages.filter((p) => !sources[p.requirementID]) ?? [], summary: previous.output?.summary ?? "Retained packages" } : undefined,
+      output: legacyPackages?.length ? { summary: previous!.output!.summary, packages: structuredClone(legacyPackages) } : undefined,
       stageWork: resumable ? Object.fromEntries(Object.entries(previous.stageWork ?? {}).filter(([id]) => !sources[id])) : undefined,
       targetInputs: resumable ? Object.fromEntries(Object.entries(previous.targetInputs ?? {}).filter(([id]) => !sources[id])) : undefined,
       targetMaterials: resumable ? Object.fromEntries(Object.entries(previous.targetMaterials ?? {}).filter(([id]) => !sources[id])) : undefined,
@@ -168,12 +168,13 @@ export class ImplementationService {
         const retained = plan.pendingSources?.[r.id], priorInput = retained?.input;
         const legacyWork = !retained && !!plan.stageWork?.[r.id] && !plan.targetInputs?.[r.id];
         const prepared = planningTargetInput(project, state, r.id, !!plan.stageWork?.[r.id] || priorInput?.mode === "staged");
+        let staged = plan.stageWork?.[r.id], materials = plan.targetMaterials?.[r.id];
         if (priorInput && priorInput.mode === prepared.mode && priorInput.inputKey === prepared.inputKey) {
           const stages = retained?.mode === "staged" ? retained.work : undefined;
-          if (prepared.mode === "staged" && stages) {
-            replayImplementationStages(project, retained!.mode === "staged" ? retained!.materials as ReturnType<typeof planningStageMaterials> : prepared.materials, stages);
-            (plan.stageWork ??= {})[r.id] = structuredClone(stages);
-            (plan.targetMaterials ??= {})[r.id] = structuredClone(retained!.mode === "staged" ? retained!.materials : prepared.materials);
+          if (prepared.mode === "staged" && stages && retained?.mode === "staged") {
+            replayImplementationStages(project, retained.materials as ReturnType<typeof planningStageMaterials>, stages);
+            staged = structuredClone(stages);
+            materials = structuredClone(retained.materials);
           }
           const savedPackage = retained?.package;
           if (savedPackage && priorInput.packageKey !== planningReuseKey(savedPackage))
@@ -188,6 +189,10 @@ export class ImplementationService {
               : new Set([r.id, ...prepared.materials.records.filter((record) => record.field === "guardrails" || record.field === "supportingRequirements").map((record) => record.record.id)]);
             if (output.packages[0]!.prerequisites.some((dependency) => !allowedRequirements.has(dependency.requirementID)))
               throw new Error("Saved package references omitted behavior. Original planning history was retained.");
+            if (staged && materials) {
+              (plan.stageWork ??= {})[r.id] = staged;
+              (plan.targetMaterials ??= {})[r.id] = materials;
+            }
             plan.output ??= { summary: "Exact-input packages retained; review dependencies and order before coding.", packages: [] };
             plan.output.packages.push(...output.packages);
             (plan.targetInputs ??= {})[r.id] = structuredClone(priorInput);
@@ -199,19 +204,22 @@ export class ImplementationService {
           const source = retained?.mode === "staged" ? retained.work : undefined;
           if (source && planningWorkDepth(source) >= planningAncestryLimit) ancestryRestart = true;
           if (source && retained?.mode === "staged") {
-              const followup = planImplementationFollowup(project, prepared.materials, retained.materials as ReturnType<typeof planningStageMaterials>,
-                source, retained.sourcePlanID, retained.sourceRevision, priorInput.inputKey,
-                { createdAt: retained.sourceCreatedAt, finishedAt: retained.sourceFinishedAt }, priorInput);
-              if (followup) (plan.stageWork ??= {})[r.id] = followup;
+            const followup = planImplementationFollowup(project, prepared.materials, retained.materials as ReturnType<typeof planningStageMaterials>,
+              source, retained.sourcePlanID, retained.sourceRevision, priorInput.inputKey,
+              { createdAt: retained.sourceCreatedAt, finishedAt: retained.sourceFinishedAt }, priorInput);
+            if (followup) staged = followup;
           }
         }
-        if (!legacyWork) (plan.targetInputs ??= {})[r.id] = priorInput && priorInput.inputKey === prepared.inputKey && plan.stageWork?.[r.id]
+        const input = priorInput && priorInput.inputKey === prepared.inputKey && staged
           ? structuredClone(priorInput) : { format: 1, policy: "exact-planning-inputs-v1", mode: prepared.mode,
-             inputKey: prepared.inputKey, originPlanID: plan.id, originRevision: revision, originPlanCreatedAt: plan.createdAt };
+              inputKey: prepared.inputKey, originPlanID: plan.id, originRevision: revision, originPlanCreatedAt: plan.createdAt } as const;
         if (prepared.mode === "staged") {
-          (plan.targetMaterials ??= {})[r.id] ??= structuredClone(prepared.materials);
-          (plan.stageWork ??= {})[r.id] ??= planImplementationStages(prepared.materials);
+          materials ??= structuredClone(prepared.materials);
+          staged ??= planImplementationStages(prepared.materials);
+          (plan.targetMaterials ??= {})[r.id] = materials;
+          (plan.stageWork ??= {})[r.id] = staged;
         }
+        if (!legacyWork) (plan.targetInputs ??= {})[r.id] = input;
         // Attach the complete current packet and consume its source in one owned
         // save. Preparation errors above leave the pending source intact.
         delete plan.pendingSources![r.id];

@@ -1,5 +1,40 @@
 # Browser workspace, epics, and estimated completeness
 
+## Resumable source-backed change checks (2026-11-04)
+
+Change checks can request exact missing original evidence through app-owned lookups
+before the nine-finding verdict. The queue shows accepted lookup count separately
+from unfinished request attempts; neither is a completion claim or provider billing
+total. Pause/reload and explicit Continue retain loaded whole sources and current
+question/answer units without reissuing accepted lookups. A validated unaffected
+verdict retains original findings/date; actual effects or uncertainty still need
+review. A global answer can therefore initially show pending checks in many areas.
+Oversized joint evidence pauses with its lookup saved, never silently truncated.
+
+The fixture browser checks source request/body delivery, visible saved lookup,
+owned Pause during the later request, reload with no automatic inference, charged
+retry without repeating the lookup, retained original findings, current-after-verdict
+status, no full unaffected-area reassessment, and mobile layout. No live model calls
+or real-project semantic effectiveness are qualified. See the
+[upgrade/verification ledger](migrations.md#source-backed-resumable-change-checks-2026-11-04).
+
+## Decision change-impact checks (2026-11-04)
+
+Continue specification now checks eligible new answers against saved findings
+before deeper review, under its existing permission/usage limits. Processing & queue
+shows **Checking the effect of your new decisions**, saved pending reviews, and
+**Current—changes checked** for unaffected areas. Original findings and dates are
+retained; affected/uncertain areas still require full evidence review. See
+[coverage and eligibility](definition-coverage.md#check-decision-impact-before-repeating-completed-reviews-2026-11-04).
+
+`npx tsx src/web/definition-change-browser-check.ts` passed with a deterministic
+adapter: explicit Continue, Pause cancellation, charged retry, unaffected reuse,
+reload without inference, and mobile overflow checks. It runs as `posttest:browser`.
+Screenshot: `.reqwizit-state/browser-definition-change-mobile.png` (generated).
+This does not establish live semantic accuracy or desktop release qualification.
+The full `npm run test:browser` suite (including this postcheck) and the separate
+coordinated-workflow browser runner also passed on the final implementation.
+
 ## Waiting questions and retained work (2026-11-03)
 
 **Processing & queue → Saved work and waiting decisions** separates waiting reviews

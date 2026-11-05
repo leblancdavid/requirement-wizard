@@ -25,7 +25,7 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
     continuous: z.object({ format: z.literal(1) }).strict().optional(),
     remainingMs: z.number().int().min(0).max(workflowLimits.durationMs), submissionIDs: z.array(z.string()).max(10000) }).strict()
     .refine((grant) => !!grant.continuous || grant.used <= workflowLimits.requests, "Expanded workflow spending requires continuous consent.").optional(),
-  current: z.object({ kind: z.enum(["input", "interpret", "refine", "conflicts", "discover", "definition", "readiness-questions"]),
+  current: z.object({ kind: z.enum(["input", "interpret", "refine", "conflicts", "discover", "definition", "definition-change", "readiness-questions"]),
     key, target: z.string().optional(), jobIDs: z.array(z.string()).max(200), completed: z.boolean().optional() }).strict().optional(),
   discovery: z.object({ inputKey: key, jobID: z.string() }).strict().optional(),
   readiness: workflowReadinessSchema.optional(),
@@ -47,7 +47,7 @@ export function workflowInputKey(project: Project) {
 }
 export function workflowWakeKey(project: Project, submissions: Submission[]) {
   return hash([workflowInputKey(project), project.assessments, submissions.filter((s) => !s.archivedAt)
-    .map((s) => [s.id, s.status, s.applied, s.conflict, s.jobID])]);
+    .map((s) => [s.id, s.status, s.applied, s.conflict, s.jobID]), ...(project.definitionChangeReviews ? [project.definitionChangeReviews] : [])]);
 }
 export type WorkflowDecision = { kind: "question" | "requirement" | "refinement" | "organization" | "input"; id: string; title: string };
 export function workflowDecisions(project: Project, submissions: Submission[]): WorkflowDecision[] {

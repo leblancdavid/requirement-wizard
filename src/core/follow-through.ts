@@ -12,11 +12,13 @@ type DefinitionArea = ReturnType<typeof coverage>["epics"][number];
 
 /** Read-only pending-work projection from durable evidence, not another queue or
  * permission grant. Never use these labels in place of exact publication keys. */
-export function definitionFollowThrough(areas: DefinitionArea[]) {
+export function definitionFollowThrough(areas: DefinitionArea[]): { epicID: string; state: "not-assessed" | "outdated" | "current"; label?: string; reason: string }[] {
   return areas.map((area) => ({ epicID: area.epicID,
     state: !area.assessed ? "not-assessed" as const : area.stale ? "outdated" as const : "current" as const,
+    label: !area.assessed ? "Not assessed" : area.stale ? area.changeReview?.outcome === "review-needed" ? "Evidence review needed" : "Saved review—change check pending"
+      : area.changeReview ? "Current—changes checked" : "Current",
     reason: !area.assessed ? "This area has no saved definition review."
-      : area.stale ? "Relevant evidence changed, or the original evidence cannot be matched. Previous findings are retained; updating them requires a review."
+      : area.stale ? "Previous findings are retained, with their original review date. Continue specification checks the effect of new decisions first when a bounded exact comparison is available. Affected or uncertain findings need deeper evidence review."
         : "The saved review matches current evidence. Its findings may still need product decisions.",
   }));
 }

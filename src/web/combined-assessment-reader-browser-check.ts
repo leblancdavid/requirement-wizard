@@ -65,7 +65,8 @@ try {
   await expect(first).toContainText("Original finding 1"); await expect(first).toContainText("wrapper date does not replace this origin");
   assert.deepEqual(store.get(p.id), before); assert.deepEqual(store.jobs(p.id), jobs); assert.equal(calls, 0);
   p = store.note(p.id, p.revision, "A changed decision outside Orders", "inbox");
-  await expect(assessment).toContainText("Project information has changed since this check");
+  await expect(assessment).toContainText("Saved findings are retained");
+  await expect(assessment).toContainText("Affected or uncertain findings may need deeper evidence review");
   await expect(first).toContainText(metadata.origins[0]!.publishedAt); assert.equal(calls, 0);
   await page.setViewportSize({ width: 390, height: 844 }); await first.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);

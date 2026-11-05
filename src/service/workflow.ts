@@ -17,6 +17,7 @@ import { readinessQuestionTask } from "../core/readiness-questions.js";
 import { dimensionLabels } from "../core/epics.js";
 import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } from "../core/follow-through.js";
 import { planWorkflowSchedule } from "../core/workflow-schedule.js";
+import type { WorkflowJobReceipt } from "../core/workflow-receipts.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Run = { controller: AbortController; promise: Promise<void> };
@@ -38,7 +39,7 @@ export class ProjectWorkflow {
     // Never certify readiness from a revision-number-only cache.
     return this.store.get(id);
   }
-  private requirementProof(project: Project, target: Project["requirements"][number], jobs: Job[]): RequirementProof | undefined {
+   private requirementProof(project: Project, target: Project["requirements"][number], jobs: WorkflowJobReceipt[]): RequirementProof | undefined {
     // Do not turn every accepted requirement into another wording-cleanup chore.
     // Consume existing human/faithful-input authority without inventing approval.
     const superseded = new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
@@ -65,12 +66,15 @@ export class ProjectWorkflow {
     const guided = this.store.processingPolicy(id).mode === "guided", enabled = state.enabled || guided;
     const suspended = enabled && !this.armed.has(id);
     const changed = state.phase === "ready-to-plan" && !readiness.specificationChecked;
+    const changeJob = state.current?.kind === "definition-change" ? state.current.jobIDs.at(-1) : undefined;
+    const changeEvidence = changeJob ? this.store.definitionChangeProgress(id, changeJob) : undefined;
     const remainingMs = state.grant && Math.max(0, state.grant.remainingMs - (state.owner && state.leaseUntil
       ? Math.max(0, Date.now() - (state.leaseUntil - 360000)) : 0));
     return { version: state.settingsVersion, enabled, paused: state.paused, suspended,
       phase: !state.enabled && state.phase === "idle" ? "idle" : suspended ? "paused" : state.phase === "blocked" ? "blocked" : state.paused ? "paused" : readiness.readyToImplement ? "ready-to-implement" : changed ? "working" : state.phase,
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
-      current: state.current && { kind: state.current.kind, target: state.current.target },
+       current: state.current && { kind: state.current.kind, target: state.current.target },
+       ...(changeEvidence ? { changeEvidence } : {}),
       grant: state.grant && { used: state.grant.used, remainingMs: remainingMs!, continuous: !!state.grant.continuous }, limits: workflowLimits,
        decisions, readiness, active, outcome,
       definitionReviews: definitions.map((area) => ({ ...area,
@@ -168,7 +172,8 @@ export class ProjectWorkflow {
         controller.signal.throwIfAborted(); const state = owned(), remaining = workflowLimits.requests - state.grant!.used;
         // Ordinary retrieval can require three calls. Reserve its upper bound;
         // staging uses the actual remaining allowance. Unused slots are visible.
-        if (state.paused || !state.enabled || !continuous && (remaining < 3 || Date.now() >= deadline)) throw new WorkflowBudgetPause("Workflow burst limit reached. Continue specification for another bounded allowance; completed calls are retained.");
+        const reserve = state.current?.kind === "definition-change" ? 1 : 3;
+        if (state.paused || !state.enabled || !continuous && (remaining < reserve || Date.now() >= deadline)) throw new WorkflowBudgetPause("Workflow burst limit reached. Continue specification for another bounded allowance; completed calls are retained.");
         return continuous ? { requests: 32, durationMs: 900000 } : { requests: remaining, durationMs: Math.max(1, deadline - Date.now()) };
       },
       beforeRequest: (jobID) => {
@@ -181,12 +186,12 @@ export class ProjectWorkflow {
       } } });
     const queue = new DiscoveryQueue(service, { manualOnly: true, owner });
     const abort = () => queue.stop(id); controller.signal.addEventListener("abort", abort, { once: true });
-    const record = (kind: NonNullable<WorkflowState["current"]>["kind"], project: Project, target?: string) => {
-      const state = owned(), key = digest([kind, workflowInputKey(project), target]);
+    const record = (kind: NonNullable<WorkflowState["current"]>["kind"], project: Project, target?: string, taskIdentity?: string) => {
+      const state = owned(), key = digest(taskIdentity ? [kind, workflowInputKey(project), target, taskIdentity] : [kind, workflowInputKey(project), target]);
       if (kind !== "discover" && state.current?.key === key && state.current.completed) throw new Error("This completed check did not advance the workflow. Its original result is retained; no automatic repeated model call.");
       state.current = state.current?.key === key && !state.current.completed ? state.current : { kind, key, target, jobIDs: [] };
       const name = project.requirements.find((r) => r.id === target)?.statement ?? project.epics.find((e) => e.id === target)?.title;
-      const label = kind === "readiness-questions" ? `clarifying ${dimensionLabels[target!.split(":").at(-1) as keyof typeof dimensionLabels] ?? "definition blockers"}` : kind;
+      const label = kind === "definition-change" ? "checking the effect of new decisions" : kind === "readiness-questions" ? `clarifying ${dimensionLabels[target!.split(":").at(-1) as keyof typeof dimensionLabels] ?? "definition blockers"}` : kind;
       state.phase = "working"; state.message = `Coordinating ${label}${name ? `: ${name}` : ""}. Completed checks are saved.`;
       this.store.saveWorkflow(id, state);
     };
@@ -228,9 +233,9 @@ export class ProjectWorkflow {
           const stale = project.refinements.find((p) => p.status === "pending" && refinementIsStale(project, p));
           if (stale) {
             record("refine", project, stale.id); queue.resume(id, { refinementOnly: true, refreshProposalID: stale.id, research: false }); await queue.wait(id);
-            const last = this.store.jobs(id).at(-1)!; if (!check(last)) return;
+            const last = this.store.jobs(id, 1).at(-1)!; if (!check(last)) return;
           } else {
-            const requirements = workflowRequirements(project), jobs = this.store.jobs(id);
+            const requirements = workflowRequirements(project), jobs = this.store.workflowJobReceipts(id);
             if (!requirements.length) {
               record("interpret", project); const job = await service.analyze(id, project.revision, { signal: controller.signal, research: false }); if (!check(job)) return;
             } else {
@@ -245,15 +250,25 @@ export class ProjectWorkflow {
                 const audit = await auditApprovedRequirements(project, { signal: controller.signal,
                   candidateFilter: (finding) => resolutionPairEligible(project, [finding.leftID, finding.rightID], jobs) });
                 const pair = audit.findings[0];
-                const outdatedArea = !pair ? definitionFollowThrough(workflowAreas(project)).find((area) => area.state === "outdated") : undefined;
+                const outdatedAreas = !pair ? definitionFollowThrough(workflowAreas(project)).filter((area) => area.state === "outdated") : [];
+                // Finish eligible change checks before starting a potentially long
+                // full review. A large/uncertain area must not strand independent
+                // impact results behind its historical evidence replay.
+                const outdatedArea = outdatedAreas.find((area) => !!this.store.definitionChangeTask(id, area.epicID)) ?? outdatedAreas[0];
                 if (pair) {
                   record("conflicts", project, `${pair.leftID}:${pair.rightID}`);
                   if (!check(await service.analyze(id, project.revision, { refinementOnly: true, refinementPair: [pair.leftID, pair.rightID], research: false, signal: controller.signal }))) return;
                 } else if (outdatedArea) {
                   // Repair existing conclusions before broadening exploration. Missing
                   // baseline reviews retain the original discovery-first ordering.
-                  record("definition", project, outdatedArea.epicID);
-                  if (!check(await service.analyze(id, project.revision, { definitionEpicID: outdatedArea.epicID, research: false, signal: controller.signal }))) return;
+                  const changeTask = this.store.definitionChangeTask(id, outdatedArea.epicID);
+                  if (changeTask) {
+                    record("definition-change", project, outdatedArea.epicID, changeTask.taskKey);
+                    if (!check(await service.reviewDefinitionChanges(id, project.revision, outdatedArea.epicID, controller.signal))) return;
+                  } else {
+                    record("definition", project, outdatedArea.epicID);
+                    if (!check(await service.analyze(id, project.revision, { definitionEpicID: outdatedArea.epicID, research: false, signal: controller.signal }))) return;
+                  }
                 } else if (state.discovery?.inputKey !== workflowInputKey(project)) {
                   record("discover", project);
                   const job = await service.analyze(id, project.revision, { gapMode: "epic", signal: controller.signal, research: false }); if (!check(job)) return;
@@ -285,7 +300,7 @@ export class ProjectWorkflow {
                       if (!job.result?.questions.length) { stop("blocked", `Readiness clarification for ${target.check.label}: ${job.result?.summary ?? target.check.explanation} No new product question was established; review the evidence in Overall progress.`, true); return; }
                       stop("needs-decision", `Questions about ${target.check.label} need your decision. Answer them in the decision inbox; affected definition checks will refresh within the remaining allowance.`); return;
                     }
-                    const currentJobs = this.store.jobs(id), proof = requirements.map((r) => this.requirementProof(project, r, currentJobs));
+                     const currentJobs = this.store.workflowJobReceipts(id), proof = requirements.map((r) => this.requirementProof(project, r, currentJobs));
                     if (proof.some((p) => !p)) { stop("blocked", "A current requirement lacks decision provenance or a reusable check; no readiness claim was published.", true); return; }
                     const latest = owned(); latest.readiness = { format: 1, policy: "coordinated-checks-v1", inputKey: workflowInputKey(project), revision: project.revision,
                       requirementIDs: requirements.map((r) => r.id), requirementProofs: proof.map((p) => p!), gapJobID: latest.discovery!.jobID };

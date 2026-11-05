@@ -9,7 +9,8 @@ export function DefinitionAssessment({ area, project }: { area: ReturnType<typeo
   const saved = project.assessments.find((a) => a.epicID === area.epicID);
   return <details className="definition-assessment">
     <summary>See what is defined and what needs attention</summary>
-    <p>{area.stale ? "Project information has changed since this check. These earlier findings may no longer apply." : "This check uses the latest relevant project information. It may still miss details."}</p>
+    <p>{area.stale ? "Saved findings are retained. New information needs a change-impact check; it does not erase this completed review. Affected or uncertain findings may need deeper evidence review." : "This check uses the latest relevant project information. It may still miss details."}</p>
+    {area.changeReview && <p>Original findings: revision {area.changeReview.originalRevision}. Change-impact check: {area.changeReview.reviewedAt}. {area.changeReview.outcome === "unaffected" ? "Original findings retained unchanged; confidence and completeness were not upgraded." : "Deeper evidence review is required."}</p>}
     {saved && <details><summary>Version details</summary><p>Checked at project version {saved.atRevision}; current version {project.revision}.</p></details>}
     {saved?.combinedReview && <p>Combined assessment wrapper: version {saved.atRevision}. Each finding below retains its own original review and date. Freshness also uses a conservative project-wide evidence guard; metadata here is not independent authentication, narrower independence, approval or readiness.</p>}
     {saved?.mixedReview && <section aria-label="Mixed finding provenance"><p>Mixed-source assessment wrapper: version {saved.atRevision}. Original published findings and scoped observations keep separate dates and identities. Confidence is conservatively low. Metadata is not independent authentication, product approval, narrower independence or implementation readiness.</p>

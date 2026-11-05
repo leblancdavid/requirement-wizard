@@ -11,7 +11,7 @@ export type ProgressScore = { percent: number; status: string; detail: string; l
 
 /** Missing or old coverage is not a finding that no definition work was done. */
 export function progressLabel(score: ProgressScore): string {
-  return score.assessmentState === "unassessed" ? "Not assessed" : score.assessmentState === "outdated" ? "Assessment outdated" : score.assessmentState === "incomplete" ? "Assessment incomplete" : `${score.percent}%`;
+  return score.assessmentState === "unassessed" ? "Not assessed" : score.assessmentState === "outdated" ? "Change check needed" : score.assessmentState === "incomplete" ? "Assessment incomplete" : `${score.percent}%`;
 }
 
 /** Presentation only: old findings remain evidence, not claims about current gaps. */
@@ -23,7 +23,7 @@ export function definitionAssessmentDetail(areas: ReturnType<typeof coverage>["e
   const previous = outdated.reduce((sum, a) => sum + a.criticalGaps, 0);
   const questions = areas.reduce((sum, a) => sum + a.openQuestions, 0);
   return [
-    ...(includeAreaCounts ? [`${current.length} current · ${outdated.length} outdated · ${unassessed.length} not assessed`] : []),
+    ...(includeAreaCounts ? [`${current.length} current · ${outdated.length} awaiting change review · ${unassessed.length} not assessed`] : []),
     ...(current.length ? [`${gaps} current critical gaps`] : []),
     ...(outdated.length ? [`${previous} previously flagged critical areas need rechecking`] : []),
     ...(unassessed.length ? ["Unassessed areas: gaps unknown"] : []),
@@ -91,7 +91,7 @@ export function projectProgress(project: Project, execution: ExecutionEvaluation
       epics: definitionAreas.map((score) => ({
          epicID: score.epicID, title: active.find((e) => e.id === score.epicID)?.title ?? score.epicID, percent: score.percent,
          assessmentState: !score.assessed ? "unassessed" : score.stale ? "outdated" : "current",
-         status: !score.assessed ? "Not assessed" : score.stale ? "Assessment outdated" : "Assessed",
+          status: !score.assessed ? "Not assessed" : score.stale ? "Saved review—change check pending" : "Assessed",
          detail: definitionAssessmentDetail([score], false),
       })) },
     { id: "review", title: "Specification decisions", ...reviewScore(requirements),

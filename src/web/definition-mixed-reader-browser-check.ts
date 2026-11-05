@@ -39,7 +39,8 @@ try {
   await expect(assessment).toContainText("rules / data / permissions: Original scoped retention/recovery concern");
   const before = structuredClone(p); assert.deepEqual(store.get(p.id), before); assert.equal(store.jobs(p.id).length, 0); assert.equal(calls, 0);
   p = store.note(p.id, p.revision, "Changed global product evidence", "project");
-  await expect(assessment).toContainText("Project information has changed since this check");
+  await expect(assessment).toContainText("Saved findings are retained");
+  await expect(assessment).toContainText("Affected or uncertain findings may need deeper evidence review");
   await page.setViewportSize({ width: 390, height: 844 }); await scoped.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-mixed-assessment-reader-mobile.png", fullPage: true });

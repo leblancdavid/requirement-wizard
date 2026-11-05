@@ -29,6 +29,8 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
     </> : <>
       {!workflow.enabled && <p><strong>Continue specification lets the app guide your next steps.</strong> It reviews saved answers and checks requirements across all project areas. To run just one task instead, use More actions below.</p>}
       <p role="status">{workflow.suspended ? "Choose Continue specification to resume after reopening the app. Completed checks are saved." : workflowLabels[workflow.phase]}</p>
+      {workflow.active && workflow.current?.kind === "definition-change" && <p role="status">Checking the effect of your new decisions on the saved review. Original findings remain saved.</p>}
+      {workflow.changeEvidence && <p role="status">Exact source lookups saved: {workflow.changeEvidence.lookups} / 6 · unfinished request attempts: {workflow.changeEvidence.attempts} / 3. Loaded evidence is retained across Pause and restart; this is not yet a completed change check.</p>}
       {workflow.phase === "blocked" && <p>The app cannot continue this task yet. Review any items under Needs your decision. If none are listed, check Logs for the cause; technical help may be needed.</p>}
       <p>Continue specification keeps working across your project until checks finish, your decision is needed, a task is blocked, or you pause. No overall time or request-count cutoff. Requests consume your AI plan’s usage; per-request timeouts and failed-attempt limits still apply. Choices are not approved automatically.</p>
       {workflow.grant && <p>{workflow.grant.continuous ? `${workflow.grant.used} AI request attempts recorded · continuous run` : `${workflow.grant.used} of ${workflow.limits.requests} AI requests used · ${Math.ceil(workflow.grant.remainingMs / 1000)} seconds remaining in the earlier bounded allowance. Continue again to authorize continuous work.`}</p>}
@@ -85,10 +87,10 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
       {workflow.definitionReviews && <section aria-label="Definition review follow-through">
         <h4>Definition reviews</h4>
         <p>{workflow.definitionReviews.filter((area) => area.state === "current").length} current · {workflow.definitionReviews.filter((area) => area.state === "outdated").length} need updating · {workflow.definitionReviews.filter((area) => area.state === "not-assessed").length} not assessed.</p>
-        {workflow.definitionReviews.some((area) => area.state === "outdated") && <p>Previous findings are saved. After authorized input and required decisions or consistency checks, Continue specification updates outdated reviews before exploring more gaps, within its AI usage limit.</p>}
+        {workflow.definitionReviews.some((area) => area.state === "outdated") && <p>Previous findings are saved, with their original review dates. Continue specification checks the effect of new decisions first when possible, retaining unaffected findings. Affected or uncertain areas get deeper review within the existing AI usage limit.</p>}
         <details><summary>Areas and saved review status</summary>
           <PagedList items={workflow.definitionReviews} itemID={(area) => area.epicID} label="Definition review areas">{(area) => <article className="queue-item">
-            <strong>{area.title} · {area.state === "current" ? "Current" : area.state === "outdated" ? "Needs updating" : "Not assessed"}</strong><p>{area.reason}</p>
+            <strong>{area.title} · {area.label ?? (area.state === "current" ? "Current" : area.state === "outdated" ? "Saved review—change check pending" : "Not assessed")}</strong><p>{area.reason}</p>
           </article>}</PagedList>
         </details>
         <p>Opening this view starts no AI requests. Current reviews can still contain unresolved findings; they do not mean the specification is complete.</p>

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { databaseSchemaVersion } from "./migrations.js";
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -139,7 +140,7 @@ test("20 to 21 preserves old bytes, completed scope work and live worker leases 
     for (let i = 0; i < 2; i++) {
       store = new ProjectStore(path); closed = false; assert.deepEqual(store.get(p.id), p); assert.deepEqual(store.definitionScopeReview(completed.job.id), completed.run);
       assert.equal(store.getJob(live.id).status, "running"); assert.equal(store.executionActive(other.id), true); store.close(); closed = true;
-      db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 23);
+      db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
       assert.deepEqual(tables.map((t) => db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()), before); db.close();
     }
     assert.equal(calls, 1);

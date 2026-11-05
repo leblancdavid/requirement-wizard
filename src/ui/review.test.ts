@@ -154,7 +154,8 @@ test("definition inspection exposes outdated category explanations and exact lin
     checks: [{ dimension: "failures", importance: "critical", status: "unknown", explanation: "Recovery after failed saves is undecided.", evidenceIDs: [project.requirements[0]!.id, "missing-evidence"] }] }];
   const before = JSON.stringify(project);
   const html = renderToStaticMarkup(createElement(DefinitionAssessment, { project, area: coverage(project).epics.find((e) => e.epicID === "project")! }));
-  assert.match(html, /earlier findings may no longer apply/);
+  assert.match(html, /Saved findings are retained/);
+  assert.match(html, /Affected or uncertain findings may need deeper evidence review/);
   assert.match(html, /Checked at project version 1; current version 2/);
   assert.match(html, /Failure behavior/);
   assert.match(html, /Recovery after failed saves is undecided/);

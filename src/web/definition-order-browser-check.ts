@@ -62,7 +62,7 @@ try {
    await tools.getByRole("button", { name: "Close assessment tools", exact: true }).click();
    await page.getByRole("button", { name: /Back to workspace/ }).click();
    await page.getByRole("button", { name: /Overall progress/ }).click(); await stage.locator(":scope > summary").click();
-   await expect(area).toContainText("Project information has changed since this check");
+   await expect(area).toContainText("Saved findings are retained");
   await page.setViewportSize({ width: 390, height: 844 }); await area.scrollIntoViewIfNeeded();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-definition-order-upgrade-mobile.png", fullPage: true });

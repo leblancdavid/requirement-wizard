@@ -5,6 +5,69 @@ decisions; it is not readiness, code completeness, or verified delivery to main.
 
 ## Refresh the overall view
 
+### Check decision impact before repeating completed reviews (2026-11-04)
+
+**Source-backed continuation now implemented (v2):** new checks can request missing
+original source records through an app-owned, durable lookup protocol before returning
+the nine-finding verdict. The original-citation index is only navigation. Requested
+whole bodies and full linked current question/answer pairs are supplied cumulatively;
+all original findings and all changes stay mandatory. Six lookups of at most eight
+IDs are available, with three attempts per unfinished request and existing workflow
+allowance. Pause/reload/portable adoption retain accepted reads and spent attempts.
+The UI shows saved lookup progress separately from a completed semantic check.
+
+If required cumulative evidence exceeds the 96,000-character joint context, the check
+pauses with its lookup saved; nothing is truncated and no unaffected verdict is
+inferred. Genuine effects or semantic uncertainty can still require full review.
+Global answers still place potentially affected areas into pending-check status
+until compatibility is established. This is not an instant blanket-current shortcut.
+Old saved work/receipts retain their original protocol, results and dates. See the
+[upgrade ledger](migrations.md#source-backed-resumable-change-checks-2026-11-04).
+All 122 focused tests, full suites, enhanced/default browsers, desktop and type/build
+checks passed; live effectiveness on the reported
+large project has not been qualified.
+
+**Historical v1 limitation found in a real project:** the one-request change
+checker supplies the exact delta and complete findings but only delta-linked
+supporting bodies. In a read-only investigation of an answer-triggered review,
+the answer's project-wide scope changed all 23 area guards. All 23 were already
+outdated immediately before that answer, so it did not erase current reviews.
+Twenty-two area tasks were eligible for the fast path, but supplied only 0–8 of
+18–132 cited records per area. Recent completed impact responses all requested
+further review, with multiple checks identifying missing evidence. This demonstrates
+that the fast path is **not yet effective at avoiding broad reassessment in that
+project**; passing fixture checks did not qualify this case.
+
+Supplying all cited bodies plus linked provenance was estimated at approximately
+132,000–363,000 characters per area, beyond the existing 96,000-character bound.
+Raising the bound, truncating human evidence, ignoring the global answer, or marking
+findings current from unchanged citations is not a safe fix. The next required
+slice is bounded, resumable source-backed impact review: distinguish a request for
+missing evidence from an affected finding, load exact requested records, preserve
+accepted responses/attempts across interruption, and publish compatibility only
+after the semantic check succeeds. Existing `review-needed` receipts must remain
+dated evidence, not be retroactively reinterpreted as harmless missing-source errors.
+The v2 protocol above addresses the missing-source-request path; it does not remove
+the cumulative joint-context bound or establish that every area is unaffected.
+This was not implemented by the earlier memory-pressure changes. No model
+calls or project mutations were made for this investigation.
+
+Continue specification prioritizes eligible change-impact comparisons before full
+reviews. Saved findings remain visible as **Saved review—change check pending**.
+An exact unaffected receipt shows **Current—changes checked**, retaining original
+findings, confidence, citations and review revision with a separate dated check.
+Affected or uncertain findings require deeper evidence review; a model cannot alter
+requirements, resolve human precedence or upgrade completeness through this task.
+
+The initial fast path requires an added human answer, complete nine-dimension
+original findings and unchanged organization/global interpretation. Every exact
+delta and whole selected evidence record must fit 96,000 characters (at most 80
+deltas and 8,000 records). Notes, removals, corrections/supersession, unsupported
+origins and oversized findings fall back to full review. Missing supporting evidence
+must return review-needed, never independence inferred from uncited records.
+Original input fingerprints stay unchanged. A later relevant decision or global
+interpretation change invalidates receipt compatibility without deleting evidence.
+
 ### Keep completed clarification work when another edit arrives (2026-11-03)
 
 A staged Design clarification now saves a valid reply against its original evidence

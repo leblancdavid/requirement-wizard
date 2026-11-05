@@ -401,7 +401,7 @@ try {
   await page.getByRole("button", { name: "Close processing queue", exact: true }).click();
   await page.locator(".progress-trigger").click();
   await expect(batchProgress).toContainText("The review is finished");
-  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("1 current · 0 outdated · 1 not assessed");
+  await expect(overview.getByRole("region", { name: "Definition assessment refresh", exact: true })).toContainText("1 current · 0 awaiting change review · 1 not assessed");
   await expect(overview.locator("details.progress-stage").filter({ has: page.locator("summary strong", { hasText: "Definition coverage" }) }).locator(":scope > summary")).toContainText("Assessment incomplete");
   assert.deepEqual(store.get(large.id).sources, large.sources);
   await page.setViewportSize({ width: 390, height: 844 });

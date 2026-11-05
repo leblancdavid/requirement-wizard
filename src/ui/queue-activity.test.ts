@@ -55,7 +55,8 @@ test("Continue specification consistently distinguishes consent, waiting decisio
   ] }, disabled: false, pending: false, configure() {} }));
   assert.match(followThrough, /1 current · 1 need updating · 1 not assessed/);
   assert.match(followThrough, /Previous findings are saved/);
-  assert.match(followThrough, /before exploring more gaps/);
+  assert.match(followThrough, /checks the effect of new decisions first/);
+  assert.match(followThrough, /Affected or uncertain areas get deeper review/);
   assert.match(followThrough, /Opening this view starts no AI requests/);
   assert.match(followThrough, /do not mean the specification is complete/);
   const artifacts = renderToStaticMarkup(createElement(WorkflowControls, { workflow: { ...workflow, artifacts: [

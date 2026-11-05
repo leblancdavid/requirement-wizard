@@ -19,6 +19,11 @@ const empty = (): Analysis => ({ summary: "Checked saved decisions", goals: [], 
 const calls: string[] = [];
 const adapter: DiscoveryAdapter = { async analyze(project, { context, research }) {
   assert.equal(research, false);
+  if (context.manifest.definitionChangeReview) {
+    calls.push(`change:${context.manifest.focusEpicID}`);
+    return { taskKey: context.manifest.definitionChangeReview.taskKey, outcome: "review-needed", explanation: "Fixture requests full verification after the new decision",
+      checks: dimensions.map((dimension) => ({ dimension, outcome: "review-needed", reason: "Inspect full evidence before changing this finding", evidenceIDs: [] })) };
+  }
   if (context.manifest.readinessQuestions) {
     calls.push("readiness-question"); assert.equal(context.manifest.readinessQuestions.dimension, "failures");
     return { ...empty(), questions: [{ epicID: "inbox", text: "What should happen after a failed report save?", whyItMatters: "Failure behavior is still undefined",
@@ -210,7 +215,7 @@ try {
   await expect(pendingReviews).toContainText("1 need updating");
   await expect(pendingReviews).toContainText("Previous findings are saved");
   await pendingReviews.getByText("Areas and saved review status", { exact: true }).click();
-  await expect(pendingReviews).toContainText("Needs updating");
+  await expect(pendingReviews).toContainText("Saved review—change check pending");
   assert.equal(calls.length, beforeChange, "Viewing pending work does not renew paused authority");
   assert.deepEqual(store.get(p.id).assessments, priorFindings);
   const savedRun = store.latestWorkflowRun(p.id)!;

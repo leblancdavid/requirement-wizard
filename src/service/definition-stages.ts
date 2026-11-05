@@ -40,11 +40,15 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
   const checkpoint = (manifest: NonNullable<Job["context"]>, renewal: { leaseUntil?: number } = { leaseUntil: Date.now() + 360_000 }) => local("checkpoint", () => store.checkpointDefinition(job.id, work, manifest, renewal));
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = options.continuous ? Infinity : Date.now() + limits.durationMs;
   const lease = () => options.continuous ? { leaseUntil: Date.now() + 360_000 } : {};
-  const candidates = store.definitionHistory(project.id, epicID, definitionInputKey(project, epicID)).filter((j) => j.id !== job.id);
   // New baseline work also guards shared interpretation. A genuine change to
   // that broader guard must fall back, not trap ordinary same-v1-key continuation
   // on an unusable prior plan forever. Preserve the old job verbatim.
-  const prior = candidates.find((j) => !j.definitionWork?.baseline || definitionBaselineScopeMatches(project, j.definitionWork.baseline));
+   let prior: Job | undefined;
+   for (const candidate of store.definitionHistoryCandidates(project.id, epicID, definitionInputKey(project, epicID))) {
+     if (candidate.id !== job.id && (!candidate.definitionWork?.baseline || definitionBaselineScopeMatches(project, candidate.definitionWork.baseline))) {
+       prior = candidate; break;
+     }
+   }
   const checkpointBaseline = !prior || prior.definitionWork?.baseline?.checkpoint
     ? await store.definitionCheckpointBaseline(project, epicID, { signal: options.signal,
       ownerJobID: job.id, onBoundary: () => store.renewDefinitionLease(job.id, Date.now() + 360_000), onProgress: options.onProgress,

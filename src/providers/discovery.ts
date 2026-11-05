@@ -11,6 +11,7 @@ import { verifyDefinitionMixedReviewContext } from "../core/definition-mixed-rev
 export class ConnectedDiscovery implements DiscoveryAdapter {
   constructor(private readonly connections: ConnectionManager, private readonly legacy: DiscoveryAdapter, private readonly request: typeof fetch = fetch) {}
   analyze(project: Project, options: DiscoveryOptions) {
+    if (options.context.manifest.definitionChangeReview && (options.scan || options.research)) throw new ProviderError("Change review cannot use a scan or research profile.");
     if (options.context.manifest.definitionMixedReview) {
       if (options.scan || options.research) throw new ProviderError("Mixed consistency cannot use a scan or research profile.");
       verifyDefinitionMixedReviewContext(project, options.context);
@@ -24,6 +25,7 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
     return this.direct(project, options, options.scan ? scanPrompt(project, options.context) : discoveryPrompt(project, options.context, false));
   }
   clarify(project: Project, request: QuestionHelpRequest, options: DiscoveryOptions) {
+    if (options.context.manifest.definitionChangeReview) throw new ProviderError("Change review cannot use a question-help profile.");
     if (options.context.manifest.definitionMixedReview) throw new ProviderError("Mixed consistency cannot use a question-help profile.");
     if (options.context.manifest.definitionScopeReview) throw new ProviderError("Scoped review cannot use a question-help profile.");
     if (!project.model.connectionID) {
@@ -39,7 +41,7 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
       return await this.connections.withAccount(project.model.connectionID!, async (account, signal) => {
         options.onProgress("Request sent to the selected ChatGPT model; awaiting its response…");
         const result = await generate(account, project.model.modelID, "You are Reqwizit's requirements assistant. Follow the supplied task and JSON schema. Do not use tools.", prompt, signal, this.request,
-          options.context.manifest.definitionScopeReview || options.context.manifest.definitionMixedReview ? { policy: "scoped-no-tools-v1" } : undefined);
+          options.context.manifest.definitionChangeReview || options.context.manifest.definitionScopeReview || options.context.manifest.definitionMixedReview ? { policy: "scoped-no-tools-v1" } : undefined);
         signal.throwIfAborted();
         options.onProgress("Response received; checking the returned output…");
         const usage = z.object({ input_tokens: z.number().nonnegative(), output_tokens: z.number().nonnegative(),

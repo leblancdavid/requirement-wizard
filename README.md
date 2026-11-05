@@ -53,6 +53,11 @@ original collection, reading only changed or still-unread records before verific
 Original findings remain saved; this is not automatic finding-independence or
 verification skipping. See [workflow resilience](docs/workflow-resilience.md).
 
+Change-impact checks can now request missing original source bodies and resume
+their saved lookups instead of immediately falling back because evidence was omitted.
+Original findings stay dated; a validated semantic check is still required, and
+oversized joint evidence pauses without truncation. See [source-backed checks](docs/definition-coverage.md#check-decision-impact-before-repeating-completed-reviews-2026-11-04).
+
 Pending scoped questions can now hold affected reviews while other evidence reviews
 continue under the same workflow permission. The queue distinguishes waiting,
 retained and current work. Global or uncertain decisions still hold all reviews;
@@ -69,7 +74,8 @@ targets across revisions using exact-input receipts. An initial additive-evidenc
 follow-up also retains original reads/drafts while collecting pending evidence and
 verifying every current batch. Prepared staged plans can reconcile changed or retired
 evidence through bounded ancestry with explicit review; broader target/global
-reconciliation and source carry-forward for unprepared later targets remain future work.
+reconciliation remains future work. Pending per-target sources now survive early
+interruption and portable adoption before those later targets are prepared.
 
 **Settings → Advanced assessment tools → Inspect changes since a definition review** compares saved inputs
 without AI calls. Unchanged citations do not justify skipping a whole-area review;
