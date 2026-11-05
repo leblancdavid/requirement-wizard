@@ -3,6 +3,23 @@
 Implemented 2026-10-23 for RW-019. Definition coverage estimates recorded product
 decisions; it is not readiness, code completeness, or verified delivery to main.
 
+## Incremental change checks and saved-score visibility (2026-11-05)
+
+After an answer, saved scores remain visible as **“N% saved · validity pending”**,
+with original findings and dates retained. A project-wide question still conservatively
+requires impact review across the guarded areas; the label does not certify current
+completeness or assume independent features.
+
+For new checks, an exact matching prior **unaffected** verdict and its authenticated
+publication snapshot can establish the comparison baseline. Every original finding
+is compared against the full new delta since that snapshot, considering interactions
+with earlier decisions and loading indispensable current supporting evidence. This
+avoids repeatedly checking already-reviewed accumulated changes. Original assessments
+are not rebased or redated. Review-needed, missing/tampered provenance and uncertain
+effects cannot establish an unaffected baseline. Saved same-input work retains its
+original tasks, replies, loads, batch results and spent attempts; only new tasks use
+the optional binding. See [compatibility and verification](migrations.md#verified-incremental-change-baselines-and-visible-saved-scores-2026-11-05).
+
 ## Bounded source batches and joint change review (2026-11-04)
 
 **All-protocol dispatch fix (2026-11-05):** exact citation advice now also covers

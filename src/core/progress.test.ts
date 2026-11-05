@@ -43,8 +43,8 @@ test("saved answers are visible independently of absent or outdated definition c
   const definition = coverage(project);
   const outdated = { ...definition, percent: 40, epics: definition.epics.map((e) => ({ ...e, assessed: true, stale: true })) };
   const old = projectProgress(project, emptyExecution(), outdated);
-  assert.equal(progressLabel(old.stages[0]!), "Change check needed");
-  assert.equal(progressLabel(old.stages[0]!.epics[0]!), "Change check needed");
+  assert.equal(progressLabel(old.stages[0]!), `${old.stages[0]!.percent}% saved · validity pending`);
+  assert.equal(progressLabel(old.stages[0]!.epics[0]!), `${old.stages[0]!.epics[0]!.percent}% saved · validity pending`);
   assert.equal(old.stages[0]!.percent, 40, "Saved score remains available for the existing overall estimate");
   const current = projectProgress(project, emptyExecution(), { ...outdated, stale: false, epics: outdated.epics.map((e) => ({ ...e, stale: false })) });
   assert.equal(progressLabel(current.stages[0]!), "40%");

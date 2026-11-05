@@ -170,6 +170,35 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   // a later answer on a clone can reuse its collection. This is not full history.
   // Some older portable imports lack it: keep that absence honest and fall back.
   const requiredRevisions = new Set(revisions), optionalBaselineRevisions = new Set<number>();
+  // Keep semantic change-review chain roots even after a new answer makes the
+  // publishing job's input key obsolete. These are bounded provenance snapshots,
+  // not an export of the activity archive or machine-local sessions.
+  const changeRoots = [...project.definitionChangeReviews ?? []];
+  for (const job of kept.values()) if (job.definitionChangeWork?.baseline) {
+    const source = snapshot(job.definitionChangeWork.baseline.revision);
+    const receipt = source.definitionChangeReviews?.find(r => r.epicID === job.definitionChangeWork!.epicID);
+    if (!receipt) throw new Error("Portable change baseline receipt is missing; saved work was not discarded.");
+    changeRoots.push(receipt);
+  }
+  const seenChangeSnapshots = new Set<string>();
+  for (const root of changeRoots) {
+    let receipt = root;
+    for (let depth = 0; ; depth++) {
+      if (depth >= 128) throw new Error("Portable change baseline chain exceeds its supported bound; no evidence was truncated.");
+      const publication = receipt.reviewedRevision + 1;
+      revisions.add(publication);
+      if (receipt.baseline) requiredRevisions.add(publication); else optionalBaselineRevisions.add(publication);
+      const identity = `${receipt.epicID}:${publication}`;
+      if (!receipt.baseline || seenChangeSnapshots.has(identity)) break;
+      seenChangeSnapshots.add(identity);
+      revisions.add(receipt.reviewedRevision); requiredRevisions.add(receipt.reviewedRevision);
+      revisions.add(receipt.baseline.revision); requiredRevisions.add(receipt.baseline.revision);
+      const previous = snapshot(receipt.baseline.revision).definitionChangeReviews?.find(r => r.epicID === receipt.epicID);
+      if (!previous || definitionBaselineKey(previous) !== receipt.baseline.receiptKey)
+        throw new Error("Portable change baseline identity differs; saved evidence was not replaced.");
+      receipt = previous;
+    }
+  }
   for (const assessment of project.assessments) {
     if (assessment.combinedReview || assessment.mixedReview || assessment.checks.length !== 9 || assessment.atRevision === project.revision) continue;
     optionalBaselineRevisions.add(assessment.atRevision); revisions.add(assessment.atRevision);
@@ -280,6 +309,16 @@ function requiresEvidenceChangeState(project: Project, continuation?: Continuati
     });
   });
 }
+function requiresIncrementalChangeState(project: Project, continuation?: Continuation) {
+  if (project.definitionChangeReviews?.some(r => !!r.baseline) || continuation?.jobs.some(j => !!j.definitionChangeWork?.baseline)) return true;
+  return Object.values(continuation?.snapshots ?? {}).some(delta => {
+    const entry = delta.definitionChangeReviews;
+    return entry && ("value" in entry ? [entry.value] : entry.items).some(key => {
+      const value = continuation!.objects[key];
+      return Array.isArray(value) ? value.some(r => !!r?.baseline) : !!value && typeof value === "object" && "baseline" in value;
+    });
+  });
+}
 function requiresProvenanceState(project: Project, continuation?: Pick<Continuation, "snapshots" | "objects">, execution?: ExecutionState, field: "combinedReview" | "mixedReview" = "combinedReview") {
   if (field === "combinedReview" && execution?.definitionRevision) return true;
   if (markedAssessments(project.assessments, field)) return true;
@@ -297,7 +336,7 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   // array base used by historical deltas. Older format-4 files remain readable.
   const evidenceState = requiresChangeReviewState(project, continuation);
   const recordOrder = evidenceState ? Object.fromEntries(portableRecordFields.map((field) => [field, project[field].map((record) => record.id)])) : undefined;
-  return { "state.json": json({ formatVersion: requiresEvidenceChangeState(project, continuation, 3) ? 6 : evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
+  return { "state.json": json({ formatVersion: requiresIncrementalChangeState(project, continuation) ? 7 : requiresEvidenceChangeState(project, continuation, 3) ? 6 : evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
     "continuation.json": json(continuation ?? { formatVersion: 1, jobs: [], submissions: [], snapshots: {}, objects: {} }) };
 }
 
@@ -394,8 +433,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5/6 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–7 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -434,6 +473,7 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(read("continuation.json")) as Continuation;
+  if (state.formatVersion < 7 && requiresIncrementalChangeState(project, continuation)) throw new Error("Incremental change baselines require portable state format 7. Saved work was not overwritten.");
   if (state.formatVersion < 6 && requiresEvidenceChangeState(project, continuation, 3)) throw new Error("Batched change reviews require portable state format 6. Saved work was not overwritten.");
   if (state.formatVersion < 5 && requiresEvidenceChangeState(project, continuation)) throw new Error("Evidence-loading change reviews require portable state format 5. Saved work was not overwritten.");
   if (state.formatVersion < 4 && requiresChangeReviewState(project, continuation)) throw new Error("Change-review evidence requires portable state format 4. Saved work was not overwritten.");

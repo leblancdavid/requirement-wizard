@@ -1,7 +1,7 @@
 import type { ContextPack } from "./context.js";
 import { canonicalJSON } from "./assessment-identity.js";
 import { definitionFindingIdentityKey as digest } from "./definition-finding-identity.js";
-import { definitionChangeLimits, validateDefinitionChangeResponse } from "./definition-change-review.js";
+import { definitionChangeLimits, definitionChangeBaselineInstruction, validateDefinitionChangeResponse } from "./definition-change-review.js";
 import { definitionChangeEvidenceLedger, type DefinitionChangeEvidenceTask } from "./definition-change-evidence.js";
 import { changeEvidencePacket } from "./definition-change-wire.js";
 import { definitionChangeBatchResponseSchema, definitionChangeEvidenceRequestSchema, definitionChangeJointResponseSchema,
@@ -41,7 +41,8 @@ function context(task: DefinitionChangeEvidenceTask, ledgerKey: string, records:
   // Navigation excerpts are not evidence and do not belong in a bounded exact batch.
   // The immutable v2 task and its original hash remain untouched for legacy replay.
   const { evidenceIndex: _index, ...fields } = task.fields;
-  const data = { ...fields, format: 3, policy, taskKey: task.taskKey, ledgerKey, evidence: records, ...stage };
+  const data = { ...fields, format: 3, policy, taskKey: task.taskKey, ledgerKey, evidence: records, ...stage,
+    ...(task.fields.baseline ? { instruction: `${stage.instruction}\n${definitionChangeBaselineInstruction}` } : {}) };
   const supplied = new Set(records.map(record => record.id));
   const superseded = new Set(task.records.flatMap(record => "supersedes" in record && record.supersedes ? [record.supersedes] : []));
   const historicalEvidenceIDs = records.filter(record => superseded.has(record.id)).map(record => record.id);
@@ -201,6 +202,7 @@ export function makeDefinitionChangeBatchedReceipt(task: DefinitionChangeEvidenc
   if (request.stage !== "joint" || !work.response) throw new Error("Every batch and a saved joint verdict are required before publication.");
   return definitionChangeReceiptSchema.parse({
     format: 3, policy, projectID: task.fields.projectID, epicID: task.fields.epicID, assessmentKey: task.fields.assessmentKey,
+    ...(task.fields.baseline ? { baseline: task.fields.baseline } : {}),
     originalInputKey: task.fields.originalInputKey, currentInputKey: task.fields.currentInputKey, globalKey: task.fields.globalKey,
     taskKey: task.taskKey, contextKey: task.contextKey, originalRevision: task.fields.originalRevision, reviewedRevision: revision,
     jobID, responseJobID: work.responseJobID, responseModel: work.responseModel, reviewedAt: new Date().toISOString(), response: work.response,

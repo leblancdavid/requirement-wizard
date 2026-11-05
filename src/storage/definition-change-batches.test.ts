@@ -166,6 +166,49 @@ test("v2 overflow becomes bounded exact batches; all original citations are cove
   } finally { store.close(); }
 });
 
+test("verified incremental baselines survive v2 overflow and v3 local/joint continuation without replacing the original findings", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = fixture(store), first = f.begin(); store.prepareDefinitionChangeRequest(first);
+    while (!store.getJob(first).definitionChangeWork!.response) {
+      const request = store.definitionChangeRequest(first); store.reserveDefinitionChangeReview(first);
+      store.recordDefinitionChangeResponse(first, reply(f.task.taskKey, request.context));
+    }
+    store.finishDefinitionChangeReview(first); const baseline = store.get(f.p.id);
+    const job = store.beginJob(baseline.id, baseline.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.finishJob(job.id, { summary: baseline.summary, goals: [], actors: [], assumptions: [], requirements: [], retireQuestions: [], questions: [{
+      epicID: "project", text: "Who receives a co-op reward?", whyItMatters: "A separate new decision", evidenceIDs: [baseline.sources[0]!.id],
+      options: [{ label: "Each player", consequence: "Own copies" }, { label: "Shared", consequence: "Shared copy" }],
+    }] });
+    let now = store.get(baseline.id); now = store.answer(now.id, now.revision, now.questions.at(-1)!.id, { kind: "answer", text: "Each player" });
+    const task = store.definitionChangeTask(now.id, "project")!; assert.ok(task.fields.baseline);
+    assert.equal(task.fields.changes.length, 2); let id = store.beginJob(now.id, now.revision).job.id; store.claimJob(id, Date.now() + 60000);
+    store.beginDefinitionChangeReview(id, "project", task.taskKey);
+    store.reserveDefinitionChangeReview(id); store.recordDefinitionChangeResponse(id, { taskKey: task.taskKey, loadEvidenceIDs: f.original.sources.filter(s => s.kind === "note").slice(0, 8).map(s => s.id) });
+    store.prepareDefinitionChangeRequest(id); assert.equal(store.getJob(id).definitionChangeWork!.format, 3);
+    let count = 0;
+    while (!store.getJob(id).definitionChangeWork!.response) {
+      const request = store.definitionChangeRequest(id); assert.deepEqual(data(request.context).baseline, task.fields.baseline);
+      assert.match(data(request.context).instruction, /changes start at baseline.revision/);
+      assert.deepEqual(data(request.context).assessment, f.original.assessments[0]);
+      store.reserveDefinitionChangeReview(id); store.recordDefinitionChangeResponse(id, reply(task.taskKey, request.context)); count++;
+      if (count === 1) {
+        const saved = store.getJob(id).definitionChangeWork!; store.failJob(id, "interrupted", "Synthetic incremental batch pause");
+        assert.equal(store.definitionChangeTask(now.id, "project")!.taskKey, task.taskKey);
+        const resume = store.beginJob(now.id, now.revision).job.id; store.claimJob(resume, Date.now() + 60000);
+        store.beginDefinitionChangeReview(resume, "project", task.taskKey);
+        assert.deepEqual(store.getJob(resume).definitionChangeWork!.baseline, saved.baseline);
+        if (saved.format !== 3 || store.getJob(resume).definitionChangeWork!.format !== 3) assert.fail();
+        assert.deepEqual((store.getJob(resume).definitionChangeWork as BatchWork).batches, saved.batches);
+        id = resume;
+      }
+    }
+    store.finishDefinitionChangeReview(id); const published = store.get(now.id), receipt = published.definitionChangeReviews![0]!;
+    assert.equal(receipt.format, 3); assert.deepEqual(receipt.baseline, task.fields.baseline); assert.ok(count >= 3);
+    assert.deepEqual(published.assessments, f.original.assessments);
+  } finally { store.close(); }
+});
+
 test("accepted batches and charged unfinished attempts survive repeated reopen, portable adoption and joint-window rehydration", () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const dir = mkdtempSync(join(root, "change-batches-")), path = join(dir, "source.sqlite"), workspace = join(dir, "repo"), clone = join(dir, "clone");
@@ -370,7 +413,7 @@ test("26 to 27 preserves payload bytes and live leases, rejects future batch for
     const before = tables.map(table => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
     db.exec("DELETE FROM migration_history WHERE version >= 27; PRAGMA user_version = 26"); db.close();
     for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.equal(store.getJob(id).status, "running"); store.close(); }
-    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 27);
+    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 28);
     assert.deepEqual(tables.map(table => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), before); db.close();
     store = new ProjectStore(path); store.prepareDefinitionChangeRequest(id); store.close(); db = new Database(path);
     const saved = (db.prepare("SELECT payload FROM jobs WHERE id=?").get(id) as { payload: string }).payload;

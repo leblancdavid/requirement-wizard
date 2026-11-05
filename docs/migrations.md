@@ -1,5 +1,84 @@
 # Data migrations and upgrade compatibility
 
+## Verified incremental change baselines and visible saved scores (2026-11-05)
+
+**Source → target:** database **27 → 28** is an ordered transactional capability
+migration. It changes no project/job payloads, assessments, evidence, revision
+counters, live leases, responses or allowances. Strict change-review work and
+receipt schemas accept optional `baseline: { format: 1, revision, inputKey,
+receiptKey }`; unknown versions still reject startup without committing migration
+history. Reopening does not issue baselines, resume workers or make model calls.
+Schema version is independent of project optimistic-concurrency revisions.
+
+Previously every new project-wide question/answer made existing assessments stale,
+and later change checks compared the entire accumulated delta since original
+assessment publication, even after earlier semantic checks found it unaffected.
+The UI replaced the saved percentage with “Change check needed.” Findings were
+retained but the presentation looked like a reset. It now displays **“N% saved ·
+validity pending”**, with the saved findings available and a distinct header label.
+This is not a new currentness/readiness claim or a new scoring formula.
+
+New eligible checks may compare from the latest saved **unaffected** receipt for
+the exact unchanged assessment. The app loads its actual publication snapshot at
+`reviewedRevision + 1`, validates its exact receipt hash against the saved receipt,
+assessment identity and original publication/input basis, actual guarded input key,
+project/area, global interpretation and chronology. Earlier baseline links require
+their saved publication and reviewed-input snapshots, exact receipt bindings and
+the same original assessment. Missing, altered, unsupported or oversized ancestry
+fails closed, never invents provenance or marks an area current. The bounded chain
+is retained explicitly; it is not inferred from matching citations or graph links.
+
+All nine full original findings still accompany every exact delta. Original
+`originalRevision`, dates, evidence and confidence remain untouched; the optional
+baseline is separate dated semantic evidence. Instructions require cumulative
+interactions with prior decisions/current supporting evidence to be considered.
+New decisions always require semantic review. Review-needed results do not become
+baselines; destructive/global/organization changes, corrections and uncertainty
+retain the established deeper-review fallback. Local v3 batch results still cannot
+publish unaffected authority: the final joint verdict remains mandatory.
+
+Existing **same-input v1/v2/v3 tasks take precedence** over the new basis. Without
+the optional field, fields/hashes/context keys remain byte-compatible; completed
+responses, accepted lookups/batches and exhausted attempts are not rewritten or
+reset. New work binds the optional descriptor through v2 loads, v3 overflow and
+joint contexts, saved-task reconstruction and publication. Failure, cancellation,
+stale edits and restart retain it and all charged attempts. This is not permission
+to replay incompatible calls or automatically repair user data.
+
+**Portable 1–6 → 7 when necessary:** baseline-bearing work/receipts require state
+format 7 with the existing exact record-order envelope. Older formats remain
+readable and are still emitted without the new metadata. Export retains the
+publication root for a saved receipt even after a new answer makes its publishing
+job obsolete, plus every required earlier baseline and reviewed-input snapshot.
+Thus an answer exported before the next task starts can use the same validated
+baseline after adoption. This is not full activity-history/session export. Missing
+legacy optional roots remain absent honestly; required new chain snapshots cannot
+be silently dropped. Unsupported future versions reject without overwriting data;
+downgrade after new metadata is saved is unsupported.
+
+**Qualification so far:** type checking and 73 focused tests passed, including
+three successive incremental decisions, review-needed exclusion, exact identity
+and snapshot tampering, saved legacy/exhausted work precedence, repeated startup,
+27→28 migration/rollback/recovery, portable root preservation/adoption, accepted
+lookup reuse, failures/cancellation/staleness, and v2→v3 batch/joint continuation.
+Read-only revision-3178 preparation found nine exact matching unaffected baselines;
+each compares only the three latest changed records instead of cumulative older
+decisions. Fourteen other assessments have no matching prior unaffected result
+and retain their original assessment basis; no narrower authority was fabricated.
+The definition-stage label is “20% saved · validity pending.” No user database/project writes
+or live inference were performed. UI build, all 22 default browser runners and both
+post-browser runners passed, including visible saved-percentage/pending-validity
+presentation. CLI help and diff checking passed. The first full run found a stale
+schema-version assertion and the existing supplemental post-page persistence
+fixture's UUID-sensitive legacy 64-step execution ceiling. The assertion now expects
+28; that persistence fixture explicitly activates the existing scoped execution
+policy before saving, with legacy-ceiling tests and production bounds unchanged.
+Both focused regressions and all **211** staged-service tests passed. The full
+`npm test` rerun passed **913 pretests, 774 main tests and 64 posttests**. The final
+baseline instruction is also present in both v3 batch/joint contexts and passed
+the 73-test focused run and type checking. Installed desktop/live continuation
+remains unqualified.
+
 ## Bounded cross-feature provenance and authenticated approvals (2026-11-05)
 
 **Source → target:** existing definition work format 1 can append an optional

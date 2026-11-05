@@ -84,7 +84,7 @@ function ProjectProgressView({ progress, definition, project, jobs = [], refresh
     {!hideTrigger && <button className="header-progress progress-trigger" aria-haspopup="dialog" aria-expanded={open} aria-controls="project-progress" onClick={() => setOpen(true)}>
       <span className="header-progress-label"><span>Overall progress</span><strong>{progress.percent}%</strong></span>
       <ProgressMeter value={progress.percent} label="Overall progress" />
-       <small>{progress.stages[0]?.assessmentState !== "current" ? "Definition assessment incomplete" : progress.status} · View breakdown ▾</small>
+       <small>{progress.stages[0]?.assessmentState === "outdated" ? "Saved definition · validity pending" : progress.stages[0]?.assessmentState !== "current" ? "Definition assessment incomplete" : progress.status} · View breakdown ▾</small>
     </button>}
     {open && <Modal id="project-progress" className="progress-dialog" titleID="progress-title" title="Project progress" description={<p>{progress.percent}% overall · {progress.status}</p>} close={() => { setOpen(false); setRefreshScope(null); }} closeLabel="Close progress">
       <p>This estimate combines three equally weighted steps: defining the product, reviewing requirements and adding verified changes to the main project. New features can lower the score. Even 100% is not a guarantee that everything is ready.</p>

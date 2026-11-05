@@ -1950,7 +1950,7 @@ test("later page subdivision preserves whole pairs, hashes and publication gates
 
 /** Reproduce the paid-path gap synthetically: accepted linked pages, a grown
  * retained assessment, then an exact re-load of a pair already read on a page. */
-function supplementalAfterPages(store: ProjectStore, failures = 0, reviewed = false, noteCount = 15) {
+function supplementalAfterPages(store: ProjectStore, failures = 0, reviewed = false, noteCount = 15, executionCapacity = false) {
   const seeded = linkedAnswerFixture(store, 1, true, reviewed, noteCount), { p, work } = seeded;
   let draft = seeded.draft;
   upgradeDefinitionAllowance(work); upgradeDefinitionLinkedAnswers(p, work, true);
@@ -1987,6 +1987,10 @@ function supplementalAfterPages(store: ProjectStore, failures = 0, reviewed = fa
   let overflow: ContextBudgetError | undefined;
   try { definitionStageContext(p, work, draft); } catch (error) { assert.ok(error instanceof ContextBudgetError); overflow = error; }
   assert.ok(overflow, "The accepted supplemental pair must overflow the original full-draft step");
+  if (executionCapacity) {
+    assert.equal(scopeDefinitionDraft(p, work, draft), true);
+    upgradeDefinitionExecution(work); assert.ok(work.executionPolicy);
+  }
   store.checkpointDefinition(job.id, work, overflow.manifest);
   store.blockDefinition(job.id, "Synthetic post-page supplemental evidence exceeds the exact full-draft context budget.", "technical");
   return { p, work, draft, job: store.getJob(job.id), pair, overflow, sourceJob: seeded.job };
@@ -2041,7 +2045,9 @@ test("saved post-page loads resume through SQLite reopen and portable adoption w
   const directory = mkdtempSync(join(root, "definition-scoped-draft-")), file = join(directory, "state.sqlite");
   let store = new ProjectStore(file);
   try {
-    const { p, work, job, sourceJob, pair } = supplementalAfterPages(store); let calls = 0;
+    // Use the existing scoped execution policy for UUID-dependent exact packing.
+    // Persistence/reuse is separate from the legacy 64-step execution ceiling.
+    const { p, work, job, sourceJob, pair } = supplementalAfterPages(store, 0, false, 15, true); let calls = 0;
     store.close(); store = new ProjectStore(file); store.close(); store = new ProjectStore(file);
     assert.deepEqual(store.getJob(job.id), job);
     const nextJob = store.beginJob(p.id, p.revision).job; store.claimJob(nextJob.id, Date.now() + 60000);

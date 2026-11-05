@@ -51,6 +51,10 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }), errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
+  await page.getByRole("button", { name: /Overall progress/ }).click();
+  const progress = page.getByRole("dialog", { name: "Project progress", exact: true });
+  await expect(progress).toContainText("100% saved · validity pending");
+  await progress.getByRole("button", { name: "Close progress", exact: true }).click();
   await page.getByRole("button", { name: /Processing & queue:/ }).click();
   const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true }), flow = drawer.getByRole("region", { name: "Project workflow", exact: true });
   await expect(flow).toContainText("change check pending"); assert.equal(calls, 0);

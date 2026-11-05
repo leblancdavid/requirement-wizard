@@ -25,7 +25,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 27;
+export const databaseSchemaVersion = 28;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -225,6 +225,9 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 27, name: "bounded-definition-change-batches-v3", apply() {
   // Reader/capability boundary only. Existing v1/v2 work, completed verdicts,
   // payload bytes, leases, hashes and spent attempts are not rewritten at startup.
+} }, { version: 28, name: "verified-incremental-change-baselines-v1", apply() {
+  // Capability boundary only. Legacy task hashes, payloads, receipts and leases
+  // remain byte-identical; baseline selection occurs only on explicit new work.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

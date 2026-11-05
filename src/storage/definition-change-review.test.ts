@@ -6,7 +6,8 @@ import Database from "better-sqlite3";
 import { ProjectStore } from "./store.js";
 import { dimensions } from "../core/definition-dimensions.js";
 import { coverage } from "../core/coverage.js";
-import { prepareDefinitionChangeReview, validateDefinitionChangeResponse } from "../core/definition-change-review.js";
+import { prepareDefinitionChangeReview, validateDefinitionChangeResponse, definitionChangeBaseline } from "../core/definition-change-review.js";
+import { prepareDefinitionChangeEvidence } from "../core/definition-change-evidence.js";
 import { projectSchema, type Project } from "../core/model.js";
 import { continuationState, decodePortable } from "./portable.js";
 import { renderWorkspace } from "./workspace.js";
@@ -46,6 +47,188 @@ function begin(store: ProjectStore, p: Project, epicID = "palette") {
   const { job } = store.beginJob(p.id, p.revision); store.claimJob(job.id, Date.now() + 60000);
   return { ...store.beginDefinitionChangeReview(job.id, epicID, task.taskKey), jobID: job.id };
 }
+
+function nextAnswer(store: ProjectStore, p: Project, text = "Each player keeps their own reward") {
+  p = publish(store, p, { ...empty(), questions: [{ epicID: "project", text: `New shared question ${p.revision}?`, whyItMatters: "Check the new decision only",
+    evidenceIDs: [p.sources[0]!.id], options: [{ label: "Own copy", consequence: "Personal rewards" }, { label: "Shared copy", consequence: "Shared rewards" }] }] });
+  return store.answer(p.id, p.revision, p.questions.at(-1)!.id, { kind: "answer", text });
+}
+function finish(store: ProjectStore, p: Project, affected = false) {
+  const started = begin(store, p); store.reserveDefinitionChangeReview(started.jobID);
+  store.recordDefinitionChangeResponse(started.jobID, response(started.task, affected)); store.finishDefinitionChangeReview(started.jobID);
+  return store.get(p.id);
+}
+
+test("successive semantic change checks use exact verified unaffected baselines without changing original findings or dates", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { original, project } = fixture(store); let now = finish(store, project);
+    for (let round = 0; round < 3; round++) {
+      const baseline = structuredClone(now), receipt = baseline.definitionChangeReviews![0]!;
+      now = nextAnswer(store, now, `Exact new decision ${round} 🧾\r\nPrior findings stay dated`);
+      assert.equal(coverage(now).epics.find(a => a.epicID === "palette")!.stale, true);
+      const { task, jobID } = begin(store, now);
+      assert.deepEqual(task.fields.baseline, { format: 1, revision: baseline.revision, inputKey: receipt.currentInputKey, receiptKey: definitionFindingIdentityKey(receipt) });
+      assert.equal(task.fields.originalRevision, original.revision);
+      assert.deepEqual(task.fields.assessment, original.assessments.find(a => a.epicID === "palette"));
+      assert.deepEqual(new Set(task.fields.changes.map(c => c.id)), new Set([now.questions.at(-1)!.id, now.sources.at(-1)!.id]));
+      assert.match((task.context.data as { instruction: string }).instruction, /cumulative interactions/);
+      assert.deepEqual(store.getJob(jobID).definitionChangeWork!.baseline, task.fields.baseline);
+      store.reserveDefinitionChangeReview(jobID); store.recordDefinitionChangeResponse(jobID, response(task)); store.finishDefinitionChangeReview(jobID);
+      now = store.get(now.id);
+      assert.deepEqual(now.assessments, original.assessments);
+      assert.deepEqual(now.definitionChangeReviews![0]!.baseline, task.fields.baseline);
+      assert.equal(coverage(now).epics.find(a => a.epicID === "palette")!.stale, false);
+      assert.equal(coverage(now).epics.find(a => a.epicID === "movement")!.stale, true);
+    }
+  } finally { store.close(); }
+});
+
+test("review-needed, replaced assessments, missing and tampered snapshots cannot issue an unaffected baseline", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { original, project } = fixture(store), baseline = finish(store, project), now = nextAnswer(store, baseline);
+    assert.ok(definitionChangeBaseline(original, now, "palette", baseline));
+    for (const field of ["receipt", "assessment", "input", "global", "revision"] as const) {
+      const changed = structuredClone(baseline);
+      if (field === "receipt") changed.definitionChangeReviews![0]!.reviewedAt = "2020-01-01T00:00:00.000Z";
+      if (field === "assessment") changed.assessments.find(a => a.epicID === "palette")!.explanation += " Replaced";
+      if (field === "input") changed.sources[0]!.text += " Changed exact evidence";
+      if (field === "global") changed.summary += " Changed meaning";
+      if (field === "revision") changed.revision++;
+      assert.equal(prepareDefinitionChangeReview(original, now, "palette", changed), undefined, field);
+    }
+    const affectedStore = new ProjectStore(":memory:");
+    try {
+      const f = fixture(affectedStore), affected = finish(affectedStore, f.project, true), newer = nextAnswer(affectedStore, affected);
+      assert.equal(definitionChangeBaseline(f.original, newer, "palette", affected), undefined);
+      assert.equal(affectedStore.definitionChangeTask(newer.id, "palette")!.fields.baseline, undefined);
+    } finally { affectedStore.close(); }
+  } finally { store.close(); }
+});
+
+test("incremental accepted lookups and charged final attempts survive repeated reopen, migration and portable adoption", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true }); const dir = mkdtempSync(join(root, "incremental-change-")), file = join(dir, "state.sqlite");
+  let store = new ProjectStore(file); const consumer = new ProjectStore(":memory:");
+  try {
+    const { original, project } = fixture(store, 2), first = finish(store, project), second = finish(store, nextAnswer(store, first)), now = nextAnswer(store, second);
+    const { task, jobID } = begin(store, now), omitted = original.sources.find(s => task.context.manifest.omittedIDs.includes(s.id))!;
+    store.reserveDefinitionChangeReview(jobID); store.recordDefinitionChangeResponse(jobID, { taskKey: task.taskKey, loadEvidenceIDs: [omitted.id] });
+    store.reserveDefinitionChangeReview(jobID); store.failJob(jobID, "interrupted", "Synthetic charged final interruption");
+    const saved = store.getJob(jobID), bytes = JSON.stringify(saved);
+    store.close(); let db = new Database(file); db.exec("DELETE FROM migration_history WHERE version >= 28; PRAGMA user_version = 27"); db.close();
+    for (let i = 0; i < 2; i++) {
+      store = new ProjectStore(file); assert.equal(JSON.stringify(store.getJob(jobID)), bytes); store.close();
+    }
+    store = new ProjectStore(file);
+    const continuation = continuationState(now, store.jobs(now.id), [], r => store.get(now.id, r)), files = renderWorkspace(now, emptyExecution(), continuation);
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 7);
+    assert.ok(continuation.snapshots[String(first.revision)]); assert.ok(continuation.snapshots[String(second.revision)]);
+    const older = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 6 }) };
+    assert.throws(() => decodePortable(older, now.model), /format 7/);
+    const path = join(dir, "workspace"); mkdirSync(path); store.connectWorkspace(now.id, now.revision, path); store.syncWorkspace(now.id);
+    consumer.openWorkspace(path, now.model);
+    const resumed = begin(consumer, consumer.get(now.id));
+    assert.equal(resumed.task.taskKey, task.taskKey); assert.equal(resumed.job.definitionChangeWork!.attempts, 1);
+    assert.deepEqual(resumed.job.definitionChangeWork!.baseline, saved.definitionChangeWork!.baseline);
+    assert.deepEqual(resumed.job.definitionChangeWork!.format === 2 && resumed.job.definitionChangeWork!.loads, saved.definitionChangeWork!.format === 2 && saved.definitionChangeWork!.loads);
+    assert.ok(consumer.definitionChangeRequest(resumed.jobID).context.manifest.includedIDs.includes(omitted.id));
+    consumer.reserveDefinitionChangeReview(resumed.jobID); consumer.recordDefinitionChangeResponse(resumed.jobID, response(resumed.task)); consumer.finishDefinitionChangeReview(resumed.jobID);
+    assert.deepEqual(consumer.get(now.id).assessments, original.assessments); assert.deepEqual(store.getJob(jobID), saved);
+    // Reject future saved baseline metadata transactionally; preserve bytes and
+    // permit reopening after the unsupported representation is resolved.
+    store.close(); db = new Database(file);
+    const raw = (db.prepare("SELECT payload FROM jobs WHERE id=?").get(jobID) as { payload: string }).payload, future = JSON.parse(raw);
+    future.definitionChangeWork.baseline.format = 2; const futureBytes = JSON.stringify(future);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(futureBytes, jobID);
+    db.exec("DELETE FROM migration_history WHERE version >= 28; PRAGMA user_version = 27");
+    assert.throws(() => new ProjectStore(file));
+    assert.equal(db.pragma("user_version", { simple: true }), 27);
+    assert.equal((db.prepare("SELECT payload FROM jobs WHERE id=?").get(jobID) as { payload: string }).payload, futureBytes);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(raw, jobID); db.close(); store = new ProjectStore(file);
+    assert.deepEqual(store.getJob(jobID), saved);
+  } finally { store.close(); consumer.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("portable state preserves an unaffected baseline before any new change task exists", () => {
+  const store = new ProjectStore(":memory:"); const consumer = new ProjectStore(":memory:");
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true }); const dir = mkdtempSync(join(root, "incremental-root-"));
+  try {
+    const { project } = fixture(store), baseline = finish(store, project), now = nextAnswer(store, baseline), expected = store.definitionChangeTask(now.id, "palette")!;
+    assert.ok(expected.fields.baseline);
+    store.connectWorkspace(now.id, now.revision, dir); store.syncWorkspace(now.id); consumer.openWorkspace(dir, now.model);
+    assert.equal(consumer.definitionChangeTask(now.id, "palette")!.taskKey, expected.taskKey);
+  } finally { store.close(); consumer.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("missing or altered baseline ancestry blocks reuse without resetting the saved task or its paid lookup", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { project } = fixture(store, 1), first = finish(store, project), second = finish(store, nextAnswer(store, first)), now = nextAnswer(store, second);
+    const { task, jobID } = begin(store, now); store.reserveDefinitionChangeReview(jobID);
+    const omitted = task.context.manifest.omittedIDs[0]!;
+    store.recordDefinitionChangeResponse(jobID, { taskKey: task.taskKey, loadEvidenceIDs: [omitted] });
+    const saved = store.getJob(jobID), db = (store as unknown as { db: Database.Database }).db;
+    const row = db.prepare("SELECT * FROM revisions WHERE project_id=? AND revision=?").get(now.id, first.revision) as { payload: string };
+    const altered = JSON.parse(row.payload); altered.sources[0].text += " Different exact evidence";
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(JSON.stringify(altered), now.id, first.revision);
+    assert.equal(store.definitionChangeTask(now.id, "palette"), undefined);
+    assert.throws(() => store.definitionChangeRequest(jobID), /baseline/);
+    assert.deepEqual(store.getJob(jobID), saved);
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(row.payload, now.id, first.revision);
+    assert.equal(store.definitionChangeTask(now.id, "palette")!.taskKey, task.taskKey);
+    const source = db.prepare("SELECT payload FROM revisions WHERE project_id=? AND revision=?").get(now.id, second.revision) as { payload: string };
+    db.prepare("UPDATE revisions SET payload='{}' WHERE project_id=? AND revision=?").run(now.id, second.revision);
+    assert.equal(store.definitionChangeTask(now.id, "palette"), undefined);
+    assert.throws(() => store.definitionChangeRequest(jobID)); assert.deepEqual(store.getJob(jobID), saved);
+    db.prepare("UPDATE revisions SET payload=? WHERE project_id=? AND revision=?").run(source.payload, now.id, second.revision);
+    assert.ok(store.definitionChangeRequest(jobID).context.manifest.includedIDs.includes(omitted));
+  } finally { store.close(); }
+});
+
+for (const outcome of ["failed", "cancelled", "stale"] as const) test(`incremental ${outcome} work keeps its exact baseline and charged attempts without publishing currentness`, () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { project } = fixture(store), baseline = finish(store, project), now = nextAnswer(store, baseline), { task, jobID } = begin(store, now);
+    store.reserveDefinitionChangeReview(jobID);
+    if (outcome === "stale") {
+      const newer = store.note(now.id, now.revision, "Concurrent shared decision", "project");
+      store.recordDefinitionChangeResponse(jobID, response(task));
+      assert.throws(() => store.finishDefinitionChangeReview(jobID), /live worker/);
+      assert.deepEqual(store.get(now.id), newer);
+    } else {
+      store.failJob(jobID, outcome, "Synthetic interruption");
+      const resumed = begin(store, now);
+      assert.equal(resumed.task.taskKey, task.taskKey); assert.equal(resumed.job.definitionChangeWork!.attempts, 1);
+    }
+    assert.deepEqual(store.getJob(jobID).definitionChangeWork!.baseline, task.fields.baseline);
+    assert.equal(store.getJob(jobID).definitionChangeWork!.attempts, 1);
+    assert.deepEqual(store.get(now.id).assessments, project.assessments);
+    assert.equal(coverage(store.get(now.id)).epics.find(a => a.epicID === "palette")!.stale, true);
+  } finally { store.close(); }
+});
+
+test("same-input legacy task identities and spent work take precedence over a newly available baseline", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { original, project } = fixture(store), baseline = finish(store, project), now = nextAnswer(store, baseline);
+    const storedOriginal = store.get(now.id, original.revision), storedCurrent = store.get(now.id);
+    const legacy = prepareDefinitionChangeReview(storedOriginal, storedCurrent, "palette")!, v2 = prepareDefinitionChangeEvidence(storedOriginal, storedCurrent, "palette")!;
+    assert.equal(legacy.fields.baseline, undefined); assert.equal(v2.fields.baseline, undefined);
+    const current = store.definitionChangeTask(now.id, "palette")!; assert.ok(current.fields.baseline);
+    // Curate a pre-upgrade same-input task, exactly as the old app issued it.
+    const { job } = store.beginJob(now.id, now.revision); store.claimJob(job.id, Date.now() + 60000);
+    const db = (store as unknown as { db: Database.Database }).db;
+    const saved = store.getJob(job.id); saved.kind = "definition-change-review"; saved.context = v2.context.manifest;
+    saved.status = "interrupted"; saved.leaseUntil = null;
+    saved.definitionChangeWork = { format: 2, policy: "definition-change-evidence-v2", epicID: "palette", assessmentKey: v2.fields.assessmentKey,
+      taskKey: v2.taskKey, contextKey: v2.contextKey, attempts: 3, loads: [] };
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(saved), job.id);
+    assert.equal(store.definitionChangeTask(now.id, "palette")!.taskKey, v2.taskKey);
+    assert.throws(() => begin(store, now), /three attempts/);
+    assert.deepEqual(store.getJob(job.id), saved);
+  } finally { store.close(); }
+});
 
 test("a dated change-only verdict retains an unaffected assessment without blessing other areas or changing original findings", () => {
   const store = new ProjectStore(":memory:");
@@ -183,7 +366,7 @@ test("23 to 24 preserves original payload bytes and live leases; unsupported new
     assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM projects WHERE id=?").get(project.id) as { payload: string }).payload), future);
     db.prepare("UPDATE projects SET payload=? WHERE id=?").run(saved.payload, project.id); db.close();
     for (let i = 0; i < 2; i++) { store = new ProjectStore(file); store.close(); }
-    db = new Database(file); assert.equal(db.pragma("user_version", { simple: true }), 27);
+    db = new Database(file); assert.equal(db.pragma("user_version", { simple: true }), 28);
     assert.deepEqual(db.prepare("SELECT * FROM projects").all(), before.projects); assert.deepEqual(db.prepare("SELECT * FROM revisions").all(), before.revisions);
     assert.deepEqual(db.prepare("SELECT * FROM jobs").all(), before.jobs); db.close();
     store = new ProjectStore(file); assert.equal(store.getJob(job.id).status, "running");

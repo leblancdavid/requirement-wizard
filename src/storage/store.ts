@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
-import { definitionChangeReceipt, prepareDefinitionChangeReview, validateDefinitionChangeResponse, makeDefinitionChangeReceipt } from "../core/definition-change-review.js";
+import { definitionChangeReceipt, definitionChangeBaseline, prepareDefinitionChangeReview, validateDefinitionChangeResponse, makeDefinitionChangeReceipt } from "../core/definition-change-review.js";
+import { canonicalJSON } from "../core/assessment-identity.js";
 import { definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
 import { prepareDefinitionChangeEvidence, definitionChangeEvidenceContext, makeDefinitionChangeEvidenceReceipt, DefinitionChangeContextOverflow } from "../core/definition-change-evidence.js";
 import { definitionChangeBatchedContext, upgradeDefinitionChangeBatches, makeDefinitionChangeBatchedReceipt } from "../core/definition-change-batches.js";
@@ -1052,21 +1053,54 @@ export class ProjectStore {
     if (!assessment || receipt && (receipt.response.outcome === "unaffected" || receipt.format !== 1)) return;
     try {
       const original = this.get(id, assessment.atRevision), legacy = prepareDefinitionChangeReview(original, project, epicID);
-      if (!legacy) return;
       // Finish/retry original v1 work under its exact protocol. An app upgrade
       // must not invalidate a saved reply or reset its three spent attempts.
-      if (!receipt && this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ? AND json_extract(payload, '$.definitionChangeWork.format') = 1
+      if (legacy && !receipt && this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ? AND json_extract(payload, '$.definitionChangeWork.format') = 1
         AND json_extract(payload, '$.definitionChangeWork.taskKey') = ? LIMIT 1`).get(id, legacy.taskKey)) return legacy;
-      return prepareDefinitionChangeEvidence(original, project, epicID);
+      const evidence = prepareDefinitionChangeEvidence(original, project, epicID);
+      // Preserve ALL existing protocols, including exhausted attempts, saved
+      // lookups and v2→v3 batches. Never switch a paid same-input task's basis.
+      if (evidence && this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ?
+        AND json_extract(payload, '$.definitionChangeWork.taskKey') = ? LIMIT 1`).get(id, evidence.taskKey)) return evidence;
+      const candidate = project.definitionChangeReviews?.find(r => r.epicID === epicID);
+      if (candidate?.response.outcome === "unaffected" && candidate.assessmentKey === definitionBaselineKey(assessment)
+        && candidate.originalRevision === assessment.atRevision) {
+        const baseline = this.verifiedDefinitionChangeBaseline(original, project, epicID);
+        // Missing/tampered chain: retain dated evidence and use full review,
+        // not an unbound replacement task that could reset saved attempts.
+        if (!baseline) return;
+        return prepareDefinitionChangeEvidence(original, project, epicID, baseline);
+      }
+      return evidence;
     }
     catch { return; } // Missing/unsupported provenance takes the existing full review.
+  }
+
+  private verifiedDefinitionChangeBaseline(original: Project, project: Project, epicID: string) {
+    const candidate = project.definitionChangeReviews?.find(r => r.epicID === epicID);
+    if (!candidate) return;
+    const baseline = this.get(project.id, candidate.reviewedRevision + 1);
+    if (!definitionChangeBaseline(original, project, epicID, baseline)) return;
+    let receipt = candidate;
+    for (let depth = 0; receipt.baseline; depth++) {
+      if (depth >= 128) return; // Fail closed, never trust a truncated chain.
+      const previous = this.get(project.id, receipt.baseline.revision);
+      const reviewed = this.get(project.id, receipt.reviewedRevision);
+      const binding = definitionChangeBaseline(original, reviewed, epicID, previous);
+      if (!binding || canonicalJSON(binding) !== canonicalJSON(receipt.baseline)) return;
+      receipt = definitionChangeReceipt(previous, epicID)!;
+    }
+    return baseline;
   }
 
   private boundDefinitionChangeTask(job: Job) {
     const work = job.definitionChangeWork!;
     const snapshot = this.get(job.projectID, job.expectedRevision), assessment = snapshot.assessments.find((a) => a.epicID === work.epicID)!;
     const original = this.get(job.projectID, assessment.atRevision);
-    const task = work.format === 1 ? prepareDefinitionChangeReview(original, snapshot, work.epicID) : prepareDefinitionChangeEvidence(original, snapshot, work.epicID);
+    const baseline = work.baseline ? this.verifiedDefinitionChangeBaseline(original, snapshot, work.epicID) : undefined;
+    if (work.baseline && (!baseline || canonicalJSON(definitionChangeBaseline(original, snapshot, work.epicID, baseline)) !== canonicalJSON(work.baseline)))
+      throw new Error("Change review verified baseline no longer matches. Saved evidence and attempts remain retained.");
+    const task = work.format === 1 ? prepareDefinitionChangeReview(original, snapshot, work.epicID, baseline) : prepareDefinitionChangeEvidence(original, snapshot, work.epicID, baseline);
     if (!task || task.taskKey !== work.taskKey || task.contextKey !== work.contextKey || task.fields.assessmentKey !== work.assessmentKey)
       throw new Error("Change review original context no longer matches.");
     return task;
@@ -1130,7 +1164,7 @@ export class ProjectStore {
       job.definitionChangeWork = prior ? { ...structuredClone(prior), sourceJobID: row!.id }
         : { ...(task.context.manifest.definitionChangeReview!.format === 1 ? { format: 1 as const, policy: "definition-change-review-v1" as const }
           : { format: 2 as const, policy: "definition-change-evidence-v2" as const, loads: [] }), epicID, assessmentKey: task.fields.assessmentKey, taskKey,
-          contextKey: task.contextKey, attempts: 0 };
+          contextKey: task.contextKey, attempts: 0, ...(task.fields.baseline ? { baseline: task.fields.baseline } : {}) };
       if (job.definitionChangeWork.format === 2 && job.definitionChangeWork.response && "records" in task)
         job.context = definitionChangeEvidenceContext(task, job.definitionChangeWork).context.manifest;
       if (job.definitionChangeWork.format === 3 && "records" in task)

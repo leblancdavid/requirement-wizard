@@ -59,6 +59,11 @@ Original findings stay dated; a validated semantic check is still required. Size
 checks can now retain bounded exact-source batch comparisons and require a separate
 joint verdict, without replaying accepted lookups/batches. Unfit whole units or joint
 receipts still pause without truncation. See [bounded change review](docs/definition-coverage.md#bounded-source-batches-and-joint-change-review-2026-11-04).
+Saved percentages now remain visible while validity is pending. New impact checks
+can start from an authenticated prior unaffected verdict for the same assessment,
+instead of repeatedly comparing all changes since its original publication. Original
+findings/dates and saved task attempts remain intact; new decisions still require
+semantic review. See [incremental change checks](docs/definition-coverage.md#incremental-change-checks-and-saved-score-visibility-2026-11-05).
 
 Pending scoped questions can now hold affected reviews while other evidence reviews
 continue under the same workflow permission. The queue distinguishes waiting,

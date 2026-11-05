@@ -7,8 +7,8 @@ import { definitionChangeEvidenceRequestSchema, definitionChangeReceiptSchema, t
 import { changeEvidencePacket } from "./definition-change-wire.js";
 
 type Work = Extract<DefinitionChangeWork, { format: 2 }>;
-export function prepareDefinitionChangeEvidence(original: Project, current: Project, epicID: string) {
-  const legacy = prepareDefinitionChangeReview(original, current, epicID);
+export function prepareDefinitionChangeEvidence(original: Project, current: Project, epicID: string, baseline?: Project) {
+  const legacy = prepareDefinitionChangeReview(original, current, epicID, baseline);
   if (!legacy) return;
   const citations = [...new Set(definitionAssessmentEvidenceIDs(legacy.fields.assessment))];
   const records = definitionInputDocument(current, epicID, citations).records;
@@ -101,6 +101,7 @@ export function makeDefinitionChangeEvidenceReceipt(task: DefinitionChangeEviden
   const loaded = definitionChangeEvidenceContext(task, work);
   const response = validateDefinitionChangeResponse({ taskKey: task.taskKey, context: { ...loaded.context, manifest: { ...loaded.context.manifest, includedIDs: loaded.citationIDs } } }, work.response);
   return definitionChangeReceiptSchema.parse({ format: 2, policy: "definition-change-evidence-v2", projectID: task.fields.projectID, epicID: task.fields.epicID,
+    ...(task.fields.baseline ? { baseline: task.fields.baseline } : {}),
     assessmentKey: task.fields.assessmentKey, originalInputKey: task.fields.originalInputKey, currentInputKey: task.fields.currentInputKey,
     globalKey: task.fields.globalKey, taskKey: task.taskKey, contextKey: task.contextKey, originalRevision: task.fields.originalRevision,
     reviewedRevision: revision, jobID, responseJobID: work.responseJobID, responseModel: work.responseModel, reviewedAt: new Date().toISOString(), response,

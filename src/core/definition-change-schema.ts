@@ -3,6 +3,9 @@ import { dimensions } from "./definition-dimensions.js";
 
 const key = z.string().regex(/^[a-f0-9]{64}$/);
 const responseModel = z.object({ providerID: z.string().min(1), modelID: z.string().min(1) }).strict();
+export const definitionChangeBaselineSchema = z.object({ format: z.literal(1), revision: z.number().int().positive(),
+  inputKey: key, receiptKey: key }).strict();
+export type DefinitionChangeBaseline = z.infer<typeof definitionChangeBaselineSchema>;
 export const definitionChangeMarkerSchema = z.object({ format: z.union([z.literal(1), z.literal(2), z.literal(3)]), taskKey: key, currentInputKey: key }).strict();
 export const definitionChangeResponseSchema = z.object({
   taskKey: key,
@@ -19,6 +22,7 @@ export const definitionChangeResponseSchema = z.object({
     ctx.addIssue({ code: "custom", message: "Change review must cite distinct detailed supplied evidence for each unaffected finding." });
 });
 const receiptFields = z.object({
+  baseline: definitionChangeBaselineSchema.optional(),
   projectID: z.string(), epicID: z.string(), assessmentKey: key, originalInputKey: key, currentInputKey: key, globalKey: key, taskKey: key, contextKey: key,
   originalRevision: z.number().int().positive(), reviewedRevision: z.number().int().positive(),
   jobID: z.string().uuid(), responseJobID: z.string().uuid(), responseModel, reviewedAt: z.string().datetime(), response: definitionChangeResponseSchema,
@@ -45,6 +49,8 @@ export const definitionChangeReceiptSchema = z.union([
 ]).superRefine((value, ctx) => {
   if (value.taskKey !== value.response.taskKey || value.reviewedRevision <= value.originalRevision)
     ctx.addIssue({ code: "custom", message: "Change review must retain its original finding and exact task identity." });
+  if (value.baseline && (value.baseline.revision <= value.originalRevision || value.baseline.revision >= value.reviewedRevision))
+    ctx.addIssue({ code: "custom", message: "Change baseline must follow the original assessment and precede the reviewed revision." });
   if (value.format === 2 && new Set(value.loadedEvidenceIDs).size !== value.loadedEvidenceIDs.length)
     ctx.addIssue({ code: "custom", message: "Loaded change evidence identities must be distinct." });
   if (value.format === 3 && (value.loads.length + value.jointLoads.length > 6
@@ -57,6 +63,7 @@ export const definitionChangeReceiptSchema = z.union([
 });
 export type DefinitionChangeReceipt = z.infer<typeof definitionChangeReceiptSchema>;
 const workFields = z.object({
+  baseline: definitionChangeBaselineSchema.optional(),
   epicID: z.string(), assessmentKey: key, taskKey: key, contextKey: key, attempts: z.number().int().min(0).max(3),
   sourceJobID: z.string().uuid().optional(), responseJobID: z.string().uuid().optional(), responseModel: responseModel.optional(), response: definitionChangeResponseSchema.optional(),
 }).strict();

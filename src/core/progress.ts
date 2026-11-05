@@ -11,7 +11,7 @@ export type ProgressScore = { percent: number; status: string; detail: string; l
 
 /** Missing or old coverage is not a finding that no definition work was done. */
 export function progressLabel(score: ProgressScore): string {
-  return score.assessmentState === "unassessed" ? "Not assessed" : score.assessmentState === "outdated" ? "Change check needed" : score.assessmentState === "incomplete" ? "Assessment incomplete" : `${score.percent}%`;
+  return score.assessmentState === "unassessed" ? "Not assessed" : score.assessmentState === "outdated" ? `${score.percent}% saved · validity pending` : score.assessmentState === "incomplete" ? "Assessment incomplete" : `${score.percent}%`;
 }
 
 /** Presentation only: old findings remain evidence, not claims about current gaps. */
