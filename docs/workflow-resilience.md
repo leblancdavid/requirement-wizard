@@ -5,6 +5,53 @@ claim that incremental continuation is already available throughout the app.
 
 ## Contract
 
+Citation advice no longer depends on reaching v3: v1/v2 seed and dispatch callers,
+v3 batches and v3 joint review share explicit rules and bounded packet encoding.
+Fitting v2 requests cannot bypass the positive/historical restrictions already used
+by validation. Accepted lookups and saved verdicts retain their original hash-bound
+reuse path even when new dispatch advice consumes extra space. See the
+[all-protocol compatibility and tests](migrations.md#shared-citation-authority-across-all-change-review-protocols-2026-11-05).
+
+Exact positive citation advice now covers **both** v3 batch and joint stages, with
+lossless sharing of the existing ID table when duplicated literal IDs would consume
+the bounded context. Each stage is offered only its own JSON response grammar.
+Original findings' citation lists are preserved, but do not grant permission to cite
+their missing bodies in a different batch. Frozen context identities, accepted
+lookups/batches and charged attempts remain unchanged. See the
+[new epic's read-only reproduction and compatibility ledger](migrations.md#positive-citation-authority-for-every-batch-stage-2026-11-05).
+
+Joint v3 review now prints the exact positive citation allowlist from the same
+function used by validation. Navigation/served-record inventories cannot silently
+grant new citation authority. Required uncited records need explicit whole-body
+rehydration and fresh semantic review. The reported task retains all three completed
+batches; this advice/diagnostic fix changes no saved hashes, attempts or allowances.
+See [compatibility and checks](migrations.md#exact-joint-review-citation-allowlist-2026-11-05).
+
+V3 request advice now exposes the existing validator's historical-only citation IDs.
+A superseded source can remain in a full historical batch without its successor;
+the model must not infer that presence means current authority. Advice is reconstructed
+without changing frozen keys or resetting saved work. The reported job retains two
+accepted batches/two unfinished attempts; a corrected response is still needed, not
+silent acceptance of the rejected citations. See the
+[compatibility ledger](migrations.md#explicit-historical-citation-authority-for-change-batches-2026-11-04).
+
+User-approved bounded change-review batching (2026-11-04) now follows the source-backed
+lookup implementation: only size-blocked unfinished v2 tasks adopt v3 during explicit
+owned continuation. Immutable original citations and accepted reads become exact
+bounded source batches; each accepted local response is durable. All nine original
+findings/changes stay complete. A final joint semantic verdict, not batch/citation
+independence, is required for currentness; unresolved batch concerns cannot be blessed
+as unaffected. Joint source rehydration uses bounded replaceable windows and the
+remaining original lookup budget, preserving checkpoints/attempts across Pause,
+restart and portable adoption. See [migration and remaining limits](migrations.md#bounded-change-review-batches-and-joint-verdict-2026-11-04).
+
+Oversized cumulative change-check contexts now try lossless identifier sharing,
+retaining exact bodies and the original expanded-data hashes. Accepted reads and
+charged attempts therefore remain reusable across reopening/portable adoption without
+a format migration. The reported blocked request prepares at 89,502 / 96,000
+characters; actual model completion remains untested. Distinct evidence can still
+exceed the unchanged bound. See the [compatibility and verification ledger](migrations.md#lossless-change-check-identifier-sharing-2026-11-04).
+
 Source-backed change-check continuation is now implemented under explicit v2
 work/receipt formats. The model can request exact missing bodies; accepted lookups
 and spent attempts survive interruption, reopening and portable adoption. Missing

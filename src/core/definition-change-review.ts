@@ -81,8 +81,13 @@ export type DefinitionChangeTask = NonNullable<ReturnType<typeof prepareDefiniti
 export function validateDefinitionChangeResponse(task: Pick<DefinitionChangeTask, "taskKey" | "context">, raw: unknown) {
   const response = definitionChangeResponseSchema.parse(raw), allowed = new Set(task.context.manifest.includedIDs);
   if (new TextEncoder().encode(JSON.stringify(response)).byteLength > 48000) throw new Error("Change-review response exceeds its durable response bound; original findings remain unchanged.");
-  if (response.taskKey !== task.taskKey || response.checks.some((c) => new Set(c.evidenceIDs).size !== c.evidenceIDs.length || c.evidenceIDs.some((id) => !allowed.has(id))
-    || c.outcome === "unaffected" && !c.evidenceIDs.length)) throw new Error("Change review must bind its exact task and cite detailed supplied evidence for every unaffected finding.");
+  if (response.taskKey !== task.taskKey) throw new Error("Change review must bind its exact task: response taskKey differs from the saved request. Accepted work and spent attempts remain retained.");
+  const invalid = [...new Set(response.checks.flatMap(check => check.evidenceIDs.filter(id => !allowed.has(id))))];
+  if (invalid.length) {
+    const historical = new Set(task.context.definitionChangeCitationAuthority?.historicalEvidenceIDs ?? []);
+    const detail = invalid.slice(0, 6).map(id => `${id}${historical.has(id) ? " (historical/superseded)" : " (not supplied as citable evidence)"}`).join(", ");
+    throw new Error(`Change review must cite detailed supplied evidence only; invalid citations: ${detail}${invalid.length > 6 ? ` (${invalid.length} total)` : ""}. Use the exact app-owned citation whitelist. IDs from original findings/indexes and historical comparison bodies do not grant current citation authority. No citation was removed or remapped; accepted work and spent attempts remain retained.`);
+  }
   return response;
 }
 export function makeDefinitionChangeReceipt(task: DefinitionChangeTask, response: ReturnType<typeof validateDefinitionChangeResponse>, jobID: string, revision: number,

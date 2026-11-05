@@ -7,6 +7,8 @@ import { coverage } from "../core/coverage.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
 import { workspaceMenu } from "./menu-check-helpers.js";
+import { expandChangeCitationAuthority } from "../core/definition-change-wire.js";
+import { discoveryPrompt } from "../runtime/discovery.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -34,8 +36,12 @@ const app = await startApp({ store, port: 0, catalog: new OpenCodeCatalog("unuse
     if (!context.manifest.definitionChangeReview) { if (context.manifest.definitionAssessment) fullReviews++; return empty(); }
     calls++;
     const data = context.data as {evidence:{id:string;text?:string}[];evidenceLoading:{turn:number}};
-    if(calls===1){assert.ok(!data.evidence.some(r=>r.id===hidden.id));return {taskKey:context.manifest.definitionChangeReview.taskKey,loadEvidenceIDs:[hidden.id]};}
+    const citable = new Set(expandChangeCitationAuthority(context.data, context.definitionChangeCitationAuthority!));
+    assert.deepEqual(citable, new Set(data.evidence.map(record => record.id)));
+    assert.ok(discoveryPrompt(snapshot, context, false).includes(JSON.stringify(context.definitionChangeCitationAuthority)));
+    if(calls===1){assert.ok(!data.evidence.some(r=>r.id===hidden.id));assert.ok(!citable.has(hidden.id));return {taskKey:context.manifest.definitionChangeReview.taskKey,loadEvidenceIDs:[hidden.id]};}
     assert.equal(data.evidence.find(r=>r.id===hidden.id)?.text,hidden.text);
+    assert.ok(citable.has(hidden.id));
     if (calls === 2) { waiting = true; return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })); }
     return { taskKey: context.manifest.definitionChangeReview.taskKey, outcome: "unaffected", explanation: "Fixture-only comparison; no new original findings",
       checks: dimensions.map((dimension) => ({ dimension, outcome: "unaffected", reason: "Exact reward timing does not alter this complete retained finding", evidenceIDs: [snapshot.sources.at(-1)!.id,hidden.id] })) };

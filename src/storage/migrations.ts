@@ -25,7 +25,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 26;
+export const databaseSchemaVersion = 27;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -222,6 +222,9 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 26, name: "indexed-startup-change-review-validation", apply(db: Database.Database) {
   for (const table of ["projects", "revisions"]) db.exec(`CREATE INDEX IF NOT EXISTS startup_${table}_change_reviews
     ON ${table}((${changeReviewValue})) WHERE ${changeReviewPredicate}`);
+} }, { version: 27, name: "bounded-definition-change-batches-v3", apply() {
+  // Reader/capability boundary only. Existing v1/v2 work, completed verdicts,
+  // payload bytes, leases, hashes and spent attempts are not rewritten at startup.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -257,7 +260,7 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
     for (const row of db.prepare(`SELECT json_extract(payload, '$.kind') AS kind,
       CASE WHEN length(CAST(json_extract(payload, '$.context.definitionChangeReview') AS BLOB)) <= 2048
         THEN json_extract(payload, '$.context.definitionChangeReview') END AS marker,
-      CASE WHEN length(CAST(json_extract(payload, '$.definitionChangeWork') AS BLOB)) <= 65536
+      CASE WHEN length(CAST(json_extract(payload, '$.definitionChangeWork') AS BLOB)) <= 262144
         THEN json_extract(payload, '$.definitionChangeWork') END AS work FROM jobs
       WHERE json_type(payload, '$.definitionChangeWork') IS NOT NULL OR json_type(payload, '$.context.definitionChangeReview') IS NOT NULL
         OR json_extract(payload, '$.kind') = 'definition-change-review'`).iterate() as Iterable<{ kind: string; marker: string; work: string | null }>) {

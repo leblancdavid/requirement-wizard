@@ -3,6 +3,12 @@ import { organizationRecords } from "./epics.js";
 import type { GapReport } from "./gap-types.js";
 
 export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]>; gapReport?: GapReport;
+  /** Reconstructed request advice only, never persisted or used as new freshness
+   * authority. It exposes the existing v3 validator's historical-source exclusions. */
+  definitionChangeCitationAuthority?: { format: 1; historicalEvidenceIDs: string[];
+    /** Exact stage whitelist, either original strings or compact references into
+     * this request's existing identifierTable. Responses still use original IDs. */
+    citableEvidenceIDs?: string[]; citableEvidenceRefs?: Array<number | string> };
   /** Local selected-context traversal only, never part of evidence/freshness hashes. */
   traversal?: { visitedRecords: number; examinedEdges: number; missingRecords: number } };
 

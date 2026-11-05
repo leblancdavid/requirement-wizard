@@ -2,6 +2,14 @@
 
 ## Confirmed product direction
 
+**Bounded change-review batches (2026-11-04).** The user approved a broader fix after
+cumulative exact change-check evidence again exceeded the joint limit despite lossless
+ID sharing. Preserve paid lookups, exact source evidence and charged attempts; save
+bounded local comparisons and require a final joint consistency verdict. Local batch
+results do not establish semantic independence/currentness, and unresolved concerns
+cannot be silently discarded. Implemented behavior and qualification limits are in
+the [migration ledger](migrations.md#bounded-change-review-batches-and-joint-verdict-2026-11-04).
+
 **Durable incremental workflows (2026-11-03).** The user approved addressing
 decision-triggered loss of usable progress across all long-running processes, not
 just Continue specification, with efficiency as an explicit goal. Preserve original

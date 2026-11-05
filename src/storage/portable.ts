@@ -268,15 +268,15 @@ function requiresChangeReviewState(project: Project, continuation?: Continuation
   return project.definitionChangeReviews !== undefined || continuation?.jobs.some((job) => !!job.definitionChangeWork)
     || Object.values(continuation?.snapshots ?? {}).some((delta) => Object.hasOwn(delta, "definitionChangeReviews"));
 }
-function requiresEvidenceChangeState(project: Project, continuation?: Continuation) {
-  if (project.definitionChangeReviews?.some((review) => review.format === 2) || continuation?.jobs.some((job) => job.definitionChangeWork?.format === 2)) return true;
+function requiresEvidenceChangeState(project: Project, continuation?: Continuation, minimum = 2) {
+  if (project.definitionChangeReviews?.some((review) => review.format >= minimum) || continuation?.jobs.some((job) => (job.definitionChangeWork?.format ?? 0) >= minimum)) return true;
   return Object.values(continuation?.snapshots ?? {}).some((delta) => {
     const entry = delta.definitionChangeReviews;
     if (!entry) return false;
     const keys = "value" in entry ? [entry.value] : entry.items;
     return keys.some((key) => {
       const value = continuation!.objects[key];
-      return Array.isArray(value) ? value.some((item) => item?.format === 2) : !!value && typeof value === "object" && "format" in value && value.format === 2;
+      return Array.isArray(value) ? value.some((item) => item?.format >= minimum) : !!value && typeof value === "object" && "format" in value && typeof value.format === "number" && value.format >= minimum;
     });
   });
 }
@@ -297,7 +297,7 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   // array base used by historical deltas. Older format-4 files remain readable.
   const evidenceState = requiresChangeReviewState(project, continuation);
   const recordOrder = evidenceState ? Object.fromEntries(portableRecordFields.map((field) => [field, project[field].map((record) => record.id)])) : undefined;
-  return { "state.json": json({ formatVersion: evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
+  return { "state.json": json({ formatVersion: requiresEvidenceChangeState(project, continuation, 3) ? 6 : evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
     "continuation.json": json(continuation ?? { formatVersion: 1, jobs: [], submissions: [], snapshots: {}, objects: {} }) };
 }
 
@@ -394,8 +394,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion === 5) !== !!state.recordOrder) throw new Error("Portable state format 5 requires exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5/6 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -434,6 +434,7 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(read("continuation.json")) as Continuation;
+  if (state.formatVersion < 6 && requiresEvidenceChangeState(project, continuation, 3)) throw new Error("Batched change reviews require portable state format 6. Saved work was not overwritten.");
   if (state.formatVersion < 5 && requiresEvidenceChangeState(project, continuation)) throw new Error("Evidence-loading change reviews require portable state format 5. Saved work was not overwritten.");
   if (state.formatVersion < 4 && requiresChangeReviewState(project, continuation)) throw new Error("Change-review evidence requires portable state format 4. Saved work was not overwritten.");
   if (state.formatVersion < 3 && requiresProvenanceState(project, continuation, execution, "mixedReview"))

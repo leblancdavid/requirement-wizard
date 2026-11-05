@@ -1,5 +1,25 @@
 # Browser workspace, epics, and estimated completeness
 
+## Bounded change-review progress (2026-11-04)
+
+Size-blocked source-backed checks now resume through exact evidence batches and a
+separate joint verdict under Continue specification. The queue displays saved batch
+count and explicitly says a joint verdict is still required. Local batch results do
+not mark findings current. Pause/reload retains accepted batches, the immutable source
+ledger, earlier lookups and charged attempts; continuing retries only the unfinished
+stage. Final joint source requests replace their bounded body window while retaining
+every batch checkpoint. No startup inference, silent reassessment, confidence/date
+change or extra workflow grant is introduced. See the
+[migration and qualification ledger](migrations.md#bounded-change-review-batches-and-joint-verdict-2026-11-04).
+
+`npm run test:browser` also runs the v2 and new v3 post-browser checks. The dedicated
+`src/web/definition-change-batches-browser-check.ts` uses a deterministic adapter to
+exercise size-triggered adoption, saved batch progress, owned Pause, charged retry,
+reload without inference, no replay of completed stages and joint-only currentness.
+Its mobile screenshot is `.reqwizit-state/browser-definition-change-batches-mobile.png`.
+All default/browser-post runners passed for this slice; they do not qualify live model
+reasoning. Build the UI before running `npm run posttest:browser` independently.
+
 ## Resumable source-backed change checks (2026-11-04)
 
 Change checks can request exact missing original evidence through app-owned lookups

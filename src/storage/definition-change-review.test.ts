@@ -11,15 +11,17 @@ import { projectSchema, type Project } from "../core/model.js";
 import { continuationState, decodePortable } from "./portable.js";
 import { renderWorkspace } from "./workspace.js";
 import { emptyExecution } from "../core/execution.js";
+import { expandChangeIdentifiers, expandChangeCitationAuthority } from "../core/definition-change-wire.js";
+import { definitionFindingIdentityKey } from "../core/definition-finding-identity.js";
 
 const empty = () => ({ summary: "Original scope", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 function publish(store: ProjectStore, p: Project, raw: unknown) {
   const { job } = store.beginJob(p.id, p.revision); store.claimJob(job.id, Date.now() + 60000); store.finishJob(job.id, raw); return store.get(p.id);
 }
-function fixture(store: ProjectStore, notes = 0, linked = false) {
+function fixture(store: ProjectStore, notes = 0, linked = false, noteLength = 0) {
   let p = store.create("Change-impact fixture", "Two separate features and shared decisions", { providerID: "openai", modelID: "fixture" });
   p = store.organize(p.id, p.revision, ["movement", "palette"].map((epicID) => ({ type: "upsert", epicID, title: epicID, purpose: `Exact ${epicID} boundaries`, dependencies: [] })));
-  for (let i = 0; i < notes; i++) p = store.note(p.id, p.revision, `Original detailed palette decision ${i}`, "palette");
+  for (let i = 0; i < notes; i++) p = store.note(p.id, p.revision, `Original detailed palette decision ${i}`.padEnd(noteLength, "x"), "palette");
   if (linked) {
     p = publish(store, p, { ...empty(), questions: [{ epicID: "palette", text: "Original palette choice?", whyItMatters: "Keep exact linked evidence",
       evidenceIDs: [p.sources[0]!.id], options: [{label:"Warm",consequence:"Use warm tones"},{label:"Cool",consequence:"Use cool tones"}] }] });
@@ -181,7 +183,7 @@ test("23 to 24 preserves original payload bytes and live leases; unsupported new
     assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM projects WHERE id=?").get(project.id) as { payload: string }).payload), future);
     db.prepare("UPDATE projects SET payload=? WHERE id=?").run(saved.payload, project.id); db.close();
     for (let i = 0; i < 2; i++) { store = new ProjectStore(file); store.close(); }
-    db = new Database(file); assert.equal(db.pragma("user_version", { simple: true }), 26);
+    db = new Database(file); assert.equal(db.pragma("user_version", { simple: true }), 27);
     assert.deepEqual(db.prepare("SELECT * FROM projects").all(), before.projects); assert.deepEqual(db.prepare("SELECT * FROM revisions").all(), before.revisions);
     assert.deepEqual(db.prepare("SELECT * FROM jobs").all(), before.jobs); db.close();
     store = new ProjectStore(file); assert.equal(store.getJob(job.id).status, "running");
@@ -223,6 +225,45 @@ test("loaded whole question/answer units survive reopen and actual portable adop
     assert.equal(coverage(current).epics.find(a=>a.epicID==="palette")!.stale,false);
     assert.equal(consumer.definitionChangeTask(opened.id,"palette"),undefined);
   } finally {store.close();consumer.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test("oversized v2 continuation preserves accepted reads and charged attempts across restart and portable adoption", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const dir = mkdtempSync(join(root, "change-wire-portable-")), path = join(dir, "source.sqlite"), workspace = join(dir, "repo"), clone = join(dir, "clone");
+  mkdirSync(workspace); mkdirSync(clone); let store = new ProjectStore(path); const consumer = new ProjectStore(":memory:");
+  try {
+    const { project, original } = fixture(store, 19, false, 10000), { task, jobID } = begin(store, project);
+    const ids = original.sources.filter(s => s.kind === "note").slice(0, 8).map(s => s.id);
+    store.reserveDefinitionChangeReview(jobID); store.recordDefinitionChangeResponse(jobID, { taskKey: task.taskKey, loadEvidenceIDs: ids });
+    store.reserveDefinitionChangeReview(jobID); store.failJob(jobID, "interrupted", "Interrupted encoded request remains charged");
+    const saved = store.getJob(jobID).definitionChangeWork!;
+    assert.equal(saved.attempts, 1);
+    const request = store.definitionChangeRequest(jobID);
+    assert.ok(request.context.manifest.identifierCompaction!.originalCharacters > 96000);
+    assert.ok(request.context.manifest.characters <= 96000);
+    const expanded = expandChangeIdentifiers(request.context.data as Record<string, unknown>);
+    assert.equal(request.contextKey, definitionFindingIdentityKey(expanded));
+    for (let i = 0; i < 2; i++) {
+      store.close(); store = new ProjectStore(path);
+      assert.deepEqual(store.getJob(jobID).definitionChangeWork, saved);
+      const reopened = store.definitionChangeRequest(jobID);
+      assert.deepEqual(reopened.context, request.context); assert.equal(reopened.contextKey, request.contextKey);
+      assert.ok("citationIDs" in reopened && "citationIDs" in request);
+      assert.deepEqual(reopened.citationIDs, request.citationIDs);
+    }
+    store.connectWorkspace(project.id, project.revision, workspace); store.syncWorkspace(project.id);
+    cpSync(join(workspace, ".reqwizit"), join(clone, ".reqwizit"), { recursive: true });
+    const opened = consumer.openWorkspace(clone, project.model), resumed = begin(consumer, opened);
+    assert.deepEqual(resumed.job.definitionChangeWork, { ...saved, sourceJobID: jobID });
+    const adopted = consumer.definitionChangeRequest(resumed.jobID);
+    assert.deepEqual(adopted.context, request.context); assert.equal(adopted.contextKey, request.contextKey);
+    assert.ok("citationIDs" in adopted && "citationIDs" in request);
+    assert.deepEqual(adopted.citationIDs, request.citationIDs);
+    consumer.reserveDefinitionChangeReview(resumed.jobID);
+    consumer.recordDefinitionChangeResponse(resumed.jobID, response(resumed.task)); consumer.finishDefinitionChangeReview(resumed.jobID);
+    assert.deepEqual(consumer.get(opened.id).assessments, original.assessments);
+    assert.deepEqual(store.getJob(jobID).definitionChangeWork, saved);
+  } finally { store.close(); consumer.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("exact lookup replay rejects tampering; a future v2 work policy rolls back 24→25 startup and can recover without resetting saved reads",()=>{
@@ -292,6 +333,11 @@ for(const mode of ["saved-response","exhausted","review-needed"] as const)test(`
     store=new ProjectStore(path);const selected=store.definitionChangeTask(project.id,"palette")!;assert.equal(selected.taskKey,task.taskKey);
     if(mode==="exhausted"){assert.throws(()=>begin(store,project),/three attempts/);return;}
     const resumed=begin(store,project);assert.equal(resumed.job.definitionChangeWork!.format,1);assert.equal(resumed.job.definitionChangeWork!.attempts,1);
+    const dispatched=store.definitionChangeRequest(resumed.jobID);
+    assert.equal(dispatched.contextKey,task.contextKey);
+    assert.deepEqual(expandChangeCitationAuthority(dispatched.context.data,dispatched.context.definitionChangeCitationAuthority!),task.context.manifest.includedIDs);
+    assert.equal(store.getJob(resumed.jobID).definitionChangeWork!.attempts,1,"Reconstructing v1 advice cannot spend an attempt or invalidate the compatible saved response");
+    assert.deepEqual(store.getJob(created.id),legacy);
     store.finishDefinitionChangeReview(resumed.jobID);
     const receipt=store.get(project.id).definitionChangeReviews![0]!;assert.equal(receipt.format,1);
     if(mode==="saved-response")assert.equal(store.definitionChangeTask(project.id,"palette"),undefined);

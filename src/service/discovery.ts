@@ -149,6 +149,7 @@ export class DiscoveryService {
       let used = 0;
       while (!this.store.getJob(job.id).definitionChangeWork?.response) {
         controller.signal.throwIfAborted();
+        this.store.prepareDefinitionChangeRequest(job.id);
         const request = this.store.definitionChangeRequest(job.id);
         if (used >= allowance.requests) throw new WorkflowBudgetPause("Change check paused at its request allowance. Exact loaded evidence and spent attempts remain saved; continue explicitly.");
         const remaining = deadline - Date.now();

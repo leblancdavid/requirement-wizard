@@ -4,6 +4,7 @@ import { definitionInputDocument } from "./definition-identity.js";
 import { definitionFindingIdentityKey as digest } from "./definition-finding-identity.js";
 import { prepareDefinitionChangeReview, validateDefinitionChangeResponse, definitionChangeLimits } from "./definition-change-review.js";
 import { definitionChangeEvidenceRequestSchema, definitionChangeReceiptSchema, type DefinitionChangeWork } from "./definition-change-schema.js";
+import { changeEvidencePacket } from "./definition-change-wire.js";
 
 type Work = Extract<DefinitionChangeWork, { format: 2 }>;
 export function prepareDefinitionChangeEvidence(original: Project, current: Project, epicID: string) {
@@ -38,7 +39,7 @@ export type DefinitionChangeEvidenceTask = NonNullable<ReturnType<typeof prepare
 
 /** Exact, cumulative bodies. Reconstruct/replay from immutable source snapshots;
  * an accepted lookup must never be reissued just to rebuild local context. */
-export function definitionChangeEvidenceContext(task: DefinitionChangeEvidenceTask, work: Work) {
+function evidenceContext(task: DefinitionChangeEvidenceTask, work: Work, allowOversize = false) {
   const byID = new Map(task.records.map((record) => [record.id, record]));
   const superseded = new Set(task.records.flatMap((record) => "supersedes" in record && record.supersedes ? [record.supersedes] : []));
   const loaded = new Set<string>();
@@ -47,9 +48,9 @@ export function definitionChangeEvidenceContext(task: DefinitionChangeEvidenceTa
     const citationIDs = [...supplied].filter((id) => !superseded.has(id));
     const data = { ...task.context.data as object, evidence: task.records.filter((record) => supplied.has(record.id)), evidenceCitationIDs: citationIDs,
       evidenceLoading: { turn, remainingLookups: 6 - turn, loadedEvidenceIDs: [...loaded] } };
-    const characters = JSON.stringify(data).length;
-    if (characters > definitionChangeLimits.characters) throw new Error("Change check paused: required exact evidence and complete findings exceed the bounded joint context. Loaded records and spent attempts remain saved; nothing was truncated or marked current.");
-    return { context: { data, manifest: { ...task.context.manifest, characters, includedIDs: [...supplied],
+    const wire = changeEvidencePacket(data, citationIDs, [...supplied].filter(id => superseded.has(id)), definitionChangeLimits.characters);
+    return { context: { data: wire.data, definitionChangeCitationAuthority: wire.authority, manifest: { ...task.context.manifest, characters: wire.characters,
+      ...(wire.identifierCompaction ? { identifierCompaction: wire.identifierCompaction } : {}), includedIDs: [...supplied],
       omittedIDs: task.records.filter((record) => !supplied.has(record.id)).map((record) => record.id) } } as ContextPack,
       contextKey: digest(data), loadedEvidenceIDs: [...loaded], citationIDs };
   };
@@ -74,6 +75,10 @@ export function definitionChangeEvidenceContext(task: DefinitionChangeEvidenceTa
     add(entry.requestedIDs);
   }
   const result = build(work.loads.length);
+  // Only a pending dispatch needs to fit new request advice. Historical lookup
+  // replay and compatible saved verdicts retain their original expanded hashes.
+  if (!allowOversize && !work.response && result.context.manifest.characters > definitionChangeLimits.characters)
+    throw new DefinitionChangeContextOverflow(`Change check paused: required exact evidence and complete findings exceed the bounded joint context (${result.context.manifest.characters} / ${definitionChangeLimits.characters} characters including lossless ID sharing and citation advice). Loaded records and spent attempts remain saved; nothing was truncated or marked current.`);
   if (work.response && work.responseContextKey !== result.contextKey) throw new Error("Saved change verdict differs from its exact loaded-evidence context.");
   return { ...result, validateLookup(raw: unknown) {
     const request = definitionChangeEvidenceRequestSchema.parse(raw);
@@ -81,6 +86,15 @@ export function definitionChangeEvidenceContext(task: DefinitionChangeEvidenceTa
     add(request.loadEvidenceIDs); // Validate IDs/units before accepting, but keep oversized bodies as a durable lookup for explicit recovery.
     return request;
   } };
+}
+
+export class DefinitionChangeContextOverflow extends Error {}
+export function definitionChangeEvidenceContext(task: DefinitionChangeEvidenceTask, work: Work) { return evidenceContext(task, work); }
+/** Reconstruction only, never dispatched: validate the immutable paid v2 chain
+ * even when its final cumulative body is too large for a new request. */
+export function definitionChangeEvidenceLedger(task: DefinitionChangeEvidenceTask, work: Work) {
+  const { loadedEvidenceIDs } = evidenceContext(task, work, true);
+  return loadedEvidenceIDs;
 }
 
 export function makeDefinitionChangeEvidenceReceipt(task: DefinitionChangeEvidenceTask, work: Work, jobID: string, revision: number) {

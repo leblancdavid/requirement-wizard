@@ -55,8 +55,10 @@ verification skipping. See [workflow resilience](docs/workflow-resilience.md).
 
 Change-impact checks can now request missing original source bodies and resume
 their saved lookups instead of immediately falling back because evidence was omitted.
-Original findings stay dated; a validated semantic check is still required, and
-oversized joint evidence pauses without truncation. See [source-backed checks](docs/definition-coverage.md#check-decision-impact-before-repeating-completed-reviews-2026-11-04).
+Original findings stay dated; a validated semantic check is still required. Size-blocked
+checks can now retain bounded exact-source batch comparisons and require a separate
+joint verdict, without replaying accepted lookups/batches. Unfit whole units or joint
+receipts still pause without truncation. See [bounded change review](docs/definition-coverage.md#bounded-source-batches-and-joint-change-review-2026-11-04).
 
 Pending scoped questions can now hold affected reviews while other evidence reviews
 continue under the same workflow permission. The queue distinguishes waiting,

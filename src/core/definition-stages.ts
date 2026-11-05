@@ -81,11 +81,12 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
     splitCount: z.number().int().min(0).max(maxSplits),
     pages: z.array(z.array(z.string().min(1)).min(2).max(10000)).min(1).max(maxStages - 1),
   }).strict()).max(maxStages - 1).optional(),
-  dimensionReviews: z.array(z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
+  dimensionReviews: z.array(z.object({ format: z.union([z.literal(1), z.literal(2)]), fromStage: z.number().int().min(0).max(maxStages - 1),
     priorRequests: z.number().int().min(0).max(maxStages), priorFollowups: z.number().int().min(0).max(maxStages * definitionEvidenceRequestLimit),
     splitCount: z.number().int().min(0).max(maxSplits), linkedReviewCount: z.number().int().min(0).max(maxEvidenceStages * 2),
-    groups: z.array(z.array(z.enum(dimensions)).min(1).max(dimensions.length)).min(2).max(dimensions.length),
-  }).strict()).max(maxStages - 1).optional(),
+    groups: z.array(z.array(z.enum(dimensions)).min(1).max(dimensions.length)).min(1).max(dimensions.length),
+  }).strict().refine((review) => review.format === 1 ? review.groups.length >= 2 : review.groups.length === 1,
+    "Dimension review v1 requires multiple groups; v2 activates one complete receipt-backed view.")).max(maxStages - 1).optional(),
   contextMetadataPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
     priorRequests: z.number().int().min(0).max(maxStages), priorFollowups: z.number().int().min(0).max(maxStages * definitionEvidenceRequestLimit),
   }).strict().optional(),
@@ -394,7 +395,7 @@ const baseStageEvidenceIDs = (work: DefinitionWork): string[] => {
 
 // Request-count boundaries preserve contexts of supplemental replies accepted
 // earlier in this same stage, including their independent replay before loading.
-const boundaryEnabled = (work: DefinitionWork, policy: DefinitionWork["linkedEvidencePolicy"]) => {
+const boundaryEnabled = (work: DefinitionWork, policy: { fromStage: number; priorRequests: number; priorFollowups: number } | undefined) => {
   return !!policy && (work.receipts.length > policy.fromStage || work.receipts.length === policy.fromStage
     && (work.evidenceRequests?.filter((r) => r.stage <= policy.fromStage).length ?? 0) >= policy.priorRequests
     && (work.evidenceFollowups?.filter((r) => r.stage <= policy.fromStage).length ?? 0) >= policy.priorFollowups);
@@ -1112,6 +1113,9 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
     }
   }
   for (const [index, review] of (work.dimensionReviews ?? []).entries()) {
+    if (review.format === 2 && (index !== 0 || JSON.stringify(review.groups) !== JSON.stringify([[...dimensions]]))) {
+      throw new Error("Receipt-backed dimension view must activate once with all nine original checks.");
+    }
     if (!work.responsePolicy || !work.collectionCitationPolicy || !work.draftPolicy
       || review.fromStage < Math.max(work.responsePolicy.fromStage, work.collectionCitationPolicy.fromStage, work.draftPolicy.fromStage)
       || review.fromStage > work.receipts.length || review.splitCount > (work.continuation?.splits.length ?? 0)
@@ -1123,6 +1127,9 @@ export function validateDefinitionPlan(project: Project, work: DefinitionWork) {
       linkedAnswerReviews: work.linkedAnswerReviews?.slice(0, review.linkedReviewCount),
       evidenceRequests: work.evidenceRequests?.slice(0, review.priorRequests), evidenceFollowups: work.evidenceFollowups?.slice(0, review.priorFollowups),
       ...(work.continuation ? { continuation: { ...work.continuation, splits: work.continuation.splits.slice(0, review.splitCount) } } : {}) };
+    if (review.format === 2 && !readCompletedLinkedPairs(project, before).size) {
+      throw new Error("Receipt-backed dimension view requires accepted whole question/answer pairs in the same phase.");
+    }
     if (!review.fromStage && !work.baseline || !definitionSteps(before)[review.fromStage]
       || JSON.stringify(review.groups.flat()) !== JSON.stringify(scopedDimensions(before) ?? dimensions)) {
       throw new Error("Dimension review must preserve every unfinished dimension exactly once, in order, after an existing assessment.");
@@ -1432,7 +1439,17 @@ export function scopeDefinitionDraft(project: Project, work: DefinitionWork, dra
     group.push(dimension);
   }
   if (group.length) review.groups.push(group);
-  if (review.groups.length < 2) return false;
+  if (review.groups.length < 2) {
+    // Entering the existing dimension protocol also activates same-phase exact
+    // pair receipts. That can make ALL nine checks fit without a dimension split.
+    // Record a new event version, never reinterpret historical v1 requests or
+    // manufacture an artificial split merely to escape the legacy 64-step cap.
+    if (work.dimensionReviews?.length || !readCompletedLinkedPairs(project, work).size) return false;
+    try { definitionStageContext(project, work, draft); return false; }
+    catch (error) { if (!(error instanceof ContextBudgetError)) throw error; }
+    work.dimensionReviews = [{ ...review, format: 2 }];
+    return true;
+  }
   if (definitionSteps(work).length + review.groups.length - 1 > definitionExecutionLimit({ ...work, dimensionReviews: [...work.dimensionReviews ?? [], review] })) return "stage-limit";
   work.dimensionReviews = [...work.dimensionReviews ?? [], review];
   return true;

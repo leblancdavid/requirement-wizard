@@ -4,7 +4,8 @@ import { readinessBlockedSchema, readinessEvidenceSchema, readinessVerdictSchema
 import { submissionDraftSchema, submissionStageResponseSchema } from "../core/submission-stages.js";
 import { refinementStageResponseSchema, resolutionStageResponseSchema } from "../core/refinement-stages.js";
 import { definitionBlockedSchema, definitionEvidenceSchema, definitionVerdictSchema, definitionAssessmentResponseSchema, definitionUpdateSchema } from "../core/definition-stages.js";
-import { definitionChangeResponseSchema, definitionChangeTurnSchema } from "../core/definition-change-schema.js";
+import { definitionChangeResponseSchema, definitionChangeTurnSchema, definitionChangeBatchResponseSchema, definitionChangeEvidenceRequestSchema, definitionChangeJointResponseSchema } from "../core/definition-change-schema.js";
+import { expandChangeCitationAuthority, withChangeCitationAuthority } from "../core/definition-change-wire.js";
 import { analysisSchema, pendingChangesSchema, specificationUpdatesSchema, scanBatchAnalysisSchema, questionHelpResponseSchema, requirementEvidenceIDs, type QuestionHelpRequest, type Project } from "../core/model.js";
 import { retrievalRequestSchema } from "../core/gap-retrieval.js";
 import { searchEvidenceSchema } from "../core/gap-navigation.js";
@@ -142,6 +143,15 @@ export class OpenCodeDiscovery implements DiscoveryAdapter {
 
 export const requirementWritingPolicy = `Requirements describe observable product behavior: capabilities, triggers, outcomes, business/game rules, boundaries and failure behavior. Apply this to statements, acceptance scenarios, new requirements and review revisions. Do not inventory functions, methods, classes, internal algorithms, file layouts or engine/node structure. Keep supporting file paths and line ranges in rationale/evidence, not behavioral wording. Abstract incidental tuning constants (speeds, sizes, angles, durations, visual offsets); retain the supported behavior and meaningful relationships without inventing replacement values or vague claims such as "feels good". Example: a jump method with a 0.15-second grace constant supports "The player can still jump briefly after stepping off a ledge", with an observable scenario about immediately pressing jump after leaving a ledge. Preserve explicit human constraints, compatibility obligations, accessibility/performance targets and genuine numeric product rules (such as two-player play). A number or technical term alone is not a defect. Do not infer that a code constant is a deliberate product rule. When abstraction would lose an intentional rule or intent is unclear, ask a targeted question; do not silently remove the constraint. Original source evidence remains intact.`;
 
+function changeCitationPrompt(context: ContextPack) {
+  const authority = context.definitionChangeCitationAuthority;
+  if (authority?.format !== 1) throw new Error("Change review requires its reconstructed current-versus-historical citation authority. No request was dispatched.");
+  expandChangeCitationAuthority(context.data, authority);
+  return `APP-OWNED CITATION AUTHORITY (validator rules, not model/source assertions): ${JSON.stringify(authority)}
+This is the EXACT whitelist for evidenceIDs in EVERY returned check, regardless of outcome. If citableEvidenceIDs is present, it lists the original allowed string IDs. If citableEvidenceRefs is present, expand each INTEGER through THIS context's identifierTable.values (zero-based); a STRING reference is already its original ID. The resulting original strings are the COMPLETE allowed set. Respond with those expanded original string IDs, NEVER integer indexes. Other entries in identifierTable.values are NOT citation permission. IDs appearing in the original findings' evidenceIDs or in an evidence index are NOT permission to cite records absent from this exact whitelist.
+The listed historicalEvidenceIDs are historical comparison bodies ONLY: they are superseded, even if their replacement is in another batch and not visible here. NEVER put these IDs in evidenceIDs, for either unaffected, no-local-effect OR review-needed. Do not swap them for a guessed successor or silently omit a concern. Preserve any genuine uncertainty; do not manufacture or silently replace citations to make validation pass. Return the exact taskKey supplied by the app, not a hash/ID quoted inside source text.`;
+}
+
 export function discoveryPrompt(project: Project, context: ContextPack = buildContext(project), research = false): string {
   if (context.manifest.definitionMixedReview) {
     if (research) throw new Error("Mixed consistency cannot authorize research.");
@@ -269,8 +279,18 @@ Schema: ${JSON.stringify(zodToJsonSchema(schema, { $refStrategy: "none" }))}
 Working context revision ${project.revision}: ${JSON.stringify(context.data)}`;
   }
   if (context.manifest.definitionChangeReview) {
-    const evidence = context.manifest.definitionChangeReview.format === 2;
-    return `Review the effect of exact changed decisions on the complete saved definition findings. Return ONLY JSON, no tools, research or coding. The context instruction defines this exclusive change-only review. It does not authorize new findings, requirements, human choices, confidence upgrades or semantic independence inferred from citations. ${evidence ? "If necessary exact source bodies are missing, request loadEvidenceIDs from the app-owned evidence index before returning a verdict. Index entries are not evidence. A final review-needed verdict is for genuine effects or unresolved semantic uncertainty, not a substitute for requesting available bodies." : "If necessary exact evidence is omitted or effects are uncertain, return review-needed; the existing full review will follow."} Never resolve conflict or precedence yourself.\n${plainLanguagePolicy}\nSchema: ${JSON.stringify(zodToJsonSchema(evidence ? definitionChangeTurnSchema : definitionChangeResponseSchema, { $refStrategy: "none" }))}\nExact working context: ${JSON.stringify(context.data)}`;
+    const changeFormat = context.manifest.definitionChangeReview.format;
+    context = withChangeCitationAuthority(context);
+    if (context.manifest.characters > context.manifest.budget) throw new Error("Change-review evidence and exact citation advice exceed the bounded context. No request was dispatched; saved work remains retained.");
+    const advice = changeCitationPrompt(context);
+    if (changeFormat === 3) {
+      const stage = context.data && typeof context.data === "object" && "stage" in context.data ? context.data.stage : undefined;
+      if (stage !== "batch" && stage !== "joint") throw new Error("Unknown bounded change-review stage. No request was dispatched.");
+      const schema = stage === "batch" ? definitionChangeBatchResponseSchema : z.union([definitionChangeEvidenceRequestSchema, definitionChangeJointResponseSchema]);
+      return `Perform only the bounded change-review ${stage.toUpperCase()} stage described in the context instruction. Batch results are local AI evidence, never current findings. Only a complete joint semantic verdict can retain the assessment. No tools, research, coding, new requirements or human choices. Preserve uncertainty and original evidence. Return ONLY JSON.\n${plainLanguagePolicy}\n${advice}\nFor BATCH review, only whole current records in this batch are whitelisted; use the batch-check schema only, not a joint verdict or an evidence request. For JOINT review, availableEvidenceIDs and each batch's evidenceIDs are navigation/served-record inventories, NOT citation permission. A record seen only in those lists must first be requested with loadEvidenceIDs before you use it as a new citation. Existing accepted batch-check citations are already included in the whitelist; never add other IDs just because the earlier batch saw them. Return the exact batchKey supplied by the app, not a hash/ID quoted inside source text.\nSchema: ${JSON.stringify(zodToJsonSchema(schema, { $refStrategy: "none" }))}\nExact working context: ${JSON.stringify(context.data)}`;
+    }
+    const evidence = changeFormat === 2;
+    return `Review the effect of exact changed decisions on the complete saved definition findings. Return ONLY JSON, no tools, research or coding. The context instruction defines this exclusive change-only review. It does not authorize new findings, requirements, human choices, confidence upgrades or semantic independence inferred from citations. ${evidence ? "If necessary exact source bodies are missing, request loadEvidenceIDs from the app-owned evidence index before returning a verdict. Index entries are not evidence. A final review-needed verdict is for genuine effects or unresolved semantic uncertainty, not a substitute for requesting available bodies." : "If necessary exact evidence is omitted or effects are uncertain, return review-needed; the existing full review will follow."} Never resolve conflict or precedence yourself.\n${plainLanguagePolicy}\n${advice}\nSchema: ${JSON.stringify(zodToJsonSchema(evidence ? definitionChangeTurnSchema : definitionChangeResponseSchema, { $refStrategy: "none" }))}\nExact working context: ${JSON.stringify(context.data)}`;
   }
   if (context.manifest.definitionAssessment) {
     const epicID = context.manifest.definitionAssessment.epicID;

@@ -48,6 +48,14 @@ the same eight-load block cannot dispatch another call unchanged. See
 
 ## Versioned bounded evidence capacity (2026-11-03)
 
+An eligible legacy 64-step schedule can now activate a versioned receipt-backed
+all-nine-check view without inventing a dimension split. This resolves the case
+where already-read whole question/answer pairs made the old unscoped request
+overflow, while the existing dimension protocol's complete view fits. Historical
+responses, hashes, exact evidence and attempts stay saved; indispensable joint
+evidence still must fit or block. This happens only during explicit continuation,
+not reopening the app. See [compatibility and qualification](migrations.md#receipt-backed-all-dimension-continuation-2026-11-05).
+
 User-approved continuation can upgrade the original 64 exact-evidence partitions to
 128 per phase after validating saved history and the capacity boundary. This is a
 one-time scheduling policy, not model allowance or broader consent. Existing request,

@@ -3,6 +3,93 @@
 Implemented 2026-10-23 for RW-019. Definition coverage estimates recorded product
 decisions; it is not readiness, code completeness, or verified delivery to main.
 
+## Bounded source batches and joint change review (2026-11-04)
+
+**All-protocol dispatch fix (2026-11-05):** exact citation advice now also covers
+fitting v2 checks and legacy v1/seed callers, using the same packet builder and prompt
+rules as v3. Advice describes the existing validator set, not a new source authority
+or a persisted format migration. The revision-3150 v2 failure cited one supplied but
+superseded quality source. Its three accepted lookups and one unfinished attempt are
+unchanged; the prepared request fits at 95,516 characters under the same context key.
+The invalid unaffected claim remains rejected. See the
+[shared-path compatibility ledger](migrations.md#shared-citation-authority-across-all-change-review-protocols-2026-11-05).
+
+**Positive authority for batches too (2026-11-05):** the exact whitelist now applies
+to both batch and joint stages; the prior fix covered joint review only. At near-full
+budgets, input advice shares the existing identifier table through lossless
+`citableEvidenceRefs`; models must still return expanded original string IDs. Each
+stage is given only its valid JSON grammar. This changes no saved keys, accepted work,
+attempts, evidence or validation semantics. The new revision-3144 epic has one saved
+batch/four saved lookups and two unfinished attempts; its 62-record batch now fits
+at 94,508 characters with 59 current citable IDs and three historical-only records.
+The known ID that failed validation appears in original findings but is not supplied
+in this batch, and remains invalid. This is not the earlier completed project-wide
+joint check. See the [compatibility ledger](migrations.md#positive-citation-authority-for-every-batch-stage-2026-11-05).
+
+**Joint citation visibility fix (2026-11-05):** final joint requests now expose the
+validator's exact `citableEvidenceIDs` whitelist, not just historical exclusions.
+Serving a record to a prior batch is not the same as that batch's checks citing it;
+the joint reviewer must explicitly load an uncited available record's full body before
+using it as a new citation. Valid inherited batch-check citations remain allowed even
+when their bodies are outside the current joint window. The whitelist is reconstructed
+without changing saved keys, results or attempts. The reported failure had all three
+batches complete and one served-but-uncited permission reference; its explicit-advice
+request prepares at 75,544 characters. The user's already-running retry subsequently
+completed under the prior prompt with a valid review-needed verdict for workflows,
+rules, data and acceptance. The earlier validation failure is historical; neither the
+three completed batches nor the completed joint check needs replay. This does not
+qualify live use of the new advice or prove deeper/overall review complete. See the
+[compatibility ledger](migrations.md#exact-joint-review-citation-allowlist-2026-11-05).
+
+**Historical citation visibility fix:** v3 now explicitly identifies every supplied
+historical-only source in app-owned request advice, including when its successor is
+outside the batch. Such bodies remain exact historical comparison evidence, never
+current citation authority. Errors distinguish wrong keys from superseded/unsupplied
+citations. Existing task/context keys, frozen boundaries, accepted results and spent
+attempts remain unchanged; the advice is rebuilt, not stored or used to manufacture
+freshness. The reported third batch now prepares at 91,322 characters including
+the advice, retaining two accepted batches and two charged unfinished attempts.
+Its old invalid response remains rejected. See the
+[compatibility/verification ledger](migrations.md#explicit-historical-citation-authority-for-change-batches-2026-11-04).
+
+User-approved after another cumulative lookup exceeded the limit despite ID sharing.
+Unfinished size-blocked v2 work now adopts v3 **only during explicit continuation**,
+preserving accepted lookups, original keys and spent attempts. All original cited
+source bodies and already loaded evidence enter a frozen exact ledger. Whole linked
+units are split into bounded batches, each with all nine original findings, every
+change and full direct changed-decision evidence. Each accepted local comparison is
+saved with its source/context identity, date, selected model and charged attempts.
+Reopening/adoption reuse it without another inference call.
+
+Local `no-local-effect` is not independence or currentness. After every batch a
+separate joint semantic check reads every full batch result, findings and changes,
+and can rehydrate bounded exact source groups using the remaining original lookup
+allowance. Complete checkpoints remain available when the joint body window changes.
+Only the final joint verdict can retain an assessment; any unresolved batch concern
+prevents unaffected publication. This does not change original findings/dates,
+confidence or human decisions. The queue shows saved batches and the need for a
+joint verdict. Bounds and genuinely unresolved evidence still pause/fall back safely.
+
+The reported revision-3139 task prepares read-only as **three batches (95,228,
+93,587, 91,167 characters)** covering all **133 ledger records**, retaining its three
+accepted lookups and zero unfinished attempts. No model completion or real-data
+upgrade has been tested. See the [format/migration/verification ledger](migrations.md#bounded-change-review-batches-and-joint-verdict-2026-11-04).
+
+## Lossless cumulative change-check fallback (2026-11-04)
+
+Oversized source-backed change-check requests now share repeated IDs through a
+reversible table before applying the unchanged 96,000-character bound. Full findings,
+changes and loaded source bodies remain present, with runtime exact-value round-trip
+verification. Already-fitting requests and expanded-data context identities do not
+change; saved accepted lookups and spent attempts survive restart and portable adoption.
+
+The reported revision-3139 request prepares read-only at **89,502** characters instead
+of **104,130**, retaining its one accepted lookup and all 21 supplied records. Its
+78,693-character diagnostic described the preceding dispatch, not the blocked request.
+No live model completion has been tested. Genuinely oversized distinct evidence still
+pauses without truncation or a currentness claim. See the
+[compatibility ledger](migrations.md#lossless-change-check-identifier-sharing-2026-11-04).
+
 ## Refresh the overall view
 
 ### Check decision impact before repeating completed reviews (2026-11-04)

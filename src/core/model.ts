@@ -321,7 +321,7 @@ export type Job = {
     gapRetrieval?: boolean;
     epicReview?: import("./epic-review-types.js").EpicReview;
     definitionAssessment?: { format: 1; epicID: string; inputKey: string; staged?: { policy: "exact-batches-v1"; planKey: string; baselineKey?: string } };
-    definitionChangeReview?: { format: 1 | 2; taskKey: string; currentInputKey: string };
+    definitionChangeReview?: { format: 1 | 2 | 3; taskKey: string; currentInputKey: string };
     definitionJointReview?: { format: 1; policy: "definition-joint-review-v1"; candidateKey: string; contextKey: string; snapshotKey: string };
     definitionScopeReview?: { format: 1; policy: "definition-review-scope-v1"; scopeKey: string; contextKey: string; snapshotKey: string };
     definitionMixedReview?: { format: 1; policy: "definition-mixed-review-v1"; requestKey: string; assemblyKey: string; contextKey: string; snapshotKey: string };

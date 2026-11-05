@@ -1,5 +1,432 @@
 # Data migrations and upgrade compatibility
 
+## Receipt-backed all-dimension continuation (2026-11-05)
+
+**Source → target:** existing `DefinitionWork` format 1 with no dimension ledger
+can append a `dimensionReviews` event **format 2** at its unfinished receipt
+boundary. Historical format-1 events still require two or more dimension groups;
+format 2 activates exactly one group containing all nine original checks, once,
+only with accepted whole question/current-answer pairs in the same phase. Unknown
+event versions are rejected. Database 27, portable state 1–6, original input/plan
+identities and published assessment semantics do not change. Older readers reject
+the new event rather than silently treating it as a historical format-1 split;
+downgrade after adopting the event is unsupported.
+
+The legacy schedule can reach its combined 64-step ceiling before enabling the
+existing dimension protocol. That protocol both separates scheduling capacity and
+uses receipt-backed same-phase pair reads. Previously, an all-nine-check view that
+already fit was rejected merely because it needed no dimension split, leaving
+splitting, paging and capacity upgrades mutually blocked. Explicit continuation
+now records the version-2 event only when the original request overflows and this
+complete view fits. No artificial split, larger context budget or model allowance
+is introduced. Original receipts, raw responses, dates, models, exact human text,
+source IDs and spent attempts are preserved. Existing multi-group events retain
+their original projection and hashes.
+
+This is a local forward scheduling event after exact replay, not a database-startup
+rewrite or a model result. The existing transactional checkpoint saves it before
+dispatch. Reopening or adopting a portable workspace retains the same event; an
+interruption before checkpoint can recompute it without inference or refunds.
+Separate earlier reads never establish joint consistency: indispensable exact
+records remain reloadable under existing limits, uncertain relationships still
+block, and every remaining verification must finish before publication. Technical
+overflow now has a technical blocker kind and reports the actual limiting ceiling;
+UI guidance does not ask for a product answer to repair a technical failure.
+
+Read-only replay of the reported revision-3163 checkpoint validated all **60**
+accepted responses before and after an in-memory event, preserved every receipt
+and the zero unfinished attempts, and prepared **70,616 / 96,000** characters
+(previously **121,093**). The saved database/job bytes were unchanged; no live
+model calls or actual-user publication were performed.
+
+Qualification passed: `npm run check`, `npm test` (**905 pretests, 774 main tests,
+54 posttests**), seven focused continuation/technical-blocker regressions, 21
+focused UI tests, both CLI help commands and diff checking. The standalone whole
+definition-stage run reached its 120-second command timeout after 181 passing
+tests; the subsequent complete `npm test` run included that suite and passed.
+The UI build and all 22 default browser runners plus both post-browser runners
+also passed with deterministic adapters and no live inference. The running
+desktop/installed application has not been rebuilt, and actual-user model
+continuation remains unverified.
+
+## Shared citation authority across all change-review protocols (2026-11-05)
+
+**No persisted-format change:** database 27, work/receipt formats 1–3 and portable
+formats 1–6 retain their existing semantics. Earlier advice fixes covered v3 batch
+and joint review, but fitting v2 checks still used their older dispatch wrapper.
+The reported revision-3150 epic is a v2 task, distinct from the previously inspected
+project-wide and batched-epic tasks.
+
+Read-only native response inspection matched the selected model, exact request and
+task/context keys. Three paid lookups are accepted, with one spent unfinished attempt.
+Of 37 supplied records, 36 are citable under the existing v2 rules. The sole invalid
+quality-check citation was `f889b3ac-6ff1-402a-a41f-54bf8def7cb7`: its whole body was
+supplied for historical comparison but was superseded. The original response claimed
+unaffected; that claim remains rejected, not repaired or certified by this diagnosis.
+
+`changeEvidencePacket` now builds bounded advice/wire encoding for both v2 and v3.
+`withChangeCitationAuthority` reconstructs equivalent advice for v1/v2 dispatch or
+seed-context callers; v3 still requires its explicitly scoped authority, never a
+permissive reconstruction from served inventories. The shared model prompt renders
+and validates one positive-whitelist/historical-exclusion explanation for **every**
+change-review protocol, including direct-provider and OpenCode routing. The v1 exact
+original validator set/final-only grammar is preserved; v2 exposes its existing
+`evidenceCitationIDs` set and source-request/final grammar. Neither path can silently
+bypass the advice solely because the request fits without batching. Both v3 grammars
+and stricter scope rules remain unchanged.
+
+The single shared packet builder reserves the full serialized advice inside the
+same 96,000-character bound and shares existing ID tables losslessly when useful.
+No original wording, finding, change, navigation prefix selection, question/answer
+unit, task key or expanded-data context hash is changed. Advice stays transient, not
+an additional job/work/receipt/portable field. v2 accepted lookup replay checks its
+original expanded hashes without a new-advice dispatch ceiling; compatible saved
+verdict publication also remains local/no-inference. Only a pending new request must
+fit, with the existing explicit v2→v3 continuation available for actual overflow.
+Legacy v1 dispatch rejects an unfit request before reserving another attempt, rather
+than discarding old work. No reset, allowance extension or attempt refund is introduced.
+
+The common final-response validator now separates wrong task keys from actual invalid
+IDs and labels known historical exclusions instead of returning the generic combined
+message. Structural nine-finding/outcome/distinct/nonempty checks remain unchanged.
+No returned citation is deleted/remapped or accepted merely because other citations
+in its check are valid. The reported v2 request prepares at **95,516 / 96,000**
+characters with the **same context hash**, three saved lookups and one spent attempt.
+Its original invalid native response is still invalid. No real project data was
+written, old request repeated, or model/provider fallback performed.
+
+All **54** focused change-work tests, final `npm test` (**899 pretests, 774 main tests,
+54 posttests**), type/diff checks, CLI help, the UI build/all **22** default browser
+runners plus both v2/v3 post-browser runners, and isolated recompiled Electron
+desktop/startup suites passed. The first broad run reached the existing 64-stage
+bound in the supplemental post-page continuation fixture; that test passed its
+targeted rerun and the final whole-suite rerun without changes to its fixture or
+engine. This observed boundary-test instability is not a newly qualified arbitrary
+context-size guarantee. The regression matrix includes v1 and v2 seed/dispatch
+advice and grammars, v2 loaded historical versus unloaded original citations, exact
+positive sets and unchanged raw outputs/lookup keys/attempts, compatible saved-v2
+reuse versus a blocked new request under a test-local smaller dispatch ceiling, and
+the existing v3 batch/joint cases. The v2 browser runner now checks advice before and
+after whole-source loading through the actual service path. Legacy stored-v1 upgrade
+fixtures also verify dispatcher advice and unchanged saved responses/attempts.
+Corrected live completion remains unqualified; no user-data write, model request,
+attempt refund, commit or push was made during this fix.
+
+## Positive citation authority for every batch stage (2026-11-05)
+
+**No persisted-format change:** database 27, work/receipt 3 and portable state 6
+remain unchanged. The previous positive-allowlist fix applied to joint review only;
+batch requests still exposed historical exclusions without an exact positive set.
+The new report concerns a different epic at revision 3144, not the completed
+project-wide review at revision 3139.
+
+Read-only reconstruction found **four accepted lookups, one accepted batch and two
+spent attempts** on batch two of three. The completed native request matched its
+saved selected model, task, context and batch keys. It cited
+`22c71115-b100-46f5-956a-a7245067993c` in all nine checks. The source was known and
+non-superseded, and its ID appeared in the complete original findings, but its whole
+body was not supplied in this batch. The unchanged validator correctly rejected it;
+neither an original finding's citation nor an ID-table entry grants current stage
+citation authority. Review-needed concerns in that invalid response are not converted
+to approval or silently removed by this fix.
+
+**Both batch and joint stages now receive an exact positive whitelist** generated
+from the existing validation rules. For batches it is every whole current supplied
+record, excluding historical-only sources. Joint review retains its narrower current
+window/actual accepted-check citation set. Every returned citation, for either outcome,
+must belong to that stage's whitelist. The shared OpenCode/direct prompt also requests
+only the current stage's JSON grammar: batch checks for a batch; source request or
+joint verdict for joint review. This is app-owned prompt/schema guidance with local
+validation, not a claim of provider-native schema enforcement or new tool permissions.
+
+Near-full contexts cannot afford another duplicated array of long source UUIDs.
+Advice therefore uses `citableEvidenceIDs` for literal IDs or, when smaller,
+`citableEvidenceRefs` sharing the **existing** request `identifierTable.values`.
+Integer references are zero-based; strings remain literal original IDs. A runtime
+round-trip verifies that the complete decoded whitelist is unchanged. No second ID
+table, shortened list, sampled evidence or new record alias is introduced. Responses
+still must return original string IDs; output citations are never repaired/coerced
+from indexes, stripped or remapped to make an invalid response pass. Missing,
+ambiguous or malformed allowlist advice fails before a new model request.
+
+The complete serialized advice remains within the same 96,000-character bound along
+with the exact body. Advice is transient and regenerated; it is not a new saved work,
+receipt or portable field. All human/source text, complete findings and changes,
+frozen batch boundaries, expanded-data hashes, accepted responses, dates and spent
+attempts remain unchanged. The reported batch prepares at **94,508 / 96,000**
+characters (previously 94,312), with exactly **59** citable current records and three
+historical-only records. All saved lookups/batch checkpoints reconstruct and the
+original invalid response remains rejected. No real-user data was written or model
+request repeated. The remaining current-stage attempt was not reset or dispatched.
+
+All **53** focused change-work tests, final `npm test` (**899 pretests, 774 main tests,
+53 posttests**), type/diff checks, both source-backed/batched browser runners and
+isolated recompiled Electron desktop checks passed. Regressions verify literal/compact whitelist equivalence,
+unencoded string IDs, out-of-range/fractional/negative/ambiguous references, exact
+batch authority versus tempting IDs in original findings and the shared dictionary,
+strict rejection for either outcome without response mutation, frozen hashes and
+stage-specific prompt grammars. The browser runner verifies positive advice through
+both actual stage paths. Live corrected completion of this epic remains unqualified;
+no user-data write, model request, attempt refund, commit or push was made.
+
+## Exact joint-review citation allowlist (2026-11-05)
+
+**No persisted-format change:** database 27, work/receipt 3 and portable state 6
+remain unchanged. The joint request now exposes its existing validator's **exact
+positive `citableEvidenceIDs` allowlist** in the ephemeral app-owned request sidecar.
+It consists of current whole records in the joint window plus current IDs actually
+cited by accepted batch checks. `availableEvidenceIDs` and each batch checkpoint's
+served `evidenceIDs` remain navigation/inventory only; serving a record to a prior
+batch is not permission to invent a new joint citation from its ID alone. Necessary
+uncited available records can still be explicitly rehydrated as whole units using
+the remaining original lookup allowance before a fresh semantic verdict.
+
+Read-only inspection of the reported revision-3139 failure found **all three batches
+complete**. The completed OpenCode V2 joint request/selected model, outer and nested
+task keys and all batch acknowledgments matched. Only one permission-check citation
+(`46411974-b127-435a-9622-76269b1f61c2`) was outside the allowed set: it was a known,
+non-superseded record served in an earlier batch, but none of the saved batch checks
+cited it and its body was absent from the joint window. Other inherited batch citations
+were valid despite being absent from `manifest.includedIDs`. The overall response
+also retained review-needed concerns; this diagnosis does not turn them into an
+unaffected result. A later owned retry was observed running with two charged joint
+attempts and was neither interrupted nor modified by the investigation.
+
+The shared OpenCode/direct-provider prompt now states the whitelist exactly for
+**every** joint check, distinguishes the two inventory lists, and tells the model to
+request required bodies instead of guessing or replacing citations. Missing joint
+allowlist advice fails before dispatch. Diagnostics separately identify outer/nested
+task keys, batch acknowledgment mismatch, historical citations and uncited/unloaded
+IDs, rather than falling through to the generic final-response error. Invalid citations
+are not silently deleted/remapped, including when other citations in that check are
+valid. The original rejected native reply remains invalid under the unchanged rules.
+
+Advice is rebuilt from frozen snapshots/checkpoints and is not added to saved work,
+receipts or portable artifacts. The same reconstruction function supplies both the
+printed allowlist and the validator set, avoiding divergent policy implementations.
+Its complete serialized size is reserved inside the unchanged 96,000-character input
+bound before lossless ID sharing. Expanded data hashes, source ledger, batch partition,
+accepted responses, dates, grants and attempts do not change. Completed responses and
+accepted joint lookups keep their original hash-bound replay path. New dispatches
+and newly requested source groups must fit the bound; local replay/publication of a
+compatible saved response cannot be blocked solely by added advice overhead. No upgrade/reset,
+attempt refund, re-partition or repetition of completed batch inference is required.
+
+The exact failed request still reconstructs under context key
+`5b0f51cbcb0e179b5fb9bd6cd687876b4681fa0d508b79b1c2d3549929acef8b`;
+its bounded request including explicit allowlist prepares at **75,544 / 96,000**
+characters (previously 74,046). No user project data was written, model call made,
+or completed response retroactively certified. A running old-code request does not
+acquire new advice mid-flight.
+
+**Subsequent read-only observation:** the already-running retry completed and saved a
+valid joint `review-needed` verdict for workflows, rules, data and acceptance, retaining
+all three completed batches and two charged joint attempts. The first failure is now
+historical; no rerun of the completed joint check is required. This is observed native
+completion under the **previous prompt**, not live qualification of the new positive
+allowlist or proof that deeper review/overall workflow is complete. No investigation
+model call or data repair produced this outcome, and original findings were not blessed
+unaffected. The existing workflow can act on its saved deeper-review result.
+
+All **52** focused change-work tests, final `npm test` (**899 pretests, 774 main tests,
+52 posttests**), type/diff checks, both source-backed/batched browser runners and
+isolated recompiled Electron desktop checks passed. No UI/data migration is part of
+this advice fix. New tests reproduce a served-but-uncited
+record alongside otherwise valid joint citations, preserve rejected raw objects and
+charged attempts, retain every completed batch, verify exact key/allowlist reconstruction,
+reject missing advice/wrong nested keys, and explicitly rehydrate the record before a
+fresh fixture verdict. A test-local tighter dispatch ceiling also exercises compatible
+saved-joint-response/lookup reuse versus correctly blocked new inference. The browser
+runner checks the allowlist received through the real workflow path and the shared
+model prompt. Live use of the new positive allowlist remains unqualified; no new
+provider/model calls or user-data writes were made during the fix.
+
+## Explicit historical citation authority for change batches (2026-11-04)
+
+**No additional persisted-format migration:** database 27, work/receipt 3 and portable
+state 6 remain unchanged. A reported third-batch rejection was not another overflow
+or a wrong task/stage key. Read-only inspection found two accepted batches and two
+charged attempts on the third. The matching completed OpenCode V2 response cited a
+superseded source in three checks. That whole body was intentionally present as
+historical comparison evidence, but the superseding record was not in this batch;
+the model could not discover the global supersession exclusion from the visible
+body alone. The generic rejection combined key errors with citation errors and hid
+this distinction. The response also retains substantive review-needed concerns;
+diagnosing its citation error does not establish an unaffected verdict.
+
+Each reconstructed v3 request now has an **ephemeral, app-owned citation-authority
+sidecar** listing exactly which supplied records are historical-only. The shared
+OpenCode/direct-provider prompt explicitly forbids those IDs in both no-local-effect
+and review-needed citations, even when their successor is absent. It does not remove
+historical bodies, substitute a successor, drop a concern or make a model preference
+current. Missing advice fails before dispatch. Validation remains equally strict;
+diagnostics now distinguish taskKey, batchKey, historical citations and unsupplied
+citations, with bounded record IDs rather than echoed human/model prose.
+
+The sidecar is regenerated from the frozen source snapshot and is **not persisted**
+in jobs/work, receipts or portable artifacts. Its serialized size is included in
+the bounded context character count, reserving room before reversible ID encoding.
+All expanded data, source ledger, saved partition, task/batch/context hashes,
+accepted responses, timestamps and attempt counts retain their existing semantics.
+Old valid completed work therefore needs neither conversion nor another inference
+call. Frozen batches are not repartitioned to accommodate equivalent wire advice;
+an actually unfit complete request still fails closed with saved work retained.
+
+The reported task reconstructs both accepted batches and the exact rejected native
+request under the same selected model/context, with **three accepted lookups, two
+accepted batches and two unfinished attempts**, unchanged. The active third request
+prepares at **91,322 / 96,000** characters including its three historical-only IDs
+(the original data-only body remains 91,167 characters). The original invalid reply
+still fails validation; it was not silently repaired or accepted. Read-only V2 message
+retrieval consumed no model call and modified no user project data. A further valid
+model response is needed for that unfinished batch, within its original retry budget;
+no attempt was refunded and the final joint verdict remains required.
+
+All **50** focused change-work tests, type/diff checks, final `npm test` (**899
+pretests, 774 main tests, 50 posttests**), both source-backed/batched browser runners
+and isolated recompiled Electron desktop checks passed. No UI change or new data
+migration is part of this citation-visibility fix. Coverage includes a successor outside the frozen
+batch, explicit prompt authority, unchanged expanded hashes/checkpoints/attempts,
+strict rejection for either outcome, no silent citation remapping and missing-advice
+rejection. Live corrected-response completion remains untested; the real task's
+remaining third-batch attempt was not dispatched or reset by these checks.
+
+## Bounded change-review batches and joint verdict (2026-11-04)
+
+**Database 26 → 27, change work/receipt 3, portable state 6.** The user approved
+durable bounded evidence-review batches followed by joint consistency review after
+identifier sharing alone proved insufficient. The database migration is an ordered,
+transactional reader-capability boundary: startup never changes old job/project
+payloads, dates, semantic fingerprints, completed v1/v2 verdicts, grants or live leases,
+and never invokes a model. Old applications reject database 27 on reopening.
+
+Only explicit owned continuation of an unfinished v2 request whose cumulative context
+still exceeds 96,000 characters adopts v3. Ordinary fitting requests keep v2; saved
+final v1/v2 responses retain their original publication path. The new job preserves
+the original task/assessment/context keys and immutable v2 lookup chain. Each old
+lookup is reconstructed against its exact original expanded-data context, even when
+the final cumulative body cannot be dispatched. The earlier job remains untouched.
+Current attempts carry into the first batch (also retained as `inheritedAttempts`);
+an exhausted three-attempt request cannot gain a fresh budget by switching protocols.
+Read-only status/context inspection cannot adopt or spend an attempt.
+
+The frozen ledger includes **every original citation**, all already accepted loaded
+records, full changed-decision provenance and whole linked current question/answer
+units. Missing records/ambiguous provenance fail closed, not guessed or summarized.
+Exact bodies, original ordering and all nine complete findings/every exact change
+determine deterministic bounded batch/context hashes. Navigation excerpts are not
+substantive evidence and are absent from the new batch protocol, rather than changing
+the old task. The original batch-key/source-ID partition is saved in `batchPlan` and
+reopened as frozen boundaries: an equivalent wire encoder cannot silently repartition
+completed work or invalidate its semantic hashes. Every batch repeats all findings/changes and full direct change evidence;
+all remaining whole source units are partitioned, never clipped. Current record IDs
+remain distinct from historical/superseded citation authority.
+
+Each accepted batch stores its exact nine-finding local response, served evidence IDs,
+batch/context keys, real acceptance timestamp, attempts and originating job/model.
+`no-local-effect` is explicitly not a global unaffected verdict. Batch concerns remain
+verbatim. All accepted responses are replay-validated locally against frozen inputs,
+not redispatched after Pause, restart, transport failure or portable adoption.
+Each unfinished stage has at most three charged attempts. Existing workflow request,
+active-time, owned lease, cancellation, no-research and selected-model checks still
+apply; batching does not grant additional workflow allowance.
+
+After all batches, the joint request contains every complete batch response plus
+original findings, changes and direct evidence. A separate semantic verdict must
+explicitly review all batch keys in order and inspect combined/cross-dimensional
+effects; the app never derives independence from batch membership, citations or local
+outcomes. An unresolved `review-needed` batch concern forbids an unaffected final
+verdict. Joint citations must refer to current whole records in the current window
+or records actually cited by accepted exact-source batch reviews. When exact joint
+bodies are needed the model can request a whole linked group from the frozen ledger;
+that bounded window replaces the preceding joint body window, not accumulated bodies
+or accepted checkpoints. These requests use the **remaining original six-lookup
+allowance**, not a fresh six. A saved joint response is validated/reused for explicit
+publication without inference. Stale results retain historical evidence, never current
+authority, and no original finding/date, confidence or human decision is changed.
+
+Portable state 6 retains v3 checkpoints, original history/order, dates, semantic keys
+and attempts, but continues excluding credentials, machine-local sessions and full
+activity archives. Formats 1–5 retain their existing readers and semantics; a v3 work
+or receipt mislabeled as format 5 is rejected without adoption/write. Unsupported
+future protocols roll back startup migration/version/history atomically; repair and
+retry can reopen without resetting compatible work. Work payloads are bounded to
+256 KiB for v3 (v1/v2 remain 64 KiB); startup selects at most that bound and validates
+the actual schema. Ledgers allow at most 1,024 records / 32 whole batches. Unfit whole
+units, complete joint receipts beyond 96,000 characters, exhausted lookups/attempts
+and other storage bounds still fail closed with retained saved work. This is not
+arbitrary-size inference or a guarantee that every uncertainty can be settled.
+
+**Read-only real-task preparation:** revision 3139 now retains three accepted lookups,
+zero unfinished attempts, and the blocked cumulative input of 127,139 expanded /
+109,129 identifier-shared characters. Its frozen ledger has **133** exact records,
+covered by **three batches of 95,228, 93,587 and 91,167 characters**. Every original
+finding, change and supplied body round-tripped exactly, and all earlier v2 lookup
+contexts reconstructed. No user database was migrated/written and no live model call
+was made. This qualifies preparation, not live batch/joint semantic completion.
+
+All **49** focused change-work/batch tests, **63** migration/portable/scope tests,
+the final `npm test` run (**899 pretests, 774 main tests, 49 posttests**), type/diff
+checks, CLI help, UI build, all **22** default browser runners plus both v2/v3
+post-browser runners, the separate coordinated-workflow browser check and isolated
+Electron desktop/startup suites passed. No inference was used. The earlier browser
+cleanup lock recorded for the wire-only slice did not recur in this aggregate run.
+Desktop checks used the existing independent ignored stage with recompiled backend
+and current UI assets, without rebuilding/stopping the user's running app.
+Tests cover actual clone adoption, repeated reopen,
+charged interrupted stages, saved-joint-response publication, concern preservation,
+malformed/guessed/stale evidence, cancellation, timeout, expired ownership, exhausted
+legacy attempts, bounded replacement joint windows, the original shared lookup cap,
+frozen-plan tampering and transactional future-format rollback/recovery. Real app
+upgrade and live model semantic completion remain unqualified; source preparation
+alone is not an unaffected verdict. No commit or push was made.
+
+## Lossless change-check identifier sharing (2026-11-04)
+
+This earlier wire-only slice remains in use for fitting v2 requests; the subsequent
+batch protocol above adds the separate persisted versions and capability migration.
+
+**No persisted format change:** database 26, portable state 5 and change work/receipts
+2 remain unchanged. Oversized cumulative change-check requests now try the existing
+identifier-table wire encoding before enforcing the same 96,000-character limit.
+Every source body, finding, change, link and human wording remains present. A runtime
+round-trip check verifies exact expanded JSON-value equivalence before dispatch.
+Already-fitting requests retain their original representation. No summaries, dropped
+records, enlarged budgets, external lookups or additional inference are introduced.
+
+`contextKey` and `responseContextKey` still hash the original **expanded** data.
+Accepted lookup IDs, model/job provenance, attempt counts and response identities
+are not rewritten or invalidated merely by a smaller wire spelling. Consequently no
+forward data migration or reassessment is needed. Reopening and portable adoption
+reconstruct the same saved lookup chain; an interrupted request remains charged.
+Unsupported or genuinely stale data retains the existing rejection behavior.
+
+Read-only reproduction of the reported revision-3139 task found one accepted lookup,
+zero attempts on the unfinished request and 21 supplied records. The blocked next
+request was **104,130** characters; the reported **78,693** described the previous
+dispatch. Production preparation now yields **89,502 / 96,000** characters and an
+exact round-trip, without repeating that lookup or writing user data. Earlier lookup
+contexts still reconstruct. This establishes preparation, **not live model completion**.
+
+Focused tests cover exact Unicode/prose/numeric/null/missing-field preservation,
+unchanged semantic hashes, legacy size-blocked continuation without another lookup,
+repeated reopen, actual portable adoption, charged-attempt preservation and unchanged
+original assessments. All 38 focused change-work tests, 94 adapter/resilience tests
+and the final `npm test` run (899 pretests, 774 main tests, 38 posttests) passed.
+An earlier run rejected a new fixture above the existing 12,000-character note limit;
+the fixture was corrected before the final full run. Type checking,
+targeted change/workflow browser checks, CLI help and isolated Electron desktop/startup
+checks passed, without live inference.
+Both default browser attempts stopped on a Windows `EBUSY` cleanup lock after the
+first eight runners' checks, including historical recovery, passed. The remaining
+14 default runners were then executed separately and all passed. Thus all default
+browser assertions were exercised, but the aggregate command's cleanup remains
+blocked; this unrelated cleanup behavior was not changed by the wire fix.
+The existing isolated desktop stage was recompiled without disturbing the user's
+running development app. Distinct evidence can
+still exceed the bound after ID sharing; that remains a durable pause, now reporting
+both encoded and expanded sizes, rather than silently truncating or marking current.
+
 ## Indexed startup review validation (2026-11-04)
 
 **Database 25 → 26 adds derived expression indexes only.** It does not rewrite

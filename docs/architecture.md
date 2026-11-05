@@ -1,5 +1,18 @@
 # Architecture outline
 
+## Bounded change-review continuation (2026-11-04)
+
+`src/core/definition-change-batches.ts` owns the immutable source ledger, frozen exact
+batch partition, bounded contexts, stage/context identity and final-joint validation.
+It reconstructs the original v2 lookup chain without dispatching oversized bodies.
+Storage adopts v3 transactionally only during explicit live continuation, persists
+local response/context/date/model/attempt provenance and publishes only a saved joint
+verdict. The service retains selected-model/no-research permissions, grants, leases,
+per-request cancellation/timeouts and expected revisions. UI reads bounded counts;
+it does not infer currentness or contain batching/evidence logic. Database 27 and
+portable state 6 add reader-capability gates without rewriting compatible old work.
+See [migration/recovery details](migrations.md#bounded-change-review-batches-and-joint-verdict-2026-11-04).
+
 `definition-change-review.ts` adds a separate bounded semantic change-impact task
 before full definition refresh under the existing Continue-specification owner/grant.
 It compares every complete saved dimension finding with every exact delta and
