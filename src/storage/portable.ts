@@ -12,7 +12,7 @@ import { readinessQuestionTaskSchema } from "../core/readiness-questions.js";
 import { readinessWorkSchema } from "../core/readiness-stages.js";
 import { submissionWorkSchema } from "../core/submission-stages.js";
 import { refinementStageSchema, refinementWorkSchema } from "../core/refinement-stages.js";
-import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionInputKey, definitionAssessmentEvidenceIDs } from "../core/definition-identity.js";
 import { definitionBaselineKey } from "../core/definition-baseline.js";
 import { definitionInterruptionSchema } from "../core/definition-interruption.js";
 import { recoveryRevisionSchema, recoveryRevisionCurrent, definitionRevisionSchema, definitionRevisionCurrent } from "../core/implementation-revisions.js";
@@ -97,7 +97,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (job.definitionChangeWork) {
       const assessment = project.assessments.find((a) => a.epicID === job.definitionChangeWork!.epicID);
       if (!assessment || job.definitionChangeWork.assessmentKey !== definitionBaselineKey(assessment)
-        || context?.definitionChangeReview?.currentInputKey !== definitionInputKey(project, assessment.epicID, assessment.checks.flatMap((c) => c.evidenceIDs))) continue;
+        || context?.definitionChangeReview?.currentInputKey !== definitionInputKey(project, assessment.epicID, definitionAssessmentEvidenceIDs(assessment))) continue;
     }
     if (job.definitionWork && !linked.has(job.id)) {
       const work = job.definitionWork;

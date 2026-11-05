@@ -41,6 +41,8 @@ import { definitionLinkedAnswers } from "../core/definition-linked-answers.js";
 import { definitionLabelDrift, definitionEvidenceIssue } from "../core/definition-evidence-issue.js";
 import { definitionDecisions } from "../core/definition-decisions.js";
 import { encodeDefinitionSnapshots } from "../core/definition-wire.js";
+import { upgradeDefinitionProvenance } from "../core/definition-stages.js";
+import { definitionApprovalReceipts, definitionProvenancePairs } from "../core/definition-provenance.js";
 import { shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure } from "../core/working-set.js";
 
 const empty = (): Analysis => analysisSchema.parse({ summary: "Definition evidence batch", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
@@ -1334,6 +1336,189 @@ test("saved linked-answer lookup failures resume through reopen and portable ado
 
 /** Historical 64-step schedule: whole linked pairs were already read during
  * verification, but the legacy unscoped request expands their graph again. */
+function provenanceFixture(store: ProjectStore, attempts = 3) {
+  let p = seed(store, 3); const requirementID = p.requirements[0]!.id;
+  const ask = store.beginJob(p.id, p.revision).job; store.claimJob(ask.id, Date.now() + 60000);
+  store.finishJob(ask.id, { ...empty(), questions: ["Which colors govern?", "Does that also govern preparation?"].map((text) => ({
+    epicID: "unrelated", text, evidenceIDs: [requirementID], whyItMatters: "Preserve the exact scope",
+    options: [{ label: "Use mineral colors", consequence: "Only the stated scope changes" }, { label: "Use theme colors", consequence: "Keep the original" }],
+  })) }); p = store.get(p.id);
+  for (const q of p.questions) p = store.answer(p.id, p.revision, q.id, { kind: "answer", text: "Use mineral colors for preparation too 🧾\r\nNo broader change." });
+  const propose = store.beginJob(p.id, p.revision).job; store.claimJob(propose.id, Date.now() + 60000);
+  store.attachContext(propose.id, { ...definitionContext(p, "runtime").manifest, definitionAssessment: undefined });
+  store.finishJob(propose.id, { ...empty(), refinements: [{ requirementID, statement: "Prepared missions use mineral colors", acceptance: ["Prepared colors match assigned minerals"],
+    rationale: `Human answers ${p.questions.map((q) => q.sourceID).join(" and ")} establish this exact scope.`,
+    reason: "This proposal does not edit the active requirement or establish approval of revised wording." }] }); p = store.get(p.id);
+  p = store.reviewRefinement(p.id, p.revision, p.refinements.at(-1)!.id, true);
+  const approval = p.sources.at(-1)!.id;
+  for (let i = 0; i < 12; i++) p = store.note(p.id, p.revision, Array.from({ length: 160 }, (_, n) => createHash("sha256").update(`provenance-background-${i}-${n}`).digest("hex")).join(""), "project");
+  const work = planDefinitionStages(p, "runtime"), initial = p.sources[0]!.id;
+  const notes = p.sources.filter((s) => s.kind === "note").map((s) => s.id), reserved = new Set([initial, notes[0]!, requirementID, approval]);
+  work.batches = [[initial], [notes[0]!], [requirementID, approval], work.batches.flat().filter((id) => !reserved.has(id))];
+  work.planKey = createHash("sha256").update(JSON.stringify(["definition-exact-batches-v1", work.epicID, work.inputKey, work.batches])).digest("hex");
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  work.attempts = 1; let draft = acceptDefinitionStage(p, work, undefined, { definitionAssessment: result("runtime", initial).assessments![0] }, job.id);
+  work.attempts = 1; draft = acceptDefinitionStage(p, work, draft, { definitionUpdate: { checks: [] } }, job.id);
+  upgradeDefinitionAllowance(work); upgradeDefinitionEvidenceFollowups(p, work); upgradeDefinitionEvidenceCorrection(p, work, draft);
+  const answers = p.questions.map((q) => q.sourceID!);
+  work.attempts = 1;
+  try { requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: answers, reason: "Read the exact choices named in the supplied requirement" } }, job.id); assert.fail("Old forward-only policy must reject reverse links"); }
+  catch (error) { assert.ok(error instanceof DefinitionEvidenceReferenceError); recordDefinitionEvidenceFailure(p, work, draft, error, job.id); }
+  work.attempts = 2; requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [notes[1]!], reason: "Read one legitimate original record" } }, job.id);
+  work.attempts = attempts; work.blockedKind = "evidence-lookup";
+  work.blocked = `Human answers named in ${requirementID} were rejected as unknown. Exact approval ${approval} quotes the earlier proposal disclaimer; this is unavailable evidence, not a new product decision.`;
+  store.checkpointDefinition(job.id, work, definitionStageContext(p, work, draft).manifest); store.blockDefinition(job.id, work.blocked, work.blockedKind);
+  return { p, work, draft, answers, approval, requirementID, job: store.getJob(job.id) };
+}
+
+test("bounded cross-feature provenance restores whole rejected pairs and exact approved cleanup facts without repairing historical replies", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, approval, answers } = provenanceFixture(store), old = structuredClone(work);
+    assert.equal(upgradeDefinitionProvenance(p, work, draft), true);
+    const context = definitionStageContext(p, work, draft), data = expandDefinitionWire(context.data);
+    assert.ok(context.manifest.characters <= 96000);
+    for (const q of p.questions) {
+      assert.ok(context.manifest.includedIDs.includes(q.id) && context.manifest.includedIDs.includes(q.sourceID!));
+      assert.deepEqual(data.questions.find((r: any) => r.id === q.id).options, q.options);
+      assert.equal(data.sources.find((r: any) => r.id === q.sourceID).text, p.sources.find((r) => r.id === q.sourceID)!.text);
+    }
+    assert.equal(data.definitionStage.provenanceNavigation.approvalReceipts[0].sourceID, approval);
+    assert.equal(data.definitionStage.provenanceNavigation.approvalReceipts[0].decision, "accepted");
+    assert.match(data.definitionStage.provenanceNavigation.instruction, /BEFORE approval/);
+    assert.deepEqual(replayDefinitionStages(p, work), draft); assert.equal(work.attempts, old.attempts);
+    assert.deepEqual(work.receipts, old.receipts); assert.deepEqual(work.evidenceFailures, old.evidenceFailures); assert.deepEqual(work.evidenceRequests, old.evidenceRequests);
+    assert.equal(upgradeDefinitionProvenance(p, work, draft), false);
+    const forged = structuredClone(work); forged.provenancePolicy!.restoredPairs[0]!.answerID = "forged-answer";
+    assert.throws(() => replayDefinitionStages(p, forged), /whole structural pairs/);
+    const future = structuredClone(work); future.provenancePolicy!.format = 2 as 1;
+    assert.equal(definitionWorkSchema.safeParse(future).success, false);
+    const unapproved = structuredClone(p); unapproved.refinements.at(-1)!.status = "pending";
+    assert.deepEqual(definitionApprovalReceipts(unapproved, [approval]), []);
+    const altered = structuredClone(p); altered.sources.find((s) => s.id === approval)!.text += " Changed";
+    assert.deepEqual(definitionApprovalReceipts(altered, [approval]), []);
+  } finally { store.close(); }
+});
+
+test("future provenance lookups keep complete pairs, unchanged S labels and strict structural eligibility", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, draft, answers, requirementID } = provenanceFixture(store);
+    delete work.blocked; delete work.blockedKind;
+    const oldLabels = expandDefinitionWire(definitionStageContext(p, work, draft).data).definitionStage.citationLabels;
+    assert.equal(upgradeDefinitionProvenance(p, work, draft), true);
+    work.attempts++;
+    const request = requestDefinitionEvidence(p, work, draft, { definitionEvidence: { recordIDs: [answers[0]!], reason: "Read exact reverse structural provenance" } }, "future-pair");
+    assert.deepEqual(new Set(request.resolvedRecordIDs), new Set([answers[0], p.questions[0]!.id]));
+    const labels = expandDefinitionWire(definitionStageContext(p, work, draft).data).definitionStage.citationLabels;
+    for (const [label, id] of Object.entries(oldLabels)) assert.equal(labels[label], id);
+    assert.equal(labels[`P:${answers[0]}`], answers[0]); assert.deepEqual(replayDefinitionStages(p, work), draft);
+    const saturated = structuredClone(p); saturated.questions = Array.from({ length: 11 }, (_, i) => ({ ...p.questions[0]!, id: `question-${i}`, sourceID: `answer-${i}` }));
+    saturated.sources.push(...saturated.questions.map((q) => ({ ...p.sources.find((s) => s.id === answers[0])!, id: q.sourceID!, questionID: q.id })));
+    assert.equal(definitionProvenancePairs(saturated, [requirementID]), undefined, "No arbitrary first ten matches");
+    const prose = structuredClone(p); prose.questions.forEach((q) => { q.evidenceIDs = []; q.text += requirementID; });
+    assert.deepEqual(definitionProvenancePairs(prose, [requirementID]), []);
+  } finally { store.close(); }
+});
+
+test("provenance activates only when a later unfinished step first supplies a foreign-linked requirement", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work: old, answers } = provenanceFixture(store), work = planDefinitionStages(p, "runtime");
+    work.batches = structuredClone(old.batches); work.planKey = old.planKey; work.receipts = old.receipts.slice(0, 1);
+    const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    const draft = replayDefinitionStages(p, work)!;
+    store.checkpointDefinition(job.id, work, definitionStageContext(p, work, draft).manifest); store.pauseDefinition(job.id, "request-limit", 300000);
+    let calls = 0;
+    const done = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; const data = expandDefinitionWire(context.data);
+      if (calls === 1) { assert.equal(data.definitionStage.provenanceNavigation, undefined); return { definitionUpdate: { checks: [] } }; }
+      assert.equal(data.definitionStage.provenanceNavigation.pairs.length, 2);
+      assert.ok(!context.manifest.includedIDs.includes(answers[0]!));
+      return { definitionEvidence: { recordIDs: [answers[0]!], reason: "Read the complete saved pair linked to this newly supplied requirement" } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 2, durationMs: 300000 } });
+    assert.equal(done.status, "interrupted", done.diagnostic); assert.equal(calls, 2);
+    assert.equal(done.definitionWork!.provenancePolicy!.fromStage, 2);
+    assert.deepEqual(done.definitionWork!.receipts.slice(0, 1), work.receipts);
+    const retained = replayDefinitionStages(p, done.definitionWork!);
+    assert.ok(definitionStageContext(p, done.definitionWork!, retained).manifest.includedIDs.includes(answers[0]!));
+  } finally { store.close(); }
+});
+
+test("provenance continuation survives repeated startup and adoption, finishes only unpaid work and binds foreign evidence freshness without invented citations", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "definition-provenance-")), file = join(directory, "state.sqlite");
+  let store = new ProjectStore(file);
+  try {
+    const { p, work, job, answers } = provenanceFixture(store);
+    for (let i = 0; i < 2; i++) { store.close(); store = new ProjectStore(file); assert.deepEqual(store.getJob(job.id), job); }
+    let calls = 0;
+    const paused = await new DiscoveryService(store, { async analyze(_snapshot, { context }) {
+      calls++; answers.forEach((id) => assert.ok(context.manifest.includedIDs.includes(id)));
+      return { definitionUpdate: { checks: [] } };
+    } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", definitionLimits: { requests: 1, durationMs: 300000 } });
+    assert.equal(paused.status, "interrupted", paused.diagnostic); assert.equal(calls, 1);
+    assert.deepEqual(paused.definitionWork!.receipts.slice(0, 2), work.receipts); assert.equal(paused.definitionWork!.receipts[2]!.attempts, 4);
+    assert.deepEqual(paused.definitionWork!.evidenceFailures, work.evidenceFailures); assert.deepEqual(paused.definitionWork!.evidenceRequests, work.evidenceRequests);
+    const path = join(directory, "project"); mkdirSync(path); store.connectWorkspace(p.id, p.revision, path); store.syncWorkspace(p.id);
+    const adopted = new ProjectStore(join(directory, "adopted.sqlite"));
+    try {
+      adopted.openWorkspace(path, p.model); assert.deepEqual(adopted.getJob(paused.id).definitionWork, paused.definitionWork);
+      const done = await new DiscoveryService(adopted, { async analyze(_snapshot, { context }) {
+        calls++; return expandDefinitionWire(context.data).definitionStage.phase === "collect" ? { definitionUpdate: { checks: [] } } : { definitionVerdict: [] };
+      } }).analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true });
+      assert.equal(done.status, "completed", done.diagnostic); assert.deepEqual(done.definitionWork!.receipts.slice(0, 3), paused.definitionWork!.receipts);
+      const published = adopted.get(p.id), assessment = published.assessments.find((a) => a.epicID === "runtime")!;
+      answers.forEach((id) => assert.ok(assessment.inputBasis!.additionalEvidenceIDs!.includes(id)));
+      assert.ok(!assessment.checks.some((c) => answers.some((id) => c.evidenceIDs.includes(id))), "App-owned reads are not manufactured model citations");
+      assert.equal(coverage(published).epics.find((e) => e.epicID === "runtime")!.stale, false);
+      const changed = structuredClone(published); changed.sources.find((s) => s.id === answers[0])!.text = "Changed exact human answer";
+      assert.equal(coverage(changed).epics.find((e) => e.epicID === "runtime")!.stale, true);
+      assert.deepEqual(store.getJob(job.id), job);
+      const portable = decodePortable(renderWorkspace(published, emptyExecution(), continuationState(published, [done], [], (r) => adopted.get(p.id, r))), p.model);
+      assert.deepEqual(portable.project.assessments, published.assessments);
+      const adoptedFile = join(directory, "adopted.sqlite");
+      for (let i = 0; i < 2; i++) {
+        const reopened = new ProjectStore(adoptedFile);
+        try { assert.deepEqual(reopened.get(p.id).assessments, published.assessments); assert.deepEqual(reopened.getJob(done.id), done); }
+        finally { reopened.close(); }
+      }
+      const raw = new Database(adoptedFile);
+      const bytes = (raw.prepare("SELECT payload FROM jobs WHERE id=?").get(paused.id) as { payload: string }).payload;
+      const unsupported = JSON.parse(bytes); unsupported.definitionWork.provenancePolicy.format = 2;
+      const futureBytes = JSON.stringify(unsupported);
+      raw.prepare("UPDATE jobs SET payload=? WHERE id=?").run(futureBytes, paused.id);
+      try {
+        assert.throws(() => { let reader: ProjectStore | undefined; try { reader = new ProjectStore(adoptedFile); reader.getJob(paused.id); } finally { reader?.close(); } });
+        assert.equal((raw.prepare("SELECT payload FROM jobs WHERE id=?").get(paused.id) as { payload: string }).payload, futureBytes);
+      } finally { raw.prepare("UPDATE jobs SET payload=? WHERE id=?").run(bytes, paused.id); raw.close(); }
+      const recovered = new ProjectStore(adoptedFile);
+      try { assert.deepEqual(recovered.getJob(paused.id).definitionWork, paused.definitionWork); assert.deepEqual(recovered.get(p.id).assessments, published.assessments); }
+      finally { recovered.close(); }
+    } finally { adopted.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const outcome of ["failed", "cancelled", "stale", "exhausted"] as const) test(`cross-feature provenance preserves all paid work and attempts on ${outcome}`, async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, work, job } = provenanceFixture(store, outcome === "exhausted" ? 4 : 3), controller = new AbortController(); let calls = 0;
+    const service = new DiscoveryService(store, { async analyze() {
+      calls++; if (outcome === "failed") throw new Error("Synthetic provenance failure");
+      if (outcome === "cancelled") { controller.abort(); throw controller.signal.reason; }
+      store.note(p.id, p.revision, "Concurrent edit", "runtime"); return { definitionUpdate: { checks: [] } };
+    } });
+    const done = await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true, signal: controller.signal });
+    assert.equal(done.status, outcome === "exhausted" ? "failed" : outcome); assert.equal(calls, outcome === "exhausted" ? 0 : 1);
+    assert.deepEqual(done.definitionWork!.receipts.slice(0, 2), work.receipts); assert.deepEqual(done.definitionWork!.evidenceRequests, work.evidenceRequests);
+    assert.deepEqual(done.definitionWork!.evidenceFailures, work.evidenceFailures); assert.equal(done.definitionWork!.attempts, outcome === "stale" ? 0 : 4);
+    replayDefinitionStages(p, done.definitionWork!); assert.deepEqual(store.getJob(job.id), job);
+    if (outcome === "exhausted" || outcome === "failed") {
+      await service.analyze(p.id, p.revision, { definitionEpicID: "runtime", continuousDefinition: true }); assert.equal(calls, outcome === "exhausted" ? 0 : 1);
+    }
+  } finally { store.close(); }
+});
+
 function receiptBackedViewFixture(store: ProjectStore, attempts = 2) {
   const { p, first, second } = linkedAnswerFixture(store, 1, true, false, 3);
   const work = planDefinitionStages(p, "runtime"); delete work.linkedAnswerPolicy;

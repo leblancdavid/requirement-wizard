@@ -52,3 +52,9 @@ export function definitionInputKey(project: Project, epicID: string, evidenceIDs
   // Keep the v1 wire digest unchanged for saved jobs/checkpoints and valid bases.
   return bytesToHex(sha256(JSON.stringify(definitionInputDocument(project, epicID, evidenceIDs))));
 }
+
+/** App-owned exact reads may extend a review's freshness scope without inventing
+ * model citations. Legacy assessments retain their identical evidence sequence. */
+export function definitionAssessmentEvidenceIDs(assessment: Project["assessments"][number]) {
+  return [...assessment.checks.flatMap((c) => c.evidenceIDs), ...assessment.inputBasis?.additionalEvidenceIDs ?? []];
+}

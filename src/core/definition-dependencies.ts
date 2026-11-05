@@ -2,7 +2,7 @@ import { z } from "zod";
 import { projectSchema, type Project } from "./model.js";
 import { dimensions } from "./epics.js";
 import { canonicalJSON } from "./assessment-identity.js";
-import { definitionInputKey, definitionInputs } from "./definition-identity.js";
+import { definitionInputKey, definitionInputs, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex } from "@noble/hashes/utils";
 
@@ -108,7 +108,7 @@ function inputs(p: Project, records: Record[], epicID: string, citations: string
 function manifest(p: Project, records: Record[], epicID: string): DefinitionDependencyManifest {
   const assessment = p.assessments.find((a) => a.epicID === epicID);
   if (!assessment?.inputBasis || assessment.combinedReview || assessment.mixedReview || assessment.atRevision !== p.revision || !assessment.checks.length) fail("invalid-origin");
-  const citations = assessment.checks.flatMap((c) => c.evidenceIDs);
+  const citations = definitionAssessmentEvidenceIDs(assessment);
   if (assessment.inputBasis.key !== definitionInputKey(p, epicID, citations)) fail("invalid-origin");
   const result = { format: 1 as const, policy: "definition-dependencies-v1" as const, authority: "inspection-only" as const,
     projectID: p.id, epicID, assessmentRevision: assessment.atRevision, inputBasisKey: assessment.inputBasis.key, assessmentKey: digest(assessment),
@@ -164,7 +164,7 @@ function dependencyProof(rawManifest: unknown, original: unknown, current: unkno
     const assessment = p.assessments.find((a) => a.epicID === saved.epicID);
     if (mode === "assessment-and-guards" && (!assessment || digest(assessment) !== saved.assessmentKey)) return fallback("assessment-changed");
     const originalAssessment = source.project.assessments.find((a) => a.epicID === saved.epicID)!;
-    const citations = originalAssessment.checks.flatMap((c) => c.evidenceIDs), guarded = inputs(p, now.records, saved.epicID, citations);
+    const citations = definitionAssessmentEvidenceIDs(originalAssessment), guarded = inputs(p, now.records, saved.epicID, citations);
     if (definitionInputKey(p, saved.epicID, citations) !== saved.inputBasisKey
       || canonicalJSON(guarded) !== canonicalJSON({ guards: saved.guards, records: saved.records })) return fallback("guard-changed");
     return { ...base, outcome: "unchanged-guarded-inputs", reason: null, currentSnapshotKey,

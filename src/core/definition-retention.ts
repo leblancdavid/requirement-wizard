@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Project } from "./model.js";
 import { canonicalJSON } from "./assessment-identity.js";
-import { definitionInputKey } from "./definition-identity.js";
+import { definitionInputKey, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 import { definitionCombinedEvidenceKey } from "./definition-combined-assessment.js";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex } from "@noble/hashes/utils";
@@ -42,7 +42,7 @@ export function retainedDefinitionReviews(before: Project, after: Project): Defi
     const original = before.assessments.find((a) => a.epicID === epic.id), next = after.assessments.find((a) => a.epicID === epic.id);
     if (!original?.inputBasis || !original.checks.length || !next || original.atRevision > before.revision
       || canonicalJSON(original) !== canonicalJSON(next)) continue;
-    const citations = original.checks.flatMap((c) => c.evidenceIDs);
+    const citations = definitionAssessmentEvidenceIDs(original);
     if (original.inputBasis.key !== definitionInputKey(before, epic.id, citations)
       || original.inputBasis.key !== definitionInputKey(after, epic.id, citations)) continue;
     if (original.combinedReview && (!combinedKeys || original.combinedReview.guardKey !== combinedKeys[0]

@@ -25,6 +25,7 @@ import { definitionPartitionLimit } from "../core/definition-continuation.js";
 import { upgradeDefinitionEvidenceBundles } from "../core/definition-stages.js";
 import { definitionEvidenceRequests } from "../core/definition-budget.js";
 import { definitionBaselineScopeMatches } from "../core/definition-baseline.js";
+import { upgradeDefinitionProvenance } from "../core/definition-stages.js";
 
 /** Ephemeral estimates shared across one explicit refresh, never a new allowance. */
 export type DefinitionSchedule = { deadline: number; collectMs: number; verifyMs: number };
@@ -96,6 +97,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
     if (upgradeDefinitionEvidenceBundles(project, work, draft, work.receipts.length === prior?.definitionWork?.receipts.length ? prior : undefined)) bundleUpgraded = true;
   };
   upgradeBundles();
+  if (upgradeDefinitionProvenance(project, work, draft)) options.onProgress?.("Preparing exact cross-feature question/answer provenance and validated approval receipts. Completed responses, accepted lookups and all spent attempts are retained; no new model call has started.");
   if (work.blocked) upgradeDefinitionPartitionCapacity(work);
   if (work.blocked && work.blockedKind === "evidence-lookup" && prior
     && recallDefinitionLinkedAnswers(project, work, draft, work.blocked, prior.id, "saved-block")) {
@@ -121,6 +123,7 @@ export async function runDefinitionStages(store: ProjectStore, adapter: Discover
       upgradeDefinitionCitationCorrection(project, work, draft);
       upgradeDefinitionSupplementalScope(project, work, draft);
       upgradeBundles();
+      if (upgradeDefinitionProvenance(project, work, draft)) options.onProgress?.("Preparing bounded cross-feature provenance for the unfinished step; original responses, lookups and spent attempts are retained.");
       try { return local("context", currentContext); }
       catch (error) {
         if (!(error instanceof ContextBudgetError)) throw error;

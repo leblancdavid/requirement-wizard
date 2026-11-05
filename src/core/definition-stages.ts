@@ -7,6 +7,7 @@ import { definitionContext, validateDefinitionResult, validateDefinitionCitation
 import { definitionInputKey, definitionAreas, definitionInputs } from "./definition-identity.js";
 import { definitionBlockKinds, definitionLabelDrift } from "./definition-evidence-issue.js";
 import { definitionLinkedAnswers } from "./definition-linked-answers.js";
+import { definitionProvenancePairs, definitionApprovalReceipts } from "./definition-provenance.js";
 import { dimensions } from "./definition-dimensions.js";
 import { shareRepeatedIdentifiers, shareRepeatedText, shareRecordStructure } from "./working-set.js";
 import { definitionSteps, withDefinitionProjectionCache, definitionStageLimit as maxEvidenceStages, definitionCellExecutionStageLimit as maxStages, definitionExecutionStageLimit as legacyDimensionStages, definitionExecutionPolicyEnabled, definitionExecutionLimit, definitionEvidenceStages, definitionLinkedPagePartitions } from "./definition-continuation.js";
@@ -22,7 +23,7 @@ export const definitionDraftLimit = 12000;
 const maxBatches = 16;
 const recallPolicyKeys = ["draftPolicy", "responsePolicy", "citationPolicy", "collectionCitationPolicy", "evidencePolicy", "exactWirePolicy",
   "linkedEvidencePolicy", "stableCitationPolicy", "linkedAnswerPolicy", "contextMetadataPolicy", "evidenceCorrectionPolicy",
-  "citationCorrectionPolicy", "executionPolicy", "evidenceFollowupPolicy", "allowancePolicy", "supplementalScopePolicy", "partitionCapacityPolicy", "evidenceBundlePolicy"] as const;
+  "citationCorrectionPolicy", "executionPolicy", "evidenceFollowupPolicy", "allowancePolicy", "supplementalScopePolicy", "partitionCapacityPolicy", "evidenceBundlePolicy", "provenancePolicy"] as const;
 const bundleSchema = z.object({ recordIDs: z.array(z.string().min(1)).min(1).max(20),
   bundledRecordIDs: z.array(z.string().min(1)).max(20), groups: z.array(z.array(z.string().min(1)).min(1).max(20)).max(20),
   omittedRootIDs: z.array(z.string().min(1)).max(20) }).strict();
@@ -70,6 +71,17 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   linkedEvidencePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
     priorRequests: z.number().int().min(0).max(maxStages),
     priorFollowups: z.number().int().min(0).max(maxStages * definitionEvidenceRequestLimit) }).strict().optional(),
+  provenancePolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
+    priorAttempts: z.number().int().min(0).max(definitionRequestLimit),
+    priorRequests: z.number().int().min(0).max(maxStages), priorFollowups: z.number().int().min(0).max(maxStages * definitionEvidenceRequestLimit),
+    splitCount: z.number().int().min(0).max(maxSplits), linkedReviewCount: z.number().int().min(0).max(maxEvidenceStages * 2),
+    dimensionReviewCount: z.number().int().min(0).max(maxStages - 1), supplementalReviewCount: z.number().int().min(0).max(maxStages),
+    absentPolicies: z.array(z.enum(recallPolicyKeys)).max(recallPolicyKeys.length),
+    contextKey: z.string().regex(/^[a-f0-9]{64}$/),
+    restoredPairs: z.array(z.object({ questionID: z.string().min(1), answerID: z.string().min(1),
+      anchorIDs: z.array(z.string().min(1)).min(1) }).strict()).max(10),
+    supersededBlock: z.string().min(1).max(1000).optional(),
+  }).strict().optional(),
   stableCitationPolicy: z.object({ format: z.literal(1), fromStage: z.number().int().min(0).max(maxStages - 1),
     priorRequests: z.number().int().min(0).max(maxStages), priorFollowups: z.number().int().min(0).max(maxStages * definitionEvidenceRequestLimit),
     supersededBlock: z.string().min(1).max(1000).optional() }).strict().optional(),
@@ -190,6 +202,14 @@ export const definitionWorkSchema = z.object({ format: z.literal(1), policy: z.l
   paused: z.enum(["request-limit", "time-limit"]).optional(), blocked: z.string().min(1).max(1000).optional(),
   blockedKind: z.enum(definitionBlockKinds).optional(),
 }).strict().superRefine((work, ctx) => {
+  const provenance = work.provenancePolicy;
+  if (provenance && (provenance.fromStage > work.receipts.length
+    || provenance.priorAttempts > (work.receipts[provenance.fromStage]?.attempts ?? work.attempts)
+    || provenance.priorRequests > (work.evidenceRequests?.length ?? 0) || provenance.priorFollowups > (work.evidenceFollowups?.length ?? 0)
+    || provenance.splitCount > (work.continuation?.splits.length ?? 0) || provenance.linkedReviewCount > (work.linkedAnswerReviews?.length ?? 0)
+    || provenance.dimensionReviewCount > (work.dimensionReviews?.length ?? 0) || provenance.supplementalReviewCount > (work.supplementalReviews?.length ?? 0))) {
+    ctx.addIssue({ code: "custom", message: "Invalid exact provenance activation boundary." });
+  }
   if (work.collectionBatches && !work.baseline) ctx.addIssue({ code: "custom", message: "Separate collection batches require a bound baseline." });
   const bundle = work.evidenceBundlePolicy;
   if (bundle && (!work.exactWirePolicy || !work.supplementalScopePolicy || bundle.fromStage > work.receipts.length
@@ -390,7 +410,9 @@ const baseStageEvidenceIDs = (work: DefinitionWork): string[] => {
   const step = definitionSteps(work)[work.receipts.length]!;
   if (step.supplementalPage !== undefined) return step.ids;
   return [...new Set([...step.ids, ...(suppliedSupplementalRequest(work) ? requestedIDs(suppliedSupplementalRequest(work)!) : []),
-    ...restoredEvidenceIDs(work), ...activeFollowups(work).flatMap(requestedIDs), ...activeRestoredBundles(work).flatMap((r) => r.bundle.bundledRecordIDs)])];
+    ...restoredEvidenceIDs(work), ...activeFollowups(work).flatMap(requestedIDs), ...activeRestoredBundles(work).flatMap((r) => r.bundle.bundledRecordIDs),
+    ...(boundaryEnabled(work, work.provenancePolicy) && work.provenancePolicy!.fromStage === work.receipts.length
+      ? work.provenancePolicy!.restoredPairs.flatMap((p) => [p.questionID, p.answerID]) : [])])];
 };
 
 // Request-count boundaries preserve contexts of supplemental replies accepted
@@ -772,7 +794,51 @@ function eligibleDefinitionEvidence(project: Project, work: DefinitionWork) {
       for (const id of Array.isArray(value) ? value : [value]) if (typeof id === "string" && saved.has(id)) available.add(id);
     }
   }
+  if (boundaryEnabled(work, work.provenancePolicy)) {
+    for (const pair of definitionProvenancePairs(project, [...loaded]) ?? []) {
+      available.add(pair.questionID); available.add(pair.answerID);
+    }
+  }
   return available;
+}
+
+function recoverableProvenance(project: Project, work: DefinitionWork) {
+  if (work.blockedKind !== "evidence-lookup" || !work.blocked) return undefined;
+  const loaded = stageEvidenceIDs(project, work), included = new Set(loaded);
+  const pairs = definitionProvenancePairs(project, loaded)?.filter((p) => !included.has(p.questionID) || !included.has(p.answerID));
+  const ids = new Set(pairs?.flatMap((p) => [p.questionID, p.answerID]));
+  const originalEligibility = eligibleDefinitionEvidence(project, work);
+  // A canonical saved pair must explain an actual rejected lookup, not merely
+  // share words with the blocker. Genuine ambiguity with supplied text stays blocked.
+  return pairs?.length && work.evidenceFailures?.some((f) => f.stage === work.receipts.length
+    && f.response.definitionEvidence.recordIDs.some((id) => ids.has(id) && !originalEligibility.has(id))) ? pairs : undefined;
+}
+
+/** Explicit continuation after replay. No response, lookup credit, attempt refund
+ * or new preference. Old failed lookups remain failures in their old contexts. */
+export function upgradeDefinitionProvenance(project: Project, work: DefinitionWork, draft?: Analysis) {
+  if (work.provenancePolicy || !linkedEvidenceEnabled(work) || !exactWire(work) || definitionPhase(work) === "complete") return false;
+  const pairs = work.blocked ? recoverableProvenance(project, work) : [];
+  if (!pairs) return false;
+  // Check structural eligibility before constructing another full wire packet.
+  // Ordinary same-scope work should not pay for duplicate context preparation.
+  const originalScope = definitionInputs(project, work.epicID).included;
+  if (!work.blocked && !(definitionProvenancePairs(project, stageEvidenceIDs(project, work))?.some((p) =>
+    !originalScope.has(p.questionID) || !originalScope.has(p.answerID)))) return false;
+  let context: ContextPack;
+  try { context = definitionStageContext(project, work, draft); }
+  catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
+  const policy: NonNullable<DefinitionWork["provenancePolicy"]> = { format: 1, fromStage: work.receipts.length,
+    priorAttempts: work.attempts, priorRequests: work.evidenceRequests?.length ?? 0, priorFollowups: work.evidenceFollowups?.length ?? 0,
+    splitCount: work.continuation?.splits.length ?? 0, linkedReviewCount: work.linkedAnswerReviews?.length ?? 0,
+    dimensionReviewCount: work.dimensionReviews?.length ?? 0, supplementalReviewCount: work.supplementalReviews?.length ?? 0,
+    absentPolicies: recallPolicyKeys.filter((key) => !work[key]), contextKey: digest(context.data), restoredPairs: pairs,
+    ...(work.blocked ? { supersededBlock: work.blocked } : {}) };
+  const probe = { ...work, provenancePolicy: policy, blocked: undefined, blockedKind: undefined };
+  try { definitionStageContext(project, probe, draft); }
+  catch (error) { if (error instanceof ContextBudgetError) return false; throw error; }
+  work.provenancePolicy = policy; delete work.blocked; delete work.blockedKind;
+  return true;
 }
 
 /** Upgrade only future contexts; never change a saved evidence-request context. */
@@ -848,11 +914,16 @@ export function requestDefinitionEvidence(project: Project, work: DefinitionWork
     throw new DefinitionEvidenceBlocked("Cross-batch evidence requests must name distinct unread canonical record IDs from this area's saved exact plan.");
   }
   work.evidenceRequests ??= [];
+  const paired = boundaryEnabled(work, work.provenancePolicy)
+    ? (definitionProvenancePairs(project, context.manifest.includedIDs) ?? [])
+      .filter((p) => unread.includes(p.questionID) || unread.includes(p.answerID)).flatMap((p) => [p.questionID, p.answerID]) : [];
+  const resolved = [...new Set([...unread, ...paired])];
+  if (resolved.length > 20) throw new DefinitionEvidenceBlocked("Whole provenance pairs exceed this lookup's 20-record bound; no records were loaded or attempts refunded.");
   let request: NonNullable<DefinitionWork["evidenceRequests"]>[number] = { stage: work.receipts.length, contextKey: digest(context.data), attempts: work.attempts,
     jobID, model: { providerID: project.model.providerID, modelID: project.model.modelID }, response,
-    ...(exactWire(work) ? { resolvedRecordIDs: unread } : {}) };
+    ...(exactWire(work) ? { resolvedRecordIDs: resolved } : {}) };
   if (bundlesEnabled(work)) {
-    const bundle = bundleDefinitionEvidence(project, unread, context.manifest.includedIDs);
+    const bundle = bundleDefinitionEvidence(project, resolved, context.manifest.includedIDs);
     request = { ...request, resolvedRecordIDs: bundle.recordIDs, bundle };
     // A packing probe may add bodies, but must keep the schedule/policies that
     // existed BEFORE this reply. During replay the ledger also contains later
@@ -877,8 +948,8 @@ export function requestDefinitionEvidence(project: Project, work: DefinitionWork
       if (!(error instanceof ContextBudgetError)) throw error;
       // Optional enrichment is all-or-nothing at the exact context boundary.
       // Preserve the requested roots; never cut a provenance group to fit.
-      request = { ...request, resolvedRecordIDs: unread,
-        bundle: { recordIDs: unread, bundledRecordIDs: [], groups: [], omittedRootIDs: unread } };
+      request = { ...request, resolvedRecordIDs: resolved,
+        bundle: { recordIDs: resolved, bundledRecordIDs: [], groups: [], omittedRootIDs: resolved } };
     }
   }
   if (supplemental) {
@@ -922,6 +993,8 @@ function citationLabels(project: Project, work: DefinitionWork, draft?: Analysis
   // ordinals are independent of packing, stage subdivisions, drafts and loads.
   const { included, records } = definitionInputs(project, work.epicID);
   const ordinals = new Map(records.filter((r) => included.has(r.id)).map((r) => r.id).sort().map((id, index) => [id, `S${index + 1}`]));
+  if (boundaryEnabled(work, work.provenancePolicy)) records.filter((r) => !included.has(r.id))
+    .forEach((r) => ordinals.set(r.id, `P:${r.id}`));
   return Object.fromEntries(allowed.map((id) => {
     const label = ordinals.get(id); if (!label) throw new Error("Stable citation evidence is outside the frozen definition input identity.");
     return [label, id];
@@ -1235,6 +1308,12 @@ function renderDefinitionStageContext(project: Project, work: DefinitionWork, dr
       ...(exactWire(work) ? { exactEvidenceReferences: "Override canonical-only wording: definitionEvidence.recordIDs accepts canonical IDs or THIS request's citationLabels. Loaded IDs are ignored only alongside new unread records. Unknown/duplicate references reject; no prefixes or other-request labels. Raw responses and resolved IDs are retained." } : {}),
       ...(linkedEvidenceEnabled(work) ? { linkedEvidencePolicy: "saved-direct-links-v1", linkedEvidenceInstruction:
         "In addition to the frozen batch plan, you may load existing saved records named by explicit sourceIDs, evidenceIDs, sourceID, requirementID or questionID links on records supplied in THIS request. Other links do not extend the frozen plan. A link is navigation, not evidence until loaded. No guessed IDs, prose matches or unrelated records. Historical confirmations retain their original wording, date, target and limited scope. Approval of a rejected, replaced or older requirement is NOT approval of the current requirement; inspect the exact target and supersession chain before treating it as a current decision. Loading history does not change any product decision or authorize specification edits. Existing request, size and stage bounds still apply." } : {}),
+      ...(boundaryEnabled(work, work.provenancePolicy) ? { provenanceNavigation: {
+        format: 1, pairs: definitionProvenancePairs(project, ids) ?? [],
+        saturated: definitionProvenancePairs(project, ids) === undefined,
+        approvalReceipts: definitionApprovalReceipts(project, ids),
+        instruction: "BOUNDED STRUCTURAL PROVENANCE overrides forward-only navigation: listed whole current question/answer pairs explicitly cite a supplied requirement through evidenceIDs, even in another feature. Request canonical IDs from these pairs when indispensable; the app loads both complete records together. No prose IDs, fuzzy search, unrelated records or preference precedence is authorized. A saturated inventory exposes NO arbitrary prefix. P citation labels are stable additional labels for actually supplied out-of-scope records; existing S labels are unchanged. approvalReceipts are app-validated exact accepted-proposal/envelope/current-target matches, NOT AI inference: each proves approval only of its exact replacement and acceptance scenarios. Proposal disclaimers quoted in its reason describe the proposal BEFORE approval, not a later revocation. Original text/history is unchanged. Missing receipts prove nothing. Read full question/options/answer scope; these receipts do not establish implementation, wider approval, or joint consistency. Separate reads cannot substitute for indispensable joint evidence. Existing attempts, lookup limits and 96k bounds remain unchanged.",
+      } } : {}),
       ...(compactResponse(work) && phase === "collect" ? { responseFormat: draft ? "definition-update-v1" : "definition-assessment-v1" } : {}),
       ...(additiveCollectionCitations(work) && phase === "collect" ? { collectionCitationPolicy: "additive-v1" } : {}),
       // Only the assessment affects subsequent findings. Ignored analysis wrapper
@@ -1549,6 +1628,7 @@ export function* iterateDefinitionStages(project: Project, work: DefinitionWork,
     const receipt = work.receipts[index]!;
     const prefix = { ...work, receipts: work.receipts.slice(0, index), attempts: receipt.attempts };
     validateFollowupPolicy(project, prefix);
+    validateDefinitionProvenance(project, prefix, draft);
     validateEvidenceBundlePolicy(project, prefix, draft);
     validateSupplementalReviews(project, prefix, draft);
     validateEvidenceFailures(project, prefix, draft);
@@ -1564,6 +1644,7 @@ export function* iterateDefinitionStages(project: Project, work: DefinitionWork,
   }
   if (definitionPhase(work) !== "complete") {
     validateFollowupPolicy(project, work);
+    validateDefinitionProvenance(project, work, draft);
     validateEvidenceBundlePolicy(project, work, draft);
     validateSupplementalReviews(project, work, draft);
     validateEvidenceFailures(project, work, draft);
@@ -1585,6 +1666,7 @@ function citationHistoryBefore(work: DefinitionWork, stage: number, attempts: nu
     for (const key of review.absentPolicies) absent[key] = undefined;
   }
   return { ...absent,
+    ...(work.provenancePolicy?.fromStage === stage && attempts <= work.provenancePolicy.priorAttempts ? { provenancePolicy: undefined } : {}),
     ...(work.evidenceBundlePolicy?.fromStage === stage && attempts <= work.evidenceBundlePolicy.priorAttempts ? { evidenceBundlePolicy: undefined } : {}),
     ...(work.supplementalScopePolicy?.fromStage === stage && attempts <= work.supplementalScopePolicy.priorAttempts
       ? { supplementalScopePolicy: undefined } : {}),
@@ -1593,6 +1675,27 @@ function citationHistoryBefore(work: DefinitionWork, stage: number, attempts: nu
     citationFailures: work.citationFailures?.filter((f) => f.stage < stage || f.stage === stage && f.attempts < attempts),
     ...(policy?.fromStage === stage && policy.legacyRejection && policy.legacyRejection.attempts >= attempts
       ? { citationCorrectionPolicy: undefined } : {}) };
+}
+
+function validateDefinitionProvenance(project: Project, work: DefinitionWork, draft?: Analysis) {
+  const p = work.provenancePolicy;
+  if (!p || p.fromStage !== work.receipts.length) return;
+  const before = { ...work, provenancePolicy: undefined, attempts: p.priorAttempts,
+    blocked: p.supersededBlock, blockedKind: p.supersededBlock ? "evidence-lookup" as const : undefined,
+    evidenceRequests: work.evidenceRequests?.slice(0, p.priorRequests), evidenceFollowups: work.evidenceFollowups?.slice(0, p.priorFollowups),
+    evidenceFailures: work.evidenceFailures?.filter((f) => f.stage < p.fromStage || f.stage === p.fromStage && f.attempts <= p.priorAttempts),
+    citationFailures: work.citationFailures?.filter((f) => f.stage < p.fromStage || f.stage === p.fromStage && f.attempts <= p.priorAttempts),
+    linkedAnswerRecalls: work.linkedAnswerRecalls?.filter((r) => r.fromStage < p.fromStage || r.fromStage === p.fromStage && r.attempts <= p.priorAttempts),
+    ...(work.continuation ? { continuation: { ...work.continuation, splits: work.continuation.splits.slice(0, p.splitCount) } } : {}),
+    linkedAnswerReviews: work.linkedAnswerReviews?.slice(0, p.linkedReviewCount), dimensionReviews: work.dimensionReviews?.slice(0, p.dimensionReviewCount),
+    supplementalReviews: work.supplementalReviews?.slice(0, p.supplementalReviewCount) };
+  for (const key of p.absentPolicies) before[key] = undefined;
+  const expected = p.supersededBlock ? recoverableProvenance(project, before) : [];
+  if (!linkedEvidenceEnabled(before) || !exactWire(before) || !expected
+    || p.contextKey !== digest(definitionStageContext(project, before, draft).data)
+    || JSON.stringify(p.restoredPairs) !== JSON.stringify(expected)) {
+    throw new Error("Saved provenance continuation differs from its original context, rejected lookup or whole structural pairs.");
+  }
 }
 
 function validateEvidenceBundlePolicy(project: Project, work: DefinitionWork, draft?: Analysis) {
@@ -1757,6 +1860,7 @@ export function completedDefinitionAssessment(project: Project, work: Definition
   // relationship. Preserve this explicit limitation in saved/UI method metadata.
   if (output.assessments![0]!.confidence === "high") output.assessments![0]!.confidence = "medium";
   validateDefinitionResult(project, work.epicID, [...new Set([...work.batches.flat(),
+    ...(work.provenancePolicy?.restoredPairs.flatMap((p) => [p.questionID, p.answerID]) ?? []),
     ...(work.evidenceRequests?.flatMap(requestedIDs) ?? []), ...(work.evidenceFollowups?.flatMap(requestedIDs) ?? [])])], output);
   return output;
 }

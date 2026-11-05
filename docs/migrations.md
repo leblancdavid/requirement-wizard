@@ -1,5 +1,88 @@
 # Data migrations and upgrade compatibility
 
+## Bounded cross-feature provenance and authenticated approvals (2026-11-05)
+
+**Source → target:** existing definition work format 1 can append an optional
+`provenancePolicy` format-1 activation after exact replay. It records the original
+context hash, receipt/attempt/lookup/schedule boundary, absent policies, original
+blocker and bounded complete restored pairs. Historical responses, rejected
+lookups and accepted lookup contexts replay under their original policy; a later
+activation never converts a rejected response into an accepted lookup or refunds
+attempts. The existing transactional checkpoint saves the event before dispatch.
+An interruption before checkpoint can recompute it without inference; repeated
+startup/adoption retains the same event and successful reads. Unknown event
+versions and unsupported fields reject without inventing replacement provenance.
+
+The reported revision-3168 case was not a context overflow or missing human choice.
+Both exact human answers were saved in another feature, but only referenced in the
+requirement's rationale, not its structural `sourceIDs`. Their questions explicitly
+cited the supplied requirement in `evidenceIDs`. The forward-only lookup policy
+therefore rejected the canonical answer IDs. Separately, the review treated a
+quoted pre-approval proposal disclaimer as if it revoked the later cleanup approval.
+The existing `currentDecisionProjection` validator proves an exact accepted-proposal,
+confirmation-envelope, current-target and supersession match for that cleanup.
+
+The new local navigation uses **one reverse structural hop from supplied requirement
+IDs** to complete current answered-question/answer pairs. It exposes all matching
+pairs only when at most ten match; saturation exposes no arbitrary prefix. No UUID
+extraction from prose, fuzzy search, unrelated project-wide allowlist, inferred
+precedence or new decision is permitted. Future explicit lookups load both whole
+records within the same 20-record bound. A saved lookup blocker can be superseded
+only when an actual rejected canonical lookup is explained by these exact missing
+pairs. Genuine blockers with the evidence already supplied, product-decision and
+technical blockers are retained. Restored records earn no successful-lookup credit.
+Ordinary same-scope reviews keep their existing fitting contexts: activation is
+limited to actual foreign provenance or the demonstrated saved lookup boundary,
+not merely the presence of an answered question or a cleanup receipt.
+
+Requests also expose approval receipts only for supplied sources that pass the
+existing exact receipt validator, alongside the unchanged complete original source
+text. The instruction distinguishes a proposal's original disclaimer from the later
+human approval of its exact replacement/scenarios. Neither links nor mere wording
+establish broader approval, implementation verification or joint consistency.
+Historical S labels remain unchanged; supplied foreign records use stable
+`P:<canonical ID>` labels independent of unrelated record insertions. Each complete
+new request, including receipts and navigation, must fit the existing 96k budget.
+
+Published assessment `inputBasis` format 1 gains optional app-owned
+`additionalEvidenceIDs` for actual reads outside its original guarded input scope.
+This is **not** a change to model citations or findings. Publication computes the
+existing v1 input hash over cited evidence plus those exact reads. Coverage,
+change-impact tasks, dependency/retention checks, portable continuation and
+serialization compatibility use the same expanded scope, so later edits to an
+uncited foreign answer cannot silently remain current. Old assessments with no
+extension retain identical hashes and semantics. AI proposal schemas cannot set
+this app-owned field. No SQL table/version change or startup rewrite is required;
+database 27 and portable 1–6 carry the optional fields. Older strict readers reject
+them rather than discard them; downgrade after activation/publication is unsupported.
+
+**Conservative remaining boundary:** the existing baseline-collection and partial
+checkpoint format cannot yet attest extended foreign evidence across changed
+revisions. It therefore does not issue that narrower reuse certificate for work
+with actual foreign reads. Original dated work remains saved; unchanged-input
+continuation and extended freshness remain supported. Changed-input work may need
+the established full review. This does not certify arbitrary cross-feature
+independence or change-review accuracy.
+
+Read-only replay of revision 3168 retained both accepted assessment responses, the
+accepted lookup, the rejected lookup and all three spent attempts. The prepared
+request includes both exact answers/options and validates the approved cleanup at
+**78,109 / 96,000** characters. Original database/job bytes were unchanged. Eight
+focused tests cover exact replay, structural eligibility/saturation, approval
+authentication, whole-pair lookups, repeated reopen/portable adoption, foreign
+freshness without invented citations, failure, cancellation, stale edits and
+exhaustion. They also verify that an unsupported saved event remains byte-identical
+after rejection and can be reopened after restoring its supported representation.
+Those tests, type checking, CLI help and diff checking passed. The UI build, all 22
+default browser runners and both post-browser runners passed with deterministic
+adapters. The first broad test run reached the existing supplemental post-page
+fixture's 64-step ceiling; activation was subsequently narrowed to actual foreign
+provenance, and all eight new tests plus that fixture passed together. A full
+`npm test` rerun passed **912 pretests, 774 main tests and 54 posttests**. The later
+activation regression and final structural-preparation optimization passed the
+nine-test focused run; the final whole-suite rerun is pending. No actual-user
+model continuation or installed desktop rebuild has been performed.
+
 ## Receipt-backed all-dimension continuation (2026-11-05)
 
 **Source → target:** existing `DefinitionWork` format 1 with no dimension ledger

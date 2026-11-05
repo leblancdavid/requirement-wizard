@@ -1,5 +1,5 @@
 import { canonicalJSON } from "./assessment-identity.js";
-import { definitionInputDocument, definitionInputKey } from "./definition-identity.js";
+import { definitionInputDocument, definitionInputKey, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 import { definitionFindingIdentityKey as digest } from "./definition-finding-identity.js";
 import { definitionChangeResponseSchema, definitionChangeReceiptSchema, type DefinitionChangeReceipt } from "./definition-change-schema.js";
 import type { Project } from "./model.js";
@@ -14,7 +14,7 @@ export function definitionChangeReceipt(project: Project, epicID: string) {
   if (!assessment || !receipt || !definitionChangeReceiptSchema.safeParse(receipt).success) return;
   if (receipt.projectID === project.id && receipt.assessmentKey === digest(assessment) && receipt.originalRevision === assessment.atRevision
     && receipt.originalInputKey === assessment.inputBasis?.key && receipt.globalKey === globalKey(project)
-    && receipt.currentInputKey === definitionInputKey(project, epicID, assessment.checks.flatMap((c) => c.evidenceIDs))) return receipt;
+    && receipt.currentInputKey === definitionInputKey(project, epicID, definitionAssessmentEvidenceIDs(assessment))) return receipt;
 }
 
 /** A separate AI change review, not a citation/dependency-graph skip proof. All
@@ -26,7 +26,7 @@ export function prepareDefinitionChangeReview(original: Project, current: Projec
   if (!assessment?.inputBasis || !source || assessment.combinedReview || assessment.mixedReview
     || assessment.checks.length !== 9 || original.id !== current.id || original.revision !== assessment.atRevision
     || original.revision >= current.revision || canonicalJSON(source) !== canonicalJSON(assessment)) return;
-  const citations = assessment.checks.flatMap((c) => c.evidenceIDs);
+  const citations = definitionAssessmentEvidenceIDs(assessment);
   if (definitionInputKey(original, epicID, citations) !== assessment.inputBasis.key) return;
   const before = definitionInputDocument(original, epicID, citations), after = definitionInputDocument(current, epicID, citations);
   const { records: oldRecords, ...oldScope } = before, { records: newRecords, ...newScope } = after;

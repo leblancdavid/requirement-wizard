@@ -33,7 +33,7 @@ import { continuationState, decodePortable, portableDigest } from "./portable.js
 import { dirname, join } from "node:path";
 import { workspaceScanKey } from "./scan.js";
 import { applyRound } from "../core/round.js";
-import { definitionInputKey, definitionInputDocument } from "../core/definition-identity.js";
+import { definitionInputKey, definitionInputDocument, definitionInputs, definitionAssessmentEvidenceIDs } from "../core/definition-identity.js";
 import { definitionBaselineKey, definitionBaselineLimits, prepareDefinitionBaseline, prepareDefinitionCheckpointBaseline, definitionCheckpointScopeCompatible, type DefinitionBaseline } from "../core/definition-baseline.js";
 import { iterateDefinitionStages } from "../core/definition-stages.js";
 import { setImmediate as yieldDefinitionReplay } from "node:timers/promises";
@@ -900,7 +900,7 @@ export class ProjectStore {
       })();
       const savedAssessment = original?.assessments.find((a) => a.epicID === assessment.epicID);
       if (original && savedAssessment && JSON.stringify({ ...savedAssessment, inputBasis: undefined }) === JSON.stringify({ ...assessment, inputBasis: undefined })) {
-        assessment.inputBasis = { format: 1, key: definitionInputKey(original, assessment.epicID, assessment.checks.flatMap((c) => c.evidenceIDs)) };
+        assessment.inputBasis = { format: 1, key: definitionInputKey(original, assessment.epicID, definitionAssessmentEvidenceIDs(assessment)) };
       }
     }
     return project;
@@ -2327,11 +2327,18 @@ export class ProjectStore {
               if (fact) definitionContexts.push(fact); else definitionCoverageAvailable = false;
             }
             const checks = assessment.checks;
+            const originalScope = definitionInputs(project, assessment.epicID).included;
+            const additionalEvidenceIDs = job.definitionWork?.provenancePolicy ? [...new Set([
+              ...job.definitionWork.provenancePolicy.restoredPairs.flatMap((p) => [p.questionID, p.answerID]),
+              ...[...job.definitionWork.evidenceRequests ?? [], ...job.definitionWork.evidenceFollowups ?? []]
+                .flatMap((r) => r.resolvedRecordIDs ?? r.response.definitionEvidence.recordIDs),
+            ])].filter((id) => !originalScope.has(id)) : [];
             project.assessments = project.assessments.filter((a) => a.epicID !== assessment.epicID);
             project.assessments.push({ ...assessment, atRevision: project.revision + 1,
               answerVersions: Object.fromEntries(checks.flatMap((c) => c.evidenceIDs).flatMap((id) => {
                 const q = project.questions.find((q) => q.id === id); return q ? [[id, q.sourceID ?? null]] : [];
-              })), inputBasis: { format: 1, key: definitionInputKey(project, assessment.epicID, checks.flatMap((c) => c.evidenceIDs)) },
+              })), inputBasis: { format: 1, key: definitionInputKey(project, assessment.epicID, [...checks.flatMap((c) => c.evidenceIDs), ...additionalEvidenceIDs]),
+                ...(additionalEvidenceIDs.length ? { additionalEvidenceIDs } : {}) },
               ...(job.definitionWork ? { stagedReview: { format: 1 as const, policy: "exact-batches-v1" as const, batches: job.definitionWork.batches.length } } : {}) });
             project.roundChanges = [`Definition assessment refreshed: ${project.epics.find((e) => e.id === assessment.epicID)?.title ?? assessment.epicID}. Specification unchanged.`];
             return;
@@ -2724,7 +2731,7 @@ export class ProjectStore {
     // Same read-only compatibility projection as get(): derive missing legacy
     // bases ONLY from their own original publication, never today's decisions.
     for (const assessment of original.data.assessments) if (!assessment.inputBasis && assessment.atRevision === revision)
-      assessment.inputBasis = { format: 1, key: definitionInputKey(original.data, assessment.epicID, assessment.checks.flatMap((c) => c.evidenceIDs)) };
+      assessment.inputBasis = { format: 1, key: definitionInputKey(original.data, assessment.epicID, definitionAssessmentEvidenceIDs(assessment)) };
     return original.data;
   }
 

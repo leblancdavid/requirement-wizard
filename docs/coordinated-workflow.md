@@ -35,6 +35,14 @@ unchanged. Restart remains suspended until explicit Continue. See
 
 ## Bounded exact evidence bundles (2026-11-03)
 
+Explicit continuation can now recover a rejected canonical answer lookup when a
+saved current question in another feature explicitly cites a supplied requirement.
+It restores complete question/options/answer pairs and exposes exact validated
+cleanup approval receipts, without treating quoted proposal disclaimers as a later
+revocation. All paid responses, lookups and attempts remain saved. Later foreign
+answer edits invalidate the resulting review's extended freshness scope even if
+the model left its citations unchanged. See [compatibility and limits](migrations.md#bounded-cross-feature-provenance-and-authenticated-approvals-2026-11-05).
+
 User-approved continuation can package directly linked question/answer/approval
 provenance together rather than spend model calls following each link separately.
 This is bounded structural retrieval, not permission to infer precedence, approval or

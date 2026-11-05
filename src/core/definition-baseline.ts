@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { Analysis, Project } from "./model.js";
 import { accumulatedAssessmentProposal, dimensions } from "./epics.js";
 import { canonicalJSON } from "./assessment-identity.js";
-import { definitionInputDocument, definitionInputKey } from "./definition-identity.js";
+import { definitionInputDocument, definitionInputKey, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 import type { DefinitionWork } from "./definition-stages.js";
 import { definitionSteps } from "./definition-continuation.js";
 
@@ -100,7 +100,11 @@ export function definitionCheckpointUnread(original: Project, work: DefinitionWo
  * not a model declaration or today's reconstructed assessment. */
 export function prepareDefinitionCheckpointBaseline(original: Project, project: Project, work: DefinitionWork,
   sourceJobID: string, assessment: DefinitionBaseline["assessment"]): DefinitionBaseline | undefined {
-  if (original.id !== project.id || original.revision >= project.revision || !work.receipts.length || assessment.epicID !== work.epicID
+  const scopeIDs = new Set(definitionInputDocument(original, work.epicID).records.map((r) => r.id));
+  const extraReads = work.provenancePolicy && [...work.provenancePolicy.restoredPairs.flatMap((p) => [p.questionID, p.answerID]),
+    ...[...work.evidenceRequests ?? [], ...work.evidenceFollowups ?? []].flatMap((r) => r.resolvedRecordIDs ?? r.response.definitionEvidence.recordIDs)]
+    .some((id) => !scopeIDs.has(id));
+  if (extraReads || original.id !== project.id || original.revision >= project.revision || !work.receipts.length || assessment.epicID !== work.epicID
     || work.inputKey !== definitionInputKey(original, work.epicID)) return;
   try {
     const before = inputs(original, work.epicID), after = inputs(project, work.epicID), byID = new Map(before.records.map((r) => [r.id, r.key]));
@@ -120,9 +124,9 @@ export function prepareDefinitionCheckpointBaseline(original: Project, project: 
 export function prepareDefinitionBaseline(original: Project, project: Project, epicID: string, sourceJobID: string): DefinitionBaseline | undefined {
   const saved = project.assessments.find((a) => a.epicID === epicID), source = original.assessments.find((a) => a.epicID === epicID);
   if (!saved || !source || original.id !== project.id || original.revision !== saved.atRevision || original.revision >= project.revision
-    || source.combinedReview || source.mixedReview || canonicalJSON(source) !== canonicalJSON(saved)
+    || source.combinedReview || source.mixedReview || source.inputBasis?.additionalEvidenceIDs?.length || canonicalJSON(source) !== canonicalJSON(saved)
     || source.checks.length !== dimensions.length || new Set(source.checks.map((c) => c.dimension)).size !== 9
-    || source.inputBasis?.key !== definitionInputKey(original, epicID, source.checks.flatMap((c) => c.evidenceIDs))) return;
+    || source.inputBasis?.key !== definitionInputKey(original, epicID, definitionAssessmentEvidenceIDs(source))) return;
   try {
     const before = inputs(original, epicID), after = inputs(project, epicID), byID = new Map(before.records.map((r) => [r.id, r.key]));
     const currentIDs = new Set(after.records.map((r) => r.id));

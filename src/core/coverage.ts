@@ -1,6 +1,6 @@
 import { dimensions, dimensionLabels } from "./epics.js";
 import type { Project } from "./model.js";
-import { definitionInputKey } from "./definition-identity.js";
+import { definitionInputKey, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 import { definitionCombinedEvidenceKey } from "./definition-combined-assessment.js";
 import { definitionChangeReceipt } from "./definition-change-review.js";
 
@@ -49,7 +49,7 @@ export function coverage(project: Project) {
     const criticalGaps = checks.filter((item) => item.importance === "critical" && !["defined", "not-applicable"].includes(item.status)).length;
     return { epicID: epic.id, percent: total ? Math.round(100 * earned / total) : 0,
       assessed: !!assessment, stale: !assessment || (assessment.inputBasis
-         ? assessment.inputBasis.key !== definitionInputKey(project, epic.id, assessment.checks.flatMap((c) => c.evidenceIDs))
+         ? assessment.inputBasis.key !== definitionInputKey(project, epic.id, definitionAssessmentEvidenceIDs(assessment))
            && changeReview?.response.outcome !== "unaffected"
         : assessment.atRevision !== project.revision) || !!assessment?.combinedReview && assessment.combinedReview.guardKey !== combinedKey
           || !!assessment?.mixedReview && assessment.mixedReview.assembly.guardKey !== combinedKey,

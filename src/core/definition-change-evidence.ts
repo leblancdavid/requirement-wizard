@@ -1,6 +1,6 @@
 import type { Project } from "./model.js";
 import type { ContextPack } from "./context.js";
-import { definitionInputDocument } from "./definition-identity.js";
+import { definitionInputDocument, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 import { definitionFindingIdentityKey as digest } from "./definition-finding-identity.js";
 import { prepareDefinitionChangeReview, validateDefinitionChangeResponse, definitionChangeLimits } from "./definition-change-review.js";
 import { definitionChangeEvidenceRequestSchema, definitionChangeReceiptSchema, type DefinitionChangeWork } from "./definition-change-schema.js";
@@ -10,7 +10,7 @@ type Work = Extract<DefinitionChangeWork, { format: 2 }>;
 export function prepareDefinitionChangeEvidence(original: Project, current: Project, epicID: string) {
   const legacy = prepareDefinitionChangeReview(original, current, epicID);
   if (!legacy) return;
-  const citations = [...new Set(legacy.fields.assessment.checks.flatMap((check) => check.evidenceIDs))];
+  const citations = [...new Set(definitionAssessmentEvidenceIDs(legacy.fields.assessment))];
   const records = definitionInputDocument(current, epicID, citations).records;
   const byID = new Map(records.map((record) => [record.id, record]));
   if (citations.some((id) => !byID.has(id))) return;

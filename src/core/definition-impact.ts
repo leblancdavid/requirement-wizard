@@ -1,7 +1,7 @@
 import type { Project } from "./model.js";
 import { dimensions } from "./epics.js";
 import { canonicalJSON } from "./assessment-identity.js";
-import { definitionInputKey, definitionInputs } from "./definition-identity.js";
+import { definitionInputKey, definitionInputs, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex } from "@noble/hashes/utils";
 
@@ -83,7 +83,7 @@ export function definitionImpact(project: Project, epicID: string, original?: Pr
   const before = graph(oldRecords), after = graph(newRecords);
   if (before.byID.size !== oldRecords.length || after.byID.size !== newRecords.length
     || [original, project].some((p) => new Set(p.epics.map((e) => e.id)).size !== p.epics.length)) return { ...base, reason: "ambiguous-records" };
-  const citations = saved.checks.flatMap((c) => c.evidenceIDs), oldKey = definitionInputKey(original, epicID, citations);
+  const citations = definitionAssessmentEvidenceIDs(saved), oldKey = definitionInputKey(original, epicID, citations);
   if ((saved.inputBasis && saved.inputBasis.key !== oldKey) || (originAssessment[0]!.inputBasis && originAssessment[0]!.inputBasis!.key !== oldKey))
     return { ...base, reason: "provenance-mismatch" };
   const same = oldKey === definitionInputKey(project, epicID, citations), oldScope = definitionInputs(original, epicID, citations), newScope = definitionInputs(project, epicID, citations);

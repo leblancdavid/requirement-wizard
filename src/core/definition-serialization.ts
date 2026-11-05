@@ -1,7 +1,7 @@
 import { projectSchema, type Project } from "./model.js";
 import { assessmentSchema } from "./epics.js";
 import { canonicalJSON } from "./assessment-identity.js";
-import { definitionInputDocument, definitionInputKey } from "./definition-identity.js";
+import { definitionInputDocument, definitionInputKey, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 
 export const definitionSerializationLimits = { snapshotBytes: 32 * 1024 * 1024 } as const;
 
@@ -45,10 +45,11 @@ export function definitionStorageOrderProof(projectID: string, current: unknown,
     const originals = raw.assessments.filter((a) => a.epicID === assessment.epicID);
     const parsed = stored.assessments.filter((a) => a.epicID === assessment.epicID);
     if (originals.length !== 1 || parsed.length !== 1 || !parsed[0]!.inputBasis) return undefined;
+    if (canonicalJSON(assessment.inputBasis.additionalEvidenceIDs ?? []) !== canonicalJSON(parsed[0]!.inputBasis.additionalEvidenceIDs ?? [])) return undefined;
     const withoutBasis = (a: unknown) => canonicalJSON({ ...a as object, inputBasis: undefined });
     if (withoutBasis(current) !== withoutBasis(assessment) || withoutBasis(originals[0]) !== withoutBasis(parsed[0])
       || withoutBasis(assessment) !== withoutBasis(parsed[0])) return undefined;
-    const citations = assessment.checks.flatMap((c) => c.evidenceIDs);
+    const citations = definitionAssessmentEvidenceIDs(assessment);
     const rawDocument = definitionInputDocument(raw, assessment.epicID, citations), storedDocument = definitionInputDocument(stored, assessment.epicID, citations);
     if (canonicalJSON(rawDocument) !== canonicalJSON(storedDocument)) return undefined;
     const originalKey = definitionInputKey(raw, assessment.epicID, citations), key = definitionInputKey(stored, assessment.epicID, citations);
@@ -63,7 +64,7 @@ export function definitionSnapshotForRead(rawOriginal: unknown, epicID?: string)
   const stored = projectSchema.parse(rawOriginal);
   for (const assessment of stored.assessments) if (assessment.atRevision === stored.revision && (!epicID || assessment.epicID === epicID)) {
     const proof = definitionStorageOrderProof(stored.id, assessment, rawOriginal);
-    if (proof) assessment.inputBasis = { format: 1, key: proof.key };
+    if (proof) assessment.inputBasis = { ...assessment.inputBasis, format: 1, key: proof.key };
   }
   return stored;
 }

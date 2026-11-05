@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { assessmentSchema } from "../core/epics.js";
 import { projectSchema, type Project } from "../core/model.js";
 import { canonicalJSON } from "../core/assessment-identity.js";
-import { definitionInputKey } from "../core/definition-identity.js";
+import { definitionInputKey, definitionAssessmentEvidenceIDs } from "../core/definition-identity.js";
 import { coverage } from "../core/coverage.js";
 import { assessmentHistoryLimits as limits, type AssessmentHistoryPreview, type AssessmentHistorySelection } from "../core/assessment-history.js";
 import { definitionStorageOrderProof } from "../core/definition-serialization.js";
@@ -30,7 +30,7 @@ function decode(db: Database.Database, project: Project, epicID: string, row: Ca
       if (original.id !== project.id || original.revision !== assessment.atRevision) throw new Error("Original assessment snapshot identity is inconsistent.");
       const saved = original.assessments.filter((a) => a.epicID === epicID);
       if (saved.length === 1 && canonicalJSON({ ...saved[0], inputBasis: undefined }) === canonicalJSON({ ...assessment, inputBasis: undefined })) {
-        assessment.inputBasis = { format: 1, key: definitionInputKey(original, epicID, assessment.checks.flatMap((c) => c.evidenceIDs)) };
+        assessment.inputBasis = { format: 1, key: definitionInputKey(original, epicID, definitionAssessmentEvidenceIDs(assessment)) };
         basis = "derived";
       }
     }
