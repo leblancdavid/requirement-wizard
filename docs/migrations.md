@@ -77,11 +77,11 @@ Those tests, type checking, CLI help and diff checking passed. The UI build, all
 default browser runners and both post-browser runners passed with deterministic
 adapters. The first broad test run reached the existing supplemental post-page
 fixture's 64-step ceiling; activation was subsequently narrowed to actual foreign
-provenance, and all eight new tests plus that fixture passed together. A full
-`npm test` rerun passed **912 pretests, 774 main tests and 54 posttests**. The later
-activation regression and final structural-preparation optimization passed the
-nine-test focused run; the final whole-suite rerun is pending. No actual-user
-model continuation or installed desktop rebuild has been performed.
+provenance, and all eight new tests plus that fixture passed together. The final
+`npm test` rerun passed **913 pretests, 774 main tests and 54 posttests**. The final
+structural-preparation optimization also passed the nine-test focused run and type
+checking. No actual-user model continuation or installed desktop rebuild has been
+performed.
 
 ## Receipt-backed all-dimension continuation (2026-11-05)
 
