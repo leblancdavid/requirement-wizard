@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { WorkflowBudgetPause } from "../core/workflow.js";
-import { StaleRevisionError, parseDiscoveryAnalysis, reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Telemetry, type ResearchEvidence } from "../core/model.js";
+import { StaleRevisionError, parseDiscoveryAnalysis, reviewFingerprint, type QuestionHelpRequest, type Job, type Project, type Submission, type Telemetry, type ResearchEvidence } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
 import { safeMessage } from "../runtime/contract.js";
 import { ContextBudgetError, type ContextPack } from "../core/context.js";
 import { planContext, planExactTaskContext } from "../core/working-set.js";
 import { canStageSubmission } from "../core/submission-stages.js";
 import { runSubmissionStages } from "./submission-stages.js";
+import { runAnswerGroup } from "./answer-group.js";
 import { questionHelpContext } from "../core/question-help-context.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
 import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
@@ -185,6 +186,48 @@ export class DiscoveryService {
     } finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
   }
 
+  /** One charged model request for a bounded cohort, not one charge per area.
+   * Publication is all-or-nothing; an accepted reply survives a lost commit. */
+  async reviewDefinitionChangeGroup(projectID: string, revision: number, epicIDs: string[], groupKey: string, signal: AbortSignal): Promise<Job> {
+    if (!this.navigation.workflow) throw new Error("Shared impact checks require an owned Continue specification grant.");
+    signal.throwIfAborted(); this.assertCanDiscover(projectID);
+    const allowance = this.navigation.workflow.beforeJob();
+    const { job, project } = this.store.beginJob(projectID, revision, undefined, false, this.navigation.workflow.owner);
+    const controller = new AbortController(), abort = () => controller.abort(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    const measurement = new DiscoveryMeasurement(value => this.store.saveDiscoveryMetrics(job.id, value));
+    let timer: ReturnType<typeof setTimeout> | undefined, violation = false;
+    try {
+      this.store.claimJob(job.id, Date.now() + Math.min(300000, allowance.durationMs) + 30000);
+      this.store.beginDefinitionChangeGroup(job.id, epicIDs, groupKey);
+      if (!this.store.getJob(job.id).definitionChangeGroupWork!.response) {
+        const request = this.store.definitionChangeGroupRequest(job.id);
+        measurement.planned(request.context);
+        this.navigation.workflow.beforeRequest(job.id); this.store.reserveDefinitionChangeGroup(job.id);
+        timer = setTimeout(() => controller.abort(new DOMException("Shared impact request timed out", "TimeoutError")), Math.min(300000, allowance.durationMs));
+        let interrupt: () => void = () => {};
+        const stopped = new Promise<never>((_, reject) => { interrupt = () => reject(controller.signal.reason); controller.signal.addEventListener("abort", interrupt, { once: true }); });
+        try {
+          const response = await measurement.request(() => Promise.race([this.adapter.analyze(project, { context: request.context, research: false, signal: controller.signal,
+            onProgress: () => {}, onSession: id => this.store.attachSession(job.id, id),
+            onTelemetry: value => { if (value.actualModel.providerID !== project.model.providerID || value.actualModel.modelID !== project.model.modelID) { violation = true; throw new Error("Shared review used a different model."); } this.store.attachTelemetry(job.id, value); },
+            onResearch: evidence => { if (evidence.length) { violation = true; throw new Error("Shared review cannot authorize research."); } },
+          }), stopped]), request.context, controller.signal);
+          controller.signal.throwIfAborted(); if (violation) throw new Error("Shared review violated its model/research profile.");
+          const saved = this.store.recordDefinitionChangeGroupResponse(job.id, response); if (saved.status === "stale") return saved;
+        } finally { controller.signal.removeEventListener("abort", interrupt); }
+      }
+      controller.signal.throwIfAborted(); return this.store.finishDefinitionChangeGroup(job.id);
+    } catch (error) {
+      const current = this.store.getJob(job.id);
+      if (["pending", "running"].includes(current.status)) this.store.failJob(job.id,
+        controller.signal.aborted ? signal.aborted ? "cancelled" : "interrupted" : error instanceof WorkflowBudgetPause ? "interrupted" : error instanceof StaleRevisionError ? "stale" : "failed",
+        controller.signal.aborted ? "Shared impact check stopped. Original findings, any accepted reply and spent attempts are saved."
+          : error instanceof z.ZodError ? schemaDiagnostic(error) : safeMessage(error instanceof Error ? error.message : error));
+      return this.store.getJob(job.id);
+    } finally { clearTimeout(timer); signal.removeEventListener("abort", abort); measurement.finish(); }
+  }
+
   assertGapContinuation(projectID: string, revision: number, jobID: string): Job {
     const project = this.store.get(projectID), source = this.store.getJob(jobID);
     if (project.revision !== revision) throw new StaleRevisionError();
@@ -335,9 +378,16 @@ export class DiscoveryService {
   async analyze(projectID: string, expectedRevision: number, options: {
     signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; onRefinementRequest?: () => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
     definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule; continuousDefinition?: boolean; definitionRecoveryJobID?: string; onDefinitionRequest?: () => void;
-    readinessQuestions?: ReadinessQuestionTask; automatic?: boolean;
+    readinessQuestions?: ReadinessQuestionTask; automatic?: boolean; answerGroup?: boolean;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
+    if (options.answerGroup && (options.research || options.refinementOnly || options.helpRequest || options.gapMode || options.definitionEpicID
+      || options.readinessQuestions || options.recordIDs || options.requiredEpicIDs || options.isolatedTask || options.savedOverlapSubmissionID
+      || options.continueGapJobID || options.questionTarget !== undefined || options.focusEpicID || options.refinementPair || options.savedEvidencePolicy
+      || !options.submissionIDs || options.submissionIDs.length < 2 || options.submissionIDs.length > 5 || new Set(options.submissionIDs).size !== options.submissionIDs.length))
+      throw new Error("Shared answer integration requires a separate no-research saved-answer group.");
+    if (!options.answerGroup && options.submissionIDs?.some(id => this.store.latestAnswerGroupWorkJob(projectID, id)))
+      throw new Error("A saved shared answer group must continue together. Its completed steps and spent attempts cannot become fresh individual work.");
     const workflowLimits = this.navigation.workflow?.beforeJob();
     const continuousDefinition = options.continuousDefinition || !!(options.definitionEpicID && this.navigation.workflow?.continuous);
     if (options.readinessQuestions !== undefined) {
@@ -497,6 +547,16 @@ export class DiscoveryService {
         return completeMeasurement(this.store.attachEpicReviewReport(job.id, epicPlan.report, true));
       }
       const taskPlanner = options.refinementOnly || options.isolatedTask && options.submissionIDs?.length === 1 ? planExactTaskContext : planContext;
+      if (options.answerGroup) {
+        const submissions = this.store.submissions(projectID), items = options.submissionIDs!.map(id => submissions.find(s => s.id === id));
+        if (items.some(s => !s)) throw new Error("A shared answer is no longer available; original input was retained.");
+        clearTimeout(timer);
+        if (!this.navigation.workflow?.continuous) timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
+        return completeMeasurement(await runAnswerGroup(this.store, inferenceAdapter, project, job, items as Submission[], {
+          signal: controller.signal, continuous: this.navigation.workflow?.continuous, limits: workflowLimits ?? this.navigation.stagedLimits,
+          onProgress: options.onProgress, measurement,
+        }));
+      }
       let readiness: ContextPack | undefined;
       if (options.readinessQuestions) {
         const task = options.readinessQuestions;
@@ -546,7 +606,7 @@ export class DiscoveryService {
         catch (error) { if (!(error instanceof ContextBudgetError)) throw error; return await run(error); }
       }
       if (canStageSubmission(stagedItem)) {
-        const previous = this.store.jobs(projectID).some((j) => j.id !== job.id && j.submissionWork?.submissionID === stagedItem.id);
+        const previous = this.store.latestSubmissionWorkJob(projectID, stagedItem.id, job.id);
         const run = async (overflow?: ContextBudgetError) => {
           clearTimeout(timer);
           if (!this.navigation.workflow?.continuous) timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);

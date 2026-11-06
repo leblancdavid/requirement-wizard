@@ -27,7 +27,7 @@ export function ProcessingSettings({ policy, configurePolicy, workflow, maintena
     </fieldset>}
     {guided ? <>
       <p role="status">Guided processing is selected for this project. Continue specification explicitly to start or resume a bounded allowance. Saving this mode starts no AI requests.</p>
-      <p>New responses are eligible for coordinated follow-up, even when this browser's separate saved-input preference is off. While waiting for a decision, saving a response can continue only the remaining allowance in this app session. Earlier saved-only responses still need explicit continuation. After Stop, a limit or restarting, choose Continue specification again.</p>
+      <p>New responses are eligible for coordinated follow-up, even when this browser's separate saved-input preference is off. New continuous runs collect answers without AI work while waiting for decisions; choose Submit saved responses when ready. Older grants retain their original behavior until explicit continuation. After Stop, a limit or restarting, continue explicitly.</p>
       {workflow && <WorkflowControls workflow={workflow} disabled={disabled} pending={pending} configure={configureWorkflow} settings guided />}
       <details><summary>Retained separate-task preferences (held by Guided processing)</summary>
         <p>Browser-wide automatic saved-input processing: {auto ? "on" : "off"}. This preference has not changed and still applies to other projects using existing permissions.</p>

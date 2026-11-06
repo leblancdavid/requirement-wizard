@@ -16,6 +16,14 @@ export class DiscoveryMeasurement {
       this.value.definitionLocalMs[phase] = (this.value.definitionLocalMs[phase] ?? 0) + performance.now() - start;
     }
   }
+  /** Synchronous saved-input work only; no extra writes or response contents. */
+  submissionLocal<T>(phase: keyof NonNullable<DiscoveryMetrics["submissionLocalMs"]>, run: () => T): T {
+    const start = performance.now();
+    try { return run(); } finally {
+      this.value.submissionLocalMs ??= {};
+      this.value.submissionLocalMs[phase] = (this.value.submissionLocalMs[phase] ?? 0) + performance.now() - start;
+    }
+  }
   private checkpoint() { this.value.elapsedMs = performance.now() - this.started; this.save(this.value); }
   preparing(progress: PlanningProgress) { this.value.planningProgress = progress; this.checkpoint(); }
   planned(context?: ContextPack, decisions?: DiscoveryMetrics["planningDecisions"]) {
@@ -32,10 +40,11 @@ export class DiscoveryMeasurement {
     try {
       const raw = await run();
       request.outcome = "returned";
-      request.response = raw && typeof raw === "object" ? "retrieveEvidence" in raw || "clarificationEvidence" in raw || "submissionEvidence" in raw || "definitionEvidence" in raw ? "load" : "searchEvidence" in raw ? "search"
-        : "reviewBlocked" in raw || "definitionBlocked" in raw || "clarificationBlocked" in raw || "submissionBlocked" in raw ? "blocked"
+      request.response = raw && typeof raw === "object" ? "retrieveEvidence" in raw || "clarificationEvidence" in raw || "submissionEvidence" in raw || "answerGroupEvidence" in raw || "definitionEvidence" in raw ? "load" : "searchEvidence" in raw ? "search"
+        : "reviewBlocked" in raw || "definitionBlocked" in raw || "clarificationBlocked" in raw || "submissionBlocked" in raw || "answerGroupBlocked" in raw ? "blocked"
           : "summary" in raw || "jointReview" in raw || "guardrailVerdict" in raw || "definitionVerdict" in raw || "definitionAssessment" in raw || "definitionUpdate" in raw
-            || "clarificationRead" in raw || "clarificationVerdict" in raw || "submissionKeep" in raw || "submissionCheck" in raw ? "analysis" : "other" : "other";
+          || "clarificationRead" in raw || "clarificationVerdict" in raw || "submissionKeep" in raw || "submissionCheck" in raw
+          || "answerGroupDraft" in raw || "answerGroupKeep" in raw || "answerGroupCheck" in raw ? "analysis" : "other" : "other";
       return raw;
     } catch (error) { request.outcome = signal.aborted ? "cancelled" : "failed"; throw error; }
     finally { request.durationMs = performance.now() - start; this.checkpoint(); }

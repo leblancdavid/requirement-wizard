@@ -6,6 +6,13 @@ const responseModel = z.object({ providerID: z.string().min(1), modelID: z.strin
 export const definitionChangeBaselineSchema = z.object({ format: z.literal(1), revision: z.number().int().positive(),
   inputKey: key, receiptKey: key }).strict();
 export type DefinitionChangeBaseline = z.infer<typeof definitionChangeBaselineSchema>;
+export const definitionChangeGuardSchema = z.object({ format: z.literal(1), key,
+  areas: z.array(z.object({ epicID: z.string().min(1), evidenceIDs: z.array(z.string().min(1)).max(10000) }).strict()).min(1).max(16),
+}).strict().refine(v => new Set(v.areas.map(a => a.epicID)).size === v.areas.length
+  && v.areas.every(a => new Set(a.evidenceIDs).size === a.evidenceIDs.length), "Shared review guards require distinct areas and exact evidence roots.");
+export type DefinitionChangeGuard = z.infer<typeof definitionChangeGuardSchema>;
+export const definitionChangeGroupOriginSchema = z.object({ format: z.literal(1), jobID: z.string().uuid(), groupKey: key,
+  contextKey: key, areaTaskKey: key, attempts: z.number().int().min(1).max(3) }).strict();
 export const definitionChangeMarkerSchema = z.object({ format: z.union([z.literal(1), z.literal(2), z.literal(3)]), taskKey: key, currentInputKey: key }).strict();
 export const definitionChangeResponseSchema = z.object({
   taskKey: key,
@@ -23,6 +30,7 @@ export const definitionChangeResponseSchema = z.object({
 });
 const receiptFields = z.object({
   baseline: definitionChangeBaselineSchema.optional(),
+  guard: definitionChangeGuardSchema.optional(),
   projectID: z.string(), epicID: z.string(), assessmentKey: key, originalInputKey: key, currentInputKey: key, globalKey: key, taskKey: key, contextKey: key,
   originalRevision: z.number().int().positive(), reviewedRevision: z.number().int().positive(),
   jobID: z.string().uuid(), responseJobID: z.string().uuid(), responseModel, reviewedAt: z.string().datetime(), response: definitionChangeResponseSchema,
@@ -46,6 +54,8 @@ export const definitionChangeReceiptSchema = z.union([
   receiptFields.extend({ format: z.literal(2), policy: z.literal("definition-change-evidence-v2"), loadedEvidenceIDs: z.array(z.string().min(1)).max(192), responseContextKey: key }).strict(),
   receiptFields.extend({ format: z.literal(3), policy: z.literal("definition-change-batches-v3"), ...batchedFields,
     loads: z.array(definitionChangeLoadSchema).max(6), reviewedBatchKeys: z.array(key).min(1).max(32), responseContextKey: key }).strict(),
+  receiptFields.extend({ format: z.literal(4), policy: z.literal("definition-change-group-v1"), guard: definitionChangeGuardSchema,
+    groupKey: key, areaContextKey: key }).strict(),
 ]).superRefine((value, ctx) => {
   if (value.taskKey !== value.response.taskKey || value.reviewedRevision <= value.originalRevision)
     ctx.addIssue({ code: "custom", message: "Change review must retain its original finding and exact task identity." });
@@ -64,6 +74,8 @@ export const definitionChangeReceiptSchema = z.union([
 export type DefinitionChangeReceipt = z.infer<typeof definitionChangeReceiptSchema>;
 const workFields = z.object({
   baseline: definitionChangeBaselineSchema.optional(),
+  guard: definitionChangeGuardSchema.optional(),
+  groupOrigin: definitionChangeGroupOriginSchema.optional(),
   epicID: z.string(), assessmentKey: key, taskKey: key, contextKey: key, attempts: z.number().int().min(0).max(3),
   sourceJobID: z.string().uuid().optional(), responseJobID: z.string().uuid().optional(), responseModel: responseModel.optional(), response: definitionChangeResponseSchema.optional(),
 }).strict();
@@ -81,6 +93,9 @@ export const definitionChangeWorkSchema = z.union([
     && work.batches.every((batch, index) => batch.batchKey === work.batchPlan[index]?.batchKey
       && JSON.stringify(batch.evidenceIDs) === JSON.stringify(work.batchPlan[index]?.evidenceIDs))
     && !!work.response === !!work.reviewedBatchKeys, "Batched work must retain its exact task, lookup allowance and joint verdict.")
+  .refine(work => !work.groupOrigin || work.format !== 1 && !!work.guard
+    && (work.loads[0]?.attempts ?? (work.format === 3 ? work.batches[0]?.attempts : undefined) ?? work.attempts) >= work.groupOrigin.attempts,
+    "Individual handoffs must preserve their shared guard and inherited charged attempts.")
   .refine((work) => new TextEncoder().encode(JSON.stringify(work)).byteLength <= (work.format === 3 ? 262144 : 65536), "Change-review work exceeds its durable bound; no evidence was truncated.");
 export type DefinitionChangeWork = z.infer<typeof definitionChangeWorkSchema>;
 export const definitionChangeEvidenceRequestSchema = z.object({ taskKey: key, loadEvidenceIDs: z.array(z.string().min(1).max(500)).min(1).max(8) }).strict();

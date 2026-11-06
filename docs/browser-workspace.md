@@ -1,5 +1,22 @@
 # Browser workspace, epics, and estimated completeness
 
+## Save answers before processing (2026-11-06)
+
+After explicitly starting/continuing the specification workflow, answer the available
+questions without waiting for AI between saves. **Submit saved responses** in the
+queue header/drawer processes the responses saved at that moment; you may submit a
+partial batch. Later responses wait for the next submission. Submitted answers remain
+editable through the existing Submitted filter until processing begins. Reopening the
+app never submits them. Existing earlier grants adopt this behavior only on explicit
+continuous continuation. Compatible sets of two to five new unscoped answers in the
+same feature now share evidence reading/checking; other inputs retain individual paths.
+The queue shows the group count and saved evidence steps. Pause/reload retains completed
+reads and charged attempts; continuation resumes the original group rather than
+restarting its members separately. Bounded multi-topic question collection remains
+future work. The dedicated fixture browser check is `npx tsx src/web/answer-group-browser-check.ts`
+(also a post-browser runner); its mobile screenshot is `.reqwizit-state/browser-shared-answers-mobile.png`.
+See [workflow details](coordinated-workflow.md#save-first-answer-collection-2026-11-06).
+
 ## Bounded change-review progress (2026-11-04)
 
 Size-blocked source-backed checks now resume through exact evidence batches and a

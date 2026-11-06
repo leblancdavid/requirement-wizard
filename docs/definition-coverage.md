@@ -3,6 +3,13 @@
 Implemented 2026-10-23 for RW-019. Definition coverage estimates recorded product
 decisions; it is not readiness, code completeness, or verified delivery to main.
 
+Compatible new change-impact checks can now share bounded exact-evidence requests
+for two to four features, with separate validated verdicts and broader co-read
+freshness guards. Paid individual work stays on its original protocol. Missing
+indispensable evidence defers to individual source review with inherited attempts.
+See [shared requests and measured limits](coordinated-workflow.md#shared-multi-area-impact-requests-2026-11-05)
+and [upgrade compatibility](migrations.md#shared-area-impact-review-2026-11-05).
+
 ## Incremental change checks and saved-score visibility (2026-11-05)
 
 After an answer, saved scores remain visible as **“N% saved · validity pending”**,

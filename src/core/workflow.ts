@@ -29,6 +29,10 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
     key, target: z.string().optional(), jobIDs: z.array(z.string()).max(200), completed: z.boolean().optional() }).strict().optional(),
   discovery: z.object({ inputKey: key, jobID: z.string() }).strict().optional(),
   readiness: workflowReadinessSchema.optional(),
+  reviewPolicy: z.object({ format: z.literal(1) }).strict().optional(),
+  inputBatchPolicy: z.object({ format: z.literal(1) }).strict().optional(),
+  reviewCheckpoint: z.object({ format: z.literal(1), inputKey: key, revision: z.number().int().positive(),
+    state: z.enum(["reviewing", "complete"]), explicit: z.boolean() }).strict().optional(),
   decisionSchedule: workflowScheduleSchema.optional(),
 }).strict();
 export type WorkflowState = z.infer<typeof workflowSchema>;
@@ -48,6 +52,11 @@ export function workflowInputKey(project: Project) {
 export function workflowWakeKey(project: Project, submissions: Submission[]) {
   return hash([workflowInputKey(project), project.assessments, submissions.filter((s) => !s.archivedAt)
     .map((s) => [s.id, s.status, s.applied, s.conflict, s.jobID]), ...(project.definitionChangeReviews ? [project.definitionChangeReviews] : [])]);
+}
+/** Checkpoint binding includes global interpretation too; changing this must not
+ * alter existing workflow/task identities or assessment freshness hashes. */
+export function workflowReviewInputKey(project: Project) {
+  return hash(["review-checkpoint-v1", workflowInputKey(project), project.summary, project.goals, project.actors, project.assumptions]);
 }
 export type WorkflowDecision = { kind: "question" | "requirement" | "refinement" | "organization" | "input"; id: string; title: string };
 export function workflowDecisions(project: Project, submissions: Submission[]): WorkflowDecision[] {

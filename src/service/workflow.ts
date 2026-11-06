@@ -2,7 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import type { Job, Project } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { workflowLimits, workflowInputKey, workflowWakeKey, workflowDecisions, workflowRequirements, workflowAreas,
-  workflowReadiness, definitionGatesPass, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
+   workflowReadiness, workflowReviewInputKey, definitionGatesPass, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
 import { refinementCheckCurrent } from "./refinement-tasks.js";
 import { refinementCandidates } from "../core/refinement.js";
 import { refinementIsStale, resolutionPairEligible, resolutionContextMatches } from "../core/resolution.js";
@@ -18,6 +18,7 @@ import { dimensionLabels } from "../core/epics.js";
 import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } from "../core/follow-through.js";
 import { planWorkflowSchedule } from "../core/workflow-schedule.js";
 import type { WorkflowJobReceipt } from "../core/workflow-receipts.js";
+import { definitionInputKey } from "../core/definition-identity.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Run = { controller: AbortController; promise: Promise<void> };
@@ -60,6 +61,7 @@ export class ProjectWorkflow {
     const readiness = workflowReadiness(project, submissions, state, execution, bindingID, areas);
     const definitions = definitionFollowThrough(areas), artifacts = artifactFollowThrough(project, execution, bindingID), active = this.active(id);
     const decisions = workflowDecisions(project, submissions);
+    const resolved = resolvedReviewAttempts(project, submissions);
     const decisionSchedule = decisions.length ? planWorkflowSchedule(project, workflowInputKey(project), decisions, areas, this.store.workflowDefinitionCheckpoints(id)) : undefined;
     const outcome = followThroughOutcome({ project, submissions, definitions, artifacts, active, decisions, blocked: state.phase === "blocked",
       change: this.store.latestSpecificationChange(id, project.revision), specificationChecked: readiness.specificationChecked, readyToImplement: readiness.readyToImplement });
@@ -68,27 +70,38 @@ export class ProjectWorkflow {
     const changed = state.phase === "ready-to-plan" && !readiness.specificationChecked;
     const changeJob = state.current?.kind === "definition-change" ? state.current.jobIDs.at(-1) : undefined;
     const changeEvidence = changeJob ? this.store.definitionChangeProgress(id, changeJob) : undefined;
+    const changeGroup = changeJob ? this.store.definitionChangeGroupProgress(id, changeJob) : undefined;
     const remainingMs = state.grant && Math.max(0, state.grant.remainingMs - (state.owner && state.leaseUntil
       ? Math.max(0, Date.now() - (state.leaseUntil - 360000)) : 0));
     return { version: state.settingsVersion, enabled, paused: state.paused, suspended,
       phase: !state.enabled && state.phase === "idle" ? "idle" : suspended ? "paused" : state.phase === "blocked" ? "blocked" : state.paused ? "paused" : readiness.readyToImplement ? "ready-to-implement" : changed ? "working" : state.phase,
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
        current: state.current && { kind: state.current.kind, target: state.current.target },
-       ...(changeEvidence ? { changeEvidence } : {}),
+        ...(changeEvidence ? { changeEvidence } : {}),
+       ...(changeGroup ? { changeGroup } : {}),
       grant: state.grant && { used: state.grant.used, remainingMs: remainingMs!, continuous: !!state.grant.continuous }, limits: workflowLimits,
-       decisions, readiness, active, outcome,
+        decisions, readiness, active, outcome,
+       ...(state.inputBatchPolicy ? { answerBatch: {
+         savedResponses: submissions.filter(s => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved"].includes(s.status) && !s.conflict).length,
+         waiting: state.phase === "needs-decision" && !active,
+       } } : {}),
       definitionReviews: definitions.map((area) => ({ ...area,
         title: project.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID })),
-       artifacts, decisionSchedule, lastRun: this.store.latestWorkflowRun(id) };
+       artifacts, decisionSchedule, ...(state.reviewCheckpoint ? { reviewCheckpoint: state.reviewCheckpoint } : {}),
+       ...(state.reviewPolicy ? { checkpointScheduling: true } : {}),
+       lastRun: this.store.latestWorkflowRun(id) };
   }
-  configure(id: string, revision: number, version: number, action: "continue" | "continue-continuous" | "pause" | "disable") {
+  configure(id: string, revision: number, version: number, action: "continue" | "continue-continuous" | "review-changes" | "pause" | "disable") {
     let state = this.store.workflow(id);
     if (state.settingsVersion !== version) throw new OperationConflictError("Project workflow settings changed. Refresh before continuing.");
     if (action === "disable" && this.store.processingPolicy(id).mode === "guided") throw new OperationConflictError("Guided processing is selected. Choose another processing mode before using separate task settings.");
-    if (action === "continue" || action === "continue-continuous") {
+    if (action === "continue" || action === "continue-continuous" || action === "review-changes") {
       if (this.closing || this.active(id) || this.store.discoveryActive(id)) throw new OperationConflictError("Wait for the active task before continuing the project.");
       this.store.assertNoExecution(id);
       const project = this.store.get(id); if (project.revision !== revision) throw new OperationConflictError("Project changed. Refresh before continuing.");
+      const submissions = this.store.submissions(id), resolved = resolvedReviewAttempts(project, submissions);
+      const pendingInput = submissions.some(s => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing"].includes(s.status));
+      if (action === "review-changes" && pendingInput) throw new OperationConflictError("Process saved responses before starting a review checkpoint. No review was started.");
       new DiscoveryService(this.store, this.adapter).assertCanDiscover(id);
       // Explicit continuation can recover this coordinator's interrupted input,
       // never unrelated failed submissions or old rejected proposals.
@@ -100,6 +113,16 @@ export class ProjectWorkflow {
         }
       }
       state.enabled = true; state.paused = false; state.phase = "working";
+      state.reviewPolicy = { format: 1 };
+      // Adopt only on explicit continuous consent. Old bounded/live grants keep
+      // their original wake-up behavior; startup never rewrites or arms them.
+      if (action === "continue-continuous") state.inputBatchPolicy = { format: 1 };
+      // Resuming identical input retains the checkpoint and the paid jobs it
+      // references through existing task identities. Changed input needs a new
+      // checkpoint, never a rewrite/restart of the older one.
+      if (pendingInput || state.reviewCheckpoint?.inputKey !== workflowReviewInputKey(project)) delete state.reviewCheckpoint;
+      if (action === "review-changes") state.reviewCheckpoint = {
+        format: 1, inputKey: workflowReviewInputKey(project), revision: state.reviewCheckpoint?.revision ?? project.revision, state: "reviewing", explicit: true };
       state.message = "Coordinating saved input and specification checks. Product choices still require your decision.";
       state.grant = { id: randomUUID(), used: 0, remainingMs: workflowLimits.durationMs,
         ...(action === "continue-continuous" ? { continuous: { format: 1 as const } } : {}),
@@ -111,7 +134,7 @@ export class ProjectWorkflow {
       if (action === "disable") state.enabled = false;
     }
     state.settingsVersion++; this.store.saveWorkflow(id, state);
-    if (action === "continue" || action === "continue-continuous") { this.armed.add(id); this.tick(id); }
+    if (action === "continue" || action === "continue-continuous" || action === "review-changes") { this.armed.add(id); this.tick(id); }
     else { this.armed.delete(id); this.runs.get(id)?.controller.abort(definitionAbortReason("user-stop")); }
     return this.view(id);
   }
@@ -120,6 +143,7 @@ export class ProjectWorkflow {
     try {
       const state = this.store.workflow(id);
       if (!state.enabled || state.paused || !state.grant) return;
+      if (state.inputBatchPolicy && state.phase === "needs-decision") return;
       const project = this.project(id), wake = workflowWakeKey(project, this.store.submissions(id));
       if (state.waitKey === wake) return;
       if (!state.grant.continuous && (state.grant.used >= workflowLimits.requests || state.grant.remainingMs <= 0)) {
@@ -202,23 +226,69 @@ export class ProjectWorkflow {
       if (job.result?.resolutionCheck?.outcome === "blocked") { stop("blocked", job.result.resolutionCheck.explanation, true); return false; }
       return true;
     };
+    const discover = async (project: Project) => {
+      record("discover", project);
+      const job = await service.analyze(id, project.revision, { gapMode: "epic", signal: controller.signal, research: false });
+      if (!check(job)) return false;
+      if (!job.result) {
+        const report = job.epicReviewReport;
+        if (!report || report.planningPartial || report.pending || report.waiting || report.blocked || !report.total) {
+          stop("blocked", report?.blockers[0]?.reason ?? "Workflow evidence review is incomplete; no readiness claim was made.", true); return false;
+        }
+        const latest = owned(); latest.discovery = { inputKey: workflowInputKey(this.project(id)), jobID: job.id }; this.store.saveWorkflow(id, latest);
+      }
+      return true;
+    };
     try {
       // Yield before dispatch so the owning run is installed before any callback.
       await Promise.resolve();
       for (let step = 0; step < workflowLimits.steps; step++) {
         controller.signal.throwIfAborted(); const state = owned(); if (!state.enabled || state.paused) return;
         const project = this.project(id), submissions = this.store.submissions(id), resolved = resolvedReviewAttempts(project, submissions);
+        if (state.reviewPolicy && state.reviewCheckpoint?.state === "reviewing"
+          && state.reviewCheckpoint.inputKey !== workflowReviewInputKey(project)) {
+          stop("paused", "New input arrived during the review checkpoint. Completed checks and charged attempts are saved. New changes are waiting for the next checkpoint; continue explicitly when ready.", true); return;
+        }
         const pending = submissions.filter((s) => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing"].includes(s.status));
+        if (pending.length && state.reviewPolicy && state.reviewCheckpoint?.state === "reviewing") {
+          stop("paused", "New saved responses are waiting for the next checkpoint. Completed review work is retained; continue explicitly to process the new batch.", true); return;
+        }
         if (pending.length) {
           const manual = this.store.processingPolicy(id).mode === "manual";
-          const permitted = pending.filter((s) => (!manual && s.auto) || state.grant!.submissionIDs.includes(s.id));
-          if (!permitted.length) { stop("paused", "Saved-only input is waiting for processing permission. Continue specification to authorize its processing.", true); return; }
+          const permitted = pending.filter((s) => (!state.inputBatchPolicy && !manual && s.auto) || state.grant!.submissionIDs.includes(s.id));
+          if (!permitted.length) { stop("paused", "Saved responses are waiting for the next batch. Continue specification explicitly to process them; saving responses starts no new work.", true); return; }
           record("input", project, permitted.map((s) => s.id).sort().join(","));
           queue.resume(id, { processOnly: true, research: false, submissionIDs: permitted.map((s) => s.id) }); await queue.wait(id);
           if (!continuous && owned().grant!.used > workflowLimits.requests - 3) throw new WorkflowBudgetPause("Workflow burst allowance reached; saved input and follow-up checkpoints are retained.");
         } else {
           const decisions = workflowDecisions(project, submissions);
-          if (decisions.length) {
+          const reviewing = state.reviewPolicy && state.reviewCheckpoint?.state === "reviewing";
+          if (state.reviewPolicy && decisions.length && !reviewing) {
+            const latest = owned(); latest.decisionSchedule = planWorkflowSchedule(project, workflowInputKey(project), decisions, workflowAreas(project), this.store.workflowDefinitionCheckpoints(id));
+            this.store.saveWorkflow(id, latest);
+            stop("needs-decision", `${decisions.length} decisions or saved-input issues remain in this batch. Answers are collected without launching area assessments. Finish the batch or choose Review changes for an explicit checkpoint; saved findings remain dated.`); return;
+          }
+          if (reviewing && workflowAreas(project).every(area => area.assessed && !area.stale)) {
+            const latest = owned(); latest.reviewCheckpoint!.state = "complete"; this.store.saveWorkflow(id, latest);
+            if (decisions.length || state.reviewCheckpoint!.explicit) {
+              stop(decisions.length ? "needs-decision" : "paused", "Review checkpoint finished. Saved findings and remaining decisions are retained. Continue specification for the next batch or planning checks.", true); return;
+            }
+          }
+          if (reviewing && state.reviewCheckpoint!.explicit) {
+            const pendingAreas = workflowAreas(project).filter(area => !area.assessed || area.stale);
+            const area = pendingAreas.find(a => {
+              const saved = a.assessed && this.store.definitionChangeTask(id, a.epicID);
+              return saved && (this.store.hasDefinitionChangeWork(id, saved.taskKey) || this.store.hasDefinitionChangeGroupWork(id, a.epicID, saved.taskKey));
+            }) ?? pendingAreas[0]!;
+            const task = area.assessed && this.store.definitionChangeTask(id, area.epicID);
+            const group = task ? this.store.definitionChangeGroupTask(id, [area.epicID, ...workflowAreas(project).filter(a => a.assessed && a.stale && a.epicID !== area.epicID).map(a => a.epicID)]) : undefined;
+            record(task ? "definition-change" : "definition", project, group ? group.bindings.map(a => a.epicID).join(",") : area.epicID, group?.groupKey ?? (task ? task.taskKey : undefined));
+            if (!check(group ? await service.reviewDefinitionChangeGroup(id, project.revision, group.bindings.map(a => a.epicID), group.groupKey, controller.signal)
+              : task ? await service.reviewDefinitionChanges(id, project.revision, area.epicID, controller.signal)
+              : await service.analyze(id, project.revision, { definitionEpicID: area.epicID, research: false, signal: controller.signal }))) return;
+            const latest = owned(); if (latest.current) latest.current.completed = true; this.store.saveWorkflow(id, latest); continue;
+          }
+          if (decisions.length && !reviewing) {
             const schedule = planWorkflowSchedule(project, workflowInputKey(project), decisions, workflowAreas(project), this.store.workflowDefinitionCheckpoints(id));
             const latest = owned(); latest.decisionSchedule = schedule; this.store.saveWorkflow(id, latest);
             const review = schedule.status === "recorded" ? schedule.tasks.find((task) => task.availability === "reviewable" && task.reviewState !== "current") : undefined;
@@ -254,34 +324,51 @@ export class ProjectWorkflow {
                 // Finish eligible change checks before starting a potentially long
                 // full review. A large/uncertain area must not strand independent
                 // impact results behind its historical evidence replay.
-                const outdatedArea = outdatedAreas.find((area) => !!this.store.definitionChangeTask(id, area.epicID)) ?? outdatedAreas[0];
+                const outdatedArea = outdatedAreas.find(area => {
+                  const saved = this.store.definitionChangeTask(id, area.epicID);
+                  return saved && (this.store.hasDefinitionChangeWork(id, saved.taskKey) || this.store.hasDefinitionChangeGroupWork(id, area.epicID, saved.taskKey));
+                }) ?? outdatedAreas.find((area) => !!this.store.definitionChangeTask(id, area.epicID)) ?? outdatedAreas[0];
                 if (pair) {
                   record("conflicts", project, `${pair.leftID}:${pair.rightID}`);
                   if (!check(await service.analyze(id, project.revision, { refinementOnly: true, refinementPair: [pair.leftID, pair.rightID], research: false, signal: controller.signal }))) return;
                 } else if (outdatedArea) {
+                  const saved = state.reviewPolicy && !reviewing ? this.store.workflowDefinitionCheckpoints(id).get(outdatedArea.epicID) : undefined;
+                  const savedChangeTask = state.reviewPolicy && !reviewing ? this.store.definitionChangeTask(id, outdatedArea.epicID) : undefined;
+                  const continuing = !!(saved && saved.inputKey === definitionInputKey(project, outdatedArea.epicID))
+                    || !!(savedChangeTask && (this.store.hasDefinitionChangeWork(id, savedChangeTask.taskKey)
+                      || this.store.hasDefinitionChangeGroupWork(id, outdatedArea.epicID, savedChangeTask.taskKey)));
+                  // Collection may produce further related questions. Only a
+                  // settled discovery pass (or explicit Review changes) closes
+                  // the batch; a single answered question is not a checkpoint.
+                  if (state.reviewPolicy && !reviewing && !continuing && state.discovery?.inputKey !== workflowInputKey(project)) {
+                    if (!await discover(project)) return;
+                    continue;
+                  }
+                  if (state.reviewPolicy && !reviewing) {
+                    const latest = owned(); latest.reviewCheckpoint = { format: 1, inputKey: workflowReviewInputKey(project), revision: project.revision, state: "reviewing", explicit: false };
+                    this.store.saveWorkflow(id, latest); continue;
+                  }
                   // Repair existing conclusions before broadening exploration. Missing
                   // baseline reviews retain the original discovery-first ordering.
                   const changeTask = this.store.definitionChangeTask(id, outdatedArea.epicID);
                   if (changeTask) {
-                    record("definition-change", project, outdatedArea.epicID, changeTask.taskKey);
-                    if (!check(await service.reviewDefinitionChanges(id, project.revision, outdatedArea.epicID, controller.signal))) return;
+                    const group = this.store.definitionChangeGroupTask(id, [outdatedArea.epicID, ...outdatedAreas.filter(a => a.epicID !== outdatedArea.epicID).map(a => a.epicID)]);
+                    record("definition-change", project, group ? group.bindings.map(a => a.epicID).join(",") : outdatedArea.epicID, group?.groupKey ?? changeTask.taskKey);
+                    if (!check(group ? await service.reviewDefinitionChangeGroup(id, project.revision, group.bindings.map(a => a.epicID), group.groupKey, controller.signal)
+                      : await service.reviewDefinitionChanges(id, project.revision, outdatedArea.epicID, controller.signal))) return;
                   } else {
                     record("definition", project, outdatedArea.epicID);
                     if (!check(await service.analyze(id, project.revision, { definitionEpicID: outdatedArea.epicID, research: false, signal: controller.signal }))) return;
                   }
                 } else if (state.discovery?.inputKey !== workflowInputKey(project)) {
-                  record("discover", project);
-                  const job = await service.analyze(id, project.revision, { gapMode: "epic", signal: controller.signal, research: false }); if (!check(job)) return;
-                  const report = job.epicReviewReport;
-                  if (!job.result) {
-                    if (!report || report.planningPartial || report.pending || report.waiting || report.blocked || !report.total) {
-                      stop("blocked", report?.blockers[0]?.reason ?? "Workflow evidence review is incomplete; no readiness claim was made.", true); return;
-                    }
-                    const latest = owned(); latest.discovery = { inputKey: workflowInputKey(this.project(id)), jobID: job.id }; this.store.saveWorkflow(id, latest);
-                  }
+                  if (!await discover(project)) return;
                 } else {
                   const area = workflowAreas(project).find((a) => !a.assessed || a.stale);
                   if (area) {
+                    if (state.reviewPolicy && !reviewing) {
+                      const latest = owned(); latest.reviewCheckpoint = { format: 1, inputKey: workflowReviewInputKey(project), revision: project.revision, state: "reviewing", explicit: false };
+                      this.store.saveWorkflow(id, latest); continue;
+                    }
                     record("definition", project, area.epicID);
                     if (!check(await service.analyze(id, project.revision, { definitionEpicID: area.epicID, research: false, signal: controller.signal }))) return;
                   } else {

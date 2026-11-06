@@ -203,6 +203,7 @@ export function makeDefinitionChangeBatchedReceipt(task: DefinitionChangeEvidenc
   return definitionChangeReceiptSchema.parse({
     format: 3, policy, projectID: task.fields.projectID, epicID: task.fields.epicID, assessmentKey: task.fields.assessmentKey,
     ...(task.fields.baseline ? { baseline: task.fields.baseline } : {}),
+    ...(task.fields.guard ? { guard: task.fields.guard } : {}),
     originalInputKey: task.fields.originalInputKey, currentInputKey: task.fields.currentInputKey, globalKey: task.fields.globalKey,
     taskKey: task.taskKey, contextKey: task.contextKey, originalRevision: task.fields.originalRevision, reviewedRevision: revision,
     jobID, responseJobID: work.responseJobID, responseModel: work.responseModel, reviewedAt: new Date().toISOString(), response: work.response,

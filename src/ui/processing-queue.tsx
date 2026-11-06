@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import type { MaintenanceView } from "../core/maintenance.js";
 import { MaintenanceQueue, type MaintenanceAction } from "./maintenance-controls.js";
-import { WorkflowControls, workflowLabels, mayContinueProject, type WorkflowAction } from "./workflow-controls.js";
+import { WorkflowControls, workflowLabels, mayContinueProject, workflowContinueLabel, type WorkflowAction } from "./workflow-controls.js";
 import type { WorkflowView } from "../service/workflow.js";
 import type { WorkflowDecision } from "../core/workflow.js";
 import { Modal } from "./modal.js";
@@ -67,7 +67,8 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
   const processable = processableSavedResponses(project, submissions);
    const clarificationTask = clarificationJob?.context?.readinessQuestions;
    const clarificationBlockedInput = clarificationHasWaitingInput(project, submissions, clarificationTask);
-   const processingFirst = processable.some((s) => clarificationTask?.format !== 3 || s.id !== clarificationTask.submissionID) && !!processSavedResponses;
+    const processingFirst = processable.some((s) => clarificationTask?.format !== 3 || s.id !== clarificationTask.submissionID) && !!processSavedResponses
+      && !(workflow?.enabled && workflow.answerBatch);
   const exhausted = processable.map((item) => ({ item, job: jobs.find((job) => job.id === item.jobID) }))
     .find(({ job }) => job?.submissionAllowance?.canExtend);
   const resumeJob = discoveryResumeJob(lastJob);
@@ -112,12 +113,14 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
       {!working && clarificationResume && <button className="primary queue-header-action" disabled={disabled} onClick={continueClarification}>Continue clarification</button>}
       {!working && refinementResume && !clarificationResume && <button className="primary queue-header-action" disabled={disabled} onClick={() => continueRefinement!(refinementJob!.id)}>Continue refinement</button>}
       {!working && processingFirst && <button className="primary queue-header-action" disabled={disabled} onClick={exhausted && extendSavedResponse ? () => setOpen(true) : processSavedResponses}>{exhausted && extendSavedResponse ? "Review additional allowance" : "Process saved responses only"}</button>}
-      {workflow && configureWorkflow && !working && !processingFirst && !clarificationResume && !refinementResume && mayContinueProject(workflow) && <button key="continue-project" className="primary queue-header-action" disabled={disabled} title={workflow.enabled ? "Continue specification until checks finish, a decision or blocker needs attention, or you pause. Requests consume your AI plan’s usage. Planning and coding remain explicit." : "Review specification workflow scope and allowance before enabling it."} onClick={() => workflow.enabled ? configureWorkflow("continue-continuous") : setOpen(true)}>Continue specification</button>}
+      {workflow && configureWorkflow && !working && !processingFirst && !clarificationResume && !refinementResume && mayContinueProject(workflow) && <button key="continue-project" className="primary queue-header-action" disabled={disabled} title={workflow.enabled ? "Process responses saved now, then continue specification until checks finish, a decision or blocker needs attention, or you pause. Later responses wait for another batch. Requests consume your AI plan’s usage. Planning and coding remain explicit." : "Review specification workflow scope and allowance before enabling it."} onClick={() => workflow.enabled ? configureWorkflow("continue-continuous") : setOpen(true)}>{workflowContinueLabel(workflow)}</button>}
     </div>
     {open && <ActionScope><Modal id="processing-queue" className="queue-drawer" titleID="queue-title" title="Processing & queue" close={() => setOpen(false)} closeLabel="Close processing queue" headerClassName="queue-drawer-heading" bodyClassName="queue-panel"
       description={<p role="status">{taskCount} active {taskCount === 1 ? "task" : "tasks"} · Responses: {processing.length} processing · {waiting.length} waiting{attentionCount ? ` · ${attentionCount} need attention` : ""}{actionablePause && !active ? lastJob?.context?.definitionAssessment ? " · Definition processing paused" : " · Discovery paused" : ""}</p>}>
         {error && error !== jobDiagnostic && <DiagnosticNotice detail={error} alert />}
-           <p>Work across your project appears here. Saved responses are reviewed one at a time.</p>
+           <p>Work across your project appears here. Compatible new answers in the same feature can be integrated together; already-started or separately scoped responses keep their original paths.</p>
+           {lastJob?.answerGroupProgress && <section aria-label="Shared answer integration"><h3>Integrating {lastJob.answerGroupProgress.answers} answers together</h3>
+             <p>{lastJob.answerGroupProgress.completed} / {lastJob.answerGroupProgress.total} evidence steps saved · {lastJob.answerGroupProgress.phase === "complete" ? "complete" : lastJob.answerGroupProgress.phase === "read" ? "reading shared evidence" : "checking the combined draft"}. Each original answer stays saved; changes publish only after every check passes.</p></section>}
           {lastJob?.definitionWork?.baseline && <DefinitionBaselineNotice baseline={lastJob.definitionWork.baseline} />}
           {reuse && <section aria-label="Reused clarification result"><h3>Clarification complete · saved result reused</h3>
             <p>Area: {project.epics.find((area) => area.id === reuse.task.epicID)?.title ?? "Saved clarification area"}.</p>

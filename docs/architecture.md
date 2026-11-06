@@ -1,5 +1,35 @@
 # Architecture outline
 
+## Shared exact answer integration (2026-11-06)
+
+`src/core/answer-group.ts` combines the complete original per-answer evidence sets,
+pins every original question/answer, freezes a bounded shared schedule and validates
+drafts, exact lookups, per-answer outcomes and immutable check receipts. It keeps old
+single-answer protocols unchanged. `src/service/answer-group.ts` owns staged dispatch,
+local timings, finite attempts, cancellation and telemetry/research guards. Queue
+selection groups only fresh compatible unscoped same-feature answers inside explicit
+coordinator consent; retained group work takes precedence and cannot be split into
+fresh allowances. Storage retains historical replies before stale detection and replays
+the complete ledger before atomic publication through existing specification gates.
+SQLite 32 adds a reader boundary, not a table rewrite. Portable format 9 is conditional
+on retained shared work and preserves exact record order, original snapshots and
+waiting inputs while excluding local accounts, consent and telemetry. Browser views
+project counts/stages, not group drafts/receipts. No narrower verification is inferred.
+
+## Save-first answer scheduling and local profiling (2026-11-06)
+
+The coordinator's optional format-1 `inputBatchPolicy` freezes submission eligibility
+to its explicit grant's saved IDs and suppresses decision-wait wake-ups. The view
+projects pending-response counts; UI saving still uses the durable existing queue,
+not a renderer-owned draft batch or alternate approval path. Publication and exact
+single-submission identities are unchanged. `DiscoveryMeasurement.submissionLocal`
+records allowlisted synchronous phase timings around the staged runner, with no
+additional writes per phase; original metrics checkpoints persist them. SQLite 31
+protects the additive local readers; portable state excludes both consent and metrics.
+This is not yet shared multi-answer execution or narrower semantic verification.
+Staged-submission recovery selects its latest matching job directly in SQLite,
+preserving original row-order/exclusion semantics without decoding unrelated jobs.
+
 ## Bounded change-review continuation (2026-11-04)
 
 `src/core/definition-change-batches.ts` owns the immutable source ledger, frozen exact

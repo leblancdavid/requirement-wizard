@@ -1,17 +1,18 @@
 import type { Project } from "./model.js";
 import type { ContextPack } from "./context.js";
-import { definitionInputDocument, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
+import { definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 import { definitionFindingIdentityKey as digest } from "./definition-finding-identity.js";
 import { prepareDefinitionChangeReview, validateDefinitionChangeResponse, definitionChangeLimits } from "./definition-change-review.js";
-import { definitionChangeEvidenceRequestSchema, definitionChangeReceiptSchema, type DefinitionChangeWork } from "./definition-change-schema.js";
+import { definitionChangeEvidenceRequestSchema, definitionChangeReceiptSchema, type DefinitionChangeWork, type DefinitionChangeGuard } from "./definition-change-schema.js";
 import { changeEvidencePacket } from "./definition-change-wire.js";
+import { changeReviewDocument } from "./definition-change-guard.js";
 
 type Work = Extract<DefinitionChangeWork, { format: 2 }>;
-export function prepareDefinitionChangeEvidence(original: Project, current: Project, epicID: string, baseline?: Project) {
-  const legacy = prepareDefinitionChangeReview(original, current, epicID, baseline);
+export function prepareDefinitionChangeEvidence(original: Project, current: Project, epicID: string, baseline?: Project, sharedGuard?: DefinitionChangeGuard) {
+  const legacy = prepareDefinitionChangeReview(original, current, epicID, baseline, sharedGuard);
   if (!legacy) return;
-  const citations = [...new Set(definitionAssessmentEvidenceIDs(legacy.fields.assessment))];
-  const records = definitionInputDocument(current, epicID, citations).records;
+  const citations = [...new Set([...definitionAssessmentEvidenceIDs(legacy.fields.assessment), ...legacy.fields.guard?.areas.flatMap(a => a.evidenceIDs) ?? []])];
+  const records = changeReviewDocument(current, epicID, citations, legacy.fields.guard).records;
   const byID = new Map(records.map((record) => [record.id, record]));
   if (citations.some((id) => !byID.has(id))) return;
   const instruction = `${(legacy.context.data as { instruction: string }).instruction}\nEVIDENCE-LOADING PROTOCOL V2 supersedes the final-only response requirement: choose an evidence request OR the final nine-finding verdict. The evidenceIndex and its explicitly partial navigationPrefix excerpts are navigation ONLY, not supplied evidence. Excerpts may be shortened or omitted to fit; load the WHOLE record before interpreting or citing it. If necessary original supporting bodies are missing, request exact IDs with {taskKey,loadEvidenceIDs:[...]} instead of declaring a finding affected merely because bodies were omitted. Request at most eight IDs per lookup; at most six lookups are available. Loaded whole records and linked current question/answer pairs remain in EVERY subsequent context. All nine complete findings and every change remain supplied. No external tools are authorized. Return the normal nine-finding verdict only when the supplied bodies support it; genuine effects or unresolved semantic uncertainty still require review-needed. Never treat missing/unchanged citations, record kinds or index sizes as proof of independence. Superseded bodies are historical, never current citation authority. Context is bounded; a required record that cannot fit pauses the check, never truncates evidence or grants a false unaffected verdict.`;
@@ -102,6 +103,7 @@ export function makeDefinitionChangeEvidenceReceipt(task: DefinitionChangeEviden
   const response = validateDefinitionChangeResponse({ taskKey: task.taskKey, context: { ...loaded.context, manifest: { ...loaded.context.manifest, includedIDs: loaded.citationIDs } } }, work.response);
   return definitionChangeReceiptSchema.parse({ format: 2, policy: "definition-change-evidence-v2", projectID: task.fields.projectID, epicID: task.fields.epicID,
     ...(task.fields.baseline ? { baseline: task.fields.baseline } : {}),
+    ...(task.fields.guard ? { guard: task.fields.guard } : {}),
     assessmentKey: task.fields.assessmentKey, originalInputKey: task.fields.originalInputKey, currentInputKey: task.fields.currentInputKey,
     globalKey: task.fields.globalKey, taskKey: task.taskKey, contextKey: task.contextKey, originalRevision: task.fields.originalRevision,
     reviewedRevision: revision, jobID, responseJobID: work.responseJobID, responseModel: work.responseModel, reviewedAt: new Date().toISOString(), response,

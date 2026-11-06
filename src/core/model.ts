@@ -305,7 +305,7 @@ export type Job = {
   /** Recorded lifecycle times, optional for older/portable saved jobs. */
   createdAt?: string; startedAt?: string; finishedAt?: string;
   id: string; projectID: string; expectedRevision: number;
-  kind?: "scan" | "definition-joint-review" | "definition-scope-review" | "definition-mixed-review" | "definition-change-review";
+  kind?: "scan" | "definition-joint-review" | "definition-scope-review" | "definition-mixed-review" | "definition-change-review" | "definition-change-group";
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
   model: ModelSelection; leaseUntil: number | null;
   /** Portable completed-check ledger, not a full runtime/navigation transcript. */
@@ -322,6 +322,7 @@ export type Job = {
     epicReview?: import("./epic-review-types.js").EpicReview;
     definitionAssessment?: { format: 1; epicID: string; inputKey: string; staged?: { policy: "exact-batches-v1"; planKey: string; baselineKey?: string } };
     definitionChangeReview?: { format: 1 | 2 | 3; taskKey: string; currentInputKey: string };
+    definitionChangeGroupReview?: z.infer<typeof import("./definition-change-group.js").definitionChangeGroupMarkerSchema>;
     definitionJointReview?: { format: 1; policy: "definition-joint-review-v1"; candidateKey: string; contextKey: string; snapshotKey: string };
     definitionScopeReview?: { format: 1; policy: "definition-review-scope-v1"; scopeKey: string; contextKey: string; snapshotKey: string };
     definitionMixedReview?: { format: 1; policy: "definition-mixed-review-v1"; requestKey: string; assemblyKey: string; contextKey: string; snapshotKey: string };
@@ -336,6 +337,7 @@ export type Job = {
     refinementPair?: { requirementIDs: [string, string]; contextKey: string; includeUnapproved?: boolean; triggerSourceIDs?: string[] };
     submissionIDs?: string[];
     submissionStage?: { policy: "exact-submission-batches-v1"; planKey: string; step: number; phase: "read" | "check" };
+    answerGroupStage?: { policy: "exact-answer-group-v1"; planKey: string; step: number; phase: "read" | "check" };
     reviewSourceIDs?: string[];
     scopedAnswerSourceIDs?: string[];
     submissionAuthorizationSourceIDs?: string[];
@@ -356,8 +358,11 @@ export type Job = {
   scanWork?: ScanWork;
   definitionWork?: import("./definition-stages.js").DefinitionWork;
   definitionChangeWork?: import("./definition-change-schema.js").DefinitionChangeWork;
+  definitionChangeGroupWork?: import("./definition-change-group.js").DefinitionChangeGroupWork;
   readinessWork?: import("./readiness-stages.js").ReadinessWork;
   submissionWork?: import("./submission-stages.js").SubmissionWork;
+  answerGroupWork?: import("./answer-group.js").AnswerGroupWork;
+  answerGroupProgress?: { answers: number; completed: number; total: number; phase: "read" | "check" | "complete" };
   refinementWork?: import("./refinement-stages.js").RefinementWork;
   /** Attempts dispatched by this job only; reused receipts are not new calls. */
   refinementRequests?: number;

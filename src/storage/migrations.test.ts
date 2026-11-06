@@ -13,6 +13,47 @@ import { assessmentCurrent, assessmentFreshness, deliveredRequirement, emptyExec
 import { requirementFingerprint } from "../core/implementation.js";
 import type { Project } from "../core/model.js";
 import { randomUUID } from "node:crypto";
+
+test("30 to 31 preserves old consent, paid work and missing timings; future collection metadata rolls back and can retry", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true }); const dir = mkdtempSync(join(root, "answer-batch-upgrade-")), path = join(dir, "state.sqlite");
+  const store = new ProjectStore(path);
+  let id: string, snapshot: Project;
+  try {
+    snapshot = store.create("Old saved consent", "Preserve original human input", { providerID: "openai", modelID: "fixture" }); id = snapshot.id;
+    const state = store.workflow(id); state.enabled = true; state.paused = false; state.phase = "needs-decision";
+    state.reviewPolicy = { format: 1 }; state.grant = { id: "paid-original-grant", used: 7, remainingMs: 1234, submissionIDs: [] };
+    store.saveWorkflow(id, state);
+    const job = store.beginJob(id, snapshot.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.saveDiscoveryMetrics(job.id, { format: 1, state: "recording", elapsedMs: 123, planningMs: null, planningDecisions: null, initialContext: null, requests: [] });
+  } finally { store.close(); }
+  try {
+    let db = new Database(path);
+    const oldWorkflow = (db.prepare("SELECT payload FROM workflow_state WHERE project_id = ?").get(id!) as { payload: string }).payload;
+    const oldJobs = db.prepare("SELECT payload FROM jobs ORDER BY rowid").all();
+    db.exec("DELETE FROM migration_history WHERE version >= 31; PRAGMA user_version = 30");
+    db.prepare("UPDATE workflow_state SET payload = ? WHERE project_id = ?").run(JSON.stringify({ ...JSON.parse(oldWorkflow), inputBatchPolicy: { format: 2 } }), id!);
+    db.close();
+    assert.throws(() => new ProjectStore(path), /Invalid literal/);
+    db = new Database(path);
+    assert.equal(db.pragma("user_version", { simple: true }), 30);
+    assert.equal((db.prepare("SELECT count(*) AS count FROM migration_history WHERE version = 31").get() as { count: number }).count, 0);
+    assert.deepEqual(db.prepare("SELECT payload FROM jobs ORDER BY rowid").all(), oldJobs);
+    assert.equal(JSON.parse((db.prepare("SELECT payload FROM workflow_state WHERE project_id = ?").get(id!) as { payload: string }).payload).inputBatchPolicy.format, 2);
+    db.prepare("UPDATE workflow_state SET payload = ? WHERE project_id = ?").run(oldWorkflow, id!); db.close();
+    for (let n = 0; n < 2; n++) {
+      const reopened = new ProjectStore(path);
+      try {
+        assert.deepEqual(reopened.get(id!), snapshot!); assert.equal(reopened.workflow(id!).inputBatchPolicy, undefined);
+        assert.equal(reopened.workflow(id!).grant!.used, 7); assert.equal(reopened.jobs(id!)[0]!.discoveryMetrics!.submissionLocalMs, undefined);
+      } finally { reopened.close(); }
+      db = new Database(path);
+      assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
+      assert.equal((db.prepare("SELECT payload FROM workflow_state WHERE project_id = ?").get(id!) as { payload: string }).payload, oldWorkflow);
+      assert.deepEqual(db.prepare("SELECT payload FROM jobs ORDER BY rowid").all(), oldJobs); db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("startup distinguishes actual upgrades from saved-data checks and failed display callbacks cannot alter saved work", () => {
   mkdirSync(resolve(".reqwizit-state/tests"), { recursive: true });
   const directory = mkdtempSync(resolve(".reqwizit-state/tests/startup-stages-")), path = join(directory, "state.sqlite"), phases: string[] = [];

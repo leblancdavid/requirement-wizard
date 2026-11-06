@@ -2,6 +2,8 @@ import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { definitionChangeReceiptSchema, definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
+import { definitionChangeGroupWorkSchema, definitionChangeGroupMarkerSchema } from "../core/definition-change-group.js";
+import { answerGroupWorkSchema, answerGroupStageSchema } from "../core/answer-group.js";
 import { decisionIdentity, executionSchemaVersion } from "../core/assessment-identity.js";
 import type { ExecutionState } from "../core/execution.js";
 import { createActivityIndex } from "./activity.js";
@@ -25,7 +27,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 28;
+export const databaseSchemaVersion = 32;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -228,6 +230,16 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 28, name: "verified-incremental-change-baselines-v1", apply() {
   // Capability boundary only. Legacy task hashes, payloads, receipts and leases
   // remain byte-identical; baseline selection occurs only on explicit new work.
+} }, { version: 29, name: "question-batch-review-checkpoints-v1", apply() {
+  // Capability boundary only. Existing consent, jobs, receipts, assessments and
+  // grants remain unchanged. Explicit continuation activates checkpoint scheduling.
+} }, { version: 30, name: "shared-area-change-impact-v1", apply() {
+  // Capability boundary only. No old work, identities, attempts or leases change.
+} }, { version: 31, name: "explicit-answer-collection-and-local-timings-v1", apply() {
+  // Reader boundary only. Original grants, saved work, evidence and metrics stay
+  // unchanged. Explicit continuous continuation adopts answer collection.
+} }, { version: 32, name: "shared-exact-answer-integration-v1", apply() {
+  // Capability boundary only. Never regroup/rewrite paid individual work on startup.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -260,6 +272,17 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       }
     }
     reportStartup(progress, "checking-saved-work");
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.answerGroupWork') AS BLOB)) <= 2097152
+      THEN json_extract(payload, '$.answerGroupWork') END AS work,
+      json_extract(payload, '$.context.answerGroupStage') AS stage, json_extract(payload, '$.context.submissionIDs') AS ids,
+      json_extract(payload, '$.context.focusEpicID') AS area FROM jobs
+      WHERE json_type(payload, '$.answerGroupWork') IS NOT NULL OR json_type(payload, '$.context.answerGroupStage') IS NOT NULL`)
+      .iterate() as Iterable<{ work: string | null; stage: string | null; ids: string | null; area: string }>) {
+      if (!row.work || !row.stage || !row.ids) throw new Error("Shared answer checkpoint is unsupported or incomplete. Nothing was overwritten.");
+      const work = answerGroupWorkSchema.parse(JSON.parse(row.work)), stage = answerGroupStageSchema.parse(JSON.parse(row.stage));
+      if (stage.planKey !== work.planKey || row.area !== work.epicID || JSON.stringify(work.submissionIDs) !== row.ids)
+        throw new Error("Shared answer checkpoint differs from its original group.");
+    }
     for (const row of db.prepare(`SELECT json_extract(payload, '$.kind') AS kind,
       CASE WHEN length(CAST(json_extract(payload, '$.context.definitionChangeReview') AS BLOB)) <= 2048
         THEN json_extract(payload, '$.context.definitionChangeReview') END AS marker,
@@ -271,6 +294,16 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       const work = definitionChangeWorkSchema.parse(JSON.parse(row.work));
       const marker = definitionChangeMarkerSchema.parse(JSON.parse(row.marker));
       if (row.kind !== "definition-change-review" || work.taskKey !== marker.taskKey || work.format !== marker.format) throw new Error("Change-review checkpoint binding differs.");
+    }
+    for (const row of db.prepare(`SELECT json_extract(payload, '$.kind') AS kind,
+      CASE WHEN length(CAST(json_extract(payload, '$.definitionChangeGroupWork') AS BLOB)) <= 262144 THEN json_extract(payload, '$.definitionChangeGroupWork') END AS work,
+      json_extract(payload, '$.context.definitionChangeGroupReview') AS marker FROM jobs
+      WHERE json_type(payload, '$.definitionChangeGroupWork') IS NOT NULL OR json_type(payload, '$.context.definitionChangeGroupReview') IS NOT NULL
+        OR json_extract(payload, '$.kind') = 'definition-change-group'`).iterate() as Iterable<{ kind: string; work: string | null; marker: string }>) {
+      if (!row.work) throw new Error("Unsupported shared change-review checkpoint. Nothing was overwritten.");
+      const work = definitionChangeGroupWorkSchema.parse(JSON.parse(row.work)), marker = definitionChangeGroupMarkerSchema.parse(JSON.parse(row.marker));
+      if (row.kind !== "definition-change-group" || work.groupKey !== marker.groupKey || JSON.stringify(work.areas.map(a => a.epicID)) !== JSON.stringify(marker.epicIDs))
+        throw new Error("Shared change-review binding differs.");
     }
     for (const row of db.prepare("SELECT project_id, review_id FROM definition_mixed_saved_reviews").iterate() as Iterable<{ project_id: string; review_id: string }>) {
       if (readMixedSavedReview(db, row.project_id, row.review_id).status !== "recorded") throw new Error(`Saved mixed review is unsupported or exceeds ${definitionMixedSavedReviewBytes} bytes. Saved evidence was not overwritten.`);

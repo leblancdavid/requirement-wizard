@@ -78,7 +78,7 @@ try {
     if (!store.workflow(p.id).enabled) {
       const consent = page.getByRole("dialog", { name: "Processing & queue", exact: true });
       await expect(consent).toContainText("Continue specification lets the app guide your next steps");
-      await expect(consent).toContainText("8 AI requests");
+      await expect(consent).toContainText("No overall time or request-count cutoff");
       assert.equal(calls.length, 0, "Opening the coordinator explanation does not grant model calls");
       await consent.getByRole("button", { name: "Continue specification", exact: true }).click();
       await consent.getByRole("button", { name: "Close processing queue", exact: true }).click();
@@ -141,6 +141,9 @@ try {
   await page.getByRole("button", { name: /Choose Offline\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
   await expect(page.locator(".queue-header").getByRole("button", { name: /Resume processing|Process saved responses/ })).toHaveCount(0);
+  await expect(page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true })).toBeEnabled();
+  assert.deepEqual(calls, ["idea"], "Saving an answer must not spend AI allowance");
+  await page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true }).click();
   await expect.poll(() => store.get(p.id).requirements[0]?.status).toBe("accepted");
   await expect.poll(() => store.get(p.id).questions.some((q) => q.text === "What should happen after a failed report save?"), { timeout: 15000 }).toBe(true);
   assert.equal(store.workflow(p.id).readiness, undefined, "Asking a readiness question cannot certify readiness");
@@ -149,6 +152,7 @@ try {
   await flow.getByRole("button", { name: "Review and decide", exact: true }).click();
   await page.getByRole("button", { name: /Choose Keep draft\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true }).click();
   async function finishBurst(expectedStatement?: string) {
     for (let at = 0; at < 5; at++) {
       await expect.poll(() => {
@@ -180,6 +184,7 @@ try {
   await specification.getByRole("button", { name: "Request changes", exact: true }).click();
   await specification.getByLabel("Requested changes", { exact: true }).fill("Save encrypted reports offline");
   await specification.getByRole("button", { name: "Send change request", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true }).click();
   await finishBurst("Save encrypted reports offline");
   assert.equal(store.get(p.id).requirements[0]!.statement, "Save encrypted reports offline"); assert.equal(store.execution(p.id).run, undefined);
   await page.locator(".topbar .queue-trigger").click();
@@ -241,7 +246,8 @@ try {
   await expect(flow.getByRole("region", { name: "Saved outcome and next step", exact: true })).toContainText(`Latest recorded specification change · revision ${changedProject.revision}`);
   await drawer.getByRole("button", { name: "Close processing queue", exact: true }).click();
   await continueProject(); await finishBurst();
-  assert.equal(calls[before], "definition:inbox", "Explicit continuation updates saved reviews before new gap exploration");
+  assert.equal(calls[before], "gaps", "A new collection pass checks for related questions before closing the review checkpoint");
+  assert.ok(calls.slice(before).includes("definition:inbox"), "Changed-area review still follows before readiness can pass");
   await page.locator(".topbar .queue-trigger").click();
   await flow.getByRole("button", { name: "Pause specification workflow", exact: true }).click();
   await expect.poll(() => store.workflowBusy(p.id)).toBe(false);

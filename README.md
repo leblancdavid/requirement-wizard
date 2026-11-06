@@ -30,6 +30,12 @@ questions and specification checks with a shared bounded allowance and decision
 inbox in Processing & queue. Opt-in per project; saved work and advanced actions
 remain. Passed checks lead to planning, not automatic coding. See
 [coordinated workflow](docs/coordinated-workflow.md) for consent and limitations.
+New continuous runs save answers without AI work while waiting for decisions;
+choose **Submit saved responses** when ready to process the saved set. Later responses
+wait for another submission. Compatible sets of two to five new unscoped answers in
+one feature now share evidence reading and verification before atomic publication;
+scoped or already-started work keeps its original path. New local timings help diagnose
+staged-answer overhead. See [shared integration](docs/coordinated-workflow.md#shared-answer-integration-2026-11-06).
 Scoped discovery and **Improve requirements** (formerly Refine requirements) are
 under **More actions** in Design/Specification. **Settings → Project settings →
 Processing permissions** explains coordinated work versus the retained, separate
@@ -64,6 +70,13 @@ can start from an authenticated prior unaffected verdict for the same assessment
 instead of repeatedly comparing all changes since its original publication. Original
 findings/dates and saved task attempts remain intact; new decisions still require
 semantic review. See [incremental change checks](docs/definition-coverage.md#incremental-change-checks-and-saved-score-visibility-2026-11-05).
+The coordinator now collects related answers/follow-up questions before running
+assessment checks, or starts a bounded review-only checkpoint from **Review changes**.
+New input during review waits for the next checkpoint instead of restarting the cycle.
+Compatible new impact checks now share bounded requests for two to four features,
+with a separate validated verdict per feature. Original findings and paid work stay
+saved; missing evidence routes to individual source review, not presumed independence.
+See [question batches](docs/coordinated-workflow.md#question-batches-and-fixed-review-checkpoints-2026-11-05).
 
 Pending scoped questions can now hold affected reviews while other evidence reviews
 continue under the same workflow permission. The queue distinguishes waiting,

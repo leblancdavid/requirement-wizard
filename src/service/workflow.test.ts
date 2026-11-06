@@ -211,6 +211,14 @@ function seed(store: ProjectStore) {
 function checks(calls: string[], defined = true): DiscoveryAdapter {
   return { async analyze(p, { context, research }) {
     assert.equal(research, false); const task = context.manifest.definitionAssessment;
+    if (context.manifest.definitionChangeGroupReview) {
+      const data = context.data as { groupKey: string; areas: { epicID: string; taskKey: string }[] };
+      return { groupKey: data.groupKey, areas: data.areas.map(a => {
+        calls.push(`change:${a.epicID}`);
+        return { epicID: a.epicID, response: { taskKey: a.taskKey, outcome: "review-needed", explanation: "Fixture requires deeper verification",
+          checks: dimensions.map(dimension => ({ dimension, outcome: "review-needed", reason: "Inspect full current evidence", evidenceIDs: [] })) } };
+      }) };
+    }
     if (context.manifest.definitionChangeReview) {
       calls.push(`change:${context.manifest.focusEpicID}`);
       return { taskKey: context.manifest.definitionChangeReview.taskKey, outcome: "review-needed", explanation: "Fixture requires deeper verification after the answer",
@@ -226,6 +234,270 @@ function checks(calls: string[], defined = true): DiscoveryAdapter {
   } };
 }
 function grant(workflow: ProjectWorkflow, store: ProjectStore, id: string) { workflow.configure(id, store.projectRevision(id), workflow.view(id).version, "continue"); }
+
+async function reviewedBatch(store: ProjectStore, count = 5) {
+  let p = seed(store);
+  for (const epicID of ["project", "reports"]) {
+    const job = await new DiscoveryService(store, checks([])).analyze(p.id, p.revision, { definitionEpicID: epicID });
+    assert.equal(job.status, "completed", job.diagnostic); p = store.get(p.id);
+  }
+  const original = structuredClone(p.assessments), job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  store.finishJob(job.id, { ...empty(), questions: Array.from({ length: count }, (_, n) => ({ epicID: "project", text: `Related batch choice ${n}?`,
+    whyItMatters: "Review these decisions together", evidenceIDs: [p.sources[0]!.id],
+    options: [{ label: "Keep", consequence: "Retain the scope" }, { label: "Change", consequence: "Change the scope" }] })) });
+  return { project: store.get(p.id), original };
+}
+function batchChecks(calls: string[]): DiscoveryAdapter {
+  return { async analyze(p, options) {
+    if (options.context.manifest.answerGroupStage) {
+      const stage = options.context.manifest.answerGroupStage; calls.push(`shared-input:${stage.phase}`);
+      return stage.phase === "check" ? { answerGroupCheck: { valid: true, reason: "All original answers checked together" } }
+        : stage.step ? { answerGroupKeep: true } : { answerGroupDraft: { analysis: { ...empty(), summary: p.summary },
+          answers: options.context.manifest.submissionIDs!.map(submissionID => ({ submissionID, outcome: "no-change", explanation: "Fixture retains the explicit source; no wording change needed" })) } };
+    }
+    if (options.context.manifest.definitionChangeGroupReview) {
+      const data = options.context.data as { groupKey: string; changePool: Record<string, { id: string }>; areas: { epicID: string; taskKey: string; changeKeys: string[]; citableEvidenceIDs: string[] }[] };
+      return { groupKey: data.groupKey, areas: data.areas.map(a => {
+        calls.push(`change:${a.epicID}`);
+        for (const answer of p.sources.filter(s => s.kind === "answer")) assert.ok(a.changeKeys.some(k => data.changePool[k]!.id === answer.id));
+        return { epicID: a.epicID, response: { taskKey: a.taskKey, outcome: "unaffected", explanation: "Fixture compares the whole batch",
+          checks: dimensions.map(dimension => ({ dimension, outcome: "unaffected", reason: "Complete findings compared with exact changes", evidenceIDs: [a.citableEvidenceIDs[0]!] })) } };
+      }) };
+    }
+    const marker = options.context.manifest.definitionChangeReview;
+    if (marker) {
+      calls.push(`change:${options.context.manifest.focusEpicID}`);
+      const data = options.context.data as { evidence: { id: string }[]; changes: { id: string }[] };
+      const answers = p.sources.filter(s => s.kind === "answer");
+      for (const answer of answers) assert.ok(data.changes.some(c => c.id === answer.id), "The combined delta retains every saved answer");
+      return { taskKey: marker.taskKey, outcome: "unaffected", explanation: "Fixture-only joint comparison of the whole answer batch against the original findings",
+        checks: dimensions.map(dimension => ({ dimension, outcome: "unaffected", reason: "All accumulated choices compared; no independence claim from links", evidenceIDs: [data.evidence[0]!.id] })) };
+    }
+    if (options.context.manifest.submissionIDs?.length) { calls.push("input"); return { ...empty(), summary: p.summary }; }
+    return checks(calls).analyze(p, options);
+  } };
+}
+
+test("continuous collection saves five answers without requests, survives restart, and requires explicit submission", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true }); const dir = mkdtempSync(join(root, "answer-collection-")), path = join(dir, "state.sqlite");
+  let store = new ProjectStore(path); const calls: string[] = []; let workflow = new ProjectWorkflow(store, batchChecks(calls));
+  try {
+    const { project: p, original } = await reviewedBatch(store);
+    workflow.configure(p.id, p.revision, workflow.view(p.id).version, "continue-continuous"); await workflow.wait(p.id);
+    const grantBefore = structuredClone(store.workflow(p.id).grant), history = store.jobs(p.id);
+    assert.deepEqual(workflow.view(p.id).answerBatch, { savedResponses: 0, waiting: true });
+    for (const [index, q] of p.questions.entries()) {
+      store.enqueue(p.id, { id: randomUUID(), auto: index % 2 === 0, research: false, input: { type: "answer", questionID: q.id,
+        questionText: q.text, sourceID: null, answer: { kind: "answer", text: `Exact choice ${index} 🧾\r\nNo silent precedence.` } } });
+      workflow.tick(p.id); await workflow.wait(p.id);
+      assert.deepEqual(calls, []); assert.deepEqual(store.workflow(p.id).grant, grantBefore);
+      assert.equal(workflow.view(p.id).answerBatch!.savedResponses, index + 1);
+    }
+    assert.deepEqual(store.get(p.id).assessments, original); assert.deepEqual(store.jobs(p.id), history);
+    const html = renderToStaticMarkup(createElement(WorkflowControls, { workflow: workflow.view(p.id), disabled: false, pending: false, configure() {} }));
+    assert.match(html, /Submit saved responses/); assert.match(html, /5 saved responses waiting/);
+    const saved = store.workflow(p.id), submissions = store.submissions(p.id);
+    await workflow.close(); store.close(); store = new ProjectStore(path); workflow = new ProjectWorkflow(store, batchChecks(calls));
+    workflow.tick(p.id); await workflow.wait(p.id);
+    assert.deepEqual(store.workflow(p.id), saved); assert.deepEqual(store.submissions(p.id), submissions); assert.deepEqual(calls, []);
+    workflow.configure(p.id, store.projectRevision(p.id), workflow.view(p.id).version, "continue-continuous"); await workflow.wait(p.id);
+    assert.equal(calls.filter(c => c === "input").length, 0);
+    assert.deepEqual(calls.filter(c => String(c).startsWith("shared-input:")), ["shared-input:read", "shared-input:check"], "One combined read/check replaces five individual calls");
+    assert.ok(store.submissions(p.id).every(s => s.status === "completed"));
+    assert.deepEqual(store.submissions(p.id).map(s => s.input), submissions.map(s => s.input));
+    assert.deepEqual(store.get(p.id).assessments, original);
+    assert.equal(calls.filter(c => c === "change:project").length, 1); assert.equal(calls.filter(c => c === "change:reports").length, 1);
+    assert.equal(workflowSchema.safeParse({ ...saved, inputBatchPolicy: { format: 2 } }).success, false);
+  } finally { await workflow.close(); store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("submitting a partial collection processes only captured responses; a new response during processing waits for consent", async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = []; let laterID: string | undefined;
+  const delegate = batchChecks(calls), workflow = new ProjectWorkflow(store, { async analyze(p, options) {
+    if (options.context.manifest.submissionIDs?.length && !laterID) {
+      const q = p.questions[1]!;
+      laterID = randomUUID(); store.enqueue(p.id, { id: laterID, auto: true, research: false, input: { type: "answer", questionID: q.id,
+        questionText: q.text, sourceID: null, answer: { kind: "answer", text: "Save this for the next batch" } } });
+    }
+    return delegate.analyze(p, options);
+  } });
+  try {
+    const { project: p } = await reviewedBatch(store, 3);
+    workflow.configure(p.id, p.revision, workflow.view(p.id).version, "continue-continuous"); await workflow.wait(p.id);
+    const q = p.questions[0]!, first = store.enqueue(p.id, { id: randomUUID(), auto: false, research: false, input: { type: "answer", questionID: q.id,
+      questionText: q.text, sourceID: null, answer: { kind: "answer", text: "A partial batch is intentional" } } });
+    workflow.configure(p.id, p.revision, workflow.view(p.id).version, "continue-continuous"); await workflow.wait(p.id);
+    assert.equal(store.submissions(p.id).find(s => s.id === first.id)!.status, "completed");
+    assert.equal(store.submissions(p.id).find(s => s.id === laterID)!.status, "queued");
+    assert.deepEqual(calls, ["input"]); assert.equal(store.get(p.id).questions[2]!.status, "pending");
+    assert.equal(store.workflow(p.id).paused, true); assert.deepEqual(store.workflow(p.id).grant!.submissionIDs, [first.id]);
+    workflow.tick(p.id); await workflow.wait(p.id); assert.deepEqual(calls, ["input"]);
+    workflow.configure(p.id, store.projectRevision(p.id), workflow.view(p.id).version, "continue-continuous"); await workflow.wait(p.id);
+    assert.deepEqual(calls, ["input", "input"]); assert.equal(workflow.view(p.id).phase, "needs-decision");
+    assert.equal(store.submissions(p.id).find(s => s.id === laterID)!.status, "completed");
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("five related answers, including a restart halfway through, produce one combined review cycle and no assessments between answers", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true }); const dir = mkdtempSync(join(root, "question-batch-")), path = join(dir, "state.sqlite");
+  let store = new ProjectStore(path); const calls: string[] = []; let workflow = new ProjectWorkflow(store, batchChecks(calls));
+  try {
+    const { project: p, original } = await reviewedBatch(store); grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.deepEqual(calls, []);
+    for (let n = 0; n < 5; n++) {
+      if (n === 2) {
+        const saved = store.workflow(p.id), jobs = store.jobs(p.id);
+        await workflow.close(); store.close(); store = new ProjectStore(path); workflow = new ProjectWorkflow(store, batchChecks(calls));
+        assert.deepEqual(store.workflow(p.id), saved); workflow.tick(p.id); await workflow.wait(p.id);
+        assert.deepEqual(store.jobs(p.id), jobs); assert.equal(calls.filter(c => c === "input").length, 2);
+        grant(workflow, store, p.id); await workflow.wait(p.id);
+      }
+      store.enqueue(p.id, { id: randomUUID(), input: { type: "answer", questionID: p.questions[n]!.id, questionText: p.questions[n]!.text,
+        sourceID: null, answer: { kind: "answer", text: `Keep exact choice ${n} 🧾` } }, auto: true, research: false });
+      workflow.tick(p.id); await workflow.wait(p.id);
+      if (n < 4) {
+        assert.ok(calls.every(c => c === "input")); assert.equal(workflow.view(p.id).phase, "needs-decision");
+        assert.deepEqual(store.get(p.id).assessments, original); assert.equal(store.workflow(p.id).reviewCheckpoint, undefined);
+      }
+    }
+    assert.equal(calls.filter(c => c === "input").length, 5);
+    assert.equal(calls.filter(c => c === "change:project").length, 1); assert.equal(calls.filter(c => c === "change:reports").length, 1);
+    assert.ok(!calls.some(c => String(c).startsWith("definition:"))); assert.deepEqual(store.get(p.id).assessments, original);
+    assert.equal(store.workflow(p.id).reviewCheckpoint!.state, "complete");
+    const used = calls.length; workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, used);
+  } finally { await workflow.close(); store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("explicit Review changes reviews one fixed snapshot without answering pending choices or starting gap discovery", async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, batchChecks(calls));
+  try {
+    const { project: p, original } = await reviewedBatch(store, 2);
+    store.answer(p.id, p.revision, p.questions[0]!.id, { kind: "answer", text: "Keep" });
+    workflow.configure(p.id, store.projectRevision(p.id), workflow.view(p.id).version, "review-changes"); await workflow.wait(p.id);
+    assert.deepEqual(calls, ["change:project", "change:reports"]); assert.equal(workflow.view(p.id).phase, "paused");
+    assert.equal(store.workflow(p.id).reviewCheckpoint!.state, "complete");
+    assert.equal(store.get(p.id).questions[1]!.status, "pending"); assert.deepEqual(store.get(p.id).assessments, original);
+    store.enqueue(p.id, { id: randomUUID(), auto: true, research: false, input: { type: "answer", questionID: p.questions[1]!.id,
+      questionText: p.questions[1]!.text, sourceID: null, answer: { kind: "answer", text: "A later answer is not review-only consent" } } });
+    workflow.tick(p.id); await workflow.wait(p.id); assert.deepEqual(calls, ["change:project", "change:reports"]);
+    assert.equal(store.submissions(p.id).at(-1)!.status, "queued");
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("sequentially discovered questions stay in one collection batch instead of triggering assessments after each answer", async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = []; let followups = 0;
+  const adapter = batchChecks(calls), workflow = new ProjectWorkflow(store, { async analyze(p, options) {
+    const c = options.context.manifest;
+    if (!c.submissionIDs?.length && !c.definitionChangeReview && !c.definitionChangeGroupReview && !c.definitionAssessment && !c.refinementOnly && followups < 2) {
+      followups++; calls.push("next-question"); return { ...empty(), summary: p.summary, questions: [{ epicID: "project", text: `Follow-up batch choice ${followups}?`,
+        whyItMatters: "Resolve the related choices before impact review", evidenceIDs: [p.sources[0]!.id],
+        options: [{ label: "Keep", consequence: "Retain" }, { label: "Change", consequence: "Revise" }] }] };
+    }
+    return adapter.analyze(p, options);
+  } });
+  try {
+    const { project: p, original } = await reviewedBatch(store, 1);
+    workflow.configure(p.id, p.revision, workflow.view(p.id).version, "continue-continuous"); await workflow.wait(p.id);
+    for (let n = 0; n < 3; n++) {
+      const question = store.get(p.id).questions.find(q => q.status === "pending")!; assert.ok(question);
+      store.enqueue(p.id, { id: randomUUID(), auto: true, research: false, input: { type: "answer", questionID: question.id,
+        questionText: question.text, sourceID: null, answer: { kind: "answer", text: "Keep this exact scope" } } });
+      workflow.tick(p.id); await workflow.wait(p.id);
+      assert.equal(store.submissions(p.id).at(-1)!.status, "queued", "Saving in a continuous answer batch starts no work");
+      workflow.configure(p.id, store.projectRevision(p.id), workflow.view(p.id).version, "continue-continuous"); await workflow.wait(p.id);
+      if (n < 2) { assert.ok(!calls.some(c => c.startsWith("change:") || c.startsWith("definition:"))); assert.deepEqual(store.get(p.id).assessments, original); }
+    }
+    assert.equal(followups, 2); assert.equal(calls.filter(c => c === "change:project").length, 1); assert.equal(calls.filter(c => c === "change:reports").length, 1);
+    assert.deepEqual(store.get(p.id).assessments, original);
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("a response queued during review freezes the cycle and does not process or assess the next batch automatically", async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = []; let queued: string | undefined;
+  const adapter = batchChecks(calls), workflow = new ProjectWorkflow(store, { async analyze(p, options) {
+    if ((options.context.manifest.definitionChangeReview || options.context.manifest.definitionChangeGroupReview) && !queued) {
+      queued = randomUUID(); store.enqueue(p.id, { id: queued, input: { type: "note", text: "A later batch decision", epicID: "reports" }, auto: true, research: false });
+    }
+    return adapter.analyze(p, options);
+  } });
+  try {
+    const { project: p } = await reviewedBatch(store, 1); store.answer(p.id, p.revision, p.questions[0]!.id, { kind: "answer", text: "Keep" });
+    workflow.configure(p.id, store.projectRevision(p.id), workflow.view(p.id).version, "review-changes"); await workflow.wait(p.id);
+    assert.equal(calls.length, 2); assert.equal(store.workflow(p.id).paused, true); assert.equal(store.workflow(p.id).reviewCheckpoint!.state, "reviewing");
+    assert.equal(store.submissions(p.id).find(s => s.id === queued)!.status, "queued");
+    workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, 2);
+    const saved = store.workflow(p.id), used = saved.grant!.used;
+    assert.throws(() => workflow.configure(p.id, store.projectRevision(p.id), workflow.view(p.id).version, "review-changes"), /Process saved responses/);
+    assert.deepEqual(store.workflow(p.id), saved); assert.equal(store.workflow(p.id).grant!.used, used);
+  } finally { await workflow.close(); store.close(); }
+});
+
+test("checkpoint upgrade is additive, retains old grants/jobs and rejects future metadata transactionally", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true }); const dir = mkdtempSync(join(root, "checkpoint-upgrade-")), path = join(dir, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const p = seed(store), old = store.workflow(p.id); old.enabled = true; old.grant = { id: "paid-legacy-grant", used: 3, remainingMs: 1234, submissionIDs: [] };
+    store.saveWorkflow(p.id, old); const saved = store.workflow(p.id), jobs = store.jobs(p.id); store.close();
+    let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 29; PRAGMA user_version = 28"); db.close();
+    for (let n = 0; n < 2; n++) { store = new ProjectStore(path); assert.deepEqual(store.workflow(p.id), saved); assert.deepEqual(store.jobs(p.id), jobs); store.close(); }
+    db = new Database(path); const raw = (db.prepare("SELECT payload FROM workflow_state WHERE project_id=?").get(p.id) as { payload: string }).payload;
+    const future = JSON.stringify({ ...JSON.parse(raw), reviewPolicy: { format: 2 } });
+    db.prepare("UPDATE workflow_state SET payload=? WHERE project_id=?").run(future, p.id);
+    db.exec("DELETE FROM migration_history WHERE version >= 29; PRAGMA user_version = 28");
+    assert.throws(() => new ProjectStore(path)); assert.equal(db.pragma("user_version", { simple: true }), 28);
+    assert.equal((db.prepare("SELECT payload FROM workflow_state WHERE project_id=?").get(p.id) as { payload: string }).payload, future);
+    db.prepare("UPDATE workflow_state SET payload=? WHERE project_id=?").run(raw, p.id); db.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.workflow(p.id), saved);
+    assert.equal(workflowSchema.safeParse({ ...saved, reviewCheckpoint: { format: 2 } }).success, false);
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a partly completed review checkpoint survives restart without replaying the accepted area or resetting charged attempts", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true }); const dir = mkdtempSync(join(root, "review-checkpoint-resume-")), path = join(dir, "state.sqlite");
+  let store = new ProjectStore(path), fail = true; const calls: string[] = [], adapter = batchChecks(calls);
+  const failing: DiscoveryAdapter = { async analyze(p, options) {
+    if (options.context.manifest.definitionChangeGroupReview) {
+      const response = await adapter.analyze(p, options) as { areas: { epicID: string; response: { taskKey: string } }[] };
+      const area = response.areas.find(a => a.epicID === "reports")!;
+      area.response = { taskKey: area.response.taskKey, defer: "source-review", reason: "Fixture needs individual source evidence" } as typeof area.response;
+      return response;
+    }
+    if (fail && options.context.manifest.definitionChangeReview && options.context.manifest.focusEpicID === "reports") {
+      calls.push("failed:reports"); throw new Error("Synthetic second-area failure");
+    }
+    return adapter.analyze(p, options);
+  } };
+  let workflow = new ProjectWorkflow(store, failing);
+  try {
+    const { project: p, original } = await reviewedBatch(store, 1); store.answer(p.id, p.revision, p.questions[0]!.id, { kind: "answer", text: "Keep" });
+    workflow.configure(p.id, store.projectRevision(p.id), workflow.view(p.id).version, "review-changes"); await workflow.wait(p.id);
+    const checkpoint = store.workflow(p.id).reviewCheckpoint!, jobs = store.jobs(p.id), failed = jobs.at(-1)!;
+    assert.equal(workflow.view(p.id).phase, "blocked"); assert.equal(failed.definitionChangeWork!.attempts, 2);
+    await workflow.close(); store.close(); store = new ProjectStore(path); fail = false; workflow = new ProjectWorkflow(store, failing);
+    assert.deepEqual(store.workflow(p.id).reviewCheckpoint, checkpoint); workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, 3);
+    workflow.configure(p.id, store.projectRevision(p.id), workflow.view(p.id).version, "review-changes"); await workflow.wait(p.id);
+    assert.equal(calls.filter(c => c === "change:project").length, 1); assert.equal(calls.filter(c => c === "change:reports").length, 2);
+    const done = store.jobs(p.id).at(-1)!; assert.equal(done.definitionChangeWork!.attempts, 3);
+    assert.equal(store.workflow(p.id).reviewCheckpoint!.revision, checkpoint.revision); assert.equal(store.workflow(p.id).reviewCheckpoint!.state, "complete");
+    assert.deepEqual(store.get(p.id).assessments, original);
+    for (const job of jobs) assert.deepEqual(store.getJob(job.id), job);
+  } finally { await workflow.close(); store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const paidArea of ["project", "reports"]) test(`Continue preserves a compatible paid ${paidArea} change task before collecting new questions or grouping`, async () => {
+  const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, batchChecks(calls));
+  try {
+    const { project: p } = await reviewedBatch(store, 1); store.answer(p.id, p.revision, p.questions[0]!.id, { kind: "answer", text: "Keep" });
+    const task = store.definitionChangeTask(p.id, paidArea)!, old = store.beginJob(p.id, store.projectRevision(p.id)).job;
+    store.claimJob(old.id, Date.now() + 60000); store.beginDefinitionChangeReview(old.id, paidArea, task.taskKey);
+    store.reserveDefinitionChangeReview(old.id); store.failJob(old.id, "interrupted", "Synthetic paid pre-upgrade attempt");
+    const saved = store.getJob(old.id); grant(workflow, store, p.id); await workflow.wait(p.id);
+    assert.deepEqual(calls.slice(0, 2), [`change:${paidArea}`, `change:${paidArea === "project" ? "reports" : "project"}`]);
+    const completed = store.jobs(p.id).find(j => j.status === "completed" && j.definitionChangeWork?.epicID === paidArea)!;
+    assert.equal(completed.definitionChangeWork!.taskKey, task.taskKey); assert.equal(completed.definitionChangeWork!.attempts, 2);
+    assert.deepEqual(store.getJob(old.id), saved);
+  } finally { await workflow.close(); store.close(); }
+});
 
 test("coordinated specification assessment does not deserialize the full job archive for scheduling or initialization", async () => {
   const store = new ProjectStore(":memory:"), p = seed(store), calls: string[] = [];
@@ -266,6 +538,14 @@ for (const affected of [false, true]) test(`Continue specification checks exact 
   p = store.get(p.id); p = store.answer(p.id, p.revision, p.questions.at(-1)!.id, { kind: "answer", text: "Next launch" });
   const generic = checks(calls);
   const workflow = new ProjectWorkflow(store, { async analyze(snapshot, options) {
+    if (options.context.manifest.definitionChangeGroupReview) {
+      const data = options.context.data as { groupKey: string; areas: { epicID: string; taskKey: string; citableEvidenceIDs: string[] }[] };
+      return { groupKey: data.groupKey, areas: data.areas.map(a => {
+        calls.push(`change:${a.epicID}`); const touched = affected && a.epicID === "reports";
+        return { epicID: a.epicID, response: { taskKey: a.taskKey, outcome: touched ? "review-needed" : "unaffected", explanation: "Complete exact comparison",
+          checks: dimensions.map((dimension, i) => ({ dimension, outcome: touched && i === 0 ? "review-needed" : "unaffected", reason: "Full finding compared", evidenceIDs: [a.citableEvidenceIDs[0]!] })) } };
+      }) };
+    }
     const marker = options.context.manifest.definitionChangeReview;
     if (!marker) return generic.analyze(snapshot, options);
     const data = options.context.data as { epicID: string; changes: { id: string }[]; assessment: { checks: unknown[] }; evidence: { id: string }[] };
@@ -286,7 +566,7 @@ for (const affected of [false, true]) test(`Continue specification checks exact 
     assert.deepEqual(now.assessments.find((a) => a.epicID === "project"), original.find((a) => a.epicID === "project"));
     if (!affected) assert.deepEqual(now.assessments, original);
     assert.equal(coverage(now).epics.find((a) => a.epicID === "project")!.stale, false);
-    assert.equal(store.jobs(p.id).filter((j) => j.kind === "definition-change-review").length, 2);
+    assert.equal(store.jobs(p.id).filter((j) => j.kind === "definition-change-group").length, 1);
   } finally { await workflow.close(); store.close(); }
 });
 
@@ -306,7 +586,7 @@ function scopedQuestionProject(store: ProjectStore) {
   return p;
 }
 
-test("waiting scoped questions hold their dependency closure, not outside-scope evidence reviews", async () => {
+test("question batches retain dependency navigation but hold even outside-scope assessments until a checkpoint", async () => {
   const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, checks(calls));
   try {
     const p = scopedQuestionProject(store), decisions = workflowDecisions(p, []);
@@ -317,12 +597,12 @@ test("waiting scoped questions hold their dependency closure, not outside-scope 
       assert.equal(task.availability, "waiting"); assert.deepEqual(task.waitingOn, [{ kind: "question", id: p.questions[0]!.id }]);
     }
     grant(workflow, store, p.id); await workflow.wait(p.id);
-    assert.deepEqual(calls, ["definition:billing"]);
-    assert.equal(workflow.view(p.id).phase, "needs-decision"); assert.equal(store.workflow(p.id).grant!.used, 1);
+    assert.deepEqual(calls, []);
+    assert.equal(workflow.view(p.id).phase, "needs-decision"); assert.equal(store.workflow(p.id).grant!.used, 0);
     assert.equal(store.workflow(p.id).paused, false); assert.equal(workflow.view(p.id).readiness.specificationChecked, false);
     assert.deepEqual(store.get(p.id).questions, p.questions); assert.deepEqual(store.get(p.id).requirements, p.requirements);
     const saved = store.workflow(p.id), jobs = store.jobs(p.id);
-    workflow.tick(p.id); await workflow.wait(p.id); assert.deepEqual(calls, ["definition:billing"]);
+    workflow.tick(p.id); await workflow.wait(p.id); assert.deepEqual(calls, []);
     assert.deepEqual(store.workflow(p.id), saved); assert.deepEqual(store.jobs(p.id), jobs);
     const view = workflow.view(p.id), markup = renderToStaticMarkup(createElement(WorkflowControls, { workflow: view, disabled: false, pending: false, configure() {} }));
     assert.match(markup, /Saved work and waiting decisions/); assert.match(markup, /How long should reports be retained/);
@@ -380,7 +660,7 @@ test("decision dependencies survive reopen without arming old grants or changing
   try {
     const p = scopedQuestionProject(store), calls: string[] = [];
     workflow = new ProjectWorkflow(store, checks(calls)); grant(workflow, store, p.id); await workflow.wait(p.id); await workflow.close(); workflow = undefined;
-    const saved = store.workflow(p.id); assert.ok(saved.decisionSchedule); assert.equal(saved.grant!.used, 1);
+    const saved = store.workflow(p.id); assert.ok(saved.decisionSchedule); assert.equal(saved.grant!.used, 0);
     const legacy = { ...saved }; delete legacy.decisionSchedule; assert.equal(workflowSchema.safeParse(legacy).success, true);
     assert.equal(workflowSchema.safeParse({ ...saved, decisionSchedule: { ...saved.decisionSchedule, policy: "future" } }).success, false);
     assert.throws(() => store.saveWorkflow(p.id, { ...saved, decisionSchedule: { ...saved.decisionSchedule!, format: 99 } } as unknown as typeof saved));
@@ -420,7 +700,7 @@ test("checkpoint progress uses immutable metadata and invalidates across equal-r
   } finally { other?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("outside-scope scheduling preserves stale-result and Pause boundaries", async () => {
+test("explicit review checkpoints preserve stale-result and Pause boundaries", async () => {
   for (const action of ["edit", "pause"] as const) {
     const store = new ProjectStore(":memory:"); let workflow: ProjectWorkflow | undefined, calls = 0;
     try {
@@ -428,12 +708,12 @@ test("outside-scope scheduling preserves stale-result and Pause boundaries", asy
       const adapter = checks([]);
       workflow = new ProjectWorkflow(store, { async analyze(snapshot, options) {
         calls++;
-        assert.equal(options.context.manifest.definitionAssessment?.epicID, "billing");
+        assert.equal(options.context.manifest.definitionAssessment?.epicID, "project");
         if (action === "edit") store.note(p.id, p.revision, "A concurrent project-wide decision", "project");
         else workflow!.stop(p.id);
         return adapter.analyze(snapshot, options);
       } });
-      grant(workflow, store, p.id); await workflow.wait(p.id);
+      workflow.configure(p.id, p.revision, workflow.view(p.id).version, "review-changes"); await workflow.wait(p.id);
       assert.equal(calls, 1); assert.equal(store.workflow(p.id).grant!.used, 1); assert.equal(store.workflow(p.id).paused, true);
       assert.equal(store.get(p.id).assessments.length, 0); assert.deepEqual(store.get(p.id).questions, p.questions);
       workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls, 1);
@@ -441,7 +721,7 @@ test("outside-scope scheduling preserves stale-result and Pause boundaries", asy
   }
 });
 
-test("outside-scope evidence work cannot renew or exceed a bounded workflow grant", async () => {
+test("explicit review checkpoints cannot renew or exceed a bounded workflow grant", async () => {
   const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, checks(calls));
   try {
     let p = scopedQuestionProject(store);
@@ -451,7 +731,7 @@ test("outside-scope evidence work cannot renew or exceed a bounded workflow gran
       rationale: "Recorded idea", sourceIDs: [p.sources[0]!.id], acceptance: [`Reopen record ${n}`] })) });
     p = store.get(p.id);
     for (const r of p.requirements.filter((r) => r.status === "proposed")) p = store.review(p.id, p.revision, r.id, "accepted", "");
-    grant(workflow, store, p.id); const grantID = store.workflow(p.id).grant!.id; await workflow.wait(p.id);
+    workflow.configure(p.id, p.revision, workflow.view(p.id).version, "review-changes"); const grantID = store.workflow(p.id).grant!.id; await workflow.wait(p.id);
     assert.equal(workflow.view(p.id).phase, "paused"); assert.equal(store.workflow(p.id).grant!.id, grantID);
     assert.equal(store.workflow(p.id).grant!.used, calls.length); assert.ok(calls.length <= workflowLimits.requests);
     assert.ok(calls.length < 9, "At least one outside-scope review must remain for later consent");
@@ -491,7 +771,7 @@ function blockedWorkflowDefinition(store: ProjectStore, scenario: "drift" | "exh
   return { p, job: store.getJob(job.id), work, draft };
 }
 
-for (const scenario of ["drift", "exhausted", "decision"] as const) test(`Continue specification handles saved ${scenario} definition work without widening its grant`, async () => {
+for (const scenario of ["drift", "exhausted", "decision"] as const) test(`Review changes handles saved ${scenario} definition work without widening its grant`, async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "workflow-definition-protocol-")), file = join(directory, "state.sqlite");
   let store = new ProjectStore(file), workflow: ProjectWorkflow | undefined;
@@ -513,7 +793,7 @@ for (const scenario of ["drift", "exhausted", "decision"] as const) test(`Contin
     } });
     workflow.tick(p.id); await workflow.wait(p.id);
     assert.equal(calls, 0, "Reopen/poll does not authorize protocol recovery or model work");
-    grant(workflow, store, p.id); await workflow.wait(p.id);
+    workflow.configure(p.id, p.revision, workflow.view(p.id).version, "review-changes"); await workflow.wait(p.id);
     const continued = store.jobs(p.id).filter((j) => j.definitionWork).at(-1)!;
     assert.notEqual(continued.id, job.id);
     assert.equal(workflow.view(p.id).phase, "blocked");
@@ -537,7 +817,7 @@ for (const scenario of ["drift", "exhausted", "decision"] as const) test(`Contin
       assert.equal(continued.definitionWork!.recovery, undefined);
     }
     const beforeRetry = calls;
-    grant(workflow, store, p.id); await workflow.wait(p.id);
+    workflow.configure(p.id, p.revision, workflow.view(p.id).version, "review-changes"); await workflow.wait(p.id);
     assert.equal(calls, beforeRetry, "Continue cannot repeatedly clear a new blocker or reset failed attempts");
     assert.equal(store.workflow(p.id).grant!.used, 0);
   } finally { await workflow?.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
@@ -747,7 +1027,7 @@ test("definition follow-through distinguishes missing, outdated and current find
   } finally { await workflow.close(); store.close(); }
 });
 
-test("changed-area reviews run before new gap discovery and unchanged areas reuse saved evidence", async () => {
+test("checkpoint scheduling collects questions before changed-area reviews and unchanged areas reuse saved evidence", async () => {
   const store = new ProjectStore(":memory:"), calls: string[] = [], workflow = new ProjectWorkflow(store, checks(calls));
   try {
     const p = seed(store); grant(workflow, store, p.id); await settle(workflow, store, p.id);
@@ -758,7 +1038,7 @@ test("changed-area reviews run before new gap discovery and unchanged areas reus
     workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, offset, "A change does not renew a stopped grant");
     grant(workflow, store, p.id); const result = await settle(workflow, store, p.id);
     const followUp = calls.slice(offset);
-    assert.equal(followUp[0], "definition:reports", "Repair saved conclusions before asking the model to explore again");
+    assert.equal(followUp[0], "discover", "Collect related questions before closing the review checkpoint");
     assert.ok(followUp.includes("discover"), "Existing explicitly authorized exploration still runs afterward");
     assert.equal(followUp.filter((call) => call === "definition:reports").length, 1);
     assert.ok(!followUp.includes("definition:project"));
@@ -772,7 +1052,7 @@ test("failed changed-area follow-through retains old findings and blocks explora
   const store = new ProjectStore(":memory:"), calls: string[] = [];
   let fail = false;
   const workflow = new ProjectWorkflow(store, { async analyze(p, options) {
-    if (fail) { calls.push("failed-definition"); assert.equal(options.context.manifest.definitionAssessment?.epicID, "reports"); throw new Error("Fixture review failure"); }
+    if (fail && options.context.manifest.definitionAssessment) { calls.push("failed-definition"); assert.equal(options.context.manifest.definitionAssessment.epicID, "reports"); throw new Error("Fixture review failure"); }
     return checks(calls).analyze(p, options);
   } });
   try {
@@ -782,10 +1062,10 @@ test("failed changed-area follow-through retains old findings and blocks explora
     fail = true; const offset = calls.length;
     grant(workflow, store, p.id); await workflow.wait(p.id);
     assert.equal(workflow.view(p.id).phase, "blocked");
-    assert.deepEqual(calls.slice(offset), ["failed-definition"]);
+    assert.deepEqual(calls.slice(offset), ["discover", "failed-definition"]);
     assert.deepEqual(store.get(p.id).assessments, baseline.assessments);
     assert.equal(workflow.view(p.id).definitionReviews.find((area) => area.epicID === "reports")!.state, "outdated");
-    workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, offset + 1);
+    workflow.tick(p.id); await workflow.wait(p.id); assert.equal(calls.length, offset + 2);
   } finally { await workflow.close(); store.close(); }
 });
 
@@ -811,7 +1091,7 @@ test("pending definition follow-through coalesces from saved evidence across res
     assert.equal(calls.length, offset); assert.deepEqual(store.jobs(p.id), jobs);
     assert.equal(workflow.view(p.id).suspended, true);
     grant(workflow, store, p.id); const result = await settle(workflow, store, p.id);
-    assert.equal(calls[offset], "definition:reports");
+    assert.equal(calls[offset], "discover");
     assert.equal(calls.slice(offset).filter((call) => call === "definition:reports").length, 1);
     assert.equal(result.phase, "ready-to-plan", result.message);
     assert.ok(result.definitionReviews.every((area) => area.state === "current"));

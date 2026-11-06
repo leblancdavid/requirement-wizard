@@ -4,6 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { ProjectStore } from "./store.js";
+import { databaseSchemaVersion } from "./migrations.js";
 import { dimensions } from "../core/definition-dimensions.js";
 import { definitionChangeBatchPlan, definitionChangeBatchedContext, upgradeDefinitionChangeBatches } from "../core/definition-change-batches.js";
 import { expandChangeIdentifiers, expandChangeCitationAuthority, changeCitationAuthority } from "../core/definition-change-wire.js";
@@ -413,7 +414,7 @@ test("26 to 27 preserves payload bytes and live leases, rejects future batch for
     const before = tables.map(table => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
     db.exec("DELETE FROM migration_history WHERE version >= 27; PRAGMA user_version = 26"); db.close();
     for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.equal(store.getJob(id).status, "running"); store.close(); }
-    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 28);
+    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.deepEqual(tables.map(table => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()), before); db.close();
     store = new ProjectStore(path); store.prepareDefinitionChangeRequest(id); store.close(); db = new Database(path);
     const saved = (db.prepare("SELECT payload FROM jobs WHERE id=?").get(id) as { payload: string }).payload;

@@ -9,9 +9,12 @@ export const workflowLabels: Record<WorkflowView["phase"], string> = {
   idle: "Not started", working: "Working", "needs-decision": "Needs your decision", blocked: "Blocked",
   paused: "Paused—progress saved", "ready-to-plan": "Specification checks passed", "ready-to-implement": "Ready to implement",
 };
-export type WorkflowAction = "continue" | "continue-continuous" | "pause" | "disable";
+export type WorkflowAction = "continue" | "continue-continuous" | "review-changes" | "pause" | "disable";
 export const mayContinueProject = (workflow: WorkflowView) => !workflow.active
-  && (!workflow.enabled || workflow.paused || workflow.suspended || ["blocked", "idle"].includes(workflow.phase));
+  && (!workflow.enabled || workflow.paused || workflow.suspended || ["blocked", "idle"].includes(workflow.phase)
+    || !!workflow.answerBatch?.waiting && (workflow.answerBatch.savedResponses > 0 || workflow.decisions.length === 0));
+export const workflowContinueLabel = (workflow: WorkflowView) => workflow.enabled && workflow.answerBatch && workflow.answerBatch.savedResponses > 0
+  ? "Submit saved responses" : "Continue specification";
 export function WorkflowControls({ workflow, disabled, pending, configure, openDecision, settings = false, guided = false }: {
   workflow: WorkflowView; disabled: boolean; pending: boolean; configure: (action: WorkflowAction) => void;
   openDecision?: (decision: WorkflowDecision) => void; settings?: boolean; guided?: boolean;
@@ -25,19 +28,25 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
     {settings ? <>
       <p>Let the app guide the next steps: review your saved answers, update requirements, check for conflicting choices and ask about missing details. It can record clear decisions from your answers; uncertain choices and existing proposals still need your decision.</p>
       <p>{guided ? "Guided processing applies only to this project on this computer. Continue specification authorizes its work; selecting the mode alone starts nothing." : "This setting applies only to this project on this computer and starts turned off."} You can still use the other tabs. Turning it on does not approve existing proposals, start coding, research the web, scan files or publish code changes.</p>
-      <p>Continue specification keeps working until checks finish, your decision is needed, a task is blocked, or you pause. There is no overall five-minute or eight-request cutoff. Requests consume your AI plan’s usage; each request still has a timeout and failed attempts remain limited. After restarting the app, choose Continue specification again.</p>
+      <p>Continue specification works until checks finish, a decision is needed, a task is blocked, or you pause. Save your answers without waiting for AI, then choose Submit saved responses to process the responses saved at that moment. Later responses wait for the next batch. There is no overall five-minute or eight-request cutoff. Requests consume your AI plan’s usage; each request still has a timeout and failed attempts remain limited. After restarting the app, continue explicitly.</p>
     </> : <>
       {!workflow.enabled && <p><strong>Continue specification lets the app guide your next steps.</strong> It reviews saved answers and checks requirements across all project areas. To run just one task instead, use More actions below.</p>}
       <p role="status">{workflow.suspended ? "Choose Continue specification to resume after reopening the app. Completed checks are saved." : workflowLabels[workflow.phase]}</p>
       {workflow.active && workflow.current?.kind === "definition-change" && <p role="status">Checking the effect of your new decisions on the saved review. Original findings remain saved.</p>}
+      {workflow.changeGroup && <p role="status">Shared change check: {workflow.changeGroup.areas} features in one request · {workflow.changeGroup.attempts} / 3 attempts saved. Each feature needs its own verdict; missing evidence goes to individual review. Original findings remain saved.</p>}
       {workflow.changeEvidence && <p role="status">Exact source lookups saved: {workflow.changeEvidence.lookups} / 6 · unfinished request attempts: {workflow.changeEvidence.attempts} / 3. Loaded evidence is retained across Pause and restart; this is not yet a completed change check.</p>}
       {workflow.changeEvidence?.format === 3 && <p role="status">Bounded evidence batches saved: {workflow.changeEvidence.completedBatches}. A joint consistency verdict is still required; saved batches and exact sources survive Pause and restart.</p>}
-      {workflow.phase === "blocked" && <p>The app cannot continue this task yet. Completed work is saved. A blocked check does not necessarily mean a product decision is missing: see Logs for the cause, and answer only actual questions listed under Needs your decision. Do not reset saved work to resolve a technical blocker.</p>}
+       {workflow.phase === "blocked" && <p>The app cannot continue this task yet. Completed work is saved. A blocked check does not necessarily mean a product decision is missing: see Logs for the cause, and answer only actual questions listed under Needs your decision. Do not reset saved work to resolve a technical blocker.</p>}
+       {workflow.answerBatch ? <p role="status">{workflow.answerBatch.savedResponses} saved responses waiting. Saving an answer starts no AI work while the workflow waits for decisions. Finish answering, then choose Submit saved responses. You may submit a partial batch; unanswered choices remain open. Compatible new answers in the same feature share evidence reading and verification; other responses retain their individual paths.</p>
+         : <p>This earlier workflow grant can still process eligible responses automatically. Continue specification explicitly to use save-first answer collection.</p>}
+       <p>Area assessments wait until decisions are resolved and related question discovery settles, or you choose Review changes. New responses during processing or review wait for the next batch; saved findings remain visible while validity is pending.</p>
+       {workflow.reviewCheckpoint && <p role="status">Review checkpoint · revision {workflow.reviewCheckpoint.revision} · {workflow.reviewCheckpoint.state === "reviewing" ? "fixed inputs; new changes wait for the next checkpoint" : "finished; later changes are not covered"}.</p>}
       <p>Continue specification keeps working across your project until checks finish, your decision is needed, a task is blocked, or you pause. No overall time or request-count cutoff. Requests consume your AI plan’s usage; per-request timeouts and failed-attempt limits still apply. Choices are not approved automatically.</p>
       {workflow.grant && <p>{workflow.grant.continuous ? `${workflow.grant.used} AI request attempts recorded · continuous run` : `${workflow.grant.used} of ${workflow.limits.requests} AI requests used · ${Math.ceil(workflow.grant.remainingMs / 1000)} seconds remaining in the earlier bounded allowance. Continue again to authorize continuous work.`}</p>}
       {workflow.phase === "blocked" && <LogLink detail={workflow.message} title="Project workflow" />}
     </>}
-    <div className="button-row">{mayContinue && <button className="primary" disabled={disabled} onClick={() => configure("continue-continuous")}>Continue specification</button>}
+    <div className="button-row">{mayContinue && <button className="primary" disabled={disabled} onClick={() => configure("continue-continuous")}>{workflowContinueLabel(workflow)}</button>}
+      {!settings && !workflow.active && workflow.enabled && <button className="secondary" disabled={disabled} title="Review the accumulated changes in one bounded burst (up to eight AI requests and five active minutes). Process saved responses first. Remaining questions are not approved or answered by this review." onClick={() => configure("review-changes")}>Review changes</button>}
       {workflow.enabled && !workflow.paused && !workflow.suspended && <button className="secondary" disabled={pending} onClick={() => configure("pause")}>Pause specification workflow</button>}
       {settings && workflow.enabled && !guided && <button className="quiet" disabled={pending} onClick={() => configure("disable")}>Use separate task settings</button>}
     </div>

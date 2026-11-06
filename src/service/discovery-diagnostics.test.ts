@@ -45,6 +45,23 @@ test("definition local timings allowlist phase names, retain exception time and 
   assert.ok(!JSON.stringify(measurement.value).includes("PRIVATE"));
 });
 
+test("saved-input local timings accumulate numeric phases including failures without inventing older measurements", () => {
+  const measurement = new DiscoveryMeasurement(() => {});
+  assert.equal(measurement.value.submissionLocalMs, undefined);
+  assert.equal(measurement.submissionLocal("context", () => 42), 42);
+  const first = measurement.value.submissionLocalMs!.context!;
+  measurement.submissionLocal("context", () => {});
+  assert.ok(measurement.value.submissionLocalMs!.context! >= first);
+  assert.throws(() => measurement.submissionLocal("validation", () => { throw new Error("PRIVATE failure"); }), /PRIVATE failure/);
+  measurement.finish();
+  assert.ok(measurement.value.submissionLocalMs!.validation! >= 0);
+  assert.equal(measurement.value.submissionLocalMs!.publication, undefined);
+  assert.ok(discoveryMetricsSchema.safeParse(measurement.value).success);
+  for (const phases of [{ "PRIVATE key": 1 }, { replay: -1 }, { context: Infinity }, { history: "PRIVATE prose" }])
+    assert.equal(discoveryMetricsSchema.safeParse({ ...measurement.value, submissionLocalMs: phases }).success, false);
+  assert.ok(!JSON.stringify(measurement.value).includes("PRIVATE"));
+});
+
 test("diagnostic export allowlists fields and keys, preserves unknown historical measurements and never changes evidence", () => {
   const store = new ProjectStore(":memory:");
   try {

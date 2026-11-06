@@ -37,6 +37,8 @@ export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.
   planningProgress: planningProgressSchema.optional(),
   definitionLocalMs: z.object({ preparation: duration.optional(), replay: duration.optional(), context: duration.optional(),
     checkpoint: duration.optional(), validation: duration.optional(), publication: duration.optional() }).strict().optional(),
+  submissionLocalMs: z.object({ history: duration.optional(), preparation: duration.optional(), replay: duration.optional(),
+    context: duration.optional(), checkpoint: duration.optional(), validation: duration.optional(), publication: duration.optional() }).strict().optional(),
   initialContext: diagnosticContextSchema.nullable(),
   requests: z.array(z.object({ durationMs: duration.nullable(), outcome: z.enum(["in-flight", "returned", "failed", "cancelled"]),
     response: z.enum(["analysis", "search", "load", "blocked", "other"]).nullable(), context: diagnosticContextSchema }).strict()).max(definitionCellExecutionStageLimit * definitionRequestLimit),
@@ -84,13 +86,13 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
       const sections: Record<string, number> = {};
       const stored = row.sections === null ? {} : JSON.parse(row.sections) as Record<string, unknown>;
       for (const key of diagnosticSections) if (typeof stored[key] === "number") sections[key] = count.parse(stored[key]);
-      const exactStages = ["exact-readiness-batches-v1", "exact-submission-batches-v1"].includes(row.policy ?? "");
+      const exactStages = ["exact-readiness-batches-v1", "exact-submission-batches-v1", "exact-answer-group-v1"].includes(row.policy ?? "");
       const totalSteps = exactStages && row.stagedBatches !== null ? count.parse(row.stagedBatches) * 2 + Number(row.savedDraftRepairFormat === 1) : null;
       const completedSteps = nullableCount(row.stagedCompleted);
       return { id: `run-${index + 1}`, revision: count.parse(row.revision),
         status: z.enum(["pending", "running", "completed", "failed", "cancelled", "interrupted", "stale"]).parse(row.status),
         package: row.packageID ? packages.get(row.packageID)! : null,
-        policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "definition-exact-batches-v1", "current-spec-v1", "exact-readiness-batches-v1", "exact-submission-batches-v1"].includes(row.policy ?? "") ? row.policy : null,
+        policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "definition-exact-batches-v1", "current-spec-v1", "exact-readiness-batches-v1", "exact-submission-batches-v1", "exact-answer-group-v1"].includes(row.policy ?? "") ? row.policy : null,
         interruptionCause: definitionInterruptionCauses.find((cause) => cause === row.interruptionCause) ?? null,
         measurements: metrics,
         timing: metrics ? { initialPlanningMs: metrics.planningMs, adapterRequestMs: adapterMs,

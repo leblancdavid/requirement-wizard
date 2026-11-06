@@ -12,15 +12,33 @@ Opening Settings or selecting a radio starts nothing. Stop active work before sw
 
 ## Guided processing
 
-Saving this mode does **not** start work, arm a scheduler or renew allowance.
-Choose **Continue specification** to authorize at most eight AI requests, five active
-minutes and twenty coordinator steps. It sequences the existing saved-input,
-consistency, affected-definition, clarification and gap-discovery checks. It can pause
-earlier if there is not enough allowance for the next task. Completed checks and
-attempts are retained; no new completion or approval rule is introduced.
+New continuous runs use **save-first answer collection**: save the answers you want
+to include, then choose **Submit saved responses**. Saving while waiting for a decision
+does not start AI processing. A partial batch is allowed; unanswered choices remain.
+Only responses saved at submission are authorized; later responses wait for another
+explicit submission. Compatible new unscoped answers in one feature can share a bounded
+evidence schedule (two to five answers); scoped or already-started tasks stay separate.
+Existing older grants keep their prior behavior until explicit
+continuous continuation. See [save-first collection](coordinated-workflow.md#save-first-answer-collection-2026-11-06).
 
-While waiting for a product decision, a newly saved eligible response can continue
-the **remaining** allowance in the same app session. It does not grant another burst.
+With checkpoint scheduling activated by explicit continuation, new answers are
+processed as a collection batch. Definition assessments wait for settled related
+question discovery and resolved decisions, or **Review changes**. An answer alone
+does not launch a round of area assessments. Review changes is a bounded review-only
+action; input arriving during review waits for a later explicit checkpoint. This
+does not change existing input-processing allowance or certify old findings current.
+See [checkpoint scheduling](coordinated-workflow.md#question-batches-and-fixed-review-checkpoints-2026-11-05).
+
+Saving this mode does **not** start work, arm a scheduler or renew allowance.
+Choose **Continue specification** to authorize continuous specification work until a
+decision, blocker, completion or Pause boundary. It sequences the existing saved-input,
+consistency, affected-definition, clarification and gap-discovery checks. Individual
+requests still time out and failed attempts remain finite. Completed checks and
+attempts are retained; no new completion or approval rule is introduced. Older bounded
+API grants retain their eight-request/five-minute limits until explicit continuation.
+
+In an older grant without save-first collection, a newly saved eligible response can
+continue the **remaining** allowance in the same app session. It does not grant another burst.
 Earlier saved-only flags are never rewritten: those responses need explicit processing
 or **Continue specification**. Stop, exhausted limits, failure and restarting do not
 renew or automatically resume the coordinator. Continue explicitly afterward.

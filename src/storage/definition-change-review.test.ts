@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, cpSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { ProjectStore } from "./store.js";
+import { databaseSchemaVersion } from "./migrations.js";
 import { dimensions } from "../core/definition-dimensions.js";
 import { coverage } from "../core/coverage.js";
 import { prepareDefinitionChangeReview, validateDefinitionChangeResponse, definitionChangeBaseline } from "../core/definition-change-review.js";
@@ -366,7 +367,7 @@ test("23 to 24 preserves original payload bytes and live leases; unsupported new
     assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM projects WHERE id=?").get(project.id) as { payload: string }).payload), future);
     db.prepare("UPDATE projects SET payload=? WHERE id=?").run(saved.payload, project.id); db.close();
     for (let i = 0; i < 2; i++) { store = new ProjectStore(file); store.close(); }
-    db = new Database(file); assert.equal(db.pragma("user_version", { simple: true }), 28);
+    db = new Database(file); assert.equal(db.pragma("user_version", { simple: true }), databaseSchemaVersion);
     assert.deepEqual(db.prepare("SELECT * FROM projects").all(), before.projects); assert.deepEqual(db.prepare("SELECT * FROM revisions").all(), before.revisions);
     assert.deepEqual(db.prepare("SELECT * FROM jobs").all(), before.jobs); db.close();
     store = new ProjectStore(file); assert.equal(store.getJob(job.id).status, "running");

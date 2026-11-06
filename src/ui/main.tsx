@@ -426,7 +426,9 @@ function App() {
     const previous = latestSubmission(question.id);
     if (await submit({ type: "answer", questionID: question.id, questionText: question.text, sourceID: question.sourceID ?? null, answer: { kind, text } }, question.id, previous?.status === "queued" ? previous.id : undefined)) {
       if (drafts.current.get(question.id)?.text === text) drafts.current.delete(question.id);
-      setExpandedQuestion(null); setSavedMessage({ id: question.id, text: previous || question.sourceID ? "Correction saved. Related requirements may need review when it is applied." : "Answer saved." });
+      setExpandedQuestion(null); setSavedMessage({ id: question.id, text: data?.workflow?.answerBatch?.waiting
+        ? "Answer saved for this batch. Keep answering, then choose Submit saved responses."
+        : previous || question.sourceID ? "Correction saved. Related requirements may need review when it is applied." : "Answer saved." });
     }
   };
 

@@ -35,8 +35,10 @@ let calls = 0;
 const options = { store, port: 0, catalog: new OpenCodeCatalog("unused", async () => ({ connected: ["openai"], all: [{ id: "openai", name: "OpenAI", models: { fixture: { name: "Fixture" } } }] })),
   adapter: { async analyze(_p: unknown, { context }: import("../service/discovery.js").DiscoveryOptions) {
     calls++; const task = context.manifest.definitionAssessment;
-    assert.equal(task?.epicID, "billing", "Pending report decisions cannot authorize report/global reviews or broad discovery");
-    return { ...empty(), assessments: [{ epicID: "billing", confidence: "medium", explanation: "Exact billing evidence reviewed",
+    assert.ok(task, "Explicit Review changes cannot authorize broad discovery");
+    const stage = (context.data as { definitionStage?: { phase: string; draft?: unknown } }).definitionStage;
+    if (stage) return stage.phase === "verify" ? { definitionVerdict: [] } : { definitionUpdate: { checks: [] } };
+    return { ...empty(), assessments: [{ epicID: task.epicID, confidence: "medium", explanation: "Exact current evidence reviewed",
       checks: dimensions.map((dimension) => ({ dimension, importance: "important", status: "defined", explanation: "Saved billing behavior", evidenceIDs: [context.manifest.includedIDs[0]!] })) }] };
   } } };
 let app = await startApp(options);
@@ -54,9 +56,10 @@ try {
   assert.equal(calls, 0, "Reading the plan cannot authorize inference");
   await queue.getByRole("button", { name: "Continue specification", exact: true }).click();
   await expect.poll(() => store.workflow(p.id).phase).toBe("needs-decision");
-  assert.equal(calls, 1); assert.equal(store.workflow(p.id).grant!.used, 1);
-  await expect(progress).toContainText("0 evidence reviews available");
-  await expect(progress).toContainText("1 saved reviews current");
+   assert.equal(calls, 0); assert.equal(store.workflow(p.id).grant!.used, 0);
+   await expect(queue).toContainText("Saving an answer starts no AI work");
+   await expect(progress).toContainText("1 evidence reviews available");
+   await expect(progress).toContainText("0 saved reviews current");
   await progress.getByText("Retained progress and waiting dependencies", { exact: true }).click();
   await expect(progress).toContainText("Unfinished—progress retained");
   await expect(progress).toContainText("1 accepted steps retained");
@@ -65,17 +68,22 @@ try {
   await expect(report).toContainText("How long should reports be retained?");
   assert.deepEqual(store.getJob(retained.id), retained);
   const grant = store.workflow(p.id).grant!, before = store.get(p.id);
-  await page.reload(); await openQueue(); await expect(progress).toContainText("1 saved reviews current");
-  assert.equal(calls, 1); assert.deepEqual(store.workflow(p.id).grant, grant);
+   await page.reload(); await openQueue(); await expect(progress).toContainText("0 saved reviews current");
+   assert.equal(calls, 0); assert.deepEqual(store.workflow(p.id).grant, grant);
   await app.close(); app = await startApp(options);
   await page.goto(app.origin); await expect(page.getByRole("button", { name: /Processing & queue:/ })).toBeVisible();
   await openQueue(); await expect(queue.getByRole("button", { name: "Continue specification", exact: true })).toBeVisible();
-  assert.equal(calls, 1); assert.deepEqual(store.workflow(p.id).grant, grant); assert.deepEqual(store.get(p.id), before);
+   assert.equal(calls, 0); assert.deepEqual(store.workflow(p.id).grant, grant); assert.deepEqual(store.get(p.id), before);
   await page.setViewportSize({ width: 390, height: 844 });
   await progress.getByText("Retained progress and waiting dependencies", { exact: true }).click();
   await expect(progress).toContainText("Unfinished—progress retained");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: ".reqwizit-state/browser-workflow-schedule-mobile.png", fullPage: true });
-  assert.deepEqual(errors, []); assert.equal(calls, 1);
-  console.log("Decision-aware workflow browser passed: only outside-scope review runs, exact waiting question/retained progress, unchanged grant on reload/restart, explicit resume, mobile and no live inference.");
+   assert.deepEqual(errors, []); assert.equal(calls, 0);
+   await queue.getByRole("button", { name: "Review changes", exact: true }).click();
+   await expect.poll(() => store.workflow(p.id).reviewCheckpoint?.state).toBe("complete");
+   assert.ok(calls > 0); assert.equal(store.get(p.id).questions[0]!.status, "pending");
+   assert.deepEqual(store.getJob(retained.id), retained);
+   const after = calls; await page.reload(); assert.equal(calls, after);
+   console.log("Checkpoint workflow browser passed: no assessments while collecting answers, retained draft and grant across reload/restart, explicit Review changes, pending choices preserved, mobile and no live inference.");
 } finally { await browser.close(); await app.close(); store.close(); }

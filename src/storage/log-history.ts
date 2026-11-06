@@ -4,24 +4,30 @@ import { logHistoryQuery, type JobLogEntry, type LogHistoryPage } from "../core/
 /** SQL-bounded diagnostics only: no prompt, response, session, account or credential payloads. */
 export function logHistory(db: Database.Database, projectID: string, input: unknown): LogHistoryPage {
   const query = logHistoryQuery.parse(input);
-  const source = `CASE WHEN json_extract(j.payload, '$.kind') IN ('definition-joint-review', 'definition-scope-review', 'definition-mixed-review') THEN 'Definition review'
+  const source = `CASE WHEN json_extract(j.payload, '$.kind') IN ('definition-joint-review', 'definition-scope-review', 'definition-mixed-review', 'definition-change-review', 'definition-change-group') THEN 'Definition review'
     WHEN json_type(j.payload, '$.context.definitionAssessment') = 'object' THEN 'Definition review'
     WHEN json_type(j.payload, '$.helpRequest') = 'object' THEN 'Question help'
     WHEN json_extract(j.payload, '$.kind') = 'scan' THEN 'Folder scan' ELSE 'Discovery' END`;
   const area = "COALESCE(json_extract(j.payload, '$.context.definitionAssessment.epicID'), json_extract(j.payload, '$.context.focusEpicID'))";
   const title = `CASE WHEN json_extract(j.payload, '$.kind') = 'definition-scope-review' THEN 'Scoped finding review'
+    WHEN json_extract(j.payload, '$.kind') = 'definition-change-group' THEN 'Shared change check'
+    WHEN json_extract(j.payload, '$.kind') = 'definition-change-review' THEN 'Change check'
     WHEN json_extract(j.payload, '$.kind') = 'definition-mixed-review' THEN 'Mixed finding check'
     WHEN json_extract(j.payload, '$.kind') = 'definition-joint-review' THEN 'Joint finding check'
     WHEN json_type(j.payload, '$.context.definitionAssessment') = 'object' THEN 'Definition review'
     WHEN json_type(j.payload, '$.helpRequest') = 'object' THEN 'Question help'
     WHEN json_extract(j.payload, '$.kind') = 'scan' THEN 'Folder scan'
     WHEN json_extract(j.payload, '$.context.refinementOnly') = 1 THEN 'Requirement refinement'
-    WHEN json_type(j.payload, '$.context.readinessQuestions') = 'object' THEN 'Readiness clarification'
+     WHEN json_type(j.payload, '$.context.readinessQuestions') = 'object' THEN 'Readiness clarification'
+     WHEN json_type(j.payload, '$.answerGroupWork') = 'object' THEN 'Shared answer integration'
     WHEN json_type(j.payload, '$.context.epicReview') = 'object' OR json_type(j.payload, '$.context.gapExploration') = 'object' THEN 'Gap discovery'
     WHEN json_array_length(j.payload, '$.context.submissionIDs') > 0 THEN 'Saved-response processing' ELSE 'Project review' END`;
   const where = ["j.project_id = ?"], args: (string | number)[] = [projectID];
   if (query.before) { where.push("j.rowid < ?"); args.push(query.before); }
-  if (query.epicID) { where.push(`${area} = ?`); args.push(query.epicID); }
+  if (query.epicID) {
+    where.push(`(${area} = ? OR EXISTS (SELECT 1 FROM json_each(j.payload, '$.definitionChangeGroupWork.areas') a WHERE json_extract(a.value, '$.epicID') = ?))`);
+    args.push(query.epicID, query.epicID);
+  }
   if (query.source) { where.push(`${source} = ?`); args.push(query.source); }
   if (query.jobID) { where.push("j.id = ?"); args.push(query.jobID); }
   if (query.problems === "true") where.push("json_extract(j.payload, '$.status') IN ('failed', 'blocked', 'interrupted', 'cancelled', 'stale')");

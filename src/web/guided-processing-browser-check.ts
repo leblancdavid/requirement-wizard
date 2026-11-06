@@ -81,10 +81,18 @@ try {
   await page.getByRole("button", { name: /Back to workspace/ }).click();
   await page.getByRole("button", { name: /Choose Encrypted\./ }).click();
   await page.getByRole("button", { name: "Save response →", exact: true }).click();
+  await expect(page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true })).toBeEnabled();
+  assert.equal(store.submissions(p.id).at(-1)!.status, "queued");
+  assert.equal(calls, 1, "Saving another answer must not launch processing while collecting decisions");
+  assert.deepEqual(store.workflow(p.id).grant, firstGrant, "Saving cannot spend or renew the previous grant");
+  await page.reload();
+  await expect(page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true })).toBeEnabled();
+  assert.equal(calls, 1, "Reload cannot submit saved answers");
+  await page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true }).click();
   await expect.poll(() => store.submissions(p.id).find((s) => s.id !== store.submissions(p.id)[0]!.id)?.status, { timeout: 15000 }).toBe("completed");
   await expect.poll(() => store.workflowBusy(p.id), { timeout: 15000 }).toBe(false);
-  assert.equal(store.workflow(p.id).grant!.id, firstGrant.id, "Automatic follow-through keeps the same allowance");
-  assert.ok(store.workflow(p.id).grant!.used <= 8); assert.equal(store.execution(p.id).run, undefined); assert.equal(store.execution(p.id).planning, undefined);
+  assert.notEqual(store.workflow(p.id).grant!.id, firstGrant.id, "Explicit submission authorizes the next captured batch");
+  assert.equal(store.workflow(p.id).grant!.submissionIDs.length, 1); assert.equal(store.execution(p.id).run, undefined); assert.equal(store.execution(p.id).planning, undefined);
   const beforeSwitch = calls, spent = structuredClone(store.workflow(p.id).grant!);
   await page.locator(".topbar .queue-trigger").click();
   const drawer = page.getByRole("dialog", { name: "Processing & queue", exact: true });
@@ -112,6 +120,6 @@ try {
   await expect(permissions.getByRole("radio", { name: "Keep existing permissions", exact: true })).toBeChecked();
   assert.equal(calls, beforeSwitch); assert.equal(store.queuePaused(p.id), true); assert.equal(store.workflow(p.id).paused, true);
   assert.equal(store.maintenance(p.id).paused, true); assert.equal(await page.evaluate(() => localStorage.getItem("reqwizit-auto")), "false");
-  console.log("Guided processing browser passed: explicit mode save/continuation, held standalone workers, shared live allowance, retained preference/spend, mode switches, restart and mobile. No live calls.");
+  console.log("Guided processing browser passed: save-first answer collection, explicit batch submission, held standalone workers, no spend on save/reload, retained preference/spend, mode switches, restart and mobile. No live calls.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-guided-processing-failure"); throw error; }
 finally { await browser.close(); await app.close(); store.close(); }

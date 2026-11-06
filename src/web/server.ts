@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { processingPolicyChangeSchema } from "../core/processing-policy.js";
+import { answerGroupProgress } from "../core/answer-group.js";
 import { ProjectStore } from "../storage/store.js";
 import { readinessProgress } from "../core/readiness-stages.js";
 import { submissionProgress, submissionAllowance } from "../core/submission-stages.js";
@@ -316,7 +317,8 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const known = rawTokens === undefined ? undefined : parseSnapshotTokens(rawTokens);
         const current = revisionSnapshot(project);
         const recent = options.store.workspaceJobs(id);
-        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, submissionWork, refinementWork, ...job }) => ({ ...job,
+        const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, submissionWork, answerGroupWork, refinementWork, ...job }) => ({ ...job,
+          ...(answerGroupWork ? { answerGroupProgress: { answers: answerGroupWork.submissionIDs.length, ...answerGroupProgress(answerGroupWork) }, submissionProgress: answerGroupProgress(answerGroupWork) } : {}),
           ...(refinementWork ? { refinementStageProgress: refinementStageProgress(refinementWork) } : {}),
           ...(submissionWork ? { submissionProgress: submissionProgress(submissionWork), submissionAllowance: submissionAllowance(submissionWork) } : {}),
           ...(readinessWork ? { readinessProgress: readinessProgress(readinessWork) } : {}),
@@ -501,7 +503,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         json(res, 200, options.store.configureProcessingPolicy(id, expectedRevision, change)); return;
       }
       if (action === "workflow") {
-        const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["continue", "continue-continuous", "pause", "disable"]) }).strict().parse(raw);
+        const input = z.object({ revision, version: z.number().int().nonnegative(), action: z.enum(["continue", "continue-continuous", "review-changes", "pause", "disable"]) }).strict().parse(raw);
         json(res, 200, workflow.configure(id, input.revision, input.version, input.action)); return;
       }
       if (action === "analyze") {

@@ -1,6 +1,9 @@
 import Database from "better-sqlite3";
 import { definitionChangeReceipt, definitionChangeBaseline, prepareDefinitionChangeReview, validateDefinitionChangeResponse, makeDefinitionChangeReceipt } from "../core/definition-change-review.js";
 import { canonicalJSON } from "../core/assessment-identity.js";
+import { changeGuardKey } from "../core/definition-change-guard.js";
+import { prepareDefinitionChangeGroup, definitionChangeGroupWorkSchema, definitionChangeGroupMarkerSchema,
+  validateDefinitionChangeGroupResponse, makeDefinitionChangeGroupReceipt, type DefinitionChangeGroupTask } from "../core/definition-change-group.js";
 import { definitionChangeWorkSchema, definitionChangeMarkerSchema } from "../core/definition-change-schema.js";
 import { prepareDefinitionChangeEvidence, definitionChangeEvidenceContext, makeDefinitionChangeEvidenceReceipt, DefinitionChangeContextOverflow } from "../core/definition-change-evidence.js";
 import { definitionChangeBatchedContext, upgradeDefinitionChangeBatches, makeDefinitionChangeBatchedReceipt } from "../core/definition-change-batches.js";
@@ -93,6 +96,7 @@ import { reconcileCompletedReview, type AppliedInputChange } from "../core/revie
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
 import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
+import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, type AnswerGroupWork } from "../core/answer-group.js";
 import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -102,7 +106,14 @@ import { questionReviewFingerprint, reviewFingerprint, validateRequirementEviden
 /** Preserve legacy jobs, but never reuse an unsupported future resolution envelope. */
 function readStoredJob(payload: string): Job {
   const job = JSON.parse(payload) as Job;
-  if (job.kind !== undefined && !["scan", "definition-joint-review", "definition-scope-review", "definition-mixed-review", "definition-change-review"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
+  if (job.kind !== undefined && !["scan", "definition-joint-review", "definition-scope-review", "definition-mixed-review", "definition-change-review", "definition-change-group"].includes(job.kind)) throw new Error("Unsupported saved job kind. Saved work was not overwritten.");
+  if (job.definitionChangeGroupWork || job.kind === "definition-change-group" || job.context?.definitionChangeGroupReview) {
+    const work = definitionChangeGroupWorkSchema.parse(job.definitionChangeGroupWork), marker = definitionChangeGroupMarkerSchema.parse(job.context?.definitionChangeGroupReview);
+    if (job.kind !== "definition-change-group" || marker.groupKey !== work.groupKey || job.context?.revision !== job.expectedRevision
+      || job.context.focusEpicID !== null || canonicalJSON(marker.epicIDs) !== canonicalJSON(work.areas.map(a => a.epicID))
+      || job.definitionChangeWork || job.definitionWork || job.result || job.retrievalWork || job.submissionWork || job.scanWork || job.helpRequest || job.scan)
+      throw new Error("Shared change review must retain its exclusive exact group. Saved work was not overwritten.");
+  }
   if (job.kind === "definition-mixed-review" || job.context?.definitionMixedReview) {
     definitionMixedReviewMarkerSchema.parse(job.context?.definitionMixedReview);
     if (job.kind !== "definition-mixed-review") throw new Error("Mixed review marker cannot masquerade as ordinary discovery. Saved evidence was not overwritten.");
@@ -123,6 +134,16 @@ function readStoredJob(payload: string): Job {
       throw new Error("Loaded change evidence must retain its original selected model. Saved work was not overwritten.");
   }
   if (job.discoveryMetrics !== undefined) discoveryMetricsSchema.parse(job.discoveryMetrics);
+  if (job.answerGroupWork !== undefined || job.context?.answerGroupStage !== undefined) {
+    const work = answerGroupWorkSchema.parse(job.answerGroupWork), stage = answerGroupStageSchema.parse(job.context?.answerGroupStage);
+    if (stage.planKey !== work.planKey || job.context?.revision !== job.expectedRevision || job.context.focusEpicID !== work.epicID
+      || JSON.stringify(job.context.submissionIDs) !== JSON.stringify(work.submissionIDs)
+      || job.kind || job.submissionWork || job.readinessWork || job.definitionWork || job.retrievalWork || job.refinementWork
+      || job.helpRequest || job.scan || job.scanWork || job.context.submissionStage || job.context.readinessQuestions || job.context.readinessStage || job.context.definitionAssessment
+      || job.context.definitionJointReview || job.context.definitionScopeReview || job.context.definitionMixedReview
+      || job.context.refinementOnly || job.context.refinementStage || job.context.refinementTarget || job.context.refinementPair || job.context.epicReview || job.context.gapExploration)
+      throw new Error("Shared answer checkpoint requires its exclusive original group and plan. Saved work was not overwritten.");
+  }
   if (job.refinementRequests !== undefined) z.number().int().nonnegative().parse(job.refinementRequests);
   const envelopes = [...(job.result?.resolutionCheck ? [job.result.resolutionCheck] : []),
     ...(job.result?.refinements ?? []).flatMap((p) => p.resolution ? [p.resolution] : [])];
@@ -1052,6 +1073,13 @@ export class ProjectStore {
     const receipt = definitionChangeReceipt(project, epicID);
     if (!assessment || receipt && (receipt.response.outcome === "unaffected" || receipt.format !== 1)) return;
     try {
+      const grouped = this.latestDefinitionChangeGroup(id, epicID), groupArea = grouped?.definitionChangeGroupWork?.areas.find(a => a.epicID === epicID);
+      const groupResponse = grouped?.definitionChangeGroupWork?.response?.areas.find(a => a.epicID === epicID)?.response;
+      const relevant = groupArea?.assessmentKey === definitionBaselineKey(assessment)
+        && groupArea.currentInputKey === definitionInputKey(project, epicID, definitionAssessmentEvidenceIDs(assessment));
+      if (relevant && (!groupResponse || "defer" in groupResponse)
+        && grouped!.definitionChangeGroupWork!.guard.key !== changeGuardKey(project, grouped!.definitionChangeGroupWork!.guard.areas)) return;
+      const handoff = relevant && grouped?.status === "completed" && groupResponse && "defer" in groupResponse ? grouped : undefined;
       const original = this.get(id, assessment.atRevision), legacy = prepareDefinitionChangeReview(original, project, epicID);
       // Finish/retry original v1 work under its exact protocol. An app upgrade
       // must not invalidate a saved reply or reset its three spent attempts.
@@ -1069,11 +1097,115 @@ export class ProjectStore {
         // Missing/tampered chain: retain dated evidence and use full review,
         // not an unbound replacement task that could reset saved attempts.
         if (!baseline) return;
-        return prepareDefinitionChangeEvidence(original, project, epicID, baseline);
+        return prepareDefinitionChangeEvidence(original, project, epicID, baseline, handoff?.definitionChangeGroupWork!.guard);
       }
-      return evidence;
+      return handoff ? prepareDefinitionChangeEvidence(original, project, epicID, undefined, handoff.definitionChangeGroupWork!.guard) : evidence;
     }
     catch { return; } // Missing/unsupported provenance takes the existing full review.
+  }
+
+  private latestDefinitionChangeGroup(id: string, epicID: string) {
+    const row = this.db.prepare(`SELECT id FROM jobs WHERE project_id = ? AND json_type(payload, '$.definitionChangeGroupWork') IS NOT NULL
+      AND EXISTS (SELECT 1 FROM json_each(payload, '$.definitionChangeGroupWork.areas') WHERE json_extract(value, '$.epicID') = ?)
+      ORDER BY rowid DESC LIMIT 1`).get(id, epicID) as { id: string } | undefined;
+    return row ? this.getJob(row.id) : undefined;
+  }
+
+  definitionChangeGroupTask(id: string, epicIDs: string[]) {
+    const project = this.get(id), first = epicIDs[0]; if (!first) return;
+    const prior = this.latestDefinitionChangeGroup(id, first);
+    if (prior && prior.status !== "completed") {
+      const work = prior.definitionChangeGroupWork!;
+      const tasks = work.areas.map(a => this.definitionChangeTask(id, a.epicID));
+      if (tasks.every((t, i) => t && "records" in t && t.taskKey === work.areas[i]!.taskKey)) {
+        const task = prepareDefinitionChangeGroup(project, tasks as import("../core/definition-change-evidence.js").DefinitionChangeEvidenceTask[]);
+        if (task?.groupKey === work.groupKey && task.contextKey === work.contextKey) return task;
+      }
+    }
+    const selected: import("../core/definition-change-evidence.js").DefinitionChangeEvidenceTask[] = [];
+    let result: DefinitionChangeGroupTask | undefined;
+    for (const epicID of epicIDs) {
+      const task = this.definitionChangeTask(id, epicID);
+      if (!task || !("records" in task) || this.hasDefinitionChangeWork(id, task.taskKey)
+        || this.latestDefinitionChangeGroup(id, epicID)?.definitionChangeGroupWork?.areas.some(a => a.taskKey === task.taskKey)) {
+        if (!selected.length) return; continue;
+      }
+      if (!selected.length) { selected.push(task); continue; }
+      const combined = prepareDefinitionChangeGroup(project, [...selected, task]);
+      if (combined) { selected.push(task); result = combined; }
+      if (selected.length === 4) break;
+    }
+    return result;
+  }
+
+  private boundDefinitionChangeGroupTask(job: Job) {
+    const work = job.definitionChangeGroupWork!, project = this.get(job.projectID, job.expectedRevision);
+    const tasks = work.areas.map(area => {
+      const assessment = project.assessments.find(a => a.epicID === area.epicID)!;
+      const original = this.get(project.id, assessment.atRevision);
+      const baseline = area.baseline ? this.verifiedDefinitionChangeBaseline(original, project, area.epicID) : undefined;
+      const task = prepareDefinitionChangeEvidence(original, project, area.epicID, baseline);
+      if (!task || task.taskKey !== area.taskKey || task.contextKey !== area.contextKey) throw new Error("Shared review original area context differs.");
+      return task;
+    });
+    const task = prepareDefinitionChangeGroup(project, tasks);
+    if (!task || task.groupKey !== work.groupKey || task.contextKey !== work.contextKey || canonicalJSON(task.guard) !== canonicalJSON(work.guard))
+      throw new Error("Shared review original group context differs. Saved evidence was retained.");
+    return task;
+  }
+
+  beginDefinitionChangeGroup(jobID: string, epicIDs: string[], groupKey: string) {
+    return this.db.transaction(() => {
+      const job = this.getJob(jobID), task = this.definitionChangeGroupTask(job.projectID, epicIDs);
+      if (!task || task.groupKey !== groupKey || this.projectRevision(job.projectID) !== job.expectedRevision) throw new StaleRevisionError();
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now() || job.kind || job.context) throw new Error("Shared review requires an exclusive live worker.");
+      const row = this.db.prepare(`SELECT id FROM jobs WHERE project_id = ? AND id != ?
+        AND json_extract(payload, '$.definitionChangeGroupWork.groupKey') = ? ORDER BY rowid DESC LIMIT 1`).get(job.projectID, job.id, groupKey) as { id: string } | undefined;
+      const prior = row ? this.getJob(row.id) : undefined;
+      if (prior && (prior.model.providerID !== job.model.providerID || prior.model.modelID !== job.model.modelID
+        || prior.model.connectionID !== undefined && prior.model.connectionID !== job.model.connectionID)) throw new Error("Saved shared review uses a different model/connection.");
+      if (prior?.definitionChangeGroupWork && prior.definitionChangeGroupWork.contextKey !== task.contextKey) throw new Error("Saved shared review context differs.");
+      if (prior?.definitionChangeGroupWork && !prior.definitionChangeGroupWork.response && prior.definitionChangeGroupWork.attempts >= 3) throw new Error("Shared review exhausted its three attempts. All spent work remains saved.");
+      job.kind = "definition-change-group"; job.context = task.context.manifest;
+      job.definitionChangeGroupWork = prior ? { ...structuredClone(prior.definitionChangeGroupWork!), sourceJobID: prior.id }
+        : { format: 1, policy: "definition-change-group-v1", groupKey, contextKey: task.contextKey, guard: task.guard, areas: task.bindings, attempts: 0 };
+      this.saveJob(job); return job;
+    }).immediate();
+  }
+
+  definitionChangeGroupRequest(id: string) { return this.boundDefinitionChangeGroupTask(this.getJob(id)); }
+  reserveDefinitionChangeGroup(id: string) {
+    return this.db.transaction(() => {
+      const job = this.getJob(id), work = job.definitionChangeGroupWork!;
+      if (!work || work.response || work.attempts >= 3 || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Shared review cannot reserve another request.");
+      if (this.projectRevision(job.projectID) !== job.expectedRevision) throw new StaleRevisionError();
+      this.boundDefinitionChangeGroupTask(job); work.attempts++; job.leaseUntil = Math.max(job.leaseUntil!, Date.now() + 330000); this.saveJob(job);
+    }).immediate();
+  }
+  recordDefinitionChangeGroupResponse(id: string, raw: unknown) {
+    return this.db.transaction(() => {
+      const job = this.getJob(id), work = job.definitionChangeGroupWork!;
+      if (!work || !work.attempts || work.response || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Shared review worker is no longer live.");
+      work.response = validateDefinitionChangeGroupResponse(this.boundDefinitionChangeGroupTask(job), raw);
+      work.responseJobID = job.id; work.responseModel = { providerID: job.model.providerID, modelID: job.model.modelID };
+      if (this.projectRevision(job.projectID) !== job.expectedRevision) { job.status = "stale"; job.leaseUntil = null; job.diagnostic = "Changed inputs: valid shared response retained, no current findings certified."; }
+      this.saveJob(job); return job;
+    }).immediate();
+  }
+  finishDefinitionChangeGroup(id: string) {
+    return this.db.transaction(() => {
+      const job = this.getJob(id), work = job.definitionChangeGroupWork!;
+      if (!work?.response || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Shared review requires a live worker and saved validated response.");
+      const task = this.boundDefinitionChangeGroupTask(job);
+      this.mutate(job.projectID, job.expectedRevision, `Shared definition impact review ${id}`, project => {
+        for (const area of task.bindings) if (this.definitionChangeTask(project.id, area.epicID)?.taskKey !== area.taskKey) throw new StaleRevisionError();
+        const receipts = task.bindings.flatMap(a => { const receipt = makeDefinitionChangeGroupReceipt(task, work, a.epicID, job.id, project.revision); return receipt ? [receipt] : []; });
+        project.definitionChangeReviews = [...project.definitionChangeReviews?.filter(r => !receipts.some(n => n.epicID === r.epicID)) ?? [], ...receipts];
+        if (new TextEncoder().encode(JSON.stringify(project.definitionChangeReviews)).length > 2097152) throw new Error("Shared review receipts exceed the durable bound. Saved response retained.");
+        project.roundChanges = [`Shared change-impact check reviewed ${receipts.length} areas; ${task.bindings.length - receipts.length} need individual source review. Original findings and decisions retained.`];
+      });
+      job.status = "completed"; job.leaseUntil = null; this.saveJob(job); return job;
+    }).immediate();
   }
 
   private verifiedDefinitionChangeBaseline(original: Project, project: Project, epicID: string) {
@@ -1097,13 +1229,27 @@ export class ProjectStore {
     const work = job.definitionChangeWork!;
     const snapshot = this.get(job.projectID, job.expectedRevision), assessment = snapshot.assessments.find((a) => a.epicID === work.epicID)!;
     const original = this.get(job.projectID, assessment.atRevision);
+    const sharedGuard = work.groupOrigin ? this.definitionChangeOriginGuard(job) : undefined;
     const baseline = work.baseline ? this.verifiedDefinitionChangeBaseline(original, snapshot, work.epicID) : undefined;
     if (work.baseline && (!baseline || canonicalJSON(definitionChangeBaseline(original, snapshot, work.epicID, baseline)) !== canonicalJSON(work.baseline)))
       throw new Error("Change review verified baseline no longer matches. Saved evidence and attempts remain retained.");
-    const task = work.format === 1 ? prepareDefinitionChangeReview(original, snapshot, work.epicID, baseline) : prepareDefinitionChangeEvidence(original, snapshot, work.epicID, baseline);
+    const task = work.format === 1 ? prepareDefinitionChangeReview(original, snapshot, work.epicID, baseline) : prepareDefinitionChangeEvidence(original, snapshot, work.epicID, baseline, sharedGuard);
     if (!task || task.taskKey !== work.taskKey || task.contextKey !== work.contextKey || task.fields.assessmentKey !== work.assessmentKey)
       throw new Error("Change review original context no longer matches.");
+    if (canonicalJSON(task.fields.guard) !== canonicalJSON(work.guard)) throw new Error("Change review shared evidence guard differs.");
     return task;
+  }
+
+  private definitionChangeOriginGuard(job: Job) {
+    const work = job.definitionChangeWork!, origin = work.groupOrigin!, source = this.getJob(origin.jobID), group = source.definitionChangeGroupWork;
+    if (work.format === 1 || source.projectID !== job.projectID || source.status !== "completed" || !group?.response
+      || group.groupKey !== origin.groupKey || group.contextKey !== origin.contextKey || group.attempts !== origin.attempts
+      || source.model.providerID !== job.model.providerID || source.model.modelID !== job.model.modelID
+      || source.model.connectionID !== undefined && source.model.connectionID !== job.model.connectionID) throw new Error("Shared review handoff provenance differs; attempts were retained.");
+    const task = this.boundDefinitionChangeGroupTask(source), response = validateDefinitionChangeGroupResponse(task, group.response).areas.find(a => a.epicID === work.epicID)?.response;
+    if (!response || !("defer" in response) || response.taskKey !== origin.areaTaskKey || canonicalJSON(group.guard) !== canonicalJSON(work.guard))
+      throw new Error("Shared review handoff did not authorize this individual source check.");
+    return group.guard;
   }
 
   definitionChangeRequest(id: string) {
@@ -1147,6 +1293,23 @@ export class ProjectStore {
       AND json_extract(payload, '$.definitionChangeWork.format') IN (2,3)`).get(projectID, id) as { lookups: number; attempts: number; format: number; completedBatches: number } | undefined;
   }
 
+  definitionChangeGroupProgress(projectID: string, id: string) {
+    return this.db.prepare(`SELECT json_array_length(payload, '$.definitionChangeGroupWork.areas') AS areas,
+      json_extract(payload, '$.definitionChangeGroupWork.attempts') AS attempts,
+      CASE WHEN json_type(payload, '$.definitionChangeGroupWork.response') IS NOT NULL THEN 1 ELSE 0 END AS saved
+      FROM jobs WHERE id = ? AND project_id = ? AND json_extract(payload, '$.kind') = 'definition-change-group'`).get(id, projectID) as { areas: number; attempts: number; saved: number } | undefined;
+  }
+
+  hasDefinitionChangeWork(projectID: string, taskKey: string) {
+    return !!this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ?
+      AND json_extract(payload, '$.definitionChangeWork.taskKey') = ? LIMIT 1`).get(projectID, taskKey);
+  }
+
+  hasDefinitionChangeGroupWork(projectID: string, epicID: string, taskKey: string) {
+    const job = this.latestDefinitionChangeGroup(projectID, epicID);
+    return !!job && job.status !== "completed" && !!job.definitionChangeGroupWork?.areas.some(a => a.taskKey === taskKey);
+  }
+
   beginDefinitionChangeReview(jobID: string, epicID: string, taskKey: string) {
     return this.db.transaction(() => {
       const job = this.getJob(jobID), task = this.definitionChangeTask(job.projectID, epicID);
@@ -1155,16 +1318,25 @@ export class ProjectStore {
       const row = this.db.prepare(`SELECT id FROM jobs WHERE project_id = ? AND id != ?
         AND json_extract(payload, '$.definitionChangeWork.taskKey') = ? ORDER BY rowid DESC LIMIT 1`).get(job.projectID, jobID, taskKey) as { id: string } | undefined;
       const priorJob = row ? this.getJob(row.id) : undefined, prior = priorJob?.definitionChangeWork;
+      const shared = !prior ? this.latestDefinitionChangeGroup(job.projectID, epicID) : undefined;
+      const deferred = shared?.definitionChangeGroupWork?.response?.areas.find(a => a.epicID === epicID)?.response;
+      const inherited = shared?.status === "completed" && deferred && "defer" in deferred && task.fields.guard
+        && canonicalJSON(task.fields.guard) === canonicalJSON(shared.definitionChangeGroupWork!.guard) ? shared : undefined;
+      const groupOrigin = inherited ? { format: 1 as const, jobID: inherited.id, groupKey: inherited.definitionChangeGroupWork!.groupKey,
+        contextKey: inherited.definitionChangeGroupWork!.contextKey, areaTaskKey: deferred!.taskKey, attempts: inherited.definitionChangeGroupWork!.attempts } : undefined;
       if (priorJob && (priorJob.model.providerID !== job.model.providerID || priorJob.model.modelID !== job.model.modelID
         || priorJob.model.connectionID !== undefined && priorJob.model.connectionID !== job.model.connectionID))
         throw new Error("Saved change review uses a different model/connection. Original evidence and attempts remain saved.");
       if (prior && prior.contextKey !== task.contextKey) throw new Error("Saved change review context differs; original work was retained.");
       if (prior && !prior.response && prior.attempts >= 3) throw new Error("This exact change review exhausted its three attempts. Saved work and findings remain retained.");
+      if (groupOrigin && groupOrigin.attempts >= 3) throw new Error("Shared/individual change review exhausted its three attempts. No allowance was reset.");
       job.kind = "definition-change-review"; job.context = task.context.manifest;
       job.definitionChangeWork = prior ? { ...structuredClone(prior), sourceJobID: row!.id }
         : { ...(task.context.manifest.definitionChangeReview!.format === 1 ? { format: 1 as const, policy: "definition-change-review-v1" as const }
           : { format: 2 as const, policy: "definition-change-evidence-v2" as const, loads: [] }), epicID, assessmentKey: task.fields.assessmentKey, taskKey,
-          contextKey: task.contextKey, attempts: 0, ...(task.fields.baseline ? { baseline: task.fields.baseline } : {}) };
+          contextKey: task.contextKey, attempts: groupOrigin?.attempts ?? 0, ...(groupOrigin ? { groupOrigin } : {}),
+          ...(task.fields.guard ? { guard: task.fields.guard } : {}), ...(task.fields.baseline ? { baseline: task.fields.baseline } : {}) };
+      if (groupOrigin) this.definitionChangeOriginGuard(job);
       if (job.definitionChangeWork.format === 2 && job.definitionChangeWork.response && "records" in task)
         job.context = definitionChangeEvidenceContext(task, job.definitionChangeWork).context.manifest;
       if (job.definitionChangeWork.format === 3 && "records" in task)
@@ -1355,6 +1527,37 @@ export class ProjectStore {
     return readStoredJob(row.payload);
   }
 
+  submissionHasJob(projectID: string, submissionID: string, excludeJobID = ""): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM jobs WHERE project_id = ? AND id <> ? AND
+      EXISTS (SELECT 1 FROM json_each(payload, '$.context.submissionIDs') WHERE value = ?) LIMIT 1`)
+      .get(projectID, excludeJobID, submissionID);
+  }
+  latestAnswerGroupWorkJob(projectID: string, submissionID: string, excludeJobID = ""): Job | undefined {
+    const row = this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND id <> ? AND
+      EXISTS (SELECT 1 FROM json_each(payload, '$.answerGroupWork.submissionIDs') WHERE value = ?) ORDER BY rowid DESC LIMIT 1`)
+      .get(projectID, excludeJobID, submissionID) as { payload: string } | undefined;
+    return row ? readStoredJob(row.payload) : undefined;
+  }
+
+  /** Select one submission's latest staged ledger without deserializing unrelated
+   * model replies/history. Row order and exclusion match the original reverse scan. */
+  latestSubmissionWorkJob(projectID: string, submissionID: string, excludeJobID: string): Job | undefined {
+    const row = this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND id <> ?
+      AND json_extract(payload, '$.submissionWork.submissionID') = ? ORDER BY rowid DESC LIMIT 1`)
+      .get(projectID, excludeJobID, submissionID) as { payload: string } | undefined;
+    return row ? readStoredJob(row.payload) : undefined;
+  }
+
+  /** Complete matching staged/clarification history, in original durable order.
+   * Recovery still verifies the actual source ledger and exact clarification task. */
+  submissionRecoveryJobs(projectID: string, submissionID: string): Job[] {
+    const rows = this.db.prepare(`SELECT payload FROM jobs WHERE project_id = ? AND
+      (json_extract(payload, '$.submissionWork.submissionID') = ?
+        OR json_extract(payload, '$.context.readinessQuestions.submissionID') = ?) ORDER BY rowid`)
+      .iterate(projectID, submissionID, submissionID) as Iterable<{ payload: string }>;
+    return Array.from(rows, row => readStoredJob(row.payload));
+  }
+
   jobs(projectID: string, limit?: number): Job[] {
     // Do not retain every raw JSON string alongside every parsed/validated job.
     const rows = limit === undefined
@@ -1424,25 +1627,28 @@ export class ProjectStore {
     const ids = z.array(z.string().uuid()).min(1).max(20).refine((items) => new Set(items).size === items.length).parse(input);
     const rows = this.db.prepare(`SELECT id, json_extract(payload, '$.expectedRevision') AS revision,
       json_extract(payload, '$.status') AS status, json_extract(payload, '$.discoveryMetrics') AS metrics,
-      COALESCE(json_extract(payload, '$.context.epicReview.packageID'), json_extract(payload, '$.definitionWork.planKey'), json_extract(payload, '$.readinessWork.planKey'), json_extract(payload, '$.submissionWork.planKey')) AS packageID,
+      COALESCE(json_extract(payload, '$.context.epicReview.packageID'), json_extract(payload, '$.definitionWork.planKey'), json_extract(payload, '$.readinessWork.planKey'), json_extract(payload, '$.submissionWork.planKey'), json_extract(payload, '$.answerGroupWork.planKey')) AS packageID,
       CASE WHEN json_type(payload, '$.readinessWork') IS NOT NULL THEN json_extract(payload, '$.readinessWork.policy')
         WHEN json_type(payload, '$.submissionWork') IS NOT NULL THEN json_extract(payload, '$.submissionWork.policy')
+        WHEN json_type(payload, '$.answerGroupWork') IS NOT NULL THEN json_extract(payload, '$.answerGroupWork.policy')
         WHEN json_type(payload, '$.definitionWork') IS NOT NULL THEN 'definition-exact-batches-v1' ELSE json_extract(payload, '$.context.epicReview.contextPolicy') END AS policy,
       CASE WHEN json_extract(payload, '$.definitionInterruption.format') = 1 THEN json_extract(payload, '$.definitionInterruption.cause') END AS interruptionCause,
-       COALESCE(json_extract(payload, '$.readinessWork.format'), json_extract(payload, '$.submissionWork.format')) AS savedStageFormat,
+       COALESCE(json_extract(payload, '$.readinessWork.format'), json_extract(payload, '$.submissionWork.format'), json_extract(payload, '$.answerGroupWork.format')) AS savedStageFormat,
        json_extract(payload, '$.submissionWork.draftRepair.format') AS savedDraftRepairFormat,
       json_extract(payload, '$.context.characters') AS characters, json_extract(payload, '$.context.budget') AS budget,
       json_array_length(payload, '$.context.includedIDs') AS included, json_array_length(payload, '$.context.omittedIDs') AS omitted,
       json_array_length(payload, '$.context.epicIDs') AS areas, json_extract(payload, '$.context.sectionCharacters') AS sections,
-      json_array_length(payload, '$.retrievalWork.stages') AS stages, COALESCE(json_extract(payload, '$.readinessWork.attempts'), json_extract(payload, '$.submissionWork.attempts'), json_extract(payload, '$.retrievalWork.attempts'), json_extract(payload, '$.definitionWork.attempts')) AS savedAttempts,
+      json_array_length(payload, '$.retrievalWork.stages') AS stages, COALESCE(json_extract(payload, '$.readinessWork.attempts'), json_extract(payload, '$.submissionWork.attempts'), json_extract(payload, '$.answerGroupWork.attempts'), json_extract(payload, '$.retrievalWork.attempts'), json_extract(payload, '$.definitionWork.attempts')) AS savedAttempts,
       json_extract(payload, '$.retrievalWork.reuse.stages') AS reusedStages, json_extract(payload, '$.retrievalWork.reuse.final') AS reusedFinal,
-      COALESCE(json_array_length(payload, '$.readinessWork.batches'), json_array_length(payload, '$.submissionWork.batches'), json_extract(payload, '$.retrievalWork.epicStages.batches'), json_array_length(payload, '$.definitionWork.batches')) AS stagedBatches,
+      COALESCE(json_array_length(payload, '$.readinessWork.batches'), json_array_length(payload, '$.submissionWork.batches'), json_array_length(payload, '$.answerGroupWork.batches'), json_extract(payload, '$.retrievalWork.epicStages.batches'), json_array_length(payload, '$.definitionWork.batches')) AS stagedBatches,
       CASE WHEN json_type(payload, '$.readinessWork') IS NOT NULL THEN
         (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.readinessWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_type(r.value, '$.response.clarificationRead') IS NOT NULL OR json_type(r.value, '$.response.clarificationVerdict') IS NOT NULL)
         WHEN json_type(payload, '$.submissionWork.draftRepair') IS NOT NULL THEN
         json_array_length(payload, '$.submissionWork.batches') + (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE CAST(r.key AS INTEGER) >= json_extract(payload, '$.submissionWork.draftRepair.fromReceipt') AND (json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1))
         WHEN json_type(payload, '$.submissionWork') IS NOT NULL THEN
         (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1)
+        WHEN json_type(payload, '$.answerGroupWork') IS NOT NULL THEN
+        (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.answerGroupWork.receipts')) r WHERE json_type(r.value, '$.response.answerGroupDraft') IS NOT NULL OR json_extract(r.value, '$.response.answerGroupKeep') = 1 OR json_extract(r.value, '$.response.answerGroupCheck.valid') = 1)
         ELSE COALESCE(json_array_length(payload, '$.retrievalWork.epicStages.receipts'), json_array_length(payload, '$.definitionWork.receipts')) END AS stagedCompleted,
       COALESCE(json_extract(payload, '$.epicReviewReport.reviewed'), json_extract(payload, '$.gapReport.checked')) AS reviewed,
       COALESCE(json_extract(payload, '$.epicReviewReport.pending'), json_extract(payload, '$.gapReport.pending')) AS pending,
@@ -2080,7 +2286,7 @@ export class ProjectStore {
     if (!repair) return;
     const source = this.getJob(repair.sourceJobID), original = source.submissionWork;
     const expected = source.projectID === project.id && original
-      && submissionDraftRepair(submissionMaterials(project, item, original.task), original, this.jobs(project.id));
+      && submissionDraftRepair(submissionMaterials(project, item, original.task), original, this.submissionRecoveryJobs(project.id, item.id));
     if (JSON.stringify(expected) !== JSON.stringify(repair) || original?.materialKey !== work.materialKey || original.planKey !== work.planKey
       || JSON.stringify(original.task) !== JSON.stringify(work.task)
       || JSON.stringify(work.receipts.slice(0, repair.fromReceipt)) !== JSON.stringify(original.receipts))
@@ -2155,6 +2361,31 @@ export class ProjectStore {
       return this.saveRetainedStageCheckpoint(job, context, "Saved-response follow-up");
     }).immediate();
     if (stale) throw new StaleRevisionError();
+  }
+
+  checkpointAnswerGroup(id: string, input: AnswerGroupWork, context: NonNullable<Job["context"]>) {
+    const stale = this.db.transaction(() => {
+      const job = this.getJob(id), work = answerGroupWorkSchema.parse(input);
+      if (job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Shared answer worker is no longer live.");
+      if (context.revision !== job.expectedRevision) throw new StaleRevisionError();
+      if (context.answerGroupStage?.planKey !== work.planKey || context.focusEpicID !== work.epicID
+        || JSON.stringify(context.submissionIDs) !== JSON.stringify(work.submissionIDs)) throw new Error("Shared answers require their original group and plan.");
+      if (job.answerGroupWork && (job.answerGroupWork.materialKey !== work.materialKey || job.answerGroupWork.planKey !== work.planKey))
+        throw new Error("Shared answer checkpoint cannot replace its original material or plan.");
+      job.answerGroupWork = structuredClone(work);
+      // Validate exclusive binding even before the first response is accepted.
+      readStoredJob(JSON.stringify({ ...job, context }));
+      return this.saveRetainedStageCheckpoint(job, context, "Shared answer follow-up");
+    }).immediate();
+    if (stale) throw new StaleRevisionError();
+  }
+  pauseAnswerGroup(id: string, reason: string): Job {
+    return this.db.transaction(() => {
+      const job = this.getJob(id);
+      if (!job.answerGroupWork || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Shared answer worker is no longer live.");
+      if (this.projectRevision(job.projectID) !== job.expectedRevision) throw new StaleRevisionError();
+      job.status = "interrupted"; job.leaseUntil = null; job.diagnostic = reason; this.saveJob(job); return job;
+    }).immediate();
   }
 
   /** Called inside the owning checkpoint transaction after live-worker and exact
@@ -2378,6 +2609,13 @@ export class ProjectStore {
             return;
           }
           const before = structuredClone(project);
+          if (job.answerGroupWork || job.context?.answerGroupStage) {
+            if (!job.answerGroupWork) throw new Error("Shared answer publication requires its original ledger.");
+            const submissions = this.submissions(project.id);
+            const items = job.answerGroupWork.submissionIDs.map(id => submissions.find(s => s.id === id));
+            if (items.some(s => !s)) throw new Error("Shared answer source submission is missing.");
+            validateAnswerGroupPublication(project, items as Submission[], job, result);
+          }
           if (job.refinementWork || job.context?.refinementStage) {
             if (!job.refinementWork || !job.context?.refinementOnly || job.context.submissionIDs?.length
               || job.submissionWork || job.readinessWork || job.definitionWork || job.retrievalWork || job.context.readinessQuestions || job.context.definitionAssessment)
@@ -2393,7 +2631,7 @@ export class ProjectStore {
             this.assertSubmissionDraftRepair(project, item, job.submissionWork);
             if (job.submissionWork.reconciliation) {
               const provenance = job.submissionWork.reconciliation, source = this.getJob(provenance.sourceJobID);
-              const expected = source.submissionWork && submissionReconciliation(project, item.id, source.submissionWork, this.jobs(project.id));
+              const expected = source.submissionWork && submissionReconciliation(project, item.id, source.submissionWork, this.submissionRecoveryJobs(project.id, item.id));
               if (JSON.stringify(expected) !== JSON.stringify(provenance)
                 || !job.submissionWork.task.recordIDs.includes(provenance.questionID) || !job.submissionWork.task.recordIDs.includes(provenance.answerSourceID))
                 throw new Error("Saved-response reconciliation requires its published question, explicit current answer and retained original ledger.");

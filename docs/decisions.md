@@ -70,6 +70,15 @@ every technical detail proposed in the planning documents.
 
 ## Coordinated project workflow (DEC-032)
 
+Confirmed follow-up (2026-11-06): the user approved starting latency/workflow
+improvements after reviewing their diagnostics. Prefer scan → question batch → save
+answers → integrate → review, instead of AI work between each answer. The first
+implemented slice is explicit save-first collection and local phase measurements;
+shared answer integration is now implemented for fresh unscoped same-feature groups;
+broader grouping and bounded question generation remain follow-ons.
+Preserve exact original input, compatible paid work, finite failed attempts and
+validated atomic publication; no verification bypass or unmeasured speedup is approved.
+
 Confirmed follow-up (2026-11-03): after the review reached eight successful lookups
 inside one step, the user approved bounded exact retrieval bundles for directly
 linked questions, answers and approval provenance, rather than raising another

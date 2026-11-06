@@ -1,5 +1,210 @@
 # Data migrations and upgrade compatibility
 
+## Shared exact answer integration (2026-11-06)
+
+**Source → target:** database **31 → 32** is an ordered transactional reader-capability
+boundary with no SQL table or existing-payload rewrite. New jobs may carry optional
+format-1 `answerGroupWork` (`exact-answer-group-v1`) and an exclusive `answerGroupStage`
+context marker. Group IDs, original material/plan/context keys, whole-record partitions,
+per-step attempts, complete read/check/lookup responses, original model/job/revision
+provenance and per-answer model outcomes are retained. Startup validates supported
+versions and group bindings; unsupported future work rolls back the migration and
+leaves the source bytes available for correction/retry. Versions remain independent
+of project revision and settings CAS counters. Older readers must not open database 32.
+
+No old job, input, completed finding/date, grant or failed attempt is converted,
+regrouped, discarded or made current on upgrade. Only new compatible answers in an
+explicit coordinator submission can group. Paid individual work remains individual;
+paid shared work resumes its exact original group or stops, never falling back to a
+fresh allowance. Fresh grouping fit failure occurs before any dispatch. Existing
+stale-result, lease/owner, finite attempts and atomic-publication checks still apply.
+Valid replies are retained before stale detection, but cannot publish over newer input.
+Group input changes remain incompatible, with the original ledger preserved; automatic
+changed-material reconciliation or rejected-draft clarification is not manufactured.
+
+**Portable source → target:** formats **1–8 → 9** only when retained shared-answer work
+is present. Exact current record order and required original snapshots preserve wire
+replay. Incomplete group ledgers and linked waiting submissions survive actual folder
+adoption under an explicitly selected account; account IDs, sessions, telemetry and
+diagnostic measurements do not travel. Completed unneeded group job archives are not
+exported. Older envelopes cannot carry the new work; unsupported future formats and
+hybrid/mismatched task bindings reject rather than strip the group. Existing exports
+without shared-answer work retain their previous format.
+
+Deterministic tests cover the five-answer 90→18 request comparison, complete evidence
+and per-answer coverage, scoped/foreign/paid-work rejection, malformed output, explicit
+source authority, frozen checks, semantic rejection, four-attempt exhaustion, cancellation,
+timeout/late output, wrong-model/research violations, concurrent edits, exact lookups,
+no-call publication recovery, repeated reopen, future-format rollback/retry and actual
+portable-folder adoption without replay. A dedicated browser runner exercises five
+save-only responses, shared progress, owned Pause, reload, charged resume without
+repeating reads, atomic updates, sanitized snapshots and mobile layout. Verification:
+`npm test` passed **1,792 tests** (926 pretest, 775 main, 91 posttest). After final
+schema/profile hardening, `npm run check`, all 15 focused shared-answer tests and
+`npm run build:desktop` (including UI build) passed. The dedicated shared-answer
+browser check and full `npm run test:browser` suite (including post-browser runners)
+passed. `git diff --check` passed. The UI build retains
+its large-chunk warning. No live inference, real-user data writes or real-project
+speed/quality qualification is implied.
+
+## Save-first answer collection and local timings (2026-11-06)
+
+**Source → target:** database **30 → 31** is an ordered transactional reader-capability
+boundary, without table changes or payload backfill. Workflow format 1 accepts optional
+`inputBatchPolicy: {format:1}`; local discovery metrics accept optional numeric
+`submissionLocalMs` phases (history, preparation, replay, context, checkpoint,
+validation, publication). No revision, task/material/context key, evidence batch,
+completed response, finding/date, spent attempt or grant is rewritten on upgrade.
+Unsupported future workflow policies reject startup and roll the migration back;
+restoring supported source metadata permits retry. Downgrade to older readers is
+unsupported. Schema version remains separate from settings/revision CAS counters.
+
+Only an explicit continuous Continue/Submit action activates collection. Old grants
+without the policy keep their prior input-wake behavior. Once adopted, a waiting
+decision holds automatic wake-up; explicit submission captures the saved response
+IDs, regardless of their original automatic flag. Input saved later cannot piggyback
+on the grant. The original flags remain intact. Partial batches do not answer other
+questions. Reopen never arms either old or new consent; original stage replay and
+publication validation remain required. No paid work is invalidated or repeated solely
+by this scheduling change. Integration is still one response at a time in this slice.
+Targeted SQLite job selection preserves original row order and full matching staged/
+clarification ledgers; it changes local reads, not saved task identities or authority.
+
+**Portable behavior:** no format change. Workflow consent and discovery metrics are
+machine-local and not exported; original project decisions/submissions and supported
+semantic checkpoints retain the existing formats and exact authority.
+
+Deterministic upgrade tests cover original saved grant/job bytes, absent historical
+timings/policy, repeated startup, future-policy rollback and successful retry. Service
+tests cover five saved answers with no requests, restart, partial submission and new
+input during processing; existing malformed/cancelled/stale/recovery tests remain.
+Verification: `npm test` passed **926 pretests, 775 main tests and 76 posttests**.
+The full default/post-browser suite and separate Manual/Guided and coordinator browser
+runners passed, including save/reload without inference, explicit submission and mobile.
+The final targeted staged-input/recovery/workflow/upgrade rerun passed **122 tests**.
+Type checking, UI/desktop builds, CLI help, the synthetic benchmark and diff checking
+passed. The first broad run caught an outdated schema-version assertion, corrected
+before rerun; the first browser run hit its shell timeout and passed with sufficient
+time. The coordinator browser assertion now follows the existing discovery-before-
+checkpoint ordering rather than the older assessment-first ordering.
+No live model calls, real-user database writes, packaged-desktop installation or
+real-project latency improvement is qualified. The synthetic local benchmark is not
+a reproduction of the attached diagnostic export's 65–88-second local overhead.
+
+## Shared area impact review (2026-11-05)
+
+**Source → target:** database **29 → 30** is a transactional reader-capability
+boundary with no table/payload rewrite. New optional shared work/markers and
+format-4 `definition-change-group-v1` receipts are supported. Existing v1/v2/v3
+tasks, lookups, response keys, baseline chains, paid attempts and live leases retain
+their original bytes/meaning when new metadata is absent. Unknown future shared
+policies/versions reject startup transactionally; correcting the unsupported source
+allows retry without reset or calls. Versions remain independent of revisions/CAS.
+
+New grouped work saves exact per-area task/context/assessment/baseline bindings,
+original revisions, a group context key, co-read guard, attempts and the validated
+response/model/job. All verdicts publish atomically. Shared responses retained before
+a lost publication can be reused locally on explicit continuation; no paid replay
+is required. A source-review deferral permits individual v2/v3 continuation only
+after parent-response/context authentication, inheriting charged attempts. It does
+not open a new three-attempt allowance. Old paid single-area work is not regrouped.
+
+Receipts retain original findings and dates and add a separate co-read guard over
+up to sixteen feature/evidence roots. Uncited foreign changes invalidate this new
+authority; incremental comparisons include their full exact delta. This deliberately
+broadens freshness for new co-read work, not for existing historical assessments.
+Unsupported scope/fit/indispensable joint evidence still stops or uses deeper review;
+no evidence is summarized, truncated or manufactured as independence proof.
+
+**Portable source → target:** existing formats **1–7 → 8** only when shared work,
+guards or group-origin metadata is present. Format 8 preserves exact record ordering,
+necessary parent handoffs, original request/assessment snapshots and baseline ancestry.
+Decode validates exclusive group/job bindings and handoff parent metadata; dispatch
+reconstructs exact historical contexts before reuse. A sibling's later assessment
+does not orphan an eligible deferred feature. Obsolete unrelated jobs, activity
+archives, sessions, accounts and workflow consent are not exported. Older readers
+reject format 8/database 30 rather than stripping provenance; downgrade is unsupported.
+
+**Deterministic verification:** dedicated tests cover lossless pooling, cohort/fit
+limits, complete area coverage and citation isolation, co-read invalidation and foreign
+incremental deltas, inherited deferral attempts, actual empty-store folder adoption,
+saved-response recovery, repeated startup and transactional future-version rollback,
+three-attempt ceilings, stale edits, cancellation, timeout and sticky research/model
+violations. The final broad rerun passed **921 pretests, 774 main tests and 76 posttests**,
+plus every configured default/post-browser runner (including shared-review progress,
+owned Pause/reload/resume, original findings, one-request accounting and mobile).
+Final recovery/priority/log-filter and durable-reply-capacity additions additionally passed **75 targeted tests**,
+including actual individual completion after a shared deferral and a replaced sibling's
+not-yet-started handoff. Type checking, UI build, CLI help and diff checking passed.
+No live model qualification, user-data repair or installed-desktop rebuild is implied.
+
+## Question-batch review checkpoints (2026-11-05)
+
+**Source → target:** database **28 → 29** adds a transactional reader-capability
+boundary, with no SQL tables/payload backfill. Workflow format 1 accepts optional
+`reviewPolicy: {format:1}` and `reviewCheckpoint: {format:1, inputKey, revision,
+state, explicit}`. Schema versions remain separate from project revision and workflow
+CAS counters. Unknown policy/checkpoint versions fail startup transactionally and
+retain original bytes, grants, jobs and evidence; resolving the unsupported source
+permits retry. Ordinary startup leaves absent/legacy fields, saved jobs, paid replies,
+allowances, dated findings and live leases unchanged and never arms a scheduler.
+The next explicit Continue specification/Review changes activates the new scheduling.
+
+The old coordinator could review outside-scope areas while waiting for one answer,
+then reassess after the next; it also repaired all outdated areas before discovering
+the next related question. New scheduling holds area reviews throughout collection,
+including questions discovered sequentially rather than only a pre-existing list.
+Saved-answer processing still runs within existing consent. Related question discovery
+precedes the assessment checkpoint; only a settled pass and resolved decisions close
+the batch automatically. This is not automatic independence or currentness authority.
+Existing freshness hashes, v1/v2/v3 change tasks, assessment findings and source/model
+receipts are unchanged. New UI/API action `review-changes` is authenticated, revision/
+settings-CAS checked and bounded to the existing eight-request/five-minute allowance.
+It performs review-only work without answering questions, approving proposals,
+exploring new gaps, launching research/coding or widening per-task failed attempts.
+Completion always pauses so later responses cannot repurpose review-only consent.
+Existing saved assessment recovery is explicitly reachable through Review changes.
+On normal Continue, an exact-input unfinished assessment or saved change-review
+task also takes precedence over new collection. This uses scoped checkpoint/task
+metadata only for scheduling; full existing replay still validates the work. The
+first broad run caught this compatibility boundary in five saved-stage regressions;
+they pass with direct same-input continuation, without new discovery calls or
+reset attempts. Changed-input/new-question batches do not gain this exception.
+
+Checkpoint keys have their own `review-checkpoint-v1` digest over the unchanged
+workflow key plus summary/goals/actors/assumptions. They do not replace old task keys.
+The starting revision/key remain fixed across same-input Pause/restart/resume even
+as review publications increment the project revision. New queued submissions or
+changed semantic inputs pause the cycle; later explicit continuation collects a new
+batch instead of automatically restarting all reviews. Stale replies follow existing
+durable retention rules and cannot publish over newer decisions. Compatible paid
+area work is reused under the existing exact task identities, not reset by a new
+workflow grant or app upgrade. Failures/Stop still stop and retain charged attempts.
+
+**Portable behavior:** project records, pending submissions and supported semantic
+jobs remain exported by the existing format; no portable version changes. Machine-local
+workflow consent/checkpoint scheduling is not exported or inferred on adoption.
+Unanswered decisions and dated findings reconstruct the pending batch; explicit
+continuation on the clone creates local scheduling without invalidating imported
+compatible task identities. No historical checkpoint/run provenance is fabricated.
+Older strict readers reject database 29 rather than stripping the optional metadata;
+downgrade after activation is unsupported. Separate explicit tasks and legacy
+automatic-maintenance opt-ins are preserved; this policy applies to coordinated work.
+
+**Verification:** type checking and 58 workflow tests cover five related answers
+with a restart halfway through, sequential follow-up questions with no intervening
+area assessments, explicit review-only checkpoints with pending choices, new input
+during review, saved protocol recovery/exhaustion/semantic blockers, additive upgrade
+and future-format rollback/recovery. The full test rerun passed **920 pretests,
+774 main tests and 64 posttests**. The final review-only completion guard (later
+answers cannot spend its leftover allowance) additionally passed all 58 workflow
+tests and type checking. API tests reject unauthenticated/foreign-origin, stale
+revision/settings and extra-limit Review changes requests without dispatch. UI build,
+all 22 default browser runners and both post-browser runners passed again in the
+final browser rerun. CLI help and diff checks passed. No user data
+changes, live model calls, installed desktop rebuild, or shared multi-area
+impact-review implementation have been performed in this slice.
+
 ## Verified incremental change baselines and visible saved scores (2026-11-05)
 
 **Source → target:** database **27 → 28** is an ordered transactional capability

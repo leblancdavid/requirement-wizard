@@ -4,6 +4,7 @@ import { safeMessage } from "../runtime/contract.js";
 import { DiscoveryService } from "./discovery.js";
 import { planContext, planExactTaskContext } from "../core/working-set.js";
 import { canStageSubmission, planSubmissionStages, submissionMaterials, submissionDraftRepair } from "../core/submission-stages.js";
+import { eligibleGroupAnswer, answerGroupMaterials, planAnswerGroup } from "../core/answer-group.js";
 import { ContextBudgetError } from "../core/context.js";
 import { refinementEvidenceRecords } from "../core/refinement-context.js";
 import { refinementCheckCurrent, resolutionPairEligible } from "./refinement-tasks.js";
@@ -987,7 +988,30 @@ export class DiscoveryQueue {
           report(`Saved response blocked by context size (${characters.toLocaleString("en-US")} / ${budget.toLocaleString("en-US")} characters). Other fitting responses can continue.`);
         };
         const batch: Submission[] = [];
-        for (const item of saved) {
+        let sharedAnswers = false;
+        const retainedGroup = saved.map(s => this.service.store.latestAnswerGroupWorkJob(id, s.id)).find(j => j?.answerGroupWork);
+        if (retainedGroup?.answerGroupWork) {
+          const members = retainedGroup.answerGroupWork.submissionIDs.map(id => saved.find(s => s.id === id));
+          if (members.some(s => !s)) throw new Error("Continue all answers in the saved shared group together. Its original answers, completed steps and attempts are retained; no individual restart was authorized.");
+          batch.push(...members as Submission[]); sharedAnswers = true;
+        } else if (this.coordinator && this.service.store.workflow(id).inputBatchPolicy && !(manual?.research ?? saved.some(s => s.research))) {
+          const resolutionJobs = this.service.store.specificationWorkflowJobs(id, "resolution");
+          const candidates = saved.filter(s => !s.jobID && eligibleGroupAnswer(project, s)
+            && !this.service.store.submissionHasJob(id, s.id)
+            && s.input.type === "answer" && !resolutionTaskForAnswer(project, s.input.questionID, resolutionJobs));
+          const first = candidates[0], epicID = first && submissionEpic(project, first);
+          const group = candidates.filter(s => submissionEpic(project, s) === epicID).slice(0, 5);
+          if (group.length >= 2) {
+            try { planAnswerGroup(answerGroupMaterials(project, group)); batch.push(...group); sharedAnswers = true; }
+            catch (error) {
+              // Fit is measured before dispatch. Failed/started groups never use
+              // this fallback and can never acquire fresh individual allowances.
+              if (!(error instanceof ContextBudgetError)) throw error;
+              report("These answers cannot fit a shared evidence schedule. Keeping their individual processing paths; no shared request was started.");
+            }
+          }
+        }
+        for (const item of batch.length ? [] : saved) {
           try {
             planExactTaskContext(project, { ...task([item]), expandMandatory: true });
             batch.push(item);
@@ -1018,7 +1042,8 @@ export class DiscoveryQueue {
         }
         const waiting = saved.filter((item) => item.status === "saved" && !batch.includes(item)).length;
         continuing = waiting > 0;
-        if (batch.length) report(`Processing one saved response in its own context; waiting: ${waiting}.`);
+        if (batch.length) report(sharedAnswers ? `Processing ${batch.length} saved answers together with shared exact evidence; waiting: ${waiting}.`
+          : `Processing one saved response in its own context; waiting: ${waiting}.`);
         for (const item of batch) { delete item.contextBlock; delete item.diagnostic; this.service.store.saveSubmission(item); }
         const research = repairSubmissionID ? false : manual?.research ?? batch.some((s) => s.research);
         if (!batch.length && manual?.questionTarget !== undefined) {
@@ -1027,7 +1052,7 @@ export class DiscoveryQueue {
         }
         const job = await this.service.analyze(id, project.revision, { automatic: !manual,
           savedEvidencePolicy: batch.length ? undefined : manual?.savedEvidencePolicy,
-          signal: controller.signal, research, ...task(batch), submissionIDs: batch.map((s) => s.id), onProgress: report,
+          signal: controller.signal, research, ...(sharedAnswers ? { answerGroup: true } : task(batch)), submissionIDs: batch.map((s) => s.id), onProgress: report,
           onJob: (job) => {
             for (const item of batch) { item.status = "processing"; item.jobID = job.id; this.service.store.saveSubmission(item); }
           },

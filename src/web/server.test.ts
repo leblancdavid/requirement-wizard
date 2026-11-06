@@ -237,6 +237,12 @@ test("coordinated workflow requires explicit authenticated revision/CAS-bound pe
     assert.equal((await post(input, { ...headers, Origin: "https://example.invalid" })).status, 403);
     assert.equal((await post({ ...input, revision: project.revision + 1 })).status, 409);
     assert.equal((await post({ ...input, requests: 999 })).status, 400);
+    const review = { ...input, action: "review-changes" };
+    assert.equal((await post(review, {})).status, 403);
+    assert.equal((await post(review, { ...headers, Origin: "https://example.invalid" })).status, 403);
+    assert.equal((await post({ ...review, revision: project.revision + 1 })).status, 409);
+    assert.equal((await post({ ...review, version: 99 })).status, 409);
+    assert.equal((await post({ ...review, requests: 999 })).status, 400);
     assert.equal(store.workflow(project.id).enabled, false);
     assert.equal(store.latestWorkflowRun(project.id), null);
     assert.equal((await post(input)).status, 200); assert.equal((await post(input)).status, 409);

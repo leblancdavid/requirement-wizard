@@ -1,5 +1,29 @@
 # Milestone backlog
 
+The next 2026-11-06 slice implements shared exact-evidence integration for two to five
+fresh unscoped answers in one feature, preserving original questions/sources and atomic
+publication. A synthetic five-answer/nine-batch comparison uses 18 shared requests
+instead of 90 individual requests without skipping checks. Paid individual work stays
+individual; paid shared work retains its original group and finite attempts through
+restart/portable adoption. Live semantic/latency qualification, changed-material group
+reconciliation and bounded multi-topic question generation remain outstanding; no
+milestone exit is implied. See [shared answer integration](coordinated-workflow.md#shared-answer-integration-2026-11-06).
+
+The 2026-11-06 first latency/workflow slice separates saving answers from explicit
+submission in new continuous runs and adds staged-input local phase timings plus a
+disposable no-model benchmark. Captured response IDs prevent later input spending the
+same grant. Shared integration beyond the compatible scope above, bounded question-batch generation and a measured
+real-project local-overhead fix remain outstanding; no milestone exit or live speedup
+is claimed. See [save-first collection](coordinated-workflow.md#save-first-answer-collection-2026-11-06).
+
+The 2026-11-05 checkpoint-scheduling slice collects related answers/questions before
+coordinated area assessments and adds explicit bounded Review changes. Fixed input
+checkpoints stop before chasing newer edits. Bounded shared multi-area impact calls
+now retain separate verdicts and authenticated individual handoffs; read-only saved
+revision fit measures 22 initial area requests fitting into 15. Live semantic accuracy,
+total end-to-end savings and desktop efficiency qualification remain outstanding;
+no milestone exit is implied. See [shared impact limits](coordinated-workflow.md#shared-multi-area-impact-requests-2026-11-05).
+
 The 2026-11-04 decision-impact slice adds bounded change checks to Continue
 specification before full definition refresh. Exact unaffected receipts retain
 original findings and review dates; affected/uncertain areas still need deeper

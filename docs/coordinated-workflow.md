@@ -1,5 +1,169 @@
 # Coordinated workflow preview (DEC-032)
 
+## Shared answer integration (2026-11-06)
+
+After **Submit saved responses**, the coordinator can integrate **two to five new,
+concrete, unscoped answers in the same feature** together. Each original question,
+options, answer and current source stays distinct and pinned in every request. The
+complete mandatory evidence sets from the individual tasks are pooled without dropping
+records; one collection pass builds a combined draft and one verification pass checks
+that frozen draft against every evidence batch. Publication is atomic only after all
+checks pass, with an explicit model outcome/explanation for each original submission.
+Outcomes are model judgments, never human approvals. Existing automatic-activation
+gates still require current authorizing answer sources and full original target support.
+
+Reviews, targeted answers, delegated/deferred choices, research, pair-resolution work
+and already-started individual work retain their established paths. Shared fit is checked
+before dispatch; a group that cannot fit may use individual processing only before any
+shared request starts. Once started, the original group, replies and attempts stay
+bound together across Pause, failure, restart and portable continuation. A new grant
+cannot turn paid shared work into fresh individual attempts. Later input remains in
+the next batch. No partial changes, tools, organization/global interpretation, automatic
+choice precedence or verification skipping is authorized. Indispensable joint evidence
+must fit exactly or the group stops, rather than relying on separately read fragments.
+
+Shared steps have four attempts each, up to 32 exact batches per phase, a 96,000-character
+input cap and a 24,000-character draft reserve. Accepted exact lookups retain their
+step/context identities; malformed attempts and cancelled calls stay spent. Completed
+drafts survive failed publication and resume locally without another model call. Valid
+replies arriving after an edit are saved historically before stopping stale. Changed
+group inputs still require review: changed-material reconciliation, group-specific
+exhausted-step extension and automatic clarification of rejected shared drafts are not
+implemented. An old task is never silently abandoned to reset its allowance.
+
+**Deterministic request comparison:** the same synthetic five-answer/nine-evidence-batch
+fixture requires **90** individual read/check requests versus **18** shared requests,
+with all original evidence retained. This is an 80% request-count reduction for that
+fixture, not a measured live speedup, provider bill or semantic-quality qualification.
+Additional exact lookups, incompatible scopes, smaller groups and larger drafts change
+the actual cost. No real-project latency improvement is claimed yet.
+
+Processing & queue shows the group's answer count and read/check progress; raw drafts
+and receipts are stripped from browser snapshots. Logs count actual requests once.
+SQLite 32 and conditional portable format 9 protect the new readers while leaving old
+single-answer work untouched. See [upgrade details](migrations.md#shared-exact-answer-integration-2026-11-06).
+
+## Save-first answer collection (2026-11-06)
+
+New explicit continuous **Continue specification** runs adopt save-first collection.
+When the workflow reaches a decision, saving answers does not wake the coordinator
+or spend AI allowance. Keep answering, then choose **Submit saved responses** in
+Processing & queue (also available in its header). A partial submission is allowed;
+unanswered questions remain open. The action captures only responses already saved
+at its start. Later input waits for another explicit batch, including input arriving
+during answer integration, not just during area assessment. Pause/restart and stale
+publication guards remain unchanged. Local plain approvals still need no AI call.
+
+This first slice separated interaction from processing; the later shared integration
+above now pools compatible new answers. Other answers still integrate individually
+through the existing exact-evidence read/check protocol. It does not
+change question-generation stopping targets, skip
+verification or promise faster inference. Original paid work and assessment identities
+are preserved. Existing grants without the new policy retain their original behavior
+until explicit continuous continuation; opening/reloading the app adopts nothing.
+
+New staged-answer diagnostics expose numeric local costs for history loading,
+preparation, replay, context construction, checkpoint persistence, response validation
+and publication. These are synchronous phase totals, not model time or an exhaustive
+CPU profile; publication includes final replay/storage, and earlier queue preflight
+is outside the job. Missing older measurements remain unknown. Local measurements
+are omitted from portable evidence. `npm run benchmark:submissions` runs a disposable
+synthetic nine-batch fixture with no model or user-database access; it does not
+reproduce the attached real project's large local overhead or qualify live speedups.
+The staged-submission lookup now selects only its latest matching ledger in SQLite,
+instead of loading/deserializing the whole job archive twice. Saved scope, row-order
+selection and full validation of the selected original ledger remain unchanged.
+Recovery/clarification validation likewise loads the complete matching submission
+history rather than unrelated job payloads; original sources and ledgers still replay.
+
+Next slices: profile a real staged-answer run using the new export, qualify shared
+integration on actual project inputs, then tune bounded question-batch discovery.
+See [compatibility](migrations.md#save-first-answer-collection-and-local-timings-2026-11-06).
+
+Verification: the full deterministic and default/post-browser suites, separate
+Manual/Guided and coordinator browser checks, type checking and UI/desktop builds
+passed. Final scoped recovery tests also pass without loading the unrelated archive.
+No live model speed, semantic effectiveness or installed-desktop qualification is implied.
+
+## Question batches and fixed review checkpoints (2026-11-05)
+
+On explicit Continue specification, the coordinator now collects answers/proposals
+and related follow-up questions before reviewing definition validity. Pending
+decisions hold **all** automatic area assessments, even structurally outside-scope
+ones. A single answered question does not end the batch: related question discovery
+runs first. A settled discovery pass with no pending decisions closes collection;
+the existing change-impact/full-review sequence then reviews the accumulated changes.
+This ordering supersedes the earlier automatic outside-scope scheduling below.
+The dependency view remains navigation, not automatic review permission.
+Compatible already-saved assessment/change-review work can resume directly on
+explicit continuation; collection must not invalidate paid work by first generating
+new questions against identical saved inputs.
+
+**Review changes** in Processing & queue explicitly starts a bounded review-only
+checkpoint (up to eight requests/five active minutes). Process saved responses first.
+It can review the currently saved evidence while some questions remain unresolved,
+without answering/approving them. It runs existing eligible impact checks/deeper
+assessments, not input processing, conflict cleanup, broad discovery or coding. It
+stops at completion or the existing allowance/failure boundary. Continue specification
+can resume identical unfinished work under its normal displayed allowance.
+Completion always pauses, including when unanswered questions remain: saving a
+later answer cannot spend the leftover review-only allowance on processing/discovery.
+
+Each checkpoint records its exact semantic input key (including global interpretation)
+and original starting revision independently of assessment publication dates. Area
+review publication does not change that key. New queued input or a product edit
+during review stops the cycle before another area is dispatched; completed replies,
+checks and attempts remain saved. Explicit continuation processes the next batch;
+it does not automatically chase edits or rewrite old findings. Restart never arms
+the scheduler. Saved scores remain visible with pending validity until reviewed.
+
+Scheduling avoids repeated cycles; bounded shared impact requests below additionally
+reduce initial area calls when their exact evidence fits. Large/uncertain areas can
+still require individual source/batch/joint work.
+Answer processing and adaptive question discovery can still consume AI calls.
+Separate legacy automatic-maintenance/scoped actions retain their explicit settings;
+use the coordinator/Guided processing for this checkpoint behavior. See
+[upgrade and verification](migrations.md#question-batch-review-checkpoints-2026-11-05).
+
+## Shared multi-area impact requests (2026-11-05)
+
+Within a fixed review checkpoint, compatible **new** change-impact tasks can share
+one request for two to four features, capped at 96,000 context characters. Full
+original nine-finding assessments remain intact. Exact record versions and changes
+are pooled losslessly, not summarized or truncated. Compatible paid single-area
+tasks keep their existing protocol and take precedence over fresh grouping.
+
+Every selected feature must return its own exact-task-bound nine-check verdict or
+explicit source-review deferral. Missing/extra features, guessed/foreign citations,
+model/profile violations and malformed replies publish nothing. Valid publication
+is atomic. An affected/uncertain finding never becomes unaffected because a neighboring
+feature passed or citations/labels stayed unchanged. Missing indispensable bodies
+defer to established individual source-loading/batched review, inheriting all spent
+shared attempts and authenticated parent provenance. Shared calls are final-only;
+grouped lookup turns are not implemented. Failure, Pause and restart retain accepted
+replies/attempts; continuation requires explicit consent.
+
+Each resulting receipt additionally guards all co-read feature/evidence roots,
+including foreign evidence left uncited. Later foreign edits invalidate it even if
+its narrow original input key is unchanged; subsequent comparisons include those
+exact foreign changes. Original assessment identities, findings, dates and evidence
+are never rebased. Processing & queue displays the shared scope/attempts; Logs count
+one actual request, not one per feature.
+
+**Read-only fit measurement:** saved revision 3178 had 23 dated assessments. Nine
+authenticated incremental baselines remained available; 22 impact tasks fit as
+15 initial requests (three three-feature cohorts, one two-feature cohort, eleven
+individual tasks). The remaining area still needs the existing deeper path. This
+is seven fewer initial requests (32%), not a semantic verdict or guaranteed total
+saving: this measures fresh context fit, not saved-job scheduling eligibility;
+paid compatible tasks still take precedence. Deferrals/affected findings may require
+further calls. Nothing was written
+to the user database and no inference was run. Reproduce with
+`npx tsx scripts/measure-change-groups.ts --database <sqlite> --project <id> --revision <n>`;
+the script uses read-only SQLite and `query_only`, never `ProjectStore`.
+
+See [compatibility and verification](migrations.md#shared-area-impact-review-2026-11-05).
+
 ## Retain staged input and question work across edits (2026-11-03)
 
 Staged saved-answer processing, clarification and refinement now retain a valid

@@ -1,9 +1,10 @@
 import { canonicalJSON } from "./assessment-identity.js";
-import { definitionInputDocument, definitionInputKey, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
+import { definitionInputKey, definitionAssessmentEvidenceIDs } from "./definition-identity.js";
 import { definitionFindingIdentityKey as digest } from "./definition-finding-identity.js";
-import { definitionChangeResponseSchema, definitionChangeReceiptSchema, type DefinitionChangeReceipt } from "./definition-change-schema.js";
+import { definitionChangeResponseSchema, definitionChangeReceiptSchema, type DefinitionChangeReceipt, type DefinitionChangeGuard } from "./definition-change-schema.js";
 import type { Project } from "./model.js";
 import type { ContextPack } from "./context.js";
+import { changeGuardKey, changeReviewDocument } from "./definition-change-guard.js";
 export { definitionChangeResponseSchema } from "./definition-change-schema.js";
 
 export const definitionChangeLimits = { characters: 96000, changes: 80, records: 8000 } as const;
@@ -15,13 +16,14 @@ export function definitionChangeReceipt(project: Project, epicID: string) {
   if (!assessment || !receipt || !definitionChangeReceiptSchema.safeParse(receipt).success) return;
   if (receipt.projectID === project.id && receipt.assessmentKey === digest(assessment) && receipt.originalRevision === assessment.atRevision
     && receipt.originalInputKey === assessment.inputBasis?.key && receipt.globalKey === globalKey(project)
+    && (!receipt.guard || receipt.guard.key === changeGuardKey(project, receipt.guard.areas))
     && receipt.currentInputKey === definitionInputKey(project, epicID, definitionAssessmentEvidenceIDs(assessment))) return receipt;
 }
 
 /** A separate AI change review, not a citation/dependency-graph skip proof. All
  * original findings and every exact delta are mandatory; insufficient supporting
  * evidence must route to the established full review, never presumed independence. */
-export function prepareDefinitionChangeReview(original: Project, current: Project, epicID: string, baseline?: Project) {
+export function prepareDefinitionChangeReview(original: Project, current: Project, epicID: string, baseline?: Project, sharedGuard?: DefinitionChangeGuard) {
   const assessment = current.assessments.find((a) => a.epicID === epicID);
   const source = original.assessments.find((a) => a.epicID === epicID);
   if (!assessment?.inputBasis || !source || assessment.combinedReview || assessment.mixedReview
@@ -32,7 +34,10 @@ export function prepareDefinitionChangeReview(original: Project, current: Projec
   const binding = baseline ? definitionChangeBaseline(original, current, epicID, baseline) : undefined;
   if (baseline && !binding) return;
   const previous = baseline ?? original;
-  const before = definitionInputDocument(previous, epicID, citations), after = definitionInputDocument(current, epicID, citations);
+  const prior = current.definitionChangeReviews?.find(r => r.epicID === epicID && r.assessmentKey === digest(assessment));
+  const inherited = sharedGuard ?? prior?.guard;
+  const guard = inherited ? { ...inherited, key: changeGuardKey(current, inherited.areas) } : undefined;
+  const before = changeReviewDocument(previous, epicID, citations, guard), after = changeReviewDocument(current, epicID, citations, guard);
   const { records: oldRecords, ...oldScope } = before, { records: newRecords, ...newScope } = after;
   if (oldRecords.length > definitionChangeLimits.records || newRecords.length > definitionChangeLimits.records
     || canonicalJSON(oldScope) !== canonicalJSON(newScope)
@@ -69,6 +74,7 @@ export function prepareDefinitionChangeReview(original: Project, current: Projec
   const evidence = newRecords.filter((r) => included.has(r.id));
   const fields = { format: 1 as const, policy: "definition-change-review-v1" as const, projectID: current.id, epicID,
     ...(binding ? { baseline: binding } : {}),
+    ...(guard ? { guard } : {}),
     originalRevision: original.revision, assessmentKey: digest(assessment), originalInputKey: assessment.inputBasis.key,
     currentInputKey: definitionInputKey(current, epicID, citations), globalKey: globalKey(current), assessment,
     areas: after.epics, changes, evidence };
@@ -115,6 +121,7 @@ export function makeDefinitionChangeReceipt(task: DefinitionChangeTask, response
   responseJobID: string, responseModel: DefinitionChangeReceipt["responseModel"]): DefinitionChangeReceipt {
   return definitionChangeReceiptSchema.parse({ format: 1, policy: "definition-change-review-v1", projectID: task.fields.projectID, epicID: task.fields.epicID,
     ...(task.fields.baseline ? { baseline: task.fields.baseline } : {}),
+    ...(task.fields.guard ? { guard: task.fields.guard } : {}),
     assessmentKey: task.fields.assessmentKey, originalInputKey: task.fields.originalInputKey, currentInputKey: task.fields.currentInputKey, globalKey: task.fields.globalKey,
     taskKey: task.taskKey, contextKey: task.contextKey, originalRevision: task.fields.originalRevision, reviewedRevision: revision,
     jobID, responseJobID, responseModel, reviewedAt: new Date().toISOString(), response });

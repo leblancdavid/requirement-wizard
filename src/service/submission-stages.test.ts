@@ -16,8 +16,60 @@ import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
 import { startApp } from "../web/server.js";
 import { submissionQuestionTask, submissionQuestionBlock, submissionClarificationQuestions } from "../core/readiness-questions.js";
+import { DiscoveryMeasurement } from "./discovery-metrics.js";
 
 const empty = (): Analysis => ({ summary: "Follow up on saved review", goals: [], actors: [], assumptions: [], requirements: [], questions: [], retireQuestions: [] });
+
+test("saved-input diagnostics measure local stages, retain exact output and export no private phase details", async () => {
+  const f = fixture();
+  try {
+    const job = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(job.id, Date.now() + 60000);
+    const measurement = new DiscoveryMeasurement(value => f.store.saveDiscoveryMetrics(job.id, value));
+    const result = await runSubmissionStages(f.store, adapter(f), f.project, job, f.item, f.task,
+      { signal: new AbortController().signal, research: false, measurement });
+    measurement.finish();
+    assert.equal(result.status, "completed"); assert.deepEqual(result.result, f.output());
+    const report = f.store.discoveryDiagnostics(f.project.id, [job.id]), timings = report.runs[0]!.measurements!.submissionLocalMs!;
+    for (const phase of ["history", "preparation", "replay", "context", "checkpoint", "validation", "publication"] as const)
+      assert.ok(timings[phase]! >= 0, phase);
+    assert.equal(measurement.value.requests.length, result.submissionWork!.batches.length * 2);
+    assert.ok(!JSON.stringify(report).includes("Exact project rule"));
+    const state = continuationState(f.store.get(f.project.id), f.store.jobs(f.project.id), [], rev => f.store.get(f.project.id, rev));
+    assert.ok(state.jobs.every(j => !j.discoveryMetrics), "Local performance measurements are not portable evidence");
+  } finally { f.store.close(); }
+});
+
+test("fresh staged input avoids decoding the job archive and latest-ledger selection preserves order and exclusion", async () => {
+  const f = fixture();
+  const jobs = f.store.jobs;
+  try {
+    const first = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(first.id, Date.now() + 60000);
+    f.store.jobs = () => { throw new Error("Unrelated archive must not be decoded for fresh staged input"); };
+    const paused = await runSubmissionStages(f.store, adapter(f), f.project, first, f.item, f.task,
+      { signal: new AbortController().signal, research: false, limits: { requests: 1, durationMs: 60000 } });
+    assert.equal(paused.status, "interrupted");
+    assert.equal(f.store.latestSubmissionWorkJob(f.project.id, f.item.id, "unused")!.id, first.id);
+    assert.equal(f.store.latestSubmissionWorkJob(f.project.id, f.item.id, first.id), undefined);
+    assert.equal(f.store.latestSubmissionWorkJob(f.project.id, randomUUID(), "unused"), undefined);
+    const other = f.store.create("Other project", "Unrelated evidence", f.project.model);
+    assert.equal(f.store.latestSubmissionWorkJob(other.id, f.item.id, "unused"), undefined);
+    const second = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(second.id, Date.now() + 60000);
+    const m = submissionMaterials(f.project, f.item, f.task), w = structuredClone(paused.submissionWork!);
+    const { draft } = replaySubmissionStages(m, w);
+    f.store.checkpointSubmission(second.id, w, submissionStageContext(m, w, draft).manifest);
+    assert.equal(f.store.latestSubmissionWorkJob(f.project.id, f.item.id, "unused")!.id, second.id);
+    assert.equal(f.store.latestSubmissionWorkJob(f.project.id, f.item.id, second.id)!.id, first.id);
+    assert.deepEqual(f.store.latestSubmissionWorkJob(f.project.id, f.item.id, "unused")!.submissionWork, paused.submissionWork);
+    assert.deepEqual(f.store.submissionRecoveryJobs(f.project.id, f.item.id).map(j => j.id), [first.id, second.id]);
+    f.store.failJob(second.id, "interrupted", "Synthetic interrupted checkpoint");
+    const third = f.store.beginJob(f.project.id, f.project.revision).job; f.store.claimJob(third.id, Date.now() + 60000);
+    const resumed = await runSubmissionStages(f.store, adapter(f), f.project, third, f.item, f.task,
+      { signal: new AbortController().signal, research: false, limits: { requests: 1, durationMs: 60000 } });
+    assert.equal(resumed.status, "interrupted");
+    assert.deepEqual(resumed.submissionWork!.receipts.slice(0, paused.submissionWork!.receipts.length), paused.submissionWork!.receipts);
+    assert.equal(resumed.submissionWork!.receipts.length, paused.submissionWork!.receipts.length + 1);
+  } finally { f.store.jobs = jobs; f.store.close(); }
+});
 
 for (const valid of [true, false]) test(`legacy frozen rationale reopens under compatible writing guidance without rewrite or new allowance: ${valid ? "valid" : "still factually invalid"}`, async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
