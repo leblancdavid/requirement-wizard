@@ -10,6 +10,8 @@ import { planningCurrent } from "./implementation-planning.js";
 import { workflowScheduleSchema } from "./workflow-schedule.js";
 
 export const workflowLimits = { requests: 8, durationMs: 300000, steps: 20 } as const;
+/** Scheduling budget only; original package evidence, checks and retry limits stay authoritative. */
+export const questionBatchLimits = { target: 5, packages: 5, requests: 16, durationMs: 300000 } as const;
 const hash = (value: unknown) => bytesToHex(sha256(JSON.stringify(value)));
 const key = z.string().regex(/^[a-f0-9]{64}$/);
 export const workflowReadinessSchema = z.object({ format: z.literal(1), policy: z.literal("coordinated-checks-v1"), inputKey: key,
@@ -31,6 +33,17 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
   readiness: workflowReadinessSchema.optional(),
   reviewPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   inputBatchPolicy: z.object({ format: z.literal(1) }).strict().optional(),
+  questionBatchPolicy: z.object({ format: z.literal(1) }).strict().optional(),
+  questionBatch: z.object({ format: z.literal(1), inputKey: key, revision: z.number().int().positive(),
+    packages: z.number().int().min(0).max(questionBatchLimits.packages),
+    requests: z.number().int().min(0).max(questionBatchLimits.requests),
+    remainingMs: z.number().int().min(0).max(questionBatchLimits.durationMs),
+    /** Wall-clock checkpoint of an owned interval; explicit recovery charges any
+     * unaccounted interval conservatively, rather than refunding a crashed call. */
+    activeSince: z.number().int().nonnegative().optional(),
+    state: z.enum(["collecting", "finished"]),
+    reason: z.enum(["target", "budget", "waiting", "settled", "decision", "input"]).optional(),
+  }).strict().refine(batch => (batch.state === "finished") === !!batch.reason, "Finished collection requires an explicit stopping reason.").optional(),
   reviewCheckpoint: z.object({ format: z.literal(1), inputKey: key, revision: z.number().int().positive(),
     state: z.enum(["reviewing", "complete"]), explicit: z.boolean() }).strict().optional(),
   decisionSchedule: workflowScheduleSchema.optional(),

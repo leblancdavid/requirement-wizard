@@ -27,7 +27,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 32;
+export const databaseSchemaVersion = 33;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -240,6 +240,8 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // unchanged. Explicit continuous continuation adopts answer collection.
 } }, { version: 32, name: "shared-exact-answer-integration-v1", apply() {
   // Capability boundary only. Never regroup/rewrite paid individual work on startup.
+} }, { version: 33, name: "bounded-workflow-question-collection-v1", apply() {
+  // Reader boundary only. Existing grants, package ledgers and evidence stay exact.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

@@ -1,5 +1,22 @@
 # Architecture outline
 
+## Bounded workflow question collection (2026-11-06)
+
+The coordinator's question collection policy is scheduling metadata, not a new model
+protocol. `src/core/workflow.ts` bounds/validates format-1 policy/progress separately
+from grant counters, semantic task identities and assessment freshness. The coordinator
+loops through existing eligible epic packages toward a soft pending-question target,
+without broadening the engine's unanswered-question dependency policy or introducing
+area assessments. A separate bounded `DiscoveryService` view of the same owned workflow
+makes staged packages honor the collection's actual remaining request/time limits;
+every adapter request is charged in the same durable run receipt before dispatch.
+Package passes, accepted read/check stages and failed attempts survive Pause/reopen.
+After a completed publication only its exact committed snapshot advances the binding;
+newer input stops rather than being silently chased. A live time checkpoint conservatively
+charges an interrupted process on explicit recovery. SQLite 33 is a reader boundary
+only; old jobs, context hashes, assessment identities and portable envelopes are unchanged.
+Collection consent/counters are not exported. See [workflow behavior](coordinated-workflow.md#bounded-question-collection-2026-11-06).
+
 ## Shared exact answer integration (2026-11-06)
 
 `src/core/answer-group.ts` combines the complete original per-answer evidence sets,

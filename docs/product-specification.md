@@ -134,6 +134,14 @@ three to five questions, prioritized by impact, uncertainty, and dependencies.
 - Allow a configurable pending-question stopping target. Continue bounded packages
   until the target is reached or eligible work/safety budget runs out. Keep useful
   final-package questions even above the target; never force questions to fill it.
+- The coordinated continuous workflow's implemented first slice uses a soft target
+  of five for new question collections, bounded by five package passes, sixteen
+  actual requests and five active minutes. Unfinished exact collections retain
+  their counters across Pause/restart; existing waiting batches are not automatically
+  enlarged. Scoped manual targets remain separately configurable. This scheduling
+  does not authorize exploration of packages waiting on unanswered dependencies,
+  approvals, area assessments or completeness claims. See
+  [implemented behavior and limits](coordinated-workflow.md#bounded-question-collection-2026-11-06).
 
 - Explain why a question matters and the consequences of its options.
 - Support custom text, help deciding, deferral, and scoped delegation.

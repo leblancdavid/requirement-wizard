@@ -21,6 +21,15 @@ evidence schedule (two to five answers); scoped or already-started tasks stay se
 Existing older grants keep their prior behavior until explicit
 continuous continuation. See [save-first collection](coordinated-workflow.md#save-first-answer-collection-2026-11-06).
 
+New continuous runs also collect questions across existing eligible workflow packages
+instead of stopping at the first new question: soft target five, at most five package
+passes/sixteen request attempts/five active minutes per collection. Smaller batches and
+useful final-package overshoot are allowed; existing waiting batches are not enlarged
+automatically. Package evidence, dependency waits and retry limits are unchanged.
+Pause/restart retains collection counters and completed package work; continuation is
+explicit. This bounds question collection, not the entire continuous workflow. See
+[question collection](coordinated-workflow.md#bounded-question-collection-2026-11-06).
+
 With checkpoint scheduling activated by explicit continuation, new answers are
 processed as a collection batch. Definition assessments wait for settled related
 question discovery and resolved decisions, or **Review changes**. An answer alone

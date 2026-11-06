@@ -1,5 +1,58 @@
 # Coordinated workflow preview (DEC-032)
 
+## Bounded question collection (2026-11-06)
+
+New explicit continuous **Continue specification** runs now collect a small question
+batch instead of stopping immediately after one workflow package produces a question.
+When discovery starts with no waiting decisions, it follows existing eligible epic
+packages toward a **soft target of five pending questions**. An exact, unfinished
+collection can resume after Pause/restart under explicit continuation, even if its
+earlier completed packages already produced questions. Existing waiting batches are
+not automatically enlarged merely by adopting this scheduling policy.
+
+Each collection is limited to **five package passes, sixteen actual model request
+attempts and five active minutes**, whichever ends first. A package pass includes an
+explicit retry or no-call eligibility pass; interrupted work does not get a fresh
+package counter. Before starting another package the scheduler conservatively reserves
+three requests for the existing ordinary retrieval protocol, so it may stop with up
+to two unused request slots. Staged reads/checks count individually inside the same
+sixteen-request ceiling and retain accepted steps and the original per-step retry
+limits. Partial staged proposals do not publish when the collection budget ends.
+The surrounding workflow remains continuous; these are question-collection bounds,
+not a new whole-workflow cutoff or an allowance for automatic retries.
+
+Collection stops sooner for saved input, proposals needing review, technical failure,
+Pause, changed inputs, or no other eligible packages. Only packages the existing
+engine considers eligible may continue past a question; dependency/source-linked or
+global questions still hold their related packages. This is structural scheduling,
+not proof that topics are semantically independent. All useful final-package questions
+are retained above the target; empty results are allowed and no question is forced
+to fill a quota. Smaller batches are valid. Area assessments, approvals and coding
+are not introduced into collection.
+
+The queue shows ready-question count, package/request usage and the saved time budget.
+Saving responses after collection still makes no AI calls; **Submit saved responses**
+captures them for integration. Responses saved while a package is running stop further
+packages and wait for separate submission. The original question, evidence, package
+identity and saved paid work remain authoritative. New product input is not silently
+chased during collection; changed inputs require explicit continuation. A completed
+no-question eligibility pass establishes the existing discovery receipt only when
+the entire reported scope is settled, with no waiting, blocked or unexamined work.
+Neither reaching the target nor spending the budget establishes readiness.
+
+SQLite **32 → 33** adds optional local policy/progress fields without rewriting old
+grants, jobs, evidence, assessment dates, context identities or portable formats.
+Startup never opts in or dispatches. Explicit recovery conservatively charges any
+unaccounted active interval from a crashed collection rather than refunding a request's
+time; a clean Pause records time and clears that interval. Collection consent and
+counters are machine-local; exported package evidence follows its existing formats.
+See [migration details](migrations.md#bounded-workflow-question-collection-2026-11-06).
+
+This slice batches existing package discovery, not a new one-request multi-feature
+question-generation protocol. It does not batch readiness clarifications, initial
+interpretation or scoped manual discovery, tune question quality, broaden shared-answer
+permissions, or qualify actual-user latency/semantic effectiveness.
+
 ## Shared answer integration (2026-11-06)
 
 After **Submit saved responses**, the coordinator can integrate **two to five new,
@@ -77,7 +130,8 @@ Recovery/clarification validation likewise loads the complete matching submissio
 history rather than unrelated job payloads; original sources and ledgers still replay.
 
 Next slices: profile a real staged-answer run using the new export, qualify shared
-integration on actual project inputs, then tune bounded question-batch discovery.
+integration and question batches on actual project inputs, then tune question quality
+and broader grouping.
 See [compatibility](migrations.md#save-first-answer-collection-and-local-timings-2026-11-06).
 
 Verification: the full deterministic and default/post-browser suites, separate

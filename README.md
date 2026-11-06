@@ -36,6 +36,12 @@ wait for another submission. Compatible sets of two to five new unscoped answers
 one feature now share evidence reading and verification before atomic publication;
 scoped or already-started work keeps its original path. New local timings help diagnose
 staged-answer overhead. See [shared integration](docs/coordinated-workflow.md#shared-answer-integration-2026-11-06).
+When starting new question discovery, continuous runs now collect across eligible
+workflow packages toward five pending questions, rather than stopping at the first
+question. Each collection is bounded to five package passes, sixteen request attempts
+and five active minutes; it can stop earlier and never forces questions to fill the
+target. Existing waiting batches and saved work stay intact. See
+[question collection](docs/coordinated-workflow.md#bounded-question-collection-2026-11-06).
 Scoped discovery and **Improve requirements** (formerly Refine requirements) are
 under **More actions** in Design/Specification. **Settings → Project settings →
 Processing permissions** explains coordinated work versus the retained, separate

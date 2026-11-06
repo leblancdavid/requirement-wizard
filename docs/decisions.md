@@ -75,7 +75,11 @@ improvements after reviewing their diagnostics. Prefer scan → question batch �
 answers → integrate → review, instead of AI work between each answer. The first
 implemented slice is explicit save-first collection and local phase measurements;
 shared answer integration is now implemented for fresh unscoped same-feature groups;
-broader grouping and bounded question generation remain follow-ons.
+bounded collection across existing eligible question-discovery packages is now
+implemented for new continuous runs (five pending-question soft target, five package
+passes/sixteen request attempts/five active minutes). Existing waiting batches stay
+intact. Broader grouping and one-request cross-feature question generation remain
+follow-ons; no live speed or question-quality qualification is implied.
 Preserve exact original input, compatible paid work, finite failed attempts and
 validated atomic publication; no verification bypass or unmeasured speedup is approved.
 

@@ -2,7 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import type { Job, Project } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { workflowLimits, workflowInputKey, workflowWakeKey, workflowDecisions, workflowRequirements, workflowAreas,
-   workflowReadiness, workflowReviewInputKey, definitionGatesPass, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
+   workflowReadiness, workflowReviewInputKey, definitionGatesPass, questionBatchLimits, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
 import { refinementCheckCurrent } from "./refinement-tasks.js";
 import { refinementCandidates } from "../core/refinement.js";
 import { refinementIsStale, resolutionPairEligible, resolutionContextMatches } from "../core/resolution.js";
@@ -81,9 +81,13 @@ export class ProjectWorkflow {
        ...(changeGroup ? { changeGroup } : {}),
       grant: state.grant && { used: state.grant.used, remainingMs: remainingMs!, continuous: !!state.grant.continuous }, limits: workflowLimits,
         decisions, readiness, active, outcome,
-       ...(state.inputBatchPolicy ? { answerBatch: {
+        ...(state.inputBatchPolicy ? { answerBatch: {
          savedResponses: submissions.filter(s => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved"].includes(s.status) && !s.conflict).length,
          waiting: state.phase === "needs-decision" && !active,
+        } } : {}),
+       ...(state.questionBatchPolicy && state.questionBatch ? { questionBatch: {
+         ...state.questionBatch, limits: questionBatchLimits,
+         questions: project.questions.filter(q => q.status === "pending" && project.epics.some(e => e.id === q.epicID && !e.archived)).length,
        } } : {}),
       definitionReviews: definitions.map((area) => ({ ...area,
         title: project.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID })),
@@ -116,7 +120,14 @@ export class ProjectWorkflow {
       state.reviewPolicy = { format: 1 };
       // Adopt only on explicit continuous consent. Old bounded/live grants keep
       // their original wake-up behavior; startup never rewrites or arms them.
-      if (action === "continue-continuous") state.inputBatchPolicy = { format: 1 };
+       if (action === "continue-continuous") {
+         state.inputBatchPolicy = { format: 1 };
+         state.questionBatchPolicy = { format: 1 };
+       }
+       if (state.questionBatch?.activeSince !== undefined) {
+         state.questionBatch.remainingMs = Math.max(0, state.questionBatch.remainingMs - Math.max(0, Date.now() - state.questionBatch.activeSince));
+         delete state.questionBatch.activeSince;
+       }
       // Resuming identical input retains the checkpoint and the paid jobs it
       // references through existing task identities. Changed input needs a new
       // checkpoint, never a rewrite/restart of the older one.
@@ -191,7 +202,15 @@ export class ProjectWorkflow {
       const state = owned(); state.phase = phase; state.message = message.slice(0, 1600); state.paused ||= pause;
       state.waitKey = workflowWakeKey(this.project(id), this.store.submissions(id)); this.store.saveWorkflow(id, state);
     };
-    const service = new DiscoveryService(this.store, this.adapter, { workflow: { owner, continuous,
+    let collecting = false, batchStarted = 0, batchRemainingMs = 0;
+    const checkpointBatchTime = () => {
+      if (!collecting) return;
+      const state = owned();
+      state.questionBatch!.remainingMs = Math.max(0, batchRemainingMs - Math.max(0, Date.now() - batchStarted));
+      state.questionBatch!.activeSince = Date.now();
+      this.store.saveWorkflow(id, state);
+    };
+    const navigation = { owner, continuous,
       beforeJob: () => {
         controller.signal.throwIfAborted(); const state = owned(), remaining = workflowLimits.requests - state.grant!.used;
         // Ordinary retrieval can require three calls. Reserve its upper bound;
@@ -200,14 +219,33 @@ export class ProjectWorkflow {
         if (state.paused || !state.enabled || !continuous && (remaining < reserve || Date.now() >= deadline)) throw new WorkflowBudgetPause("Workflow burst limit reached. Continue specification for another bounded allowance; completed calls are retained.");
         return continuous ? { requests: 32, durationMs: 900000 } : { requests: remaining, durationMs: Math.max(1, deadline - Date.now()) };
       },
-      beforeRequest: (jobID) => {
+      beforeRequest: (jobID: string) => {
         controller.signal.throwIfAborted(); const state = owned();
         if (state.paused || !state.enabled || !continuous && (state.grant!.used >= workflowLimits.requests || Date.now() >= deadline)) throw new WorkflowBudgetPause("Project workflow paused before model dispatch.");
+        if (collecting) {
+          const batch = state.questionBatch!;
+          batch.remainingMs = Math.max(0, batchRemainingMs - Math.max(0, Date.now() - batchStarted));
+          batch.activeSince = Date.now();
+          if (batch.requests >= questionBatchLimits.requests || !batch.remainingMs) throw new WorkflowBudgetPause("Question collection allowance reached. Saved questions and package steps are retained.");
+          batch.requests++;
+        }
         state.leaseUntil = Date.now() + 360000;
         state.grant!.used++;
         if (state.current && !state.current.jobIDs.includes(jobID)) state.current.jobIDs.push(jobID);
         this.store.saveWorkflow(id, state, jobID);
-      } } });
+      } };
+    const service = new DiscoveryService(this.store, this.adapter, { workflow: navigation });
+    // The surrounding workflow is continuous; a question collection episode is
+    // not. Staged packages must honor its actual remaining request/time budget.
+    const batchService = new DiscoveryService(this.store, this.adapter, { workflow: { ...navigation, continuous: false,
+      beforeJob: () => {
+        navigation.beforeJob(); checkpointBatchTime();
+        const batch = owned().questionBatch!;
+        if (batch.requests > questionBatchLimits.requests - 3 || !batch.remainingMs)
+          throw new WorkflowBudgetPause("Question collection allowance reached; completed package work is saved.");
+        return { requests: questionBatchLimits.requests - batch.requests, durationMs: batch.remainingMs };
+      },
+    } });
     const queue = new DiscoveryQueue(service, { manualOnly: true, owner });
     const abort = () => queue.stop(id); controller.signal.addEventListener("abort", abort, { once: true });
     const record = (kind: NonNullable<WorkflowState["current"]>["kind"], project: Project, target?: string, taskIdentity?: string) => {
@@ -227,6 +265,7 @@ export class ProjectWorkflow {
       return true;
     };
     const discover = async (project: Project) => {
+      if (owned().questionBatchPolicy && continuous) return collectQuestions(project);
       record("discover", project);
       const job = await service.analyze(id, project.revision, { gapMode: "epic", signal: controller.signal, research: false });
       if (!check(job)) return false;
@@ -238,6 +277,81 @@ export class ProjectWorkflow {
         const latest = owned(); latest.discovery = { inputKey: workflowInputKey(this.project(id)), jobID: job.id }; this.store.saveWorkflow(id, latest);
       }
       return true;
+    };
+    const collectQuestions = async (project: Project) => {
+      const current = owned(), previous = current.questionBatch;
+      // Resume only an exact current collection. Old completed package identities
+      // and paid task attempts are still selected/validated by the existing engine.
+      if (!previous || previous.state !== "collecting" || previous.inputKey !== workflowReviewInputKey(project)) {
+        current.questionBatch = { format: 1, inputKey: workflowReviewInputKey(project), revision: project.revision,
+          packages: 0, requests: 0, remainingMs: questionBatchLimits.durationMs, state: "collecting" };
+        this.store.saveWorkflow(id, current);
+      }
+      collecting = true; batchStarted = Date.now(); batchRemainingMs = owned().questionBatch!.remainingMs;
+      const timeout = AbortSignal.timeout(Math.max(1, batchRemainingMs));
+      const signal = AbortSignal.any([controller.signal, timeout]);
+      const finish = (reason: NonNullable<WorkflowState["questionBatch"]>["reason"], message: string) => {
+        checkpointBatchTime();
+        const state = owned(); state.questionBatch!.state = "finished"; state.questionBatch!.reason = reason;
+        this.store.saveWorkflow(id, state);
+        const decisions = workflowDecisions(this.project(id), this.store.submissions(id));
+        stop(decisions.length ? "needs-decision" : "paused", message, !decisions.length);
+        return false;
+      };
+      try {
+        for (;;) {
+          controller.signal.throwIfAborted(); checkpointBatchTime();
+          const snapshot = this.project(id), state = owned(), batch = state.questionBatch!;
+          if (batch.inputKey !== workflowReviewInputKey(snapshot)) {
+            stop("paused", "Inputs changed during question collection. Saved questions and completed steps are retained; continue explicitly for the next batch.", true); return false;
+          }
+          const submissions = this.store.submissions(id), resolved = resolvedReviewAttempts(snapshot, submissions);
+          if (submissions.some(s => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing", "needs-attention"].includes(s.status)))
+            return finish("input", "Saved responses are waiting for the next batch. No more questions were requested; submit the saved responses when ready.");
+          const decisions = workflowDecisions(snapshot, submissions);
+          if (decisions.some(d => d.kind !== "question")) return finish("decision", "Proposed choices need your review. Question collection stopped without approving them or starting area assessments.");
+          const pending = snapshot.questions.filter(q => q.status === "pending" && snapshot.epics.some(e => e.id === q.epicID && !e.archived)).length;
+          if (pending >= questionBatchLimits.target) return finish("target", `${pending} questions are ready. Collection reached its soft target of ${questionBatchLimits.target}; all useful questions from the last package were kept. Save your answers, then Submit saved responses.`);
+          if (batch.packages >= questionBatchLimits.packages || batch.requests > questionBatchLimits.requests - 3 || !batch.remainingMs)
+            return finish("budget", "Bounded question collection stopped. Saved questions and completed package steps are retained; the target is not a quota or proof of completeness.");
+          record("discover", snapshot);
+          const started = owned(); started.questionBatch!.packages++;
+          started.message = `Collecting questions · ${pending} ready / soft target ${questionBatchLimits.target} · package pass ${started.questionBatch!.packages} of ${questionBatchLimits.packages}. Independent eligible packages only; no area assessments.`;
+          this.store.saveWorkflow(id, started);
+          const job = await batchService.analyze(id, snapshot.revision, { gapMode: "epic", questionTarget: questionBatchLimits.target, signal, research: false });
+          checkpointBatchTime();
+          if (controller.signal.aborted) { check(job); return false; }
+          if (timeout.aborted) return finish("budget", "Question collection reached its active-time limit. Saved questions, completed package steps and charged attempts are retained. Continue explicitly when ready.");
+          if (job.status === "interrupted" && owned().questionBatch!.requests >= questionBatchLimits.requests)
+            return finish("budget", "Question collection reached its request limit. Completed package steps and charged attempts are saved; no partial proposals were published.");
+          if (!check(job)) return false;
+          // Only this completed engine publication may advance the collection's
+          // binding. A concurrent product edit remains stale, never silently chased.
+          const published = this.store.get(id, job.expectedRevision + (job.result ? 1 : 0));
+          if (workflowReviewInputKey(published) !== workflowReviewInputKey(this.project(id))) {
+            stop("paused", "New input arrived after a question package. Completed questions and charged attempts are saved; continue explicitly for the next batch.", true); return false;
+          }
+          const latest = owned(); latest.questionBatch!.inputKey = workflowReviewInputKey(published);
+          if (latest.current) latest.current.completed = true;
+          this.store.saveWorkflow(id, latest);
+          if (!job.result) {
+            const report = job.epicReviewReport;
+            const blockedPackage = job.context?.epicReview && report?.blockers.some(b => b.packageID === job.context!.epicReview!.packageID);
+            if (blockedPackage) continue; // Existing engine keeps the blocker, not a completed check.
+            if (workflowDecisions(this.project(id), this.store.submissions(id)).length)
+              return finish("waiting", "Available questions are ready. No other eligible packages remain without waiting on decisions or evidence. Answer the saved questions; this is not proof of completeness.");
+            if (!report || report.planningPartial || report.pending || report.waiting || report.blocked || !report.total) {
+              stop("blocked", report?.blockers[0]?.reason ?? "Question collection cannot establish a settled evidence pass. Completed work is saved; no completeness claim was made.", true); return false;
+            }
+            const settled = owned(); settled.discovery = { inputKey: workflowInputKey(this.project(id)), jobID: job.id };
+            settled.questionBatch!.state = "finished"; settled.questionBatch!.reason = "settled";
+            this.store.saveWorkflow(id, settled); return true;
+          }
+        }
+      } finally {
+        checkpointBatchTime(); collecting = false;
+        const state = owned(); delete state.questionBatch!.activeSince; this.store.saveWorkflow(id, state);
+      }
     };
     try {
       // Yield before dispatch so the owning run is installed before any callback.
@@ -261,8 +375,13 @@ export class ProjectWorkflow {
           queue.resume(id, { processOnly: true, research: false, submissionIDs: permitted.map((s) => s.id) }); await queue.wait(id);
           if (!continuous && owned().grant!.used > workflowLimits.requests - 3) throw new WorkflowBudgetPause("Workflow burst allowance reached; saved input and follow-up checkpoints are retained.");
         } else {
-          const decisions = workflowDecisions(project, submissions);
-          const reviewing = state.reviewPolicy && state.reviewCheckpoint?.state === "reviewing";
+           const decisions = workflowDecisions(project, submissions);
+           const reviewing = state.reviewPolicy && state.reviewCheckpoint?.state === "reviewing";
+           if (!reviewing && continuous && state.questionBatchPolicy && state.questionBatch?.state === "collecting"
+             && state.questionBatch.inputKey === workflowReviewInputKey(project)) {
+             if (!await collectQuestions(project)) return;
+             continue;
+           }
           if (state.reviewPolicy && decisions.length && !reviewing) {
             const latest = owned(); latest.decisionSchedule = planWorkflowSchedule(project, workflowInputKey(project), decisions, workflowAreas(project), this.store.workflowDefinitionCheckpoints(id));
             this.store.saveWorkflow(id, latest);

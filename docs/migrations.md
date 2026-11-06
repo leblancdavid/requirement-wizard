@@ -1,5 +1,49 @@
 # Data migrations and upgrade compatibility
 
+## Bounded workflow question collection (2026-11-06)
+
+**Source → target:** database **32 → 33**, an ordered transactional reader-capability
+boundary. No SQL tables, old payloads, evidence identities or specification revisions
+are converted. Workflow state gains optional format-1 `questionBatchPolicy` and
+`questionBatch`: exact current input key, original starting revision, spent package
+passes/request attempts, remaining active milliseconds, collection state and stopping
+reason. A live interval checkpoint supports conservative time charging after a crash.
+The schema version remains separate from workflow CAS/settings and project revisions.
+Unsupported future policy/progress formats or malformed counters stop startup and
+roll back the reader boundary without replacing the original row; reopening after
+the incompatible record is restored can retry safely.
+
+Only explicit continuous continuation adopts the policy. Old bounded/live grants
+retain their prior behavior until explicit new consent; startup/reload never arms
+work. A retained exact unfinished collection preserves counters across clean Pause
+and reopen. Unaccounted wall time from its last live checkpoint is conservatively
+charged on explicit recovery (including downtime after an unclean exit); absent old
+measurements are not fabricated. The original engine still owns per-package evidence,
+accepted replies, read/check stages, attempt ceilings and expected-revision publication.
+Collection limits never reset paid task attempts or turn a partial package into a
+completed review. Changes can start a later collection only through ordinary explicit
+continuation; old ledgers and dated findings remain saved. Finished waiting batches
+are not enlarged automatically, and unresolved proposals are never approved to fill
+a question target. Existing review-only checkpoints keep their original scope.
+
+**Portable compatibility:** unchanged. Workflow consent, counters and active intervals
+are local metadata, not project evidence. Package jobs/snapshots/questions keep their
+existing portable envelopes and exact-input continuation rules; no new migration,
+freshness rebase, repeat assessment or model call is required for old saved work.
+
+Focused deterministic tests cover multi-topic collection, soft-target overshoot,
+normal activation, smaller waiting batches, five-pass/aggregate staged-request/time
+limits, save-only input during collection, human-review stops, failures, stale results,
+clean Pause/repeated reopen with original paid attempts, unclean-interval charging,
+old-grant/work preservation and future-format rollback/retry. `npm test` passed
+**1,805 tests** (926 pretest, 775 main, 104 posttest). After adding the final
+post-publication edit guard test and byte-preservation assertions, all **14** focused
+question-batch tests passed. Type checking, UI/desktop builds, the full default/post-browser
+suite, and separate coordinator/Guided browser runners passed. `git diff --check`
+passed. The existing UI large-chunk and unit-render React key warnings remain.
+Live model speed, question quality, installed-desktop and cross-machine qualification
+remain outstanding.
+
 ## Shared exact answer integration (2026-11-06)
 
 **Source → target:** database **31 → 32** is an ordered transactional reader-capability

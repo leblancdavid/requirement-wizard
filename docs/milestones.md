@@ -1,18 +1,27 @@
 # Milestone backlog
 
+The latest 2026-11-06 slice adds bounded question collection to new explicit continuous
+runs: existing eligible workflow packages collect toward five pending questions, with
+five package-pass, sixteen-request and five-active-minute limits. Original package
+checks/attempts and waiting batches are retained; no area assessments or approvals
+are inserted into collection. This is not one-request cross-feature generation or
+qualification of live speed/question quality. Broader answer grouping, changed-material
+recovery and real-project overhead diagnosis remain outstanding. See
+[bounded collection](coordinated-workflow.md#bounded-question-collection-2026-11-06).
+
 The next 2026-11-06 slice implements shared exact-evidence integration for two to five
 fresh unscoped answers in one feature, preserving original questions/sources and atomic
 publication. A synthetic five-answer/nine-batch comparison uses 18 shared requests
 instead of 90 individual requests without skipping checks. Paid individual work stays
 individual; paid shared work retains its original group and finite attempts through
 restart/portable adoption. Live semantic/latency qualification, changed-material group
-reconciliation and bounded multi-topic question generation remain outstanding; no
+reconciliation and one-request multi-topic question generation remain outstanding; no
 milestone exit is implied. See [shared answer integration](coordinated-workflow.md#shared-answer-integration-2026-11-06).
 
 The 2026-11-06 first latency/workflow slice separates saving answers from explicit
 submission in new continuous runs and adds staged-input local phase timings plus a
 disposable no-model benchmark. Captured response IDs prevent later input spending the
-same grant. Shared integration beyond the compatible scope above, bounded question-batch generation and a measured
+same grant. Shared integration beyond the compatible scope above, question-quality tuning and a measured
 real-project local-overhead fix remain outstanding; no milestone exit or live speedup
 is claimed. See [save-first collection](coordinated-workflow.md#save-first-answer-collection-2026-11-06).
 
