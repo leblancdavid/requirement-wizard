@@ -5,6 +5,7 @@ import { DiscoveryService } from "./discovery.js";
 import { planContext, planExactTaskContext } from "../core/working-set.js";
 import { canStageSubmission, planSubmissionStages, submissionMaterials, submissionDraftRepair } from "../core/submission-stages.js";
 import { eligibleGroupAnswer, answerGroupMaterials, planAnswerGroup } from "../core/answer-group.js";
+import { answerIntegrationReasons, type AnswerIntegrationDiagnostic } from "../core/answer-integration-diagnostics.js";
 import { ContextBudgetError } from "../core/context.js";
 import { refinementEvidenceRecords } from "../core/refinement-context.js";
 import { refinementCheckCurrent, resolutionPairEligible } from "./refinement-tasks.js";
@@ -989,24 +990,37 @@ export class DiscoveryQueue {
         };
         const batch: Submission[] = [];
         let sharedAnswers = false;
+        let compatibleAnswers = 0, overflowAnswers: Set<string> | undefined;
+        let resolutionJobs: ReturnType<typeof this.service.store.specificationWorkflowJobs> | undefined;
+        const coordinated = !!this.coordinator && !!this.service.store.workflow(id).inputBatchPolicy;
+        const groupResearch = manual?.research ?? saved.some(s => s.research);
         const retainedGroup = saved.map(s => this.service.store.latestAnswerGroupWorkJob(id, s.id)).find(j => j?.answerGroupWork);
         if (retainedGroup?.answerGroupWork) {
           const members = retainedGroup.answerGroupWork.submissionIDs.map(id => saved.find(s => s.id === id));
           if (members.some(s => !s)) throw new Error("Continue all answers in the saved shared group together. Its original answers, completed steps and attempts are retained; no individual restart was authorized.");
           batch.push(...members as Submission[]); sharedAnswers = true;
-        } else if (this.coordinator && this.service.store.workflow(id).inputBatchPolicy && !(manual?.research ?? saved.some(s => s.research))) {
-          const resolutionJobs = this.service.store.specificationWorkflowJobs(id, "resolution");
+        } else if (coordinated && !groupResearch) {
+          resolutionJobs = this.service.store.specificationWorkflowJobs(id, "resolution");
           const candidates = saved.filter(s => !s.jobID && eligibleGroupAnswer(project, s)
             && !this.service.store.submissionHasJob(id, s.id)
-            && s.input.type === "answer" && !resolutionTaskForAnswer(project, s.input.questionID, resolutionJobs));
-          const first = candidates[0], epicID = first && submissionEpic(project, first);
-          const group = candidates.filter(s => submissionEpic(project, s) === epicID).slice(0, 5);
+            && s.input.type === "answer" && !resolutionTaskForAnswer(project, s.input.questionID, resolutionJobs!));
+          compatibleAnswers = candidates.length;
+          // A lone answer in the first feature must not hide a compatible group
+          // later in the same explicitly submitted set.
+          const groups = new Map<string | undefined, Submission[]>();
+          for (const item of candidates) {
+            const epicID = submissionEpic(project, item), group = groups.get(epicID) ?? [];
+            if (group.length < 5) group.push(item);
+            groups.set(epicID, group);
+          }
+          const group = [...groups.values()].find(items => items.length >= 2) ?? [];
           if (group.length >= 2) {
             try { planAnswerGroup(answerGroupMaterials(project, group)); batch.push(...group); sharedAnswers = true; }
             catch (error) {
               // Fit is measured before dispatch. Failed/started groups never use
               // this fallback and can never acquire fresh individual allowances.
               if (!(error instanceof ContextBudgetError)) throw error;
+              overflowAnswers = new Set(group.map(s => s.id));
               report("These answers cannot fit a shared evidence schedule. Keeping their individual processing paths; no shared request was started.");
             }
           }
@@ -1046,13 +1060,28 @@ export class DiscoveryQueue {
           : `Processing one saved response in its own context; waiting: ${waiting}.`);
         for (const item of batch) { delete item.contextBlock; delete item.diagnostic; this.service.store.saveSubmission(item); }
         const research = repairSubmissionID ? false : manual?.research ?? batch.some((s) => s.research);
+        let answerIntegration: AnswerIntegrationDiagnostic | undefined;
+        if (batch.length) {
+          const item = batch[0]!;
+          const reason: AnswerIntegrationDiagnostic["reason"] = sharedAnswers ? retainedGroup ? "retained-group" : "shared"
+            : !coordinated ? "separate-action" : groupResearch ? "research"
+              : item.jobID || this.service.store.submissionHasJob(id, item.id) ? "already-started"
+                : item.answerScope ? "scoped-answer"
+                  : item.input.type !== "answer" || item.input.answer.kind !== "answer" ? "other-input"
+                    : resolutionTaskForAnswer(project, item.input.questionID, resolutionJobs ??= this.service.store.specificationWorkflowJobs(id, "resolution")) ? "resolution"
+                      : overflowAnswers?.has(item.id) ? "context-budget" : !eligibleGroupAnswer(project, item) ? "ineligible"
+                        : saved.length === 1 ? "single-answer" : compatibleAnswers >= 2 ? "different-features" : "single-compatible-answer";
+          answerIntegration = { format: 1, reason, selectedResponses: saved.length, compatibleAnswers,
+            groupedAnswers: sharedAnswers ? batch.length : 0 };
+          report(answerIntegrationReasons[reason]);
+        }
         if (!batch.length && manual?.questionTarget !== undefined) {
           await this.findQuestions(id, manual, controller.signal, report);
           break;
         }
         const job = await this.service.analyze(id, project.revision, { automatic: !manual,
           savedEvidencePolicy: batch.length ? undefined : manual?.savedEvidencePolicy,
-          signal: controller.signal, research, ...(sharedAnswers ? { answerGroup: true } : task(batch)), submissionIDs: batch.map((s) => s.id), onProgress: report,
+          signal: controller.signal, research, answerIntegration, ...(sharedAnswers ? { answerGroup: true } : task(batch)), submissionIDs: batch.map((s) => s.id), onProgress: report,
           onJob: (job) => {
             for (const item of batch) { item.status = "processing"; item.jobID = job.id; this.service.store.saveSubmission(item); }
           },

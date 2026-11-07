@@ -6,8 +6,19 @@ import { contextDiagnostics, type DiscoveryMetrics, type PlanningProgress } from
 export class DiscoveryMeasurement {
   readonly value: DiscoveryMetrics = { format: 1, state: "recording", elapsedMs: 0, planningMs: null,
     planningDecisions: null, initialContext: null, requests: [] };
-  private readonly started = performance.now();
-  constructor(private readonly save: (value: DiscoveryMetrics) => void) { this.checkpoint(); }
+  private readonly started: number;
+  private lastRequestEnd?: number;
+  private persistenceMs = 0;
+  constructor(private readonly save: (value: DiscoveryMetrics) => void, private readonly now = () => performance.now()) {
+    this.started = this.now(); this.checkpoint();
+  }
+  bookkeeping<T>(phase: keyof NonNullable<DiscoveryMetrics["bookkeepingMs"]>, run: () => T): T {
+    const start = this.now();
+    try { return run(); } finally {
+      this.value.bookkeepingMs ??= {};
+      this.value.bookkeepingMs[phase] = (this.value.bookkeepingMs[phase] ?? 0) + this.now() - start;
+    }
+  }
   /** Synchronous definition phases; no extra persistence per local probe. */
   local<T>(phase: keyof NonNullable<DiscoveryMetrics["definitionLocalMs"]>, run: () => T): T {
     const start = performance.now();
@@ -24,19 +35,29 @@ export class DiscoveryMeasurement {
       this.value.submissionLocalMs[phase] = (this.value.submissionLocalMs[phase] ?? 0) + performance.now() - start;
     }
   }
-  private checkpoint() { this.value.elapsedMs = performance.now() - this.started; this.save(this.value); }
+  private checkpoint() {
+    this.value.bookkeepingMs ??= {};
+    // Completed earlier writes only. The final measurement write cannot include
+    // its own cost without recursively writing another measurement.
+    this.value.bookkeepingMs.metricsPersistence = this.persistenceMs;
+    this.value.elapsedMs = this.now() - this.started;
+    const start = this.now();
+    try { this.save(this.value); } finally { this.persistenceMs += this.now() - start; }
+  }
   preparing(progress: PlanningProgress) { this.value.planningProgress = progress; this.checkpoint(); }
   planned(context?: ContextPack, decisions?: DiscoveryMetrics["planningDecisions"]) {
     if (this.value.planningMs !== null) return; // Later evidence-load failures are not initial planning.
-    this.value.planningMs = performance.now() - this.started;
+    this.value.planningMs = this.now() - this.started;
     this.value.initialContext = context ? contextDiagnostics(context) : null;
     this.value.planningDecisions = decisions ?? null;
     this.checkpoint();
   }
   async request(run: () => Promise<unknown>, context: ContextPack, signal: AbortSignal): Promise<unknown> {
-    const request: DiscoveryMetrics["requests"][number] = { durationMs: null, outcome: "in-flight", response: null, context: contextDiagnostics(context) };
+    const request: DiscoveryMetrics["requests"][number] = { durationMs: null, outcome: "in-flight", response: null,
+      context: this.bookkeeping("requestContext", () => contextDiagnostics(context)) };
     this.value.requests.push(request); this.checkpoint();
-    const start = performance.now();
+    const start = this.now();
+    request.gapBeforeMs = start - (this.lastRequestEnd ?? this.started);
     try {
       const raw = await run();
       request.outcome = "returned";
@@ -44,14 +65,15 @@ export class DiscoveryMeasurement {
         : "reviewBlocked" in raw || "definitionBlocked" in raw || "clarificationBlocked" in raw || "submissionBlocked" in raw || "answerGroupBlocked" in raw ? "blocked"
           : "summary" in raw || "jointReview" in raw || "guardrailVerdict" in raw || "definitionVerdict" in raw || "definitionAssessment" in raw || "definitionUpdate" in raw
           || "clarificationRead" in raw || "clarificationVerdict" in raw || "submissionKeep" in raw || "submissionCheck" in raw
-          || "answerGroupDraft" in raw || "answerGroupKeep" in raw || "answerGroupCheck" in raw ? "analysis" : "other" : "other";
+          || "answerGroupDraft" in raw || "answerGroupRepair" in raw || "answerGroupKeep" in raw || "answerGroupCheck" in raw ? "analysis" : "other" : "other";
       return raw;
     } catch (error) { request.outcome = signal.aborted ? "cancelled" : "failed"; throw error; }
-    finally { request.durationMs = performance.now() - start; this.checkpoint(); }
+    finally { this.lastRequestEnd = this.now(); request.durationMs = this.lastRequestEnd - start; this.checkpoint(); }
   }
   finish() {
     if (this.value.state === "finished") return;
-    this.value.planningMs ??= performance.now() - this.started;
+    this.value.planningMs ??= this.now() - this.started;
+    if (this.lastRequestEnd !== undefined) this.value.afterLastRequestMs = this.now() - this.lastRequestEnd;
     this.value.state = "finished"; this.checkpoint();
   }
 }

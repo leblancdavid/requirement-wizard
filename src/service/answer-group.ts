@@ -27,6 +27,8 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
     local("checkpoint", () => store.checkpointAnswerGroup(job.id, work, context.manifest));
     if (done) return local("publication", () => store.finishJob(job.id, draft!.analysis));
     if (blocked) throw new Error(`Shared answers need review: ${blocked} All original answers and completed work remain saved.`);
+    if (answerGroupProgress(work).phase === "repair" && answerGroupProgress(work).repairs >= answerGroupLimits.repairs)
+      throw new Error("Shared draft reached its two-repair limit. Original answers, rejected drafts and paid evidence remain saved; human review is required.");
     if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline))
       return store.pauseAnswerGroup(job.id, "Shared answer integration paused. Continue explicitly; completed steps will not repeat.");
     if (work.attempts >= answerGroupLimits.attempts)
@@ -34,7 +36,9 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
     if (!calls) options.measurement?.planned(context);
     work.attempts++; calls++;
     local("checkpoint", () => store.checkpointAnswerGroup(job.id, work, context.manifest));
-    options.onProgress?.(`Integrating ${items.length} saved answers together · ${answerGroupProgress(work).completed} / ${work.batches.length * 2} evidence steps saved. No partial changes published.`);
+    options.onProgress?.(answerGroupProgress(work).phase === "repair"
+      ? `Repairing the shared draft · repair ${answerGroupProgress(work).repairs + 1} / ${answerGroupLimits.repairs}. Original answers and evidence reads are saved. Every evidence batch will be checked again before publication.`
+      : `Integrating ${items.length} saved answers together · ${answerGroupProgress(work).completed} / ${work.batches.length * 2} evidence steps saved. No partial changes published.`);
     const timeout = AbortSignal.timeout(options.continuous ? 300000 : Math.max(1, Math.min(300000, deadline - Date.now())));
     const signal = AbortSignal.any([options.signal, timeout]);
     let abort: () => void = () => {}, violation: Error | undefined;

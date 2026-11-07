@@ -20,6 +20,27 @@ import { definitionRequestLimit } from "../core/definition-budget.js";
 const empty = (): Analysis => ({ summary: "PRIVATE model output", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 const create = (store: ProjectStore) => store.create("PRIVATE project name", "PRIVATE initial human input", { providerID: "openai", modelID: "PRIVATE-model" });
 
+test("slow metric writes and uninstrumented intervals are separately visible without changing adapter timings or recursively persisting", async () => {
+  let time = 0, writes = 0; let persisted: unknown;
+  const measurement = new DiscoveryMeasurement(value => { persisted = structuredClone(value); writes++; time += 2000; }, () => time);
+  const context = { data: {}, manifest: { revision: 1, focusEpicID: null, characters: 2, budget: 48000, includedIDs: [], omittedIDs: [] } };
+  measurement.planned(context);
+  await measurement.request(async () => { time += 100; return empty(); }, context, new AbortController().signal);
+  time += 3000; // A scheduler/local interval outside all named submission phases.
+  await measurement.request(async () => { time += 150; return empty(); }, context, new AbortController().signal);
+  time += 500;
+  measurement.finish();
+  assert.equal(writes, 7, "Instrumentation must not add recursive measurement writes");
+  assert.deepEqual(persisted, measurement.value);
+  assert.equal(measurement.value.bookkeepingMs!.metricsPersistence, 12000, "All completed writes except the final metrics write");
+  assert.deepEqual(measurement.value.requests.map(r => r.durationMs), [100, 150]);
+  assert.deepEqual(measurement.value.requests.map(r => r.gapBeforeMs), [6000, 7000]);
+  assert.equal(measurement.value.afterLastRequestMs, 2500);
+  assert.equal(measurement.value.elapsedMs, 15750);
+  assert.ok(discoveryMetricsSchema.safeParse(measurement.value).success);
+  assert.equal(discoveryMetricsSchema.safeParse({ ...measurement.value, bookkeepingMs: { "PRIVATE key": 1 } }).success, false);
+});
+
 test("cell execution metrics remain bounded while preserving measurements beyond the former 128-step envelope", () => {
   const measurement = new DiscoveryMeasurement(() => {}), base = structuredClone(measurement.value);
   const request = { durationMs: null, outcome: "in-flight" as const, response: null, context: {
@@ -101,6 +122,7 @@ test("new discovery measures actual adapter requests and context, without record
     assert.ok(metrics.elapsedMs >= metrics.planningMs! + metrics.requests[0]!.durationMs!);
     assert.equal(metrics.initialContext!.characters, metrics.requests[0]!.context.characters);
     assert.deepEqual(store.getJob(job.id).discoveryMetrics, metrics);
+    assert.equal(JSON.stringify(store.getJob(job.id).discoveryMetrics), JSON.stringify(metrics), "Returned measurements retain their stored serialization for byte-preserving recovery");
     const report = store.discoveryDiagnostics(p.id, [job.id]);
     assert.ok(!JSON.stringify(report).includes("PRIVATE"));
     assert.throws(() => discoveryMetricsSchema.parse({ ...metrics, prompt: "PRIVATE" }));
@@ -185,6 +207,27 @@ test("compatible workflow checks export zero new requests, matching reasons, gra
     const exported = continuationState(store.get(p.id), store.jobs(p.id), [], (revision) => store.get(p.id, revision));
     assert.ok(exported.jobs.length > 0); assert.ok(exported.jobs.every((job) => !job.discoveryMetrics));
     assert.ok(store.getJob(first.id).discoveryMetrics, "Local measurements remain saved");
+  } finally { store.close(); }
+});
+
+test("repeated package identities distinguish incompatible saved checks from retries without exporting input keys", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    let p = create(store); const seed = store.beginJob(p.id, p.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+    store.finishJob(seed.id, { ...empty(), requirements: [{ epicID: "project", statement: "PRIVATE rule", rationale: "Explicit idea", acceptance: ["Retain the rule"], sourceIDs: [p.sources[0]!.id] }],
+      questions: [{ epicID: "project", text: "PRIVATE choice?", whyItMatters: "Human constraint", options: [{ label: "A", consequence: "First" }, { label: "B", consequence: "Second" }] }] });
+    p = store.get(p.id); p = store.answer(p.id, p.revision, p.questions[0]!.id, { kind: "answer", text: "Original choice" });
+    const service = new DiscoveryService(store, { async analyze() { return empty(); } });
+    const first = await service.analyze(p.id, p.revision, { gapMode: "epic" });
+    assert.equal(first.discoveryMetrics!.epicSelection!.reason, "new-package");
+    p = store.get(p.id); p = store.answer(p.id, p.revision, p.questions[0]!.id, { kind: "answer", text: "A changed human choice" });
+    const changed = await service.analyze(p.id, p.revision, { gapMode: "epic" });
+    assert.equal(changed.status, "completed", changed.diagnostic);
+    assert.equal(changed.context!.epicReview!.packageID, first.context!.epicReview!.packageID);
+    assert.deepEqual(changed.discoveryMetrics!.epicSelection, { format: 1, priorCompleted: true, reason: "saved-task-incompatible" });
+    const report = JSON.stringify(store.discoveryDiagnostics(p.id, [first.id, changed.id]));
+    assert.ok(!report.includes("PRIVATE")); assert.ok(!report.includes(changed.context!.epicReview!.inputKey));
+    assert.deepEqual(store.getJob(first.id), first);
   } finally { store.close(); }
 });
 

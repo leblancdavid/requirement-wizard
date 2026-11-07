@@ -3,6 +3,8 @@ import type { ContextPack } from "./context.js";
 import { definitionInterruptionCauses } from "./definition-interruption.js";
 import { definitionCellExecutionStageLimit } from "./definition-continuation.js";
 import { definitionRequestLimit } from "./definition-budget.js";
+import { answerIntegrationSchema } from "./answer-integration-diagnostics.js";
+import { workflowStopSchema } from "./workflow-stop.js";
 
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const duration = z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -35,12 +37,18 @@ export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.
   elapsedMs: duration, planningMs: duration.nullable(),
   planningDecisions: planningDecisionsSchema.nullable(),
   planningProgress: planningProgressSchema.optional(),
+  answerIntegration: answerIntegrationSchema.optional(),
+  epicSelection: z.object({ format: z.literal(1), reason: z.enum(["new-package", "saved-task-incompatible", "saved-work-resume"]),
+    priorCompleted: z.boolean() }).strict().optional(),
+  bookkeepingMs: z.object({ metricsPersistence: duration.optional(), requestContext: duration.optional(), revisionChecks: duration.optional(),
+    progress: duration.optional() }).strict().optional(),
+  afterLastRequestMs: duration.optional(),
   definitionLocalMs: z.object({ preparation: duration.optional(), replay: duration.optional(), context: duration.optional(),
     checkpoint: duration.optional(), validation: duration.optional(), publication: duration.optional() }).strict().optional(),
   submissionLocalMs: z.object({ history: duration.optional(), preparation: duration.optional(), replay: duration.optional(),
     context: duration.optional(), checkpoint: duration.optional(), validation: duration.optional(), publication: duration.optional() }).strict().optional(),
   initialContext: diagnosticContextSchema.nullable(),
-  requests: z.array(z.object({ durationMs: duration.nullable(), outcome: z.enum(["in-flight", "returned", "failed", "cancelled"]),
+   requests: z.array(z.object({ durationMs: duration.nullable(), gapBeforeMs: duration.optional(), outcome: z.enum(["in-flight", "returned", "failed", "cancelled"]),
     response: z.enum(["analysis", "search", "load", "blocked", "other"]).nullable(), context: diagnosticContextSchema }).strict()).max(definitionCellExecutionStageLimit * definitionRequestLimit),
 }).strict();
 export type DiscoveryMetrics = z.infer<typeof discoveryMetricsSchema>;
@@ -66,6 +74,9 @@ export type DiagnosticSource = {
   interruptionCause?: string | null;
   savedStageFormat?: number | null;
   savedDraftRepairFormat?: number | null;
+  answerGroupPhase?: string | null;
+  workflowPhase?: string | null;
+  workflowStop?: string | null;
 };
 const nullableCount = (value: number | null) => value === null ? null : count.parse(value);
 export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
@@ -73,7 +84,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
   const packages = new Map<string, string>();
   return { format: 1 as const, kind: "reqwizit-discovery-diagnostics" as const,
     privacy: "Metadata only. No project/record/job IDs, names, paths, prompts, answers, responses, credentials or diagnostic prose. Counts and durations can still reveal project scale; review before sharing.",
-    limitations: "Missing measurements are null, never zero. Recording-state measurements are partial, not a complete run total. Requests are adapter attempts checkpointed before dispatch, not proof of provider acceptance. Request time includes startup/tools/provider work, not pure inference. Context characters exclude runtime prompt/schema overhead and are not tokens. Saved context may be a staged publication union; request contexts describe actual app inputs. Saved attempts may span earlier runs; measured requests belong only to this run. savedWork.completedBatches counts completed stage receipts (reading/discovery plus verification), not distinct evidence batches. Freshness reasons describe local matching, not semantic proof. Response categories precede validation. No timestamps or model/account identifiers are exported.",
+    limitations: "Missing measurements are null or absent, never zero. Recording-state measurements are partial, not a complete run total. Requests are adapter attempts checkpointed before dispatch, not proof of provider acceptance. Request time includes startup/tools/provider work, not pure inference. gapBeforeMs and afterLastRequestMs locate wall time outside adapter requests, not CPU attribution. Bookkeeping and phase timings overlap initial planning/intervals; do not add them together. metricsPersistence includes completed earlier metric writes; the final metrics write and its duration are excluded to avoid recursive measurement. Workflow stop reasons belong to the recorded worker receipt, not button-click history; older reasons remain unknown. Selection reasons describe structural compatibility, not semantic independence. Context characters exclude runtime prompt/schema overhead and are not tokens. Saved context may be a staged publication union; request contexts describe actual app inputs. Saved attempts may span earlier runs; measured requests belong only to this run. savedWork.completedBatches counts completed stage receipts (reading/discovery plus verification), not distinct evidence batches. Freshness reasons describe local matching, not semantic proof. Response categories precede validation. No timestamps or model/account identifiers are exported.",
     runs: rows.map((row, index) => {
       if (row.savedStageFormat !== undefined && row.savedStageFormat !== null && row.savedStageFormat !== 1)
         throw new Error("Unsupported saved clarification/response stage format. Upgrade the app; saved work was not overwritten.");
@@ -95,6 +106,8 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
         policy: ["headroom-v1", "staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "definition-exact-batches-v1", "current-spec-v1", "exact-readiness-batches-v1", "exact-submission-batches-v1", "exact-answer-group-v1"].includes(row.policy ?? "") ? row.policy : null,
         interruptionCause: definitionInterruptionCauses.find((cause) => cause === row.interruptionCause) ?? null,
         measurements: metrics,
+        workflow: row.workflowPhase ? { phase: z.enum(["idle", "working", "needs-decision", "blocked", "paused", "ready-to-plan"]).parse(row.workflowPhase),
+          stopReason: row.workflowStop ? workflowStopSchema.parse(row.workflowStop) : null } : null,
         timing: metrics ? { initialPlanningMs: metrics.planningMs, adapterRequestMs: adapterMs,
           otherLocalMs: metrics.state === "finished" && metrics.planningMs !== null && adapterMs !== null
             ? Math.max(0, metrics.elapsedMs - metrics.planningMs - adapterMs) : null } : null,
@@ -103,7 +116,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
         savedWork: { navigationStages: nullableCount(row.stages), attempts: nullableCount(row.savedAttempts), reusedStages: nullableCount(row.reusedStages),
           reusedFinal: row.reusedFinal === null ? null : !!row.reusedFinal, stagedBatches: nullableCount(row.stagedBatches), completedBatches: completedSteps,
           totalSteps, remainingSteps: totalSteps !== null && completedSteps !== null ? Math.max(0, totalSteps - completedSteps) : null,
-          phase: totalSteps !== null && completedSteps !== null ? completedSteps >= totalSteps ? "complete" : completedSteps < row.stagedBatches! || row.savedDraftRepairFormat === 1 && completedSteps === row.stagedBatches ? "read" : "check" : null,
+          phase: totalSteps !== null && completedSteps !== null ? completedSteps >= totalSteps ? "complete" : row.answerGroupPhase === "repair" ? "repair" : completedSteps < row.stagedBatches! || row.savedDraftRepairFormat === 1 && completedSteps === row.stagedBatches ? "read" : "check" : null,
           continuationAction: exactStages && ["interrupted", "cancelled", "failed"].includes(row.status)
             ? row.policy === "exact-readiness-batches-v1" ? "continue-clarification" : "process-saved-responses" : null },
         backlog: { scope: row.planningPartial === 1 ? "examined-prefix" : "saved-scope", reviewed: nullableCount(row.reviewed), pending: nullableCount(row.pending), waiting: nullableCount(row.waiting), blocked: nullableCount(row.blocked) } };

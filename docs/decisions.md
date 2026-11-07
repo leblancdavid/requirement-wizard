@@ -70,6 +70,25 @@ every technical detail proposed in the planning documents.
 
 ## Coordinated project workflow (DEC-032)
 
+Confirmed follow-up (2026-11-06): the user approved fixing a shared-answer dead end
+where verification correctly rejected a draft that added cancellation but left an
+incompatible existing acceptance scenario unchanged. Add bounded draft correction
+using the original answers and exact evidence, preserve paid reads/rejected versions,
+and require every evidence batch to verify the corrected draft. Implemented repair
+is limited to two accepted corrections per original group and the existing charged
+step-attempt limits. Genuine human ambiguity remains an explicit blocker, not guessed
+precedence. SQLite 35 preserves saved rejected groups for explicit continuation.
+
+Confirmed follow-up (2026-11-06): the user's real-project diagnostics showed repeated
+Continue prompts, individual 19–21-request answer processing, fourteen-request scans
+and roughly 85 seconds still outside the newest answer's named phase/request timings.
+The user approved fixing unnecessary successful-work continuation boundaries, tracing
+unmeasured bookkeeping/gaps and explaining grouping/recheck selection. Implemented:
+explicit-adoption policy-2 automatic work windows under continuous consent, preserved
+per-task failures/paid stages, metadata-only routing/stop reasons, and expanded local
+attribution. This does not approve failed-request auto-retry, cross-feature grouping,
+verification skipping or a claimed fix for unlocated real-project time.
+
 Confirmed follow-up (2026-11-06): the user approved starting latency/workflow
 improvements after reviewing their diagnostics. Prefer scan → question batch → save
 answers → integrate → review, instead of AI work between each answer. The first

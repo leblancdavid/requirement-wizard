@@ -1,6 +1,97 @@
 # Coordinated workflow preview (DEC-032)
 
+## Bounded shared-draft repair (2026-11-06)
+
+A negative shared-answer check no longer strands an otherwise usable saved answer
+group. The engine retains the rejection and original answers, asks for a complete
+corrected draft using that feedback and exact evidence, then checks **every** original
+evidence batch again. Original reading steps are retained rather than repeated. The
+queue explicitly shows repair versus verification progress; check progress may move
+back because earlier checks do not verify a changed draft.
+
+There are at most two accepted draft repairs per original group. Repair requests also
+use the existing charged four-attempt step ceiling; Pause, failure, Continue and clone
+adoption cannot refund it. Invalid output, timeouts and newer input still stop work.
+Feedback does not establish product intent: genuine conflicting/ambiguous human choices
+must return an explicit blocker with the precise choice needed, never guessed precedence.
+That blocker remains a human-review stop; automatic targeted-question creation for
+shared blockers is not implemented by this repair slice.
+
+Existing saved rejected groups can use **Continue specification** after updating.
+Explicit continuation recovers only this coordinator's eligible unfinished group,
+including older passes incorrectly marked completed after interruption. Startup makes
+no calls; no answers need re-entering. Exact material changes still block incompatible
+reuse instead of silently rewriting old work. Repair evidence survives portable adoption;
+older app versions reject new repair variants and should be updated before opening them.
+See [migration and recovery details](migrations.md#bounded-shared-answer-draft-repair-2026-11-06).
+
+Shared lookup requests now explicitly distinguish already detailed bodies from missing
+evidence. The per-request response schema allows only the missing original IDs, not
+every ID in the overall task inventory, and omits lookups when nothing is missing.
+This is dispatch guidance, not weaker validation: unavailable, duplicate and repeated
+loads still stop atomically with distinct explanations, and all spent attempts remain
+charged. Saved context/receipt identities are unchanged. A group already at three
+attempts still has only one request before that step's existing ceiling; the fixture
+recovery check uses its retained evidence directly rather than promising more retries.
+See [lookup compatibility](migrations.md#shared-answer-lookup-request-contract-2026-11-06).
+
+## Continuous work windows and processing diagnostics (2026-11-06)
+
+The next explicit continuous **Continue specification** adopts collection policy 2.
+Reaching a successful package/stage work-window boundary now yields to the scheduler
+and continues under the **same continuous grant**, rather than requiring another
+Continue click. A typical fourteen-request package therefore no longer strands two
+unused request slots and forces a new user action. Windows still allow five package
+passes/sixteen request attempts, and the five-active-minute checkpoint is cooperative:
+finish the in-flight request (or ordinary package), then yield between completed steps.
+It is not a second whole-package timeout. Each actual request retains its own timeout.
+An intentional staged request/time-budget pause with accepted steps can resume in the
+next window; real request timeouts, failed attempts, semantic rejections, stale input,
+lease/ownership changes and human Pause do **not** automatically retry. No saved task
+attempt counter is reset. Queued later responses retain their separate consent.
+The later shared-draft repair slice above adds a separate bounded corrective stage
+for negative draft verification; it is not replay of an unchanged rejected check.
+
+Collection still ends at the soft question target, a human-review decision, saved
+input, or no eligible work. Continuous consent is not proof of completeness, approval,
+or coding permission. Stop remains available while workers release/reclaim a window.
+Startup never arms the scheduler; explicit continuation adopts policy 2 and projects
+old format-1 counters into format 2 without dropping spent requests or original jobs.
+The prior finite collection behavior below remains for old grants until that action.
+
+Processing & queue now shows the actual non-error workflow message and current window
+versus cumulative collection usage. New instrumented saved-response jobs retain a
+metadata-only selection reason: shared group, retained paid path, separately scoped
+answer, research, different features, a single compatible answer, or a pre-dispatch
+combined-context bound. A lone answer in the first feature no longer hides a compatible
+pair later in the submitted set. This does not authorize cross-feature or scoped grouping.
+New epic job diagnostics distinguish a new package from an incompatible saved check
+and a resumed saved task. Incompatible means exact inputs/context no longer match;
+it is not proof that all old evidence changed or that narrower verification is safe.
+
+New request `gapBeforeMs` and run `afterLastRequestMs` locate wall time outside adapter
+calls. Numeric bookkeeping buckets additionally measure metrics persistence, request
+context diagnostics and staged-input revision/progress callbacks. These overlap planning
+and gap intervals and must not be added together. Persistence totals include completed
+earlier metric writes, excluding the final metrics write itself to avoid recursive
+instrumentation. No extra checkpoint writes are added. Recorded worker receipts also
+export a bounded stop reason, distinguishing scheduler yields from user-facing stops;
+older reasons stay unknown. No prompts, answers, source IDs or private diagnostic prose
+are added to the export. Metadata/consent remain local, not portable evidence.
+
+The supplied real-project export still showed about 85 seconds outside request and
+named local-phase timing on its newest individual-answer job. The disposable benchmark
+with expanded timing did not reproduce that delay (about 0.25 seconds total, including
+about 16 ms of metrics persistence, for eighteen synthetic requests in one run). This
+is **instrumentation, not a claimed fix** for the missing real-project time. A fresh
+export from a naturally needed step can locate it without repeating completed work.
+Source/changed-evidence reconciliation and broader answer grouping remain separate work.
+See [upgrade details](migrations.md#continuous-collection-windows-and-diagnostic-attribution-2026-11-06).
+
 ## Bounded question collection (2026-11-06)
+
+This describes policy 1, superseded for newly authorized continuous runs by policy 2
+above. Existing original evidence, task identities and retry ceilings remain valid.
 
 New explicit continuous **Continue specification** runs now collect a small question
 batch instead of stopping immediately after one workflow package produces a question.

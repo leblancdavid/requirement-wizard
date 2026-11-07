@@ -36,11 +36,18 @@ wait for another submission. Compatible sets of two to five new unscoped answers
 one feature now share evidence reading and verification before atomic publication;
 scoped or already-started work keeps its original path. New local timings help diagnose
 staged-answer overhead. See [shared integration](docs/coordinated-workflow.md#shared-answer-integration-2026-11-06).
+Rejected shared drafts now have a bounded correction path: retain original answers
+and reads, repair against the verification feedback, then recheck every evidence batch.
+Existing eligible rejected groups resume with **Continue specification** after updating;
+genuine human conflicts still stop. See [draft repair](docs/coordinated-workflow.md#bounded-shared-draft-repair-2026-11-06).
+Shared lookup prompts/schemas now distinguish already detailed records from missing
+original IDs, without resetting saved attempts or changing existing context identities.
 When starting new question discovery, continuous runs now collect across eligible
 workflow packages toward five pending questions, rather than stopping at the first
-question. Each collection is bounded to five package passes, sixteen request attempts
-and five active minutes; it can stop earlier and never forces questions to fill the
-target. Existing waiting batches and saved work stay intact. See
+question. New continuous runs automatically continue between bounded work windows
+without another Continue click; actual timeouts, failures, decisions and Pause still
+stop work. The queue explains response grouping, and diagnostics separate request
+gaps/bookkeeping from model time. Existing waiting batches and saved work stay intact. See
 [question collection](docs/coordinated-workflow.md#bounded-question-collection-2026-11-06).
 Scoped discovery and **Improve requirements** (formerly Refine requirements) are
 under **More actions** in Design/Specification. **Settings → Project settings →

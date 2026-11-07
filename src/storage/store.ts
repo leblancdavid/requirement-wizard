@@ -1635,6 +1635,11 @@ export class ProjectStore {
       CASE WHEN json_extract(payload, '$.definitionInterruption.format') = 1 THEN json_extract(payload, '$.definitionInterruption.cause') END AS interruptionCause,
        COALESCE(json_extract(payload, '$.readinessWork.format'), json_extract(payload, '$.submissionWork.format'), json_extract(payload, '$.answerGroupWork.format')) AS savedStageFormat,
        json_extract(payload, '$.submissionWork.draftRepair.format') AS savedDraftRepairFormat,
+       json_extract(payload, '$.context.answerGroupStage.phase') AS answerGroupPhase,
+       (SELECT json_extract(w.payload, '$.result.phase') FROM workflow_runs w WHERE w.project_id = jobs.project_id
+         AND EXISTS (SELECT 1 FROM json_each(w.payload, '$.jobIDs') WHERE value = jobs.id) ORDER BY w.rowid DESC LIMIT 1) AS workflowPhase,
+       (SELECT json_extract(w.payload, '$.result.stopReason') FROM workflow_runs w WHERE w.project_id = jobs.project_id
+         AND EXISTS (SELECT 1 FROM json_each(w.payload, '$.jobIDs') WHERE value = jobs.id) ORDER BY w.rowid DESC LIMIT 1) AS workflowStop,
       json_extract(payload, '$.context.characters') AS characters, json_extract(payload, '$.context.budget') AS budget,
       json_array_length(payload, '$.context.includedIDs') AS included, json_array_length(payload, '$.context.omittedIDs') AS omitted,
       json_array_length(payload, '$.context.epicIDs') AS areas, json_extract(payload, '$.context.sectionCharacters') AS sections,
@@ -1648,7 +1653,7 @@ export class ProjectStore {
         WHEN json_type(payload, '$.submissionWork') IS NOT NULL THEN
         (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.submissionWork.receipts')) r WHERE json_type(r.value, '$.response.questions') IS NOT NULL OR json_extract(r.value, '$.response.submissionKeep') = 1 OR json_extract(r.value, '$.response.submissionCheck.valid') = 1)
         WHEN json_type(payload, '$.answerGroupWork') IS NOT NULL THEN
-        (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.answerGroupWork.receipts')) r WHERE json_type(r.value, '$.response.answerGroupDraft') IS NOT NULL OR json_extract(r.value, '$.response.answerGroupKeep') = 1 OR json_extract(r.value, '$.response.answerGroupCheck.valid') = 1)
+        (SELECT COUNT(*) FROM json_each(json_extract(payload, '$.answerGroupWork.receipts')) r WHERE json_type(r.value, '$.response.answerGroupDraft') IS NOT NULL OR json_extract(r.value, '$.response.answerGroupKeep') = 1 OR (json_extract(r.value, '$.response.answerGroupCheck.valid') = 1 AND CAST(r.key AS INTEGER) > COALESCE((SELECT MAX(CAST(repair.key AS INTEGER)) FROM json_each(json_extract(payload, '$.answerGroupWork.receipts')) repair WHERE json_type(repair.value, '$.response.answerGroupRepair') IS NOT NULL), -1)))
         ELSE COALESCE(json_array_length(payload, '$.retrievalWork.epicStages.receipts'), json_array_length(payload, '$.definitionWork.receipts')) END AS stagedCompleted,
       COALESCE(json_extract(payload, '$.epicReviewReport.reviewed'), json_extract(payload, '$.gapReport.checked')) AS reviewed,
       COALESCE(json_extract(payload, '$.epicReviewReport.pending'), json_extract(payload, '$.gapReport.pending')) AS pending,

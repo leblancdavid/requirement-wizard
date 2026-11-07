@@ -1,5 +1,34 @@
 # Architecture outline
 
+## Shared-draft correction and replay (2026-11-06)
+
+Shared-answer format-1 receipts add an explicit repair response/stage. A negative
+verification retains its exact receipt and selects a bounded corrective context with
+the original pinned answers, failed batch, frozen draft and model feedback. Core
+validation applies the original same-feature/exact-source authorization to the complete
+repair. A receipt-derived cursor retains reads but resets current verification to the
+first batch after each repair. Two accepted repairs and four charged attempts per step
+remain durable across service/coordinator recovery and portable replay. Publication
+requires full verification of the latest draft; old checks are history, not current
+authority. Explicit human-conflict blockers remain terminal. SQLite 35 adds a reader
+boundary without rewriting jobs/keys; see [compatibility](migrations.md#bounded-shared-answer-draft-repair-2026-11-06).
+
+## Continuous scheduling windows and diagnostic attribution (2026-11-06)
+
+Explicit continuous grants adopt question collection policy 2, retaining cumulative
+spend separately from bounded cooperative work-window counters. Scheduler yields
+release/reclaim ownership under the same grant; engine-marked request-budget pauses
+or successful time-boundary stage pauses resume without resetting task attempts.
+Actual timeouts/errors/Stop/changed inputs retain their existing stop boundaries.
+`DiscoveryService`'s internal cooperative-window profile honors staged request counts
+and checks active time between accepted steps while keeping a separate actual-request
+timeout; ordinary manual/bounded profiles do not inherit it. Old policy-1 consent
+and progress remain unchanged until explicit adoption. SQLite 34 protects readers.
+Optional numeric bookkeeping/gap measurements and allowlisted selection/worker-stop
+reasons improve local attribution without becoming evidence or freshness authority.
+Final metrics-write timing is deliberately excluded rather than recursively persisted.
+No portable envelope or original task hash changes. See [behavior and limits](coordinated-workflow.md#continuous-work-windows-and-processing-diagnostics-2026-11-06).
+
 ## Bounded workflow question collection (2026-11-06)
 
 The coordinator's question collection policy is scheduling metadata, not a new model

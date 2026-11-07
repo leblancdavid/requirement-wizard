@@ -46,7 +46,9 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
   local("validation", () => store.assertSubmissionDraftRepair(project, item, w));
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;
-  const current = () => { options.signal.throwIfAborted(); if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError(); };
+  const bookkeeping = <T>(phase: Parameters<DiscoveryMeasurement["bookkeeping"]>[0], run: () => T): T => options.measurement ? options.measurement.bookkeeping(phase, run) : run();
+  const progress = (message: string) => bookkeeping("progress", () => options.onProgress?.(message));
+  const current = () => bookkeeping("revisionChecks", () => { options.signal.throwIfAborted(); if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError(); });
   for (;;) {
     current();
     const done = submissionStep(w) === submissionTotalSteps(w);
@@ -74,7 +76,7 @@ export async function runSubmissionStages(store: ProjectStore, adapter: Discover
       : "Saved-response step exhausted its extended eight-request allowance. Earlier completed work and spent attempts remain saved; no further requests were granted.");
     if (!calls) options.measurement?.planned(context);
     w.attempts++; calls++; local("checkpoint", () => store.checkpointSubmission(job.id, w, context.manifest));
-    options.onProgress?.(`Following up on saved input · ${submissionStep(w)} / ${submissionTotalSteps(w)} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial changes published.`);
+    progress(`Following up on saved input · ${submissionStep(w)} / ${submissionTotalSteps(w)} exact read/check steps saved · ${context.manifest.characters.toLocaleString("en-US")} / 96,000 characters. No partial changes published.`);
     const timeout = AbortSignal.timeout(options.continuous ? 300000 : Math.max(1, Math.min(300000, deadline - Date.now())));
     const signal = AbortSignal.any([options.signal, timeout]);
     let abort: () => void = () => {};

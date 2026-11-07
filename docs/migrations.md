@@ -1,5 +1,151 @@
 # Data migrations and upgrade compatibility
 
+## Shared-answer lookup request contract (2026-11-06)
+
+**Source → target:** SQLite **35 → 35**; no schema, persisted payload, portable
+format, material/plan/context identity, assessment or freshness migration is needed.
+The dispatch-only shared-answer response schema now enumerates **only this request's
+missing original IDs**, rather than advertising arbitrary strings. The prompt separately
+identifies already detailed original IDs and explains that `availableEvidenceIDs` is
+the overall task inventory, not permission to reload those bodies. Encoded identifier
+indexes/aliases are not lookup IDs. With no missing evidence, the lookup response is
+not offered. This view is derived from the existing manifest; it does not modify the
+saved context data or any old receipt's hash. Overlapping/duplicate manifest inventories
+reject rather than manufacture lookup authority.
+
+The engine's existing atomic rejection of unavailable, duplicate or already loaded
+lookup IDs is unchanged; these now have separate explanatory diagnostics. No failed
+request is turned into a valid lookup, normalized, partially accepted or refunded.
+Existing accepted receipts retain their original validity and replay exactly. A saved
+repair at three spent attempts still has just its fourth attempt; updated prompting
+does not extend it. A repair that genuinely needs further requests can still hit that
+limit. Already exhausted groups remain exhausted. No startup inference or automatic
+replay of the failed request is introduced.
+
+Deterministic tests cover refreshed requestable enums after a paid load, original IDs
+versus encoded references, absent lookup branches for fully loaded contexts, unchanged
+old context/receipt data, invalid mixed requests, inconsistent manifests, and a saved
+three-attempt repair completing on its fourth request using the retained load before
+full re-verification. Verification passed: 106 focused shared-answer/diagnostic/workflow
+tests, type checking, UI/desktop builds, the shared-answer repair browser check and
+`git diff --check`. The full unit/default-browser suites were not repeated for this
+dispatch-only follow-up. These fixtures do not establish live model compliance.
+No real project data or provider was used.
+
+## Bounded shared-answer draft repair (2026-11-06)
+
+**Source → target:** SQLite **34 → 35**, a transactional reader boundary. No tables,
+original job payloads, completed results, source IDs, context/material/plan keys,
+assessments or paid attempts are rewritten on startup. The existing shared-answer
+format-1 ledger gains an additive `answerGroupRepair` response and `repair` stage.
+An original negative verification receipt is retained verbatim and now exposes a
+corrective stage on explicit continuation, rather than remaining an unrecoverable
+terminal rejection. Historical completed groups retain their exact semantics/bytes.
+Explicit `answerGroupBlocked` receipts remain terminal; they are not repair authority.
+
+Repairs append a complete validated draft and retain every original read/lookup,
+rejected draft and check receipt. All checks of an earlier draft lose current authority
+after a repair; **every original evidence batch must pass again**. Earlier reads remain
+paid and are not dispatched again. Exact supporting evidence is still required for
+changed actions. Feedback is a model finding, never a human preference or permission
+to choose precedence. Two accepted repairs per original group are the durable ceiling;
+the existing four-attempt step allowance includes its rejected check and repair
+attempts, with no reset on Continue, cancellation, reopen or cloning. A successful
+repair starts a new verification cycle, not a new group. The bounded receipt capacity
+is 520 (32 read batches + three 32-batch check cycles + two repairs, each at most four
+requests), retaining the original 256-receipt histories unchanged.
+
+Explicit coordinator continuation may recover its own failed shared job only when it
+is awaiting repair, has remaining attempts/repairs and no explicit blocked receipt.
+It does not recover unrelated failures or grant review-only actions input-processing
+authority. The historical completed-input marker is cleared only when explicitly
+recovering that coordinator's unfinished job; newly interrupted/failed input passes
+are no longer marked completed. Startup still does not arm workers or make calls.
+
+**Portable compatibility:** the format-9 envelope and format-1 ledger remain; the new
+response/stage variants travel with their original receipts and are replay-validated.
+Older readers reject the unknown repair variants rather than reinterpret or overwrite
+them; use an updated reader on the receiving machine. Existing exports and completed
+work need no conversion. Future work formats roll back the 34→35 reader boundary and
+retain original data for recovery. No fingerprint or freshness rule changes.
+
+Upgrade tests cover byte-preserving repeated startup from a saved rejected v1 group,
+future-format rollback/retry, explicit-only recovery, canceled repair/recheck attempts,
+portable decoding and actual clone adoption without repeating reads or accepted repair.
+Behavioral tests cover a late rejection, complete re-verification, existing acceptance
+scenario correction, preserved unrelated answers, exact-source/scope rejection,
+malformed and exhausted repair budgets, terminal genuine conflicts, and the historical
+completed-input marker. Exact same-batch supplemental bodies remain available across
+repair cycles; only the old verdict loses authority. Stage-specific request schemas
+avoid duplicating the large draft schema in verification prompts; persisted receipt
+validation retains the full union, and no original context hashes change.
+
+**Verification:** full `npm test` passed 1,820 tests (928 pretest, 775 main, 117
+posttest), with zero failures. The final 42 focused shared-answer/diagnostic checks,
+type checking, UI/desktop builds, full default/post-browser suite and separate
+coordinator/Guided browser checks passed. Browser repair checks cover visible progress,
+Pause/reload/explicit resume during correction, preserved charged attempts, retained
+reads and atomic publication after full re-verification. Existing bundle-size,
+React-key and experimental timer warnings remain unrelated qualification limits.
+
+This addresses the rejected-draft dead end, not the separately observed 112-second
+post-request delay. No live model call or real-user-data write is part of verification.
+
+## Continuous collection windows and diagnostic attribution (2026-11-06)
+
+**Source → target:** SQLite **33 → 34** is a transactional reader boundary, with no
+table changes or startup payload conversion. Workflow readers accept original
+format-1 question collection unchanged and additive policy/progress **format 2**.
+Only explicit continuous continuation adopts policy 2: original cumulative package
+and request counts become the first current window's spent counts, preserving the
+starting revision, current exact input binding, remaining time and all paid jobs.
+Later window rollovers reset only their scheduling window counters, never cumulative
+spend, task identities, stage receipts, failed attempts or grant/request-run receipts.
+Active interval recovery remains conservative. Startup, reopen and reads do not opt
+in or dispatch work. Old bounded grants and explicit review-only work remain bounded.
+
+Policy 2 windows yield under the same continuous grant at successful work boundaries;
+they do not renew a failed request's allowance. Cooperative time checks permit an
+in-flight request/ordinary package to finish; actual per-request timeout failures
+still stop with charged attempts. Staged budget pauses require the engine's explicit
+request/time pause marker and accepted-step state before automatic continuation.
+Input changes at a publication or window boundary stop rather than silently adopt
+new product input. No legacy context/freshness hash or assessment identity changes.
+
+New optional format-1 diagnostics retain allowlisted answer-selection/epic-selection
+reasons, request gap timings, post-request tail timing and numeric bookkeeping costs.
+The request-duration meaning stays unchanged. Final metrics persistence is excluded
+from its own timing; earlier metric-write costs are measured without more writes.
+Phase/gap/bookkeeping timings overlap and are not additive CPU attribution. Old
+missing fields remain absent, not reconstructed as zero. New optional workflow
+`stopReason` is copied into the worker's final run receipt and linked diagnostically
+only through its recorded job IDs. Older receipts remain unchanged and export unknown
+reasons. Future formats/reasons and invalid window/cumulative counts reject rather
+than overwrite saved state. Capability versions stay independent of revision/CAS.
+
+**Portable compatibility:** no envelope change. Collection consent/counters, stop
+metadata and discovery timing/selection metadata are machine-local and excluded.
+All underlying paid jobs, original snapshots and exact continuation ledgers keep
+their existing portable rules; no repeat assessment/model calls are required solely
+because the scheduling representation changed.
+
+Deterministic coverage includes rollover beyond sixteen cumulative requests and five
+passes, exact stage reuse, cooperative time rollover versus actual request timeout,
+Pause/restart, source edits, held new input, retained human decisions, later-feature
+pair selection, grouping explanations, incompatible-package explanation/privacy,
+synthetic slow metric persistence/gap attribution and byte-preserving 33→34 reopen,
+future-format rollback/retry and explicit-only adoption. The first broad unit run
+caught eleven serialized-recovery comparisons differing only in new measurement
+field order. New returned metrics now use the same validated serialization as their
+stored payload; historical jobs are not normalized or rewritten. All 111 focused
+retrieval/diagnostic regression checks then passed. Type checking, UI/desktop builds,
+the full default/post-browser suite and separate collection/shared-answer/coordinator/
+Guided browser checks passed (the Guided check was rerun successfully after a build
+asset race in parallel verification). The final full `npm test` rerun passed all
+1,812 tests: 928 pretest, 775 main and 109 posttest, with zero failures.
+Real-project hidden time remains unlocated;
+synthetic profiling is not a live speed or semantic-quality qualification.
+
 ## Bounded workflow question collection (2026-11-06)
 
 **Source → target:** database **32 → 33**, an ordered transactional reader-capability

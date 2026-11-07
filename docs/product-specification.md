@@ -142,6 +142,19 @@ three to five questions, prioritized by impact, uncertainty, and dependencies.
   does not authorize exploration of packages waiting on unanswered dependencies,
   approvals, area assessments or completeness claims. See
   [implemented behavior and limits](coordinated-workflow.md#bounded-question-collection-2026-11-06).
+- Its policy-2 follow-up continues successful work between cooperative scheduling
+  windows under the same explicit continuous consent, instead of requiring repeated
+  Continue clicks at those boundaries. It preserves cumulative spending, saved stage
+  evidence and failed-attempt ceilings, and still stops for actual request timeouts,
+  failures, newer input, human decisions and Pause. Old bounded consent is not widened
+  on startup. Show the stop reason and explain individual versus shared answer routing;
+  missing older diagnostics remain unknown.
+- A shared-answer draft rejected by verification has a bounded corrective path:
+  retain the original answers, reading steps and rejection; repair using exact evidence;
+  verify every original evidence batch against the corrected draft before publication.
+  Limit accepted repairs to two per original group without refunding step attempts.
+  Genuine ambiguity/conflicting human choices remain explicit stops, not invented
+  precedence. Existing compatible rejected groups resume only with explicit continuation.
 
 - Explain why a question matters and the consequences of its options.
 - Support custom text, help deciding, deferral, and scoped delegation.

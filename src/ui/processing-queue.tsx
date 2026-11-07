@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import type { MaintenanceView } from "../core/maintenance.js";
 import { MaintenanceQueue, type MaintenanceAction } from "./maintenance-controls.js";
 import { WorkflowControls, workflowLabels, mayContinueProject, workflowContinueLabel, type WorkflowAction } from "./workflow-controls.js";
+import { answerIntegrationReasons } from "../core/answer-integration-diagnostics.js";
 import type { WorkflowView } from "../service/workflow.js";
 import type { WorkflowDecision } from "../core/workflow.js";
 import { Modal } from "./modal.js";
@@ -119,8 +120,12 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
       description={<p role="status">{taskCount} active {taskCount === 1 ? "task" : "tasks"} · Responses: {processing.length} processing · {waiting.length} waiting{attentionCount ? ` · ${attentionCount} need attention` : ""}{actionablePause && !active ? lastJob?.context?.definitionAssessment ? " · Definition processing paused" : " · Discovery paused" : ""}</p>}>
         {error && error !== jobDiagnostic && <DiagnosticNotice detail={error} alert />}
            <p>Work across your project appears here. Compatible new answers in the same feature can be integrated together; already-started or separately scoped responses keep their original paths.</p>
+           {lastJob?.discoveryMetrics?.answerIntegration && <section aria-label="Response integration selection"><h3>How responses are being processed</h3>
+             <p>{answerIntegrationReasons[lastJob.discoveryMetrics.answerIntegration.reason]}</p>
+             <p>{lastJob.discoveryMetrics.answerIntegration.selectedResponses} responses available at selection · {lastJob.discoveryMetrics.answerIntegration.groupedAnswers} answers in this shared task. This explains scheduling, not approval or model quality.</p></section>}
+           {lastJob?.discoveryMetrics?.epicSelection?.reason === "saved-task-incompatible" && <p>A saved check exists for this package, but its exact inputs or context no longer match this task. Its original result is retained; this is a new evidence check, not a retry of a failed request.</p>}
            {lastJob?.answerGroupProgress && <section aria-label="Shared answer integration"><h3>Integrating {lastJob.answerGroupProgress.answers} answers together</h3>
-             <p>{lastJob.answerGroupProgress.completed} / {lastJob.answerGroupProgress.total} evidence steps saved · {lastJob.answerGroupProgress.phase === "complete" ? "complete" : lastJob.answerGroupProgress.phase === "read" ? "reading shared evidence" : "checking the combined draft"}. Each original answer stays saved; changes publish only after every check passes.</p></section>}
+              <p>{lastJob.answerGroupProgress.completed} / {lastJob.answerGroupProgress.total} current evidence steps saved · {lastJob.answerGroupProgress.phase === "complete" ? "complete" : lastJob.answerGroupProgress.phase === "repair" ? "repairing the draft against verification feedback; saved reads are retained and every batch will be checked again" : lastJob.answerGroupProgress.phase === "read" ? "reading shared evidence" : "checking the combined draft"}. Each original answer stays saved; changes publish only after every check passes.</p></section>}
           {lastJob?.definitionWork?.baseline && <DefinitionBaselineNotice baseline={lastJob.definitionWork.baseline} />}
           {reuse && <section aria-label="Reused clarification result"><h3>Clarification complete · saved result reused</h3>
             <p>Area: {project.epics.find((area) => area.id === reuse.task.epicID)?.title ?? "Saved clarification area"}.</p>

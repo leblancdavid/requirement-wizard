@@ -8,12 +8,23 @@ import { coverage } from "./coverage.js";
 import type { ExecutionState } from "./execution.js";
 import { planningCurrent } from "./implementation-planning.js";
 import { workflowScheduleSchema } from "./workflow-schedule.js";
+import { workflowStopSchema } from "./workflow-stop.js";
 
 export const workflowLimits = { requests: 8, durationMs: 300000, steps: 20 } as const;
 /** Scheduling budget only; original package evidence, checks and retry limits stay authoritative. */
 export const questionBatchLimits = { target: 5, packages: 5, requests: 16, durationMs: 300000 } as const;
 const hash = (value: unknown) => bytesToHex(sha256(JSON.stringify(value)));
 const key = z.string().regex(/^[a-f0-9]{64}$/);
+const questionBatchSchema = z.object({ format: z.literal(1), inputKey: key, revision: z.number().int().positive(),
+  packages: z.number().int().min(0).max(questionBatchLimits.packages), requests: z.number().int().min(0).max(questionBatchLimits.requests),
+  remainingMs: z.number().int().min(0).max(questionBatchLimits.durationMs), activeSince: z.number().int().nonnegative().optional(),
+  state: z.enum(["collecting", "finished"]), reason: z.enum(["target", "budget", "waiting", "settled", "decision", "input"]).optional(),
+}).strict();
+const continuousQuestionBatchSchema = questionBatchSchema.extend({ format: z.literal(2),
+  packages: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), requests: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  window: z.object({ number: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), packages: z.number().int().min(0).max(questionBatchLimits.packages),
+    requests: z.number().int().min(0).max(questionBatchLimits.requests) }).strict(),
+});
 export const workflowReadinessSchema = z.object({ format: z.literal(1), policy: z.literal("coordinated-checks-v1"), inputKey: key,
   revision: z.number().int().positive(), requirementIDs: z.array(z.string()).min(1),
   requirementProofs: z.array(z.object({ requirementID: z.string(), kind: z.enum(["human-reviewed", "answer-derived", "refinement-check"]),
@@ -22,6 +33,7 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
   settingsVersion: z.number().int().nonnegative(), enabled: z.boolean(), paused: z.boolean(),
   phase: z.enum(["idle", "working", "needs-decision", "blocked", "paused", "ready-to-plan"]),
   message: z.string().max(1600), waitKey: key.optional(),
+  stopReason: workflowStopSchema.optional(),
   owner: z.string().optional(), leaseUntil: z.number().int().nonnegative().optional(),
   grant: z.object({ id: z.string(), used: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
     continuous: z.object({ format: z.literal(1) }).strict().optional(),
@@ -33,21 +45,16 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
   readiness: workflowReadinessSchema.optional(),
   reviewPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   inputBatchPolicy: z.object({ format: z.literal(1) }).strict().optional(),
-  questionBatchPolicy: z.object({ format: z.literal(1) }).strict().optional(),
-  questionBatch: z.object({ format: z.literal(1), inputKey: key, revision: z.number().int().positive(),
-    packages: z.number().int().min(0).max(questionBatchLimits.packages),
-    requests: z.number().int().min(0).max(questionBatchLimits.requests),
-    remainingMs: z.number().int().min(0).max(questionBatchLimits.durationMs),
-    /** Wall-clock checkpoint of an owned interval; explicit recovery charges any
-     * unaccounted interval conservatively, rather than refunding a crashed call. */
-    activeSince: z.number().int().nonnegative().optional(),
-    state: z.enum(["collecting", "finished"]),
-    reason: z.enum(["target", "budget", "waiting", "settled", "decision", "input"]).optional(),
-  }).strict().refine(batch => (batch.state === "finished") === !!batch.reason, "Finished collection requires an explicit stopping reason.").optional(),
+  questionBatchPolicy: z.object({ format: z.union([z.literal(1), z.literal(2)]) }).strict().optional(),
+  questionBatch: z.discriminatedUnion("format", [questionBatchSchema, continuousQuestionBatchSchema])
+    .refine(batch => (batch.state === "finished") === !!batch.reason, "Finished collection requires an explicit stopping reason.")
+    .refine(batch => batch.format === 1 || batch.window.packages <= batch.packages && batch.window.requests <= batch.requests,
+      "Window spending cannot exceed collection spending.").optional(),
   reviewCheckpoint: z.object({ format: z.literal(1), inputKey: key, revision: z.number().int().positive(),
     state: z.enum(["reviewing", "complete"]), explicit: z.boolean() }).strict().optional(),
   decisionSchedule: workflowScheduleSchema.optional(),
-}).strict();
+}).strict().refine(state => state.questionBatch?.format !== 2 || state.questionBatchPolicy?.format === 2,
+  "Continuous collection windows require their explicit policy.");
 export type WorkflowState = z.infer<typeof workflowSchema>;
 export const emptyWorkflow = (): WorkflowState => ({ format: 1, version: 0, settingsVersion: 0, enabled: false,
   paused: true, phase: "idle", message: "Coordinated workflow has not been started." });

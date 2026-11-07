@@ -8,6 +8,7 @@ import { planContext, planExactTaskContext } from "../core/working-set.js";
 import { canStageSubmission } from "../core/submission-stages.js";
 import { runSubmissionStages } from "./submission-stages.js";
 import { runAnswerGroup } from "./answer-group.js";
+import { answerIntegrationSchema, type AnswerIntegrationDiagnostic } from "../core/answer-integration-diagnostics.js";
 import { questionHelpContext } from "../core/question-help-context.js";
 import { GapBacklogBlocked, GapBacklogIdle, planGapContext, restoreGapTaskContext } from "../core/gap-context.js";
 import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenceBasis, enableGapRetrieval, nextGapContext, retrievalContextKey, retrievalEvidenceBasis, validateRetrieval, validateGapFinal, type RetrievalWork } from "../core/gap-retrieval.js";
@@ -34,6 +35,7 @@ import { refinementEvidenceRecords, assertRefinementEvidence } from "../core/ref
 import { pairQuestions, resolutionContextKey } from "../core/resolution.js";
 import { planScanBatches, scanBatchSources, splitScanBatch, validateScanBatch, scanBatchTimeout, scanWindowTimeout, scanLeaseDuration } from "./scan-batches.js";
 import { DiscoveryMeasurement } from "./discovery-metrics.js";
+import { discoveryMetricsSchema } from "../core/discovery-diagnostics.js";
 import { prepareEpicReview } from "./epic-planning.js";
 import { stagedRunRequestLimit, stagedRunDurationMs, stagedRunLeaseMs } from "../core/epic-run.js";
 import { definitionJointReviewLimits } from "../core/definition-joint-review.js";
@@ -71,7 +73,7 @@ function schemaDiagnostic(error: z.ZodError): string {
 export class DiscoveryService {
   constructor(readonly store: ProjectStore, private readonly adapter: DiscoveryAdapter,
     private readonly navigation: { searchEvidence?: typeof searchSavedEvidence; stagedLimits?: { requests: number; durationMs: number }; definitionRequestMs?: number;
-      workflow?: { owner: string; continuous?: boolean; beforeJob: () => { requests: number; durationMs: number }; beforeRequest: (jobID: string) => void } } = {}) {
+      workflow?: { owner: string; continuous?: boolean; cooperativeWindow?: boolean; beforeJob: () => { requests: number; durationMs: number }; beforeRequest: (jobID: string) => void } } = {}) {
     if (navigation.stagedLimits) z.object({ requests: z.number().int().min(1).max(stagedRunRequestLimit),
       durationMs: z.number().int().min(1).max(stagedRunDurationMs) }).strict().parse(navigation.stagedLimits);
     if (navigation.definitionRequestMs !== undefined) z.number().int().min(1).max(300000).parse(navigation.definitionRequestMs);
@@ -378,9 +380,13 @@ export class DiscoveryService {
   async analyze(projectID: string, expectedRevision: number, options: {
     signal?: AbortSignal; onProgress?: (message: string) => void; onJob?: (job: Job) => void; onRefinementRequest?: () => void; focusEpicID?: string; requiredEpicIDs?: string[]; recordIDs?: string[]; submissionIDs?: string[]; isolatedTask?: boolean; research?: boolean; refinementOnly?: boolean; refinementPair?: [string, string]; includeUnapproved?: boolean; resolutionTriggerSourceIDs?: string[]; savedOverlapSubmissionID?: string; helpRequest?: QuestionHelpRequest; savedEvidencePolicy?: SavedEvidencePolicy; continueGapJobID?: string; gapMode?: "epic"; questionTarget?: number; definitionEpicID?: string;
     definitionLimits?: { requests: number; durationMs: number }; definitionSchedule?: DefinitionSchedule; continuousDefinition?: boolean; definitionRecoveryJobID?: string; onDefinitionRequest?: () => void;
-    readinessQuestions?: ReadinessQuestionTask; automatic?: boolean; answerGroup?: boolean;
+    readinessQuestions?: ReadinessQuestionTask; automatic?: boolean; answerGroup?: boolean; answerIntegration?: AnswerIntegrationDiagnostic;
   } = {}): Promise<Job> {
     options.signal?.throwIfAborted();
+    if (options.answerIntegration) {
+      answerIntegrationSchema.parse(options.answerIntegration);
+      if (!options.submissionIDs?.length) throw new Error("Answer integration diagnostics require a saved response task.");
+    }
     if (options.answerGroup && (options.research || options.refinementOnly || options.helpRequest || options.gapMode || options.definitionEpicID
       || options.readinessQuestions || options.recordIDs || options.requiredEpicIDs || options.isolatedTask || options.savedOverlapSubmissionID
       || options.continueGapJobID || options.questionTarget !== undefined || options.focusEpicID || options.refinementPair || options.savedEvidencePolicy
@@ -467,9 +473,12 @@ export class DiscoveryService {
     this.store.claimJob(job.id, Date.now() + (continuousDefinition ? 360_000 : options.gapMode || options.definitionEpicID ? stagedRunLeaseMs : 360_000));
     const measurement = !options.helpRequest && !options.refinementOnly
       ? new DiscoveryMeasurement((value) => this.store.saveDiscoveryMetrics(job.id, value)) : undefined;
+    if (measurement && options.answerIntegration) measurement.value.answerIntegration = options.answerIntegration;
     const completeMeasurement = (result: Job): Job => {
       measurement?.finish();
-      if (measurement) result.discoveryMetrics = structuredClone(measurement.value);
+      // Match the exact field order of the validated SQLite measurement payload.
+      // Recovery callers retain serialized original jobs, not just equal values.
+      if (measurement) result.discoveryMetrics = discoveryMetricsSchema.parse(measurement.value);
       return result;
     };
     const controller = new AbortController();
@@ -522,7 +531,8 @@ export class DiscoveryService {
       const generalExploration = !options.readinessQuestions && !options.definitionEpicID && !options.helpRequest && !options.refinementOnly && !options.recordIDs?.length
         && !options.submissionIDs?.length && !options.isolatedTask && !options.requiredEpicIDs?.length;
       if (options.gapMode) options.onProgress?.("Preparing workflow evidence…\nIndexing saved checks locally. No model request has started; Stop remains available.");
-      const epicPlan = options.gapMode ? await prepareEpicReview(project, this.store.epicReviewHistory(projectID), options.focusEpicID, this.store.submissions(projectID), {
+      const epicHistory = options.gapMode ? this.store.epicReviewHistory(projectID) : [];
+      const epicPlan = options.gapMode ? await prepareEpicReview(project, epicHistory, options.focusEpicID, this.store.submissions(projectID), {
         signal: controller.signal, readRevision: (revision) => this.store.get(projectID, revision),
         loadReceipts: (inputKey) => this.store.epicPlanningReceipts(projectID, inputKey),
         saveReceipt: (inputKey, key, value) => this.store.saveEpicPlanningReceipt(projectID, project.revision, inputKey, key, value),
@@ -540,6 +550,12 @@ export class DiscoveryService {
       if (epicPlan) {
         controller.signal.throwIfAborted();
         if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
+        if (measurement && epicPlan.task) {
+          const task = epicPlan.task;
+          const priorCompleted = epicHistory.some(j => j.status === "completed" && !!j.result && j.context?.epicReview?.packageID === task.review.packageID);
+          measurement.value.epicSelection = { format: 1, priorCompleted,
+            reason: task.prior ? "saved-work-resume" : priorCompleted ? "saved-task-incompatible" : "new-package" };
+        }
       }
       if (epicPlan && !epicPlan.task) {
         measurement?.planned(undefined, epicPlan.planningDecisions);
@@ -678,7 +694,7 @@ export class DiscoveryService {
         onResearch: (evidence) => this.store.attachResearch(job.id, evidence),
       };
       const requestModel = async (context: ContextPack) => {
-        if (this.navigation.workflow?.continuous) {
+        if (this.navigation.workflow?.continuous || this.navigation.workflow?.cooperativeWindow) {
           clearTimeout(timer); timer = setTimeout(timeout, 300000);
         }
         if (options.definitionEpicID) options.onDefinitionRequest?.();
@@ -732,7 +748,7 @@ export class DiscoveryService {
           const limits = workflowLimits ?? this.navigation.stagedLimits ?? { requests: stagedRunRequestLimit, durationMs: stagedRunDurationMs };
           work.stagedRun = { format: 1, requestLimit: limits.requests, durationMs: limits.durationMs };
           clearTimeout(timer);
-          if (!this.navigation.workflow?.continuous) timer = setTimeout(timeout, Math.max(0, started + limits.durationMs - Date.now()));
+          if (!this.navigation.workflow?.continuous && !this.navigation.workflow?.cooperativeWindow) timer = setTimeout(timeout, Math.max(0, started + limits.durationMs - Date.now()));
           if (work.stages.length || work.continuation) throw new Error("Staged decision review cannot reuse ordinary navigation work.");
           let callsThisRun = 0;
           while (staged.phase !== "complete") {

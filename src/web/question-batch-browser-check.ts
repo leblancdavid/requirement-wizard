@@ -56,9 +56,9 @@ try {
   hold = false;
   await queue.getByRole("region", { name: "Project workflow", exact: true }).getByRole("button", { name: "Continue specification", exact: true }).click();
   await expect.poll(() => store.workflow(p.id).phase).toBe("needs-decision"); await expect.poll(() => store.workflowBusy(p.id)).toBe(false);
-  await expect(batch).toContainText("4 questions ready"); await expect(batch).toContainText("5 / 5 package passes");
+  await expect(batch).toContainText("5 questions ready"); await expect(batch).toContainText("Work window 2");
   assert.equal(topics.filter(t => t === topics[0]).length, 1); assert.equal(topics.filter(t => t === topics[1]).length, 2);
-  assert.equal(store.workflow(p.id).questionBatch!.requests, 5); assert.equal(store.workflow(p.id).questionBatch!.reason, "budget");
+  assert.equal(store.workflow(p.id).questionBatch!.requests, 6); assert.equal(store.workflow(p.id).questionBatch!.reason, "target");
   assert.deepEqual(store.getJob(interrupted.id), interrupted); assert.deepEqual(store.get(p.id).requirements, p.requirements);
   assert.equal(store.get(p.id).assessments.length, 0); assert.equal(store.execution(p.id).run, undefined);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -75,6 +75,6 @@ try {
   assert.ok(store.submissions(p.id).every(s => s.status === "queued"));
   await expect(page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true })).toBeVisible();
   await page.reload(); assert.equal(topics.length, originalCalls); assert.deepEqual(errors, []);
-  console.log("Question collection browser passed: multi-topic collection, visible bounds, owned Pause/reload/explicit resume, counters and paid-package recovery, no repeated finished topic, mobile, four save-only answers and separate submission. Fixture only; no live inference.");
+  console.log("Question collection browser passed: multi-topic collection, automatic bounded-window continuation without another Continue click, owned Pause/reload/explicit resume, retained counters and paid work, no repeated finished topic, mobile, five save-only answers and separate submission. Fixture only; no live inference.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-question-batch-failure"); throw error; }
 finally { await browser.close(); await app.close(); store.close(); }

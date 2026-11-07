@@ -1,5 +1,11 @@
 # Browser workspace, epics, and estimated completeness
 
+Shared-answer verification can now show **repairing the draft**: original answers
+and reading steps stay saved, while a bounded correction is followed by a full check
+of every evidence batch. Existing eligible rejected groups resume with **Continue
+specification** after updating. Pause/reload retains charged repair attempts; genuine
+conflicting human choices still stop. See [repair and limits](coordinated-workflow.md#bounded-shared-draft-repair-2026-11-06).
+
 ## Save answers before processing (2026-11-06)
 
 After explicitly starting/continuing the specification workflow, answer the available
@@ -16,6 +22,11 @@ restarting its members separately. Question collection now visits eligible packa
 within a bounded episode for new continuous runs; see
 [question collection](coordinated-workflow.md#bounded-question-collection-2026-11-06).
 The queue shows its soft target, package/request usage and saved active-time budget.
+New explicit continuous runs use automatic work windows rather than requiring another
+Continue click at a successful scheduling boundary. Actual request timeouts and failures
+still stop. The queue shows current-window/cumulative usage and the actual stop message,
+plus grouping explanations for newly instrumented response jobs. See
+[continuous windows](coordinated-workflow.md#continuous-work-windows-and-processing-diagnostics-2026-11-06).
 The dedicated fixture browser check is `npx tsx src/web/question-batch-browser-check.ts`
 (also a post-browser runner); its mobile screenshot is `.reqwizit-state/browser-question-batch-mobile.png`.
 The shared-answer fixture browser check is `npx tsx src/web/answer-group-browser-check.ts`

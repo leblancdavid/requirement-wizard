@@ -23,7 +23,7 @@ for (let i = 0; i < 20; i++) p = store.note(p.id, p.revision, `Original rule ${i
 const connections: Connections = { async accounts() { return []; }, async models() { return [{ id: "fixture", name: "Fixture" }]; },
   async beginLogin() { throw new Error("No sign-in"); }, loginStatus() { throw new Error("No sign-in"); }, cancelLogin() {},
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {} };
-const calls: string[] = []; let holdCheck = true;
+const calls: string[] = []; let holdCheck = true, holdRepair = true, rejected = false;
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(project, { context, signal, research }) {
   assert.equal(research, false);
   const stage = context.manifest.answerGroupStage;
@@ -31,11 +31,13 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
     calls.push(`${stage.phase}:${stage.step}`);
     if (stage.phase === "check") {
       if (holdCheck) return new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      if (!rejected) { rejected = true; return { answerGroupCheck: { valid: false, reason: "The draft left the original cancellation restriction unchanged" } }; }
       return { answerGroupCheck: { valid: true, reason: "Original answers and shared evidence agree" } };
     }
-    if (stage.step) return { answerGroupKeep: true };
+    if (stage.phase === "repair" && holdRepair) return new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    if (stage.phase === "read" && stage.step) return { answerGroupKeep: true };
     const items = context.manifest.submissionIDs!.map(id => store.submissions(project.id).find(s => s.id === id)!);
-    return { answerGroupDraft: { analysis: { ...empty(), requirements: items.map((s, i) => ({ localID: `new:rule-${i}`, epicID: "project",
+    return { [stage.phase === "repair" ? "answerGroupRepair" : "answerGroupDraft"]: { analysis: { ...empty(), requirements: items.map((s, i) => ({ localID: `new:rule-${i}`, epicID: "project",
       statement: `Keep behavior ${i}`, rationale: "Exact original answer", acceptance: [`Behavior ${i} remains available`], sourceIDs: [s.appliedSourceID!] })),
       specificationUpdates: { format: 1, changes: items.map((s, i) => ({ type: "activate", requirementID: `new:rule-${i}`,
         sourceIDs: [s.appliedSourceID!], reason: "Records the original explicit answer" })) } },
@@ -70,6 +72,9 @@ try {
   await page.locator(".topbar .queue-trigger").click();
   const shared = queue.getByRole("region", { name: "Shared answer integration", exact: true });
   await expect(shared).toContainText("Integrating 5 answers together");
+  const selection = queue.getByRole("region", { name: "Response integration selection", exact: true });
+  await expect(selection).toContainText("Compatible new answers in this feature share one evidence read/check schedule");
+  await expect(selection).toContainText("5 responses available at selection · 5 answers in this shared task");
   await expect(shared).toContainText("checking the combined draft");
   const flow = queue.getByRole("region", { name: "Project workflow", exact: true });
   await flow.getByRole("button", { name: "Pause specification workflow", exact: true }).click();
@@ -84,6 +89,17 @@ try {
   await page.screenshot({ path: ".reqwizit-state/browser-shared-answers-mobile.png", fullPage: true });
   holdCheck = false;
   await flow.getByRole("button", { name: "Continue specification", exact: true }).click();
+  await expect(shared).toContainText("repairing the draft against verification feedback");
+  assert.equal(store.get(p.id).requirements.length, 0);
+  await flow.getByRole("button", { name: "Pause specification workflow", exact: true }).click();
+  await expect.poll(() => store.workflowBusy(p.id)).toBe(false);
+  const repairStopped = store.jobs(p.id).reverse().find(j => j.answerGroupWork)!;
+  assert.equal(repairStopped.answerGroupWork!.attempts, 3);
+  const repairSpend = calls.length;
+  await page.reload(); await page.locator(".topbar .queue-trigger").click();
+  assert.equal(calls.length, repairSpend); await expect(shared).toContainText("repairing the draft against verification feedback");
+  holdRepair = false;
+  await flow.getByRole("button", { name: "Continue specification", exact: true }).click();
   await expect.poll(() => store.submissions(p.id).every(s => s.status === "completed"), { timeout: 20000 }).toBe(true);
   await expect.poll(() => store.workflowBusy(p.id), { timeout: 20000 }).toBe(false);
   assert.equal(calls.filter(c => c.startsWith("read:")).length, readCount, "Paid reads must not replay after Pause/reload");
@@ -95,6 +111,9 @@ try {
     { origin: app.origin, token: app.token, id: p.id });
   assert.ok(snapshot.jobs.every((j: { answerGroupWork?: unknown }) => !j.answerGroupWork), "Browser snapshot must not expose raw grouped drafts/receipts");
   assert.equal(store.execution(p.id).run, undefined);
-  console.log("Shared answer browser passed: five fast saves/no requests, combined evidence, atomic publication, owned Pause/reload/resume without read replay, spent attempts, sanitized snapshots and mobile. No live inference.");
-} catch (error) { await diagnose?.(".reqwizit-state/browser-shared-answers-failure"); throw error; }
+  console.log("Shared answer browser passed: five fast saves/no requests, bounded rejected-draft repair, visible repair progress, Pause/reload/resume with charged repair attempts, retained reads, full recheck, atomic publication, sanitized snapshots and mobile. No live inference.");
+} catch (error) {
+  console.error({ calls, workflow: store.workflow(p.id).message, jobs: store.jobs(p.id).filter(j => j.answerGroupWork).map(j => ({ status: j.status, diagnostic: j.diagnostic, attempts: j.answerGroupWork!.attempts })) });
+  await diagnose?.(".reqwizit-state/browser-shared-answers-failure"); throw error;
+}
 finally { await browser.close(); await app.close(); store.close(); }

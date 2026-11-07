@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Project } from "./model.js";
 import { definitionRetentionSchema } from "./definition-retention.js";
+import { workflowStopSchema } from "./workflow-stop.js";
 
 const count = z.number().int().nonnegative();
 export const workflowRunSchema = z.object({ format: z.literal(1), id: z.string().uuid(), grantID: z.string(),
@@ -9,7 +10,8 @@ export const workflowRunSchema = z.object({ format: z.literal(1), id: z.string()
   requests: count.max(Number.MAX_SAFE_INTEGER), jobIDs: z.array(z.string()).max(10000),
   retentionStartKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   result: z.object({ throughRevision: z.number().int().positive(), endedAt: z.string().datetime(),
-    phase: z.enum(["idle", "working", "needs-decision", "blocked", "paused", "ready-to-plan"]),
+     phase: z.enum(["idle", "working", "needs-decision", "blocked", "paused", "ready-to-plan"]),
+     stopReason: workflowStopSchema.optional(),
     changes: z.array(z.object({ label: z.enum(["decision", "requirement", "question", "feature", "research source", "refinement", "definition review"]),
       added: count, updated: count, removed: count }).strict()).max(7),
     jobs: z.object({ completed: count, unfinished: count, stopped: count }).strict(),

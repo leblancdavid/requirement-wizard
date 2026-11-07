@@ -56,7 +56,7 @@ export function finishWorkflowRun(db: Database.Database, id: string, state: Work
     && snapshotKey(projectSchema.parse(JSON.parse(current.payload))) === snapshotKey(after) ? retainedDefinitionReviews(before, after)
       : { format: 1 as const, policy: "definition-run-retention-v1" as const, status: "unavailable" as const, reason: "snapshot-mismatch" as const, reviews: [] }
     : undefined;
-  run.result = { throughRevision: revision, endedAt: new Date().toISOString(), phase: state.phase, changes: workflowRunChanges(before, after), jobs,
+  run.result = { throughRevision: revision, endedAt: new Date().toISOString(), phase: state.phase, ...(state.stopReason ? { stopReason: state.stopReason } : {}), changes: workflowRunChanges(before, after), jobs,
     ...(retainedDefinitions ? { retainedDefinitions } : {}) };
   write(db, id, run);
 }

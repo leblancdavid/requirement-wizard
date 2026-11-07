@@ -30,6 +30,13 @@ Pause/restart retains collection counters and completed package work; continuati
 explicit. This bounds question collection, not the entire continuous workflow. See
 [question collection](coordinated-workflow.md#bounded-question-collection-2026-11-06).
 
+Policy 2, adopted by the next explicit continuous continuation, treats those bounds
+as cooperative work windows: successful work yields and continues under the same
+continuous permission, without another Continue click. The time checkpoint does not
+cancel an in-flight successful request. Actual request timeouts, technical/semantic
+failures, changed inputs and Pause still stop; spent task attempts are never reset.
+Earlier bounded grants and review-only checkpoints do not gain continuous permission.
+
 With checkpoint scheduling activated by explicit continuation, new answers are
 processed as a collection batch. Definition assessments wait for settled related
 question discovery and resolved decisions, or **Review changes**. An answer alone

@@ -337,7 +337,7 @@ export type Job = {
     refinementPair?: { requirementIDs: [string, string]; contextKey: string; includeUnapproved?: boolean; triggerSourceIDs?: string[] };
     submissionIDs?: string[];
     submissionStage?: { policy: "exact-submission-batches-v1"; planKey: string; step: number; phase: "read" | "check" };
-    answerGroupStage?: { policy: "exact-answer-group-v1"; planKey: string; step: number; phase: "read" | "check" };
+    answerGroupStage?: { policy: "exact-answer-group-v1"; planKey: string; step: number; phase: "read" | "check" | "repair" };
     reviewSourceIDs?: string[];
     scopedAnswerSourceIDs?: string[];
     submissionAuthorizationSourceIDs?: string[];
@@ -362,7 +362,7 @@ export type Job = {
   readinessWork?: import("./readiness-stages.js").ReadinessWork;
   submissionWork?: import("./submission-stages.js").SubmissionWork;
   answerGroupWork?: import("./answer-group.js").AnswerGroupWork;
-  answerGroupProgress?: { answers: number; completed: number; total: number; phase: "read" | "check" | "complete" };
+  answerGroupProgress?: { answers: number; completed: number; total: number; phase: "read" | "check" | "repair" | "complete" };
   refinementWork?: import("./refinement-stages.js").RefinementWork;
   /** Attempts dispatched by this job only; reused receipts are not new calls. */
   refinementRequests?: number;

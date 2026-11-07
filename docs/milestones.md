@@ -1,5 +1,21 @@
 # Milestone backlog
 
+Shared-answer correction now repairs an AI draft after negative verification without
+repeating original evidence reads, then verifies all batches again. Two repairs and
+existing charged step attempts bound the work; real human conflicts remain explicit
+stops. Old rejected jobs and interrupted coordinator passes have explicit recovery.
+This does not qualify live repair quality or fix the observed post-request delay.
+See [repair and migration](migrations.md#bounded-shared-answer-draft-repair-2026-11-06).
+
+The real-project follow-up fixes scheduling-only Continue stops with explicit-adoption
+policy-2 work windows, preserves paid task attempts and distinguishes genuine request
+timeouts from successful cooperative time boundaries. It adds grouping/epic-selection
+and worker-stop reasons plus gap/metrics-persistence attribution. A later-feature
+compatible answer pair is no longer hidden by an earlier singleton. The supplied
+project's roughly 85-second unmeasured answer overhead remains unlocated; expanded
+synthetic profiling does not reproduce it. No live speed or milestone exit is claimed.
+See [continuous windows and diagnostics](coordinated-workflow.md#continuous-work-windows-and-processing-diagnostics-2026-11-06).
+
 The latest 2026-11-06 slice adds bounded question collection to new explicit continuous
 runs: existing eligible workflow packages collect toward five pending questions, with
 five package-pass, sixteen-request and five-active-minute limits. Original package

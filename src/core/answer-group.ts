@@ -8,7 +8,7 @@ import { shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure } fro
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
-export const answerGroupLimits = { answers: 5, batches: 32, characters: 96000, draft: 24000, attempts: 4 } as const;
+export const answerGroupLimits = { answers: 5, batches: 32, characters: 96000, draft: 24000, attempts: 4, repairs: 2 } as const;
 export const answerGroupDraftSchema = z.object({ analysis: submissionDraftSchema.extend({
   reviewChanges: z.tuple([]).optional(), reviewResponses: z.tuple([]).optional(),
   refinements: z.array(analysisSchema.shape.refinements.unwrap().element.extend({ resolution: z.never().optional() })).max(10).optional(),
@@ -17,13 +17,32 @@ export const answerGroupDraftSchema = z.object({ analysis: submissionDraftSchema
 export type AnswerGroupDraft = z.infer<typeof answerGroupDraftSchema>;
 export const answerGroupResponseSchema = z.union([
   z.object({ answerGroupDraft: answerGroupDraftSchema }).strict(),
+  z.object({ answerGroupRepair: answerGroupDraftSchema }).strict(),
   z.object({ answerGroupKeep: z.literal(true) }).strict(),
   z.object({ answerGroupCheck: z.object({ valid: z.boolean(), reason: z.string().trim().min(1).max(1200) }).strict() }).strict(),
   z.object({ answerGroupEvidence: z.object({ recordIDs: z.array(z.string().min(1)).min(1).max(8) }).strict() }).strict(),
   z.object({ answerGroupBlocked: z.object({ reason: z.string().trim().min(1).max(1200) }).strict() }).strict(),
 ]);
+/** Advertise only this stage's output, rather than duplicating the large draft
+ * schema in every verification request. Persisted receipts still use the full union. */
+export function answerGroupStageResponseSchema(phase: "read" | "check" | "repair", requestableIDs: readonly string[]) {
+  const [draft, repair, keep, check, , blocked] = answerGroupResponseSchema.options;
+  const result = phase === "read" ? z.union([draft, keep, blocked]) : phase === "repair" ? z.union([repair, blocked]) : z.union([check, blocked]);
+  if (!requestableIDs.length) return result;
+  const [first, ...rest] = [...new Set(requestableIDs)];
+  const evidence = z.object({ answerGroupEvidence: z.object({ recordIDs: z.array(z.enum([first!, ...rest]))
+    .min(1).max(8).describe("Distinct original string IDs for missing evidence only. Never request an already detailed record or an identifier-table index.") }).strict() }).strict();
+  return z.union([result, evidence]);
+}
+/** Dispatch-only inventory. Do not change historical context bodies or receipt keys. */
+export function answerGroupLookupInventory(context: ContextPack) {
+  const { includedIDs, omittedIDs } = context.manifest, included = new Set(includedIDs);
+  if (included.size !== includedIDs.length || new Set(omittedIDs).size !== omittedIDs.length || omittedIDs.some(id => included.has(id)))
+    throw new Error("Shared answer lookup inventory is inconsistent. No lookup permission was inferred.");
+  return { loadedIDs: [...includedIDs], requestableIDs: [...omittedIDs] };
+}
 export const answerGroupStageSchema = z.object({ policy: z.literal("exact-answer-group-v1"), planKey: key,
-  step: z.number().int().min(0).max(64), phase: z.enum(["read", "check"]) }).strict();
+  step: z.number().int().min(0).max(64), phase: z.enum(["read", "check", "repair"]) }).strict();
 export const answerGroupWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-answer-group-v1"),
   submissionIDs: z.array(z.string().uuid()).min(2).max(answerGroupLimits.answers).refine(ids => new Set(ids).size === ids.length), epicID: z.string().min(1),
   materialKey: key, planKey: key, batches: z.array(z.array(z.string()).min(1)).min(1).max(answerGroupLimits.batches),
@@ -31,13 +50,22 @@ export const answerGroupWorkSchema = z.object({ format: z.literal(1), policy: z.
     step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(answerGroupLimits.attempts),
     jobID: z.string().uuid(), atRevision: z.number().int().positive(), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
     response: answerGroupResponseSchema,
-  }).strict()).max(256) }).strict();
+  }).strict()).max((answerGroupLimits.batches * (2 + answerGroupLimits.repairs) + answerGroupLimits.repairs) * answerGroupLimits.attempts) }).strict();
 export type AnswerGroupWork = z.infer<typeof answerGroupWorkSchema>;
 const completes = (response: z.infer<typeof answerGroupResponseSchema>) => "answerGroupDraft" in response || "answerGroupKeep" in response
-  || "answerGroupCheck" in response && response.answerGroupCheck.valid;
-export const answerGroupStep = (w: AnswerGroupWork) => w.receipts.filter(r => completes(r.response)).length;
-export const answerGroupProgress = (w: AnswerGroupWork) => ({ completed: answerGroupStep(w), total: w.batches.length * 2,
-  phase: answerGroupStep(w) >= w.batches.length * 2 ? "complete" as const : answerGroupStep(w) < w.batches.length ? "read" as const : "check" as const });
+  || "answerGroupRepair" in response || "answerGroupCheck" in response && response.answerGroupCheck.valid;
+/** Reads remain paid evidence; a changed draft invalidates every earlier check, not the reads. */
+export function answerGroupProgress(w: AnswerGroupWork) {
+  let completed = 0, repairs = 0, rejection: string | undefined;
+  for (const { response } of w.receipts) {
+    if ("answerGroupRepair" in response) { completed = w.batches.length; repairs++; rejection = undefined; }
+    else if ("answerGroupCheck" in response && !response.answerGroupCheck.valid) rejection = response.answerGroupCheck.reason;
+    else if (completes(response)) completed++;
+  }
+  return { completed, total: w.batches.length * 2, repairs,
+    phase: rejection ? "repair" as const : completed >= w.batches.length * 2 ? "complete" as const : completed < w.batches.length ? "read" as const : "check" as const };
+}
+export const answerGroupStep = (w: AnswerGroupWork) => answerGroupProgress(w).completed;
 
 /** First shared protocol: same-feature concrete unscoped answers only. Targeted
  * answers, reviews, reconciliation, research and paid individual work stay separate. */
@@ -78,12 +106,19 @@ export type AnswerGroupMaterials = ReturnType<typeof answerGroupMaterials>;
 export function answerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft): ContextPack {
   const step = answerGroupStep(w), progress = answerGroupProgress(w);
   if (progress.phase === "complete") throw new Error("No unfinished shared-answer stage.");
+  const repairIndex = w.receipts.reduce((last, r, index) => "answerGroupRepair" in r.response ? index : last, -1);
+  const cycle = w.receipts.slice(repairIndex + 1);
+  // Exact material is unchanged: paid same-batch lookups remain usable across
+  // correction cycles, although their earlier verdicts do not verify the new draft.
   const extra = w.receipts.filter(r => r.step === step).flatMap(r => "answerGroupEvidence" in r.response ? r.response.answerGroupEvidence.recordIDs : []);
   const ids = new Set([...m.pins, ...w.batches[step % w.batches.length]!, ...extra]);
   const records = m.records.filter(r => ids.has(r.record.id));
   let data: unknown = { ...m.base, ...Object.fromEntries(["sources", "questions", "requirements", "research"]
     .map(field => [field, records.filter(r => r.field === field).map(r => r.record)])), draft: draft ?? null,
-    answerGroup: { phase: progress.phase, step, batches: w.batches.length, availableEvidenceIDs: m.evidenceIDs } };
+    answerGroup: { phase: progress.phase, step, batches: w.batches.length, availableEvidenceIDs: m.evidenceIDs,
+      ...(progress.phase === "repair" ? { repair: { number: progress.repairs + 1, limit: answerGroupLimits.repairs,
+        feedback: [...cycle].reverse().find(r => "answerGroupCheck" in r.response && !r.response.answerGroupCheck.valid)!.response,
+        instruction: "Repair the complete draft against the original answers and this verification feedback. Feedback is a model finding, not human authority. Preserve unrelated choices; do not invent precedence. Load exact target/supporting evidence before changing actions. If the original human decisions are genuinely ambiguous or conflicting, return answerGroupBlocked with a focused explanation; do not choose for the user. All evidence batches must be checked again after repair." } } : {}) } };
   for (const encode of [shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure]) {
     const next = encode(data).data; if (JSON.stringify(next).length < JSON.stringify(data).length) data = next;
   }
@@ -123,20 +158,29 @@ function accept(m: AnswerGroupMaterials, w: AnswerGroupWork, draft: AnswerGroupD
   if ("answerGroupBlocked" in response) return { response, draft, blocked: response.answerGroupBlocked.reason };
   if ("answerGroupEvidence" in response) {
     const ids = response.answerGroupEvidence.recordIDs;
-    if (new Set(ids).size !== ids.length || ids.some(id => !m.evidenceIDs.includes(id) || context.manifest.includedIDs.includes(id)))
-      throw new Error("Shared answer lookup contains unavailable, duplicate or already loaded evidence.");
+    if (ids.some(id => !m.evidenceIDs.includes(id)))
+      throw new Error("Shared answer lookup contains unavailable evidence. Only missing original record IDs from this request's lookup schema are allowed; no guessed IDs or identifier-table indexes.");
+    if (new Set(ids).size !== ids.length)
+      throw new Error("Shared answer lookup contains duplicate evidence. Request each missing original record ID only once.");
+    if (ids.some(id => context.manifest.includedIDs.includes(id)))
+      throw new Error("Shared answer lookup contains already loaded evidence. Use the detailed bodies already in this request; only missing original record IDs may be loaded.");
     return { response, draft };
   }
   if (context.manifest.answerGroupStage!.phase === "check") {
     if (!("answerGroupCheck" in response)) throw new Error("Shared answer verification cannot rewrite the frozen draft.");
-    return { response, draft, blocked: response.answerGroupCheck.valid ? undefined : response.answerGroupCheck.reason };
+    return { response, draft };
   }
+  const repairing = context.manifest.answerGroupStage!.phase === "repair";
+  if (repairing && answerGroupProgress(w).repairs >= answerGroupLimits.repairs)
+    throw new Error("Shared draft reached its two-repair limit. Original answers, rejected drafts and paid evidence remain saved; human review is required.");
+  if (repairing ? !("answerGroupRepair" in response) : "answerGroupRepair" in response)
+    throw new Error("Shared answer repair requires its explicit rejected-draft stage and a complete repaired draft.");
   if ("answerGroupKeep" in response) {
     if (!draft) throw new Error("Shared answers need an explicit draft before unchanged retention.");
     return { response, draft };
   }
-  if (!("answerGroupDraft" in response)) throw new Error("Shared answer reading requires a complete draft.");
-  const next = response.answerGroupDraft, output = next.analysis, loaded = new Set(context.manifest.includedIDs);
+  if (!("answerGroupDraft" in response) && !("answerGroupRepair" in response)) throw new Error("Shared answer reading requires a complete draft.");
+  const next = "answerGroupRepair" in response ? response.answerGroupRepair : response.answerGroupDraft, output = next.analysis, loaded = new Set(context.manifest.includedIDs);
   if ([...output.questions, ...output.requirements].some(r => r.epicID !== m.epicID)
     || output.retireQuestions.some(q => m.project.questions.find(r => r.id === q.questionID)?.epicID !== m.epicID)
     || output.refinements?.some(r => m.project.requirements.find(t => t.id === r.requirementID)?.epicID !== m.epicID)

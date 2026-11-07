@@ -29,6 +29,8 @@ try {
   measurement.finish(); assert.equal(result.status, "completed");
   console.log(JSON.stringify({ comparison: "synthetic-saved-answer-no-inference", records: p.sources.length + p.questions.length,
     batches: result.submissionWork!.batches.length, requests: measurement.value.requests.length,
-    elapsedMs: measurement.value.elapsedMs, localMs: measurement.value.submissionLocalMs,
+     elapsedMs: measurement.value.elapsedMs, localMs: measurement.value.submissionLocalMs,
+     bookkeepingMs: measurement.value.bookkeepingMs, gapBeforeMs: measurement.value.requests.map(r => r.gapBeforeMs),
+     afterLastRequestMs: measurement.value.afterLastRequestMs,
     limitation: "Synthetic local preparation/validation/persistence only. No real-project or model-latency claim." }));
 } finally { store.close(); }

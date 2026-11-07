@@ -19,6 +19,7 @@ import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } 
 import { planWorkflowSchedule } from "../core/workflow-schedule.js";
 import type { WorkflowJobReceipt } from "../core/workflow-receipts.js";
 import { definitionInputKey } from "../core/definition-identity.js";
+import { answerGroupProgress, answerGroupLimits } from "../core/answer-group.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Run = { controller: AbortController; promise: Promise<void> };
@@ -112,17 +113,29 @@ export class ProjectWorkflow {
       if (state.current?.kind === "input") for (const item of this.store.submissions(id)) {
         if (item.status !== "needs-attention" || item.conflict || !item.jobID || !state.current.jobIDs.includes(item.jobID)) continue;
         const job = this.store.getJob(item.jobID);
-        if (["interrupted", "cancelled"].includes(job.status) && job.context?.submissionIDs?.includes(item.id)) {
+        const group = job.answerGroupWork, progress = group && answerGroupProgress(group);
+        const repairable = action !== "review-changes" && job.status === "failed" && group && progress?.phase === "repair"
+          && progress.repairs < answerGroupLimits.repairs && group.attempts < answerGroupLimits.attempts
+          && !group.receipts.some(r => "answerGroupBlocked" in r.response);
+        if ((["interrupted", "cancelled"].includes(job.status) || repairable) && job.context?.submissionIDs?.includes(item.id)) {
           item.status = item.applied ? "saved" : "queued"; this.store.saveSubmission(item);
+          // Earlier workers marked an input pass complete even after queue cancellation.
+          // Explicit recovery of its unfinished job must not inherit that loop guard.
+          state.current.completed = false;
         }
       }
-      state.enabled = true; state.paused = false; state.phase = "working";
+       state.enabled = true; state.paused = false; state.phase = "working";
+       delete state.stopReason;
       state.reviewPolicy = { format: 1 };
       // Adopt only on explicit continuous consent. Old bounded/live grants keep
       // their original wake-up behavior; startup never rewrites or arms them.
        if (action === "continue-continuous") {
          state.inputBatchPolicy = { format: 1 };
-         state.questionBatchPolicy = { format: 1 };
+         state.questionBatchPolicy = { format: 2 };
+         if (state.questionBatch?.format === 1) {
+           const previous = state.questionBatch;
+           state.questionBatch = { ...previous, format: 2, window: { number: 1, packages: previous.packages, requests: previous.requests } };
+         }
        }
        if (state.questionBatch?.activeSince !== undefined) {
          state.questionBatch.remainingMs = Math.max(0, state.questionBatch.remainingMs - Math.max(0, Date.now() - state.questionBatch.activeSince));
@@ -140,7 +153,8 @@ export class ProjectWorkflow {
         submissionIDs: this.store.submissions(id).filter((s) => !s.archivedAt && ["queued", "saved"].includes(s.status)).map((s) => s.id) };
       delete state.waitKey; delete state.owner; delete state.leaseUntil;
     } else {
-      state.paused = true; state.phase = "paused";
+       state.paused = true; state.phase = "paused";
+       state.stopReason = "human-pause";
       state.message = action === "disable" ? "Coordinated workflow is off. Existing advanced actions remain available." : "Project workflow paused. Saved decisions and completed checks are retained.";
       if (action === "disable") state.enabled = false;
     }
@@ -198,8 +212,10 @@ export class ProjectWorkflow {
       } catch (error) { controller.abort(error); }
     }, 30000) : undefined;
     let yielded = false;
-    const stop = (phase: WorkflowState["phase"], message: string, pause = false) => {
+    const stop = (phase: WorkflowState["phase"], message: string, pause = false, reason?: WorkflowState["stopReason"]) => {
       const state = owned(); state.phase = phase; state.message = message.slice(0, 1600); state.paused ||= pause;
+      state.stopReason = reason ?? (controller.signal.aborted && state.stopReason === "human-pause" ? "human-pause"
+        : phase === "needs-decision" ? "decision" : phase === "blocked" ? "task-failed" : phase === "ready-to-plan" ? "ready" : "task-stopped");
       state.waitKey = workflowWakeKey(this.project(id), this.store.submissions(id)); this.store.saveWorkflow(id, state);
     };
     let collecting = false, batchStarted = 0, batchRemainingMs = 0;
@@ -226,8 +242,8 @@ export class ProjectWorkflow {
           const batch = state.questionBatch!;
           batch.remainingMs = Math.max(0, batchRemainingMs - Math.max(0, Date.now() - batchStarted));
           batch.activeSince = Date.now();
-          if (batch.requests >= questionBatchLimits.requests || !batch.remainingMs) throw new WorkflowBudgetPause("Question collection allowance reached. Saved questions and package steps are retained.");
-          batch.requests++;
+          if ((batch.format === 2 ? batch.window.requests : batch.requests) >= questionBatchLimits.requests || batch.format === 1 && !batch.remainingMs) throw new WorkflowBudgetPause("Question collection allowance reached. Saved questions and package steps are retained.");
+          batch.requests++; if (batch.format === 2) batch.window.requests++;
         }
         state.leaseUntil = Date.now() + 360000;
         state.grant!.used++;
@@ -238,12 +254,13 @@ export class ProjectWorkflow {
     // The surrounding workflow is continuous; a question collection episode is
     // not. Staged packages must honor its actual remaining request/time budget.
     const batchService = new DiscoveryService(this.store, this.adapter, { workflow: { ...navigation, continuous: false,
+      cooperativeWindow: initial.questionBatchPolicy?.format === 2,
       beforeJob: () => {
         navigation.beforeJob(); checkpointBatchTime();
         const batch = owned().questionBatch!;
-        if (batch.requests > questionBatchLimits.requests - 3 || !batch.remainingMs)
+        if ((batch.format === 2 ? batch.window.requests : batch.requests) > questionBatchLimits.requests - 3 || !batch.remainingMs)
           throw new WorkflowBudgetPause("Question collection allowance reached; completed package work is saved.");
-        return { requests: questionBatchLimits.requests - batch.requests, durationMs: batch.remainingMs };
+        return { requests: questionBatchLimits.requests - (batch.format === 2 ? batch.window.requests : batch.requests), durationMs: batch.remainingMs };
       },
     } });
     const queue = new DiscoveryQueue(service, { manualOnly: true, owner });
@@ -285,18 +302,35 @@ export class ProjectWorkflow {
       if (!previous || previous.state !== "collecting" || previous.inputKey !== workflowReviewInputKey(project)) {
         current.questionBatch = { format: 1, inputKey: workflowReviewInputKey(project), revision: project.revision,
           packages: 0, requests: 0, remainingMs: questionBatchLimits.durationMs, state: "collecting" };
+        if (current.questionBatchPolicy?.format === 2) current.questionBatch = { ...current.questionBatch, format: 2, window: { number: 1, packages: 0, requests: 0 } };
         this.store.saveWorkflow(id, current);
       }
       collecting = true; batchStarted = Date.now(); batchRemainingMs = owned().questionBatch!.remainingMs;
+      const cooperative = owned().questionBatchPolicy?.format === 2 && owned().questionBatch!.format === 2;
       const timeout = AbortSignal.timeout(Math.max(1, batchRemainingMs));
-      const signal = AbortSignal.any([controller.signal, timeout]);
+      const signal = cooperative ? controller.signal : AbortSignal.any([controller.signal, timeout]);
       const finish = (reason: NonNullable<WorkflowState["questionBatch"]>["reason"], message: string) => {
         checkpointBatchTime();
         const state = owned(); state.questionBatch!.state = "finished"; state.questionBatch!.reason = reason;
         this.store.saveWorkflow(id, state);
         const decisions = workflowDecisions(this.project(id), this.store.submissions(id));
-        stop(decisions.length ? "needs-decision" : "paused", message, !decisions.length);
+        stop(decisions.length ? "needs-decision" : "paused", message, !decisions.length, reason === "budget" ? "collection-budget" : reason === "input" ? "saved-input" : "decision");
         return false;
+      };
+      const nextWindow = () => {
+        checkpointBatchTime(); const state = owned(), batch = state.questionBatch!;
+        if (batch.inputKey !== workflowReviewInputKey(this.project(id))) {
+          stop("paused", "Inputs changed at a work-window boundary. Saved steps and spent attempts are retained; continue explicitly for the new input.", true); return false;
+        }
+        if (state.questionBatchPolicy?.format !== 2 || batch.format !== 2) return finish("budget", "Bounded question collection stopped. Saved work is retained; continue explicitly for more work.");
+        batch.window = { number: batch.window.number + 1, packages: 0, requests: 0 };
+        batch.remainingMs = questionBatchLimits.durationMs;
+        // Yield/release the worker, not the user's existing continuous consent.
+        // Only budget pauses reach here; errors, request timeouts and Stop do not.
+        collecting = false; delete batch.activeSince; delete state.waitKey;
+        state.phase = "working"; state.message = "Question discovery is continuing in another bounded work window. Completed package steps and all charged attempts are saved; no Continue click is needed.";
+        state.stopReason = "scheduler-yield";
+        this.store.saveWorkflow(id, state); yielded = true; return false;
       };
       try {
         for (;;) {
@@ -312,18 +346,31 @@ export class ProjectWorkflow {
           if (decisions.some(d => d.kind !== "question")) return finish("decision", "Proposed choices need your review. Question collection stopped without approving them or starting area assessments.");
           const pending = snapshot.questions.filter(q => q.status === "pending" && snapshot.epics.some(e => e.id === q.epicID && !e.archived)).length;
           if (pending >= questionBatchLimits.target) return finish("target", `${pending} questions are ready. Collection reached its soft target of ${questionBatchLimits.target}; all useful questions from the last package were kept. Save your answers, then Submit saved responses.`);
-          if (batch.packages >= questionBatchLimits.packages || batch.requests > questionBatchLimits.requests - 3 || !batch.remainingMs)
-            return finish("budget", "Bounded question collection stopped. Saved questions and completed package steps are retained; the target is not a quota or proof of completeness.");
+          const window = batch.format === 2 ? batch.window : batch;
+          if (window.packages >= questionBatchLimits.packages || window.requests > questionBatchLimits.requests - 3 || !batch.remainingMs)
+            return nextWindow();
           record("discover", snapshot);
           const started = owned(); started.questionBatch!.packages++;
-          started.message = `Collecting questions · ${pending} ready / soft target ${questionBatchLimits.target} · package pass ${started.questionBatch!.packages} of ${questionBatchLimits.packages}. Independent eligible packages only; no area assessments.`;
+          if (started.questionBatch!.format === 2) started.questionBatch!.window.packages++;
+          started.message = `Collecting questions · ${pending} ready / soft target ${questionBatchLimits.target} · ${started.questionBatch!.packages} package passes saved. Eligible packages only; no area assessments.`;
           this.store.saveWorkflow(id, started);
-          const job = await batchService.analyze(id, snapshot.revision, { gapMode: "epic", questionTarget: questionBatchLimits.target, signal, research: false });
+          let job: Job;
+          try { job = await batchService.analyze(id, snapshot.revision, { gapMode: "epic", questionTarget: questionBatchLimits.target, signal, research: false }); }
+          catch (error) {
+            const saved = owned().questionBatch!, spent = saved.format === 2 ? saved.window : saved;
+            if (cooperative && error instanceof WorkflowBudgetPause && !controller.signal.aborted
+              && (spent.requests > questionBatchLimits.requests - 3 || !saved.remainingMs)) return nextWindow();
+            throw error;
+          }
           checkpointBatchTime();
           if (controller.signal.aborted) { check(job); return false; }
-          if (timeout.aborted) return finish("budget", "Question collection reached its active-time limit. Saved questions, completed package steps and charged attempts are retained. Continue explicitly when ready.");
-          if (job.status === "interrupted" && owned().questionBatch!.requests >= questionBatchLimits.requests)
-            return finish("budget", "Question collection reached its request limit. Completed package steps and charged attempts are saved; no partial proposals were published.");
+          if (!cooperative && timeout.aborted) return finish("budget", "Question collection reached its active-time limit. Saved questions, completed package steps and charged attempts are retained. Continue explicitly when ready.");
+          const savedBatch = owned().questionBatch!;
+          if (job.status === "interrupted" && job.retrievalWork?.stagedRun?.paused === "request-limit"
+            && (savedBatch.format === 2 ? savedBatch.window.requests : savedBatch.requests) >= questionBatchLimits.requests)
+            return nextWindow();
+          if (cooperative && job.status === "interrupted" && job.retrievalWork?.stagedRun?.paused === "time-limit"
+            && job.retrievalWork.attempts === 0 && savedBatch.format === 2 && savedBatch.window.requests > 0) return nextWindow();
           if (!check(job)) return false;
           // Only this completed engine publication may advance the collection's
           // binding. A concurrent product edit remains stale, never silently chased.
@@ -372,7 +419,13 @@ export class ProjectWorkflow {
           const permitted = pending.filter((s) => (!state.inputBatchPolicy && !manual && s.auto) || state.grant!.submissionIDs.includes(s.id));
           if (!permitted.length) { stop("paused", "Saved responses are waiting for the next batch. Continue specification explicitly to process them; saving responses starts no new work.", true); return; }
           record("input", project, permitted.map((s) => s.id).sort().join(","));
-          queue.resume(id, { processOnly: true, research: false, submissionIDs: permitted.map((s) => s.id) }); await queue.wait(id);
+           queue.resume(id, { processOnly: true, research: false, submissionIDs: permitted.map((s) => s.id) }); await queue.wait(id);
+           controller.signal.throwIfAborted();
+           const after = this.store.submissions(id), resolvedAfter = resolvedReviewAttempts(this.project(id), after);
+           const unfinished = after.filter(s => permitted.some(p => p.id === s.id) && !resolvedAfter.has(s.id) && !["completed", "superseded"].includes(s.status));
+           if (unfinished.length) {
+             stop("needs-decision", unfinished[0]!.diagnostic ?? "Saved response processing stopped. Original answers and completed work are retained; review the unfinished response before continuing."); return;
+           }
           if (!continuous && owned().grant!.used > workflowLimits.requests - 3) throw new WorkflowBudgetPause("Workflow burst allowance reached; saved input and follow-up checkpoints are retained.");
         } else {
            const decisions = workflowDecisions(project, submissions);
