@@ -70,6 +70,15 @@ every technical detail proposed in the planning documents.
 
 ## Coordinated project workflow (DEC-032)
 
+Confirmed follow-up (2026-11-06): a read-only check established that the reported
+missing source was a stored superseded confirmation omitted by current-decision
+projection, while edit validation required its original body. The user approved
+exact historical-source loading plus a separate, explicit, one-time recovery grant
+of up to four additional correction requests for the exhausted original group.
+Preserve the four spent requests, all blockers/replies and original answers; require
+full re-verification. Authorization starts no calls and does not choose precedence
+between human decisions. SQLite 36/portable 10 preserve the additive support/grant.
+
 Confirmed follow-up (2026-11-06): the user approved fixing a shared-answer dead end
 where verification correctly rejected a draft that added cancellation but left an
 incompatible existing acceptance scenario unchanged. Add bounded draft correction

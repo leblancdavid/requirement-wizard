@@ -75,6 +75,8 @@ export type DiagnosticSource = {
   savedStageFormat?: number | null;
   savedDraftRepairFormat?: number | null;
   answerGroupPhase?: string | null;
+  groupRecoveryRequests?: number | null;
+  groupSupportRecords?: number | null;
   workflowPhase?: string | null;
   workflowStop?: string | null;
 };
@@ -114,6 +116,7 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
         savedContext: { characters: nullableCount(row.characters), budget: nullableCount(row.budget), includedRecords: nullableCount(row.included),
           omittedRecords: nullableCount(row.omitted), areas: nullableCount(row.areas), sections },
         savedWork: { navigationStages: nullableCount(row.stages), attempts: nullableCount(row.savedAttempts), reusedStages: nullableCount(row.reusedStages),
+          additionalRecoveryRequestsGranted: nullableCount(row.groupRecoveryRequests ?? null), originalSupportRecords: nullableCount(row.groupSupportRecords ?? null),
           reusedFinal: row.reusedFinal === null ? null : !!row.reusedFinal, stagedBatches: nullableCount(row.stagedBatches), completedBatches: completedSteps,
           totalSteps, remainingSteps: totalSteps !== null && completedSteps !== null ? Math.max(0, totalSteps - completedSteps) : null,
           phase: totalSteps !== null && completedSteps !== null ? completedSteps >= totalSteps ? "complete" : row.answerGroupPhase === "repair" ? "repair" : completedSteps < row.stagedBatches! || row.savedDraftRepairFormat === 1 && completedSteps === row.stagedBatches ? "read" : "check" : null,

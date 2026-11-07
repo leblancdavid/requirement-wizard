@@ -27,7 +27,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 35;
+export const databaseSchemaVersion = 36;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -246,6 +246,8 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // Reader boundary only. No paid work, original metrics or old consent is rewritten.
 } }, { version: 35, name: "bounded-shared-draft-repair-v1", apply() {
   // Reader boundary only: retain original receipts/keys; repairs append new evidence.
+} }, { version: 36, name: "shared-original-source-support-and-explicit-recovery-v1", apply() {
+  // Reader boundary only. No original evidence, jobs, attempts or consent rewritten.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

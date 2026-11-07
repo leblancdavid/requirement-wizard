@@ -155,6 +155,12 @@ three to five questions, prioritized by impact, uncertainty, and dependencies.
   Limit accepted repairs to two per original group without refunding step attempts.
   Genuine ambiguity/conflicting human choices remain explicit stops, not invented
   precedence. Existing compatible rejected groups resume only with explicit continuation.
+- Original supporting sources must remain exactly readable even when a later current
+  decision projection omits their historical body. Historical evidence is not current
+  authorization. An eligible older exhausted shared group may receive one explicitly
+  confirmed allowance of four additional correction requests, keeping its original
+  four requests/blocker unchanged and still verifying every evidence batch. Merely
+  authorizing that allowance must not make a model call or enable a disabled workflow.
 
 - Explain why a question matters and the consequences of its options.
 - Support custom text, help deciding, deferral, and scoped delegation.

@@ -1,5 +1,18 @@
 # Architecture outline
 
+## Original supporting evidence and bounded recovery (2026-11-06)
+
+Shared-answer material/plan identities retain the original projection for compatibility.
+Optional versioned source-support metadata authenticates exact original bodies excluded
+by background review projection, without promoting historical evidence to authority.
+New work sizes batches with linked support; explicit legacy recovery activates after
+a preserved receipt prefix, details only affected targets and keeps background packets
+bounded. A transaction records one additional four-request allowance without inference
+or workflow opt-in; the service continues correction attempts at 5–8, then requires
+full original-batch verification. Original reads, blockers and failed spend survive.
+SQLite 36 and portable format 10 protect new readers; earlier saved formats remain
+valid. See [migration ledger](migrations.md#original-shared-answer-support-and-explicit-recovery-2026-11-06).
+
 ## Shared-draft correction and replay (2026-11-06)
 
 Shared-answer format-1 receipts add an explicit repair response/stage. A negative

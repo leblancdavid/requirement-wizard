@@ -9,7 +9,7 @@ export const workflowLabels: Record<WorkflowView["phase"], string> = {
   idle: "Not started", working: "Working", "needs-decision": "Needs your decision", blocked: "Blocked",
   paused: "Paused—progress saved", "ready-to-plan": "Specification checks passed", "ready-to-implement": "Ready to implement",
 };
-export type WorkflowAction = "continue" | "continue-continuous" | "review-changes" | "pause" | "disable";
+export type WorkflowAction = "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "pause" | "disable";
 export const mayContinueProject = (workflow: WorkflowView) => !workflow.active
   && (!workflow.enabled || workflow.paused || workflow.suspended || ["blocked", "idle"].includes(workflow.phase)
     || !!workflow.answerBatch?.waiting && (workflow.answerBatch.savedResponses > 0 || workflow.decisions.length === 0));
@@ -52,6 +52,11 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
       {workflow.grant && <p>{workflow.grant.continuous ? `${workflow.grant.used} AI request attempts recorded · continuous run` : `${workflow.grant.used} of ${workflow.limits.requests} AI requests used · ${Math.ceil(workflow.grant.remainingMs / 1000)} seconds remaining in the earlier bounded allowance. Continue again to authorize continuous work.`}</p>}
       {workflow.phase === "blocked" && <LogLink detail={workflow.message} title="Project workflow" />}
     </>}
+    {workflow.sourceRecovery && !workflow.active && <section aria-label="Original source recovery"><h4>Recover missing original sources</h4>
+      <p>The saved draft needs original supporting records omitted from its earlier evidence set. Those records still exist. The original four requests and blocker stay saved.</p>
+      <p>Authorize one allowance of up to four additional repair requests for this group. Saved reading steps will not repeat; every evidence batch must check the corrected draft. This consumes AI plan usage, does not resolve conflicting human choices, and cannot be extended a second time. Authorizing this allowance alone starts no AI work.</p>
+      <button className="secondary" disabled={disabled} onClick={() => configure("recover-shared-sources")}>Authorize source recovery · up to 4 requests</button>
+    </section>}
     <div className="button-row">{mayContinue && <button className="primary" disabled={disabled} onClick={() => configure("continue-continuous")}>{workflowContinueLabel(workflow)}</button>}
       {!settings && !workflow.active && workflow.enabled && <button className="secondary" disabled={disabled} title="Review the accumulated changes in one bounded burst (up to eight AI requests and five active minutes). Process saved responses first. Remaining questions are not approved or answered by this review." onClick={() => configure("review-changes")}>Review changes</button>}
       {workflow.enabled && !workflow.paused && !workflow.suspended && <button className="secondary" disabled={pending} onClick={() => configure("pause")}>Pause specification workflow</button>}

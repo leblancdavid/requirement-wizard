@@ -1,5 +1,28 @@
 # Coordinated workflow preview (DEC-032)
 
+## Original sources and one-time recovery (2026-11-06)
+
+Original supporting confirmations can be historical without being disposable. Shared
+editing now keeps their exact bodies available, separate from current human authority;
+a later quotation/confirmation is not substituted for an original source needed by
+the edit validator. New shared batches include linked original support and budget for it.
+
+An older exhausted group with this specific omission can show **Recover missing
+original sources** in Processing & queue. Choose **Authorize source recovery · up to
+4 requests**, then **Continue specification** (or explicit saved-input processing).
+Authorization alone starts nothing. It preserves the old four requests and blocked
+reply and permits one additional allowance of four correction requests, beginning
+at attempt five. It is not repeatable, cannot resolve genuine human conflicts, and
+does not skip any verification batch. Pause/reopen/clone preserve its spend and exact
+original evidence. If the corrected draft or required joint context cannot fit, work
+still stops without truncating human evidence.
+
+Background history is not pulled into every recovered verification packet. Exact
+missing support remains requestable when needed; a source's historical presence does
+not approve its old wording or authorize a new rule. The earlier repair/request limits
+below remain the default, with only this explicit one-time recovery exception.
+See [compatibility and checks](migrations.md#original-shared-answer-support-and-explicit-recovery-2026-11-06).
+
 ## Bounded shared-draft repair (2026-11-06)
 
 A negative shared-answer check no longer strands an otherwise usable saved answer

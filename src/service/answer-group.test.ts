@@ -8,7 +8,7 @@ import type { Analysis, Project, Submission } from "../core/model.js";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService, type DiscoveryAdapter } from "./discovery.js";
 import { runAnswerGroup } from "./answer-group.js";
-import { answerGroupMaterials, planAnswerGroup, answerGroupContext, acceptAnswerGroup, replayAnswerGroup, answerGroupProgress, answerGroupWorkSchema, answerGroupDraftSchema, answerGroupStageResponseSchema, answerGroupLookupInventory, type AnswerGroupDraft } from "../core/answer-group.js";
+import { answerGroupMaterials, planAnswerGroup, answerGroupContext, acceptAnswerGroup, replayAnswerGroup, answerGroupProgress, answerGroupWorkSchema, answerGroupDraftSchema, answerGroupStageResponseSchema, answerGroupLookupInventory, answerGroupRecoveryPreview, answerGroupRequestLimit, authorizeAnswerGroupRecovery, type AnswerGroupDraft } from "../core/answer-group.js";
 import { planSubmissionStages, submissionMaterials } from "../core/submission-stages.js";
 import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
@@ -16,15 +16,17 @@ import { discoveryPrompt, scanPrompt } from "../runtime/discovery.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
 import { ConnectedDiscovery } from "../providers/discovery.js";
 import { ProjectWorkflow } from "./workflow.js";
+import { startApp } from "../web/server.js";
 
 const empty = (): Analysis => ({ summary: "Shared answer integration", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
-function fixture(store: ProjectStore, answers = 5, large = false, answerText?: (index: number) => string, waitingRule = false) {
+function fixture(store: ProjectStore, answers = 5, large = false, answerText?: (index: number) => string, waitingRule = false, supersededSupport = false) {
   let p = store.create("Shared answers", "Keep each original human rule", { providerID: "openai", modelID: "fixture" });
   if (waitingRule) {
     const rule = store.beginJob(p.id, p.revision).job; store.claimJob(rule.id, Date.now() + 60000);
     store.finishJob(rule.id, { ...empty(), requirements: [{ epicID: "project", statement: "Approved people remain waiting",
       rationale: "Original rule", acceptance: ["Remain waiting unless approval is withdrawn or disconnection cancels it"], sourceIDs: [p.sources[0]!.id] }] });
-    p = store.get(p.id); p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", "Original accepted rule");
+    p = store.get(p.id); p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", supersededSupport ? "" : "Original accepted rule");
+    if (supersededSupport) p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", "");
   }
   const seed = store.beginJob(p.id, p.revision).job; store.claimJob(seed.id, Date.now() + 60000);
   store.finishJob(seed.id, { ...empty(), questions: Array.from({ length: answers }, (_, index) => ({ epicID: "project", text: `Keep report behavior ${index}?`,
@@ -45,6 +47,237 @@ function output(items: Submission[]) {
       sourceIDs: [s.appliedSourceID!], reason: "Records this exact human choice" })) } },
     answers: items.map(s => ({ submissionID: s.id, outcome: "integrated" as const, explanation: "Recorded this original answer without changing another choice" })) };
 }
+function legacySourceBlock(store: ProjectStore) {
+  const { p, items } = fixture(store, 2, false, i => i === 0 ? "Let the waiting person cancel." : "Keep the usable route.", true, true);
+  const target = p.requirements[0]!, historical = p.sources.find(s => s.kind === "confirmation" && p.sources.some(t => t.supersedes === s.id))!;
+  const m = answerGroupMaterials(p, items), work = planAnswerGroup(m); delete work.sourceSupport;
+  assert.ok(!m.evidenceIDs.includes(historical.id), "Reproduce the old background projection omission");
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  let draft: AnswerGroupDraft | undefined;
+  for (let i = 0; i < work.batches.length; i++) {
+    work.attempts = 1; draft = acceptAnswerGroup(m, work, draft, i ? { answerGroupKeep: true } : { answerGroupDraft: output(items) }, job).draft;
+  }
+  work.attempts = 1;
+  acceptAnswerGroup(m, work, draft, { answerGroupCheck: { valid: false, reason: `The cancellation decision requires updating ${target.id}.` } }, job);
+  const context = answerGroupContext(m, work, draft); work.attempts = 4;
+  acceptAnswerGroup(m, work, draft, { answerGroupBlocked: { reason: `Original source ${historical.id} for ${target.id} is unavailable; please supply it before repair.` } }, job);
+  store.checkpointAnswerGroup(job.id, work, context.manifest); store.failJob(job.id, "failed", "Shared answers need original supporting evidence before repair.");
+  for (const item of items) { item.status = "needs-attention"; item.jobID = job.id; store.saveSubmission(item); }
+  return { p, items, m, target, historical, job: store.getJob(job.id), work };
+}
+
+test("new shared plans supply superseded original confirmations exactly, without making them authorization", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, items } = fixture(store, 2, false, undefined, true, true), m = answerGroupMaterials(p, items), w = planAnswerGroup(m);
+    const old = p.sources.find(s => s.kind === "confirmation" && p.sources.some(t => t.supersedes === s.id))!;
+    assert.ok(w.sourceSupport); assert.equal(w.sourceSupport.fromReceipt, 0); assert.equal(w.sourceSupport.recovery, undefined);
+    const context = answerGroupContext(m, w); assert.ok(context.manifest.includedIDs.includes(old.id));
+    assert.ok(!context.manifest.submissionAuthorizationSourceIDs!.includes(old.id));
+    assert.match(JSON.stringify(context.data), /not new human decisions/);
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      assert.ok(context.manifest.includedIDs.includes(old.id));
+      return context.manifest.answerGroupStage!.phase === "check" ? { answerGroupCheck: { valid: true, reason: "Exact original sources read" } }
+        : { answerGroupDraft: { analysis: empty(), answers: items.map(s => ({ submissionID: s.id, outcome: "no-change", explanation: "Keep this original answer saved" })) } };
+    } }).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id) });
+    assert.equal(result.status, "completed", result.diagnostic);
+  } finally { store.close(); }
+});
+
+test("explicit source recovery preserves four spent requests and the blocker, starts no calls, then repairs at attempt five", async () => {
+  const store = new ProjectStore(":memory:"); let workflow: ProjectWorkflow | undefined;
+  try {
+    const f = legacySourceBlock(store), original = structuredClone(f.job); let calls = 0;
+    workflow = new ProjectWorkflow(store, { async analyze() { calls++; throw new Error("Authorization must not dispatch"); } });
+    assert.ok(workflow.view(f.p.id).sourceRecovery);
+    const version = store.workflow(f.p.id).settingsVersion;
+    workflow.configure(f.p.id, f.p.revision, version, "recover-shared-sources"); await workflow.wait(f.p.id);
+    assert.equal(calls, 0); assert.equal(store.workflow(f.p.id).paused, true);
+    const granted = store.getJob(f.job.id); assert.equal(granted.answerGroupWork!.attempts, 4);
+    assert.deepEqual(granted.answerGroupWork!.receipts, original.answerGroupWork!.receipts);
+    assert.equal(granted.status, original.status); assert.equal(granted.diagnostic, original.diagnostic);
+    assert.equal(answerGroupRequestLimit(granted.answerGroupWork!), 8);
+    const equivalentRevision = structuredClone(f.p); equivalentRevision.revision++;
+    assert.equal(replayAnswerGroup(answerGroupMaterials(equivalentRevision, f.items), granted.answerGroupWork!).blocked, undefined,
+      "A compatible revision-number change alone must not discard the paid recovery grant");
+    const futureGrant = structuredClone(granted.answerGroupWork!); futureGrant.sourceSupport!.recovery!.atRevision = f.p.revision + 1;
+    assert.throws(() => replayAnswerGroup(f.m, futureGrant), /preserved history or grant/);
+    assert.equal(workflow.view(f.p.id).sourceRecovery, undefined);
+    assert.throws(() => workflow!.configure(f.p.id, f.p.revision, version, "recover-shared-sources"), /settings changed/);
+    assert.throws(() => store.recoverAnswerGroupSources(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion, f.job.id), /group changed/);
+    const corrected = answerGroupDraftSchema.parse(output(f.items));
+    corrected.analysis.specificationUpdates!.changes.push({ type: "revise", requirementID: f.target.id, sourceIDs: [f.items[0]!.appliedSourceID!],
+      statement: f.target.statement, rationale: "Include the concrete cancellation answer", acceptance: ["The waiting person may cancel; withdrawal and disconnection also end waiting"], reason: "Exact current answer" });
+    const phases: string[] = [];
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      phases.push(context.manifest.answerGroupStage!.phase);
+      if (context.manifest.answerGroupStage!.phase === "repair") assert.ok(context.manifest.includedIDs.includes(f.historical.id));
+      assert.ok(!context.manifest.submissionAuthorizationSourceIDs!.includes(f.historical.id));
+      return context.manifest.answerGroupStage!.phase === "repair" ? { answerGroupRepair: corrected }
+        : { answerGroupCheck: { valid: true, reason: "All original supporting evidence and exact current answers agree" } };
+    } }).analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id) });
+    assert.equal(result.status, "completed", result.diagnostic); assert.deepEqual(phases, ["repair", "check"]);
+    assert.equal(result.answerGroupWork!.receipts[f.work.receipts.length]!.attempt, 5);
+    assert.deepEqual(result.answerGroupWork!.receipts.slice(0, f.work.receipts.length), original.answerGroupWork!.receipts);
+    assert.match(store.get(f.p.id).requirements.find(r => r.id === f.target.id)!.acceptance[0]!, /may cancel/);
+    assert.deepEqual(store.getJob(f.job.id), granted, "Executing recovery does not rewrite its original blocked parent");
+  } finally { await workflow?.close(); store.close(); }
+});
+
+test("source recovery is one four-request allowance, not a retry reset or a bypass for genuine human blockers", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = legacySourceBlock(store); store.recoverAnswerGroupSources(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion, f.job.id);
+    let calls = 0; const service = new DiscoveryService(store, { async analyze() { calls++; return { malformed: true }; } });
+    for (let attempt = 5; attempt <= 9; attempt++) {
+      const result = await service.analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id) });
+      assert.equal(result.status, "failed"); assert.equal(result.answerGroupWork!.attempts, Math.min(attempt, 8));
+    }
+    assert.equal(calls, 4); assert.equal(store.get(f.p.id).requirements.length, 1);
+    const changed = structuredClone(f.p); changed.sources.find(s => s.id === f.historical.id)!.text += "Changed history";
+    assert.throws(() => replayAnswerGroup(answerGroupMaterials(changed, f.items), store.getJob(f.job.id).answerGroupWork!));
+    const ordinary = new ProjectStore(":memory:");
+    try {
+      const { p, items } = fixture(ordinary, 2);
+      const result = await new DiscoveryService(ordinary, { async analyze() { return { answerGroupBlocked: { reason: "Two actual human decisions conflict" } }; } })
+        .analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id) });
+      assert.equal(answerGroupRecoveryPreview(p, result), undefined);
+    } finally { ordinary.close(); }
+  } finally { store.close(); }
+});
+
+test("explicit coordinator retry can spend the remaining source-recovery allowance without reviving its old blocker", async () => {
+  const store = new ProjectStore(":memory:"); let workflow: ProjectWorkflow | undefined;
+  try {
+    const f = legacySourceBlock(store); let fail = true; const phases: string[] = [];
+    workflow = new ProjectWorkflow(store, { async analyze(_p, { context }) {
+      const phase = context.manifest.answerGroupStage?.phase;
+      if (!phase) return context.manifest.refinementPair ? { ...empty(), resolutionCheck: { format: 1, outcome: "distinct", explanation: "Distinct fixture behaviors" } } : empty();
+      phases.push(phase);
+      if (fail) throw new Error("Synthetic interrupted repair preparation");
+      return phase === "repair" ? { answerGroupRepair: output(f.items) } : { answerGroupCheck: { valid: true, reason: "Exact original support checked" } };
+    } });
+    workflow.configure(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion, "recover-shared-sources");
+    workflow.configure(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion, "continue-continuous"); await workflow.wait(f.p.id);
+    const stopped = store.jobs(f.p.id).filter(j => j.answerGroupWork).at(-1)!;
+    assert.equal(stopped.status, "failed"); assert.equal(stopped.answerGroupWork!.attempts, 5); assert.deepEqual(phases, ["repair"]);
+    fail = false;
+    workflow.configure(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion, "continue-continuous"); await workflow.wait(f.p.id);
+    assert.deepEqual(phases, ["repair", "repair", "check"]);
+    assert.ok(store.submissions(f.p.id).every(s => s.status === "completed"));
+    const completed = store.jobs(f.p.id).find(j => j.answerGroupWork && j.status === "completed")!;
+    assert.equal(completed.answerGroupWork!.receipts[f.work.receipts.length]!.attempt, 6);
+    assert.deepEqual(completed.answerGroupWork!.receipts.slice(0, f.work.receipts.length), f.work.receipts);
+  } finally { await workflow?.close(); store.close(); }
+});
+
+test("35 to 36 preserves the old blocker across reopen; explicit recovery survives portable adoption without another allowance", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "source-recovery-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const f = legacySourceBlock(store), original = structuredClone(f.job); store.close();
+    const old = new Database(path), bytes = old.prepare("SELECT payload FROM jobs WHERE id = ?").get(f.job.id);
+    old.exec("DELETE FROM migration_history WHERE version >= 36; PRAGMA user_version = 35"); old.close();
+    for (let i = 0; i < 2; i++) {
+      store = new ProjectStore(path); assert.deepEqual(store.getJob(f.job.id), original);
+      const raw = new Database(path, { readonly: true }); assert.deepEqual(raw.prepare("SELECT payload FROM jobs WHERE id = ?").get(f.job.id), bytes); raw.close(); store.close();
+    }
+    store = new ProjectStore(path);
+    assert.throws(() => store.recoverAnswerGroupSources(f.p.id, f.p.revision - 1, store.workflow(f.p.id).settingsVersion, f.job.id), /Project changed/);
+    assert.deepEqual(store.getJob(f.job.id), original);
+    store.recoverAnswerGroupSources(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion, f.job.id);
+    const granted = store.getJob(f.job.id); store.close();
+    const corrupt = new Database(path); corrupt.exec("DELETE FROM migration_history WHERE version >= 36; PRAGMA user_version = 35");
+    const future = { ...granted, answerGroupWork: { ...granted.answerGroupWork, sourceSupport: { ...granted.answerGroupWork!.sourceSupport, format: 2 } } };
+    corrupt.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(future), f.job.id); corrupt.close();
+    assert.throws(() => new ProjectStore(path));
+    const restore = new Database(path); assert.equal(restore.pragma("user_version", { simple: true }), 35);
+    assert.deepEqual(JSON.parse((restore.prepare("SELECT payload FROM jobs WHERE id = ?").get(f.job.id) as { payload: string }).payload), future);
+    restore.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(granted), f.job.id); restore.close();
+    store = new ProjectStore(path); assert.deepEqual(store.getJob(f.job.id), granted);
+    const paused = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      assert.equal(context.manifest.answerGroupStage!.phase, "repair");
+      return { answerGroupRepair: output(f.items) };
+    } }, { stagedLimits: { requests: 1, durationMs: 60000 } }).analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id) });
+    assert.equal(paused.status, "interrupted", paused.diagnostic);
+    assert.equal(paused.answerGroupWork!.receipts[f.work.receipts.length]!.attempt, 5);
+    for (const item of f.items) { item.jobID = paused.id; item.status = "needs-attention"; store.saveSubmission(item); }
+    const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id), store.submissions(f.p.id), revision => store.get(f.p.id, revision)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 10);
+    const decoded = decodePortable(files, f.p.model); assert.ok(decoded.continuation.jobs.some(j => j.id === f.job.id));
+    const downgrade = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 9 }) };
+    assert.throws(() => decodePortable(downgrade, f.p.model), /format 10/);
+    const missingParent = { ...files, "continuation.json": JSON.stringify({ ...JSON.parse(files["continuation.json"]!), jobs: decoded.continuation.jobs.filter(j => j.id !== f.job.id) }) };
+    assert.throws(() => decodePortable(missingParent, f.p.model), /preserved grant/);
+    const folder = join(directory, "clone");
+    for (const [name, value] of Object.entries(files)) { const path = join(folder, ".reqwizit", name); mkdirSync(resolve(path, ".."), { recursive: true }); writeFileSync(path, value); }
+    const clone = new ProjectStore(":memory:");
+    try {
+      const adopted = clone.openWorkspace(folder, f.p.model); let calls = 0;
+      assert.equal(clone.getJob(paused.id).answerGroupWork!.sourceSupport!.recovery!.grantID, granted.answerGroupWork!.sourceSupport!.recovery!.grantID);
+      const result = await new DiscoveryService(clone, { async analyze(_p, { context }) {
+        calls++; assert.equal(context.manifest.answerGroupStage!.phase, "check");
+        assert.ok([...context.manifest.includedIDs, ...context.manifest.omittedIDs].includes(f.historical.id));
+        return { answerGroupCheck: { valid: true, reason: "Repaired draft checked with exact original support" } };
+      } }).analyze(adopted.id, adopted.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id) });
+      assert.equal(result.status, "completed", result.diagnostic); assert.equal(calls, f.work.batches.length);
+      assert.deepEqual(result.answerGroupWork!.receipts.slice(0, paused.answerGroupWork!.receipts.length), paused.answerGroupWork!.receipts);
+    } finally { clone.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("recovery preserves bounded paid batches instead of pulling every background answer's question into each request", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = legacySourceBlock(store), project = structuredClone(f.p), background: { sourceID: string; questionID: string }[] = [];
+    for (let i = 0; i < 10; i++) {
+      const questionID = randomUUID(), sourceID = randomUUID(); background.push({ sourceID, questionID });
+      project.questions.push({ id: questionID, epicID: "project", text: randomBytes(5000).toString("hex"), whyItMatters: "Saved background question",
+        options: [{ label: "Yes", consequence: "Keep" }, { label: "No", consequence: "Change" }], status: "answered", sourceID });
+      project.sources.push({ id: sourceID, kind: "answer", epicID: "project", questionID, text: randomBytes(700).toString("hex") });
+    }
+    const material = answerGroupMaterials(project, f.items), work = planAnswerGroup(material); delete work.sourceSupport;
+    assert.ok(work.batches.length > 1); let draft: AnswerGroupDraft | undefined;
+    for (let i = 0; i < work.batches.length; i++) {
+      work.attempts = 1; draft = acceptAnswerGroup(material, work, draft, i ? { answerGroupKeep: true } : { answerGroupDraft: output(f.items) }, f.job).draft;
+    }
+    work.attempts = 1; acceptAnswerGroup(material, work, draft, { answerGroupCheck: { valid: false, reason: `Repair ${f.target.id}.` } }, f.job);
+    const context = answerGroupContext(material, work, draft); work.attempts = 4;
+    acceptAnswerGroup(material, work, draft, { answerGroupBlocked: { reason: `Missing original source ${f.historical.id} for ${f.target.id}.` } }, f.job);
+    const parent = { ...f.job, answerGroupWork: work, context: context.manifest };
+    const granted = authorizeAnswerGroupRecovery(material, work, parent, randomUUID()), repair = answerGroupContext(material, granted, draft);
+    assert.ok(repair.manifest.characters < 96000); assert.ok(repair.manifest.includedIDs.includes(f.historical.id));
+    assert.ok(background.some(({ sourceID, questionID }) => repair.manifest.includedIDs.includes(sourceID) && repair.manifest.omittedIDs.includes(questionID)));
+    granted.attempts = 5; draft = acceptAnswerGroup(material, granted, draft, { answerGroupRepair: output(f.items) }, parent).draft;
+    for (let i = 0; i < work.batches.length; i++) {
+      const check = answerGroupContext(material, granted, draft); assert.ok(check.manifest.characters < 96000);
+      assert.ok([...check.manifest.includedIDs, ...check.manifest.omittedIDs].includes(f.historical.id));
+      granted.attempts = 1; acceptAnswerGroup(material, granted, draft, { answerGroupCheck: { valid: true, reason: "Fixture-only exact batch check" } }, parent);
+    }
+    assert.equal(answerGroupProgress(granted).phase, "complete");
+  } finally { store.close(); }
+});
+
+test("source-recovery API is authenticated, revision/CAS checked, one-time and metadata-only", async () => {
+  const store = new ProjectStore(":memory:"), f = legacySourceBlock(store); let calls = 0;
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; return empty(); } } });
+  const headers = { "Content-Type": "application/json", "X-Reqwizit-Token": app.token, Origin: app.origin };
+  const body = { revision: f.p.revision, version: store.workflow(f.p.id).settingsVersion, action: "recover-shared-sources" };
+  const post = (value: unknown, selectedHeaders = headers) => fetch(`${app.origin}/api/projects/${f.p.id}/workflow`, { method: "POST", headers: selectedHeaders, body: JSON.stringify(value) });
+  try {
+    assert.equal((await post(body, { ...headers, "X-Reqwizit-Token": "wrong" })).status, 403);
+    assert.equal((await post(body, { ...headers, Origin: "https://example.invalid" })).status, 403);
+    assert.equal((await post({ ...body, revision: body.revision - 1 })).status, 409);
+    assert.equal((await post({ ...body, version: body.version + 1 })).status, 409);
+    const response = await post(body); assert.equal(response.status, 200);
+    assert.equal(calls, 0); assert.equal(store.getJob(f.job.id).answerGroupWork!.attempts, 4);
+    assert.equal((await post(body)).status, 409);
+    const diagnostic = store.discoveryDiagnostics(f.p.id, [f.job.id]).runs[0]!;
+    assert.equal(diagnostic.savedWork.additionalRecoveryRequestsGranted, 4);
+    assert.ok(diagnostic.savedWork.originalSupportRecords! > 0);
+  } finally { await app.close(); store.close(); }
+});
 function adapter(items: Submission[], seen: string[] = []): DiscoveryAdapter {
   return { async analyze(p, { context, research }) {
     assert.equal(research, false); const stage = context.manifest.answerGroupStage!;

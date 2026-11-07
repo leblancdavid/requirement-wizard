@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
 import { startApp } from "./server.js";
@@ -8,11 +8,44 @@ import { browserDiagnostics } from "./browser-diagnostics.js";
 import { dimensions } from "../core/epics.js";
 import type { Analysis } from "../core/model.js";
 import type { Connections } from "../providers/connections.js";
+import { answerGroupMaterials, planAnswerGroup, answerGroupContext, acceptAnswerGroup, type AnswerGroupDraft } from "../core/answer-group.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
 const store = new ProjectStore(":memory:");
 const empty = (): Analysis => ({ summary: "Exact saved answers", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+function sourceRecoveryFixture() {
+  let p = store.create("Original source recovery", "Keep original confirmations and exact answers", { providerID: "openai", modelID: "fixture" });
+  const seed = store.beginJob(p.id, p.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+  store.finishJob(seed.id, { ...empty(), requirements: [{ epicID: "project", statement: "Approved people remain waiting", rationale: "Original rule",
+    acceptance: ["Remain waiting unless approval is withdrawn or disconnection cancels it"], sourceIDs: [p.sources[0]!.id] }] });
+  p = store.get(p.id);
+  for (let i = 0; i < 2; i++) p = store.review(p.id, p.revision, p.requirements[0]!.id, "accepted", "");
+  const target = p.requirements[0]!, historical = p.sources.find(s => s.kind === "confirmation" && p.sources.some(t => t.supersedes === s.id))!;
+  const questions = store.beginJob(p.id, p.revision).job; store.claimJob(questions.id, Date.now() + 60000);
+  store.finishJob(questions.id, { ...empty(), questions: ["May the waiting person cancel?", "Keep the usable route?"].map(text => ({ epicID: "project", text,
+    whyItMatters: "Explicit behavior", options: [{ label: "Yes", consequence: "Keep" }, { label: "No", consequence: "Change" }] })) });
+  p = store.get(p.id);
+  const submissions = p.questions.map(q => store.enqueue(p.id, { id: randomUUID(), auto: false, research: false,
+    input: { type: "answer", questionID: q.id, questionText: q.text, sourceID: null, answer: { kind: "answer", text: "Yes, keep this behavior." } } }));
+  store.applyQueued(p.id, submissions.map(s => s.id)); p = store.get(p.id);
+  const items = store.submissions(p.id), m = answerGroupMaterials(p, items), w = planAnswerGroup(m); delete w.sourceSupport;
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000); let draft: AnswerGroupDraft | undefined;
+  for (let i = 0; i < w.batches.length; i++) {
+    w.attempts = 1; draft = acceptAnswerGroup(m, w, draft, i ? { answerGroupKeep: true } : { answerGroupDraft: { analysis: empty(),
+      answers: items.map(s => ({ submissionID: s.id, outcome: "no-change", explanation: "Original answer retained" })) } }, job).draft;
+  }
+  w.attempts = 1; acceptAnswerGroup(m, w, draft, { answerGroupCheck: { valid: false, reason: `Correct the cancellation restriction in ${target.id}.` } }, job);
+  const context = answerGroupContext(m, w, draft); w.attempts = 4;
+  acceptAnswerGroup(m, w, draft, { answerGroupBlocked: { reason: `Original source ${historical.id} for ${target.id} is not available.` } }, job);
+  store.checkpointAnswerGroup(job.id, w, context.manifest); store.failJob(job.id, "failed", "Original supporting source unavailable.");
+  for (const item of items) { item.status = "needs-attention"; item.jobID = job.id; store.saveSubmission(item); }
+  const workflow = store.workflow(p.id); workflow.enabled = true; workflow.paused = true; workflow.phase = "needs-decision";
+  workflow.inputBatchPolicy = { format: 1 }; workflow.reviewPolicy = { format: 1 };
+  workflow.current = { kind: "input", key: "0".repeat(64), jobIDs: [job.id], completed: true }; store.saveWorkflow(p.id, workflow);
+  return { p, job: store.getJob(job.id), historical };
+}
+const recovery = sourceRecoveryFixture();
 let p = store.create("Shared answer browser", "Retain each original human choice", { providerID: "openai", modelID: "fixture" });
 const seed = store.beginJob(p.id, p.revision).job; store.claimJob(seed.id, Date.now() + 60000);
 store.finishJob(seed.id, { ...empty(), questions: Array.from({ length: 5 }, (_, i) => ({ epicID: "project", text: `Keep behavior ${i}?`,
@@ -45,7 +78,8 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
   }
   if (context.manifest.definitionAssessment) return { ...empty(), assessments: [{ epicID: context.manifest.definitionAssessment.epicID,
     confidence: "medium", explanation: "Fixture-only verification", checks: dimensions.map(dimension => ({ dimension, importance: "important", status: "defined",
-      explanation: "Original choices retained", evidenceIDs: [project.sources[0]!.id] })) }] };
+       explanation: "Original choices retained", evidenceIDs: [project.sources[0]!.id] })) }] };
+  if (context.manifest.refinementPair) return { ...empty(), resolutionCheck: { format: 1, outcome: "distinct", explanation: "Fixture behavior targets remain separate" } };
   return empty();
 } } });
 const browser = await chromium.launch();
@@ -111,7 +145,27 @@ try {
     { origin: app.origin, token: app.token, id: p.id });
   assert.ok(snapshot.jobs.every((j: { answerGroupWork?: unknown }) => !j.answerGroupWork), "Browser snapshot must not expose raw grouped drafts/receipts");
   assert.equal(store.execution(p.id).run, undefined);
-  console.log("Shared answer browser passed: five fast saves/no requests, bounded rejected-draft repair, visible repair progress, Pause/reload/resume with charged repair attempts, retained reads, full recheck, atomic publication, sanitized snapshots and mobile. No live inference.");
+  await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: "Original source recovery", exact: true }).click();
+  await page.locator(".topbar .queue-trigger").click();
+  const recoveryRegion = queue.getByRole("region", { name: "Original source recovery", exact: true });
+  await expect(recoveryRegion).toContainText("original four requests and blocker stay saved");
+  const beforeGrant = calls.length;
+  await recoveryRegion.getByRole("button", { name: "Authorize source recovery · up to 4 requests", exact: true }).click();
+  await expect(recoveryRegion).toHaveCount(0); assert.equal(calls.length, beforeGrant);
+  const grant = store.getJob(recovery.job.id);
+  assert.equal(grant.answerGroupWork!.attempts, 4); assert.deepEqual(grant.answerGroupWork!.receipts, recovery.job.answerGroupWork!.receipts);
+  assert.equal(store.workflow(recovery.p.id).paused, true);
+  await page.reload(); await page.locator(".topbar .queue-trigger").click();
+  await expect(flow).toContainText("One recovery allowance"); assert.equal(calls.length, beforeGrant);
+  await flow.getByRole("button", { name: /^(Continue specification|Submit saved responses)$/ }).click();
+  await expect.poll(() => store.submissions(recovery.p.id).every(s => s.status === "completed"), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => store.workflowBusy(recovery.p.id), { timeout: 20000 }).toBe(false);
+  const recovered = store.jobs(recovery.p.id).reverse().find(j => j.answerGroupWork && j.status === "completed")!;
+  assert.equal(recovered.answerGroupWork!.receipts[recovery.job.answerGroupWork!.receipts.length]!.attempt, 5);
+  assert.ok(!calls.slice(beforeGrant).some(c => c.startsWith("read:")));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  console.log("Shared answer browser passed: bounded draft repair and explicit one-time source recovery, no calls on authorization/reload, preserved original four requests/blocker, attempt-five correction, retained reads, complete recheck, atomic publication and mobile. No live inference.");
 } catch (error) {
   console.error({ calls, workflow: store.workflow(p.id).message, jobs: store.jobs(p.id).filter(j => j.answerGroupWork).map(j => ({ status: j.status, diagnostic: j.diagnostic, attempts: j.answerGroupWork!.attempts })) });
   await diagnose?.(".reqwizit-state/browser-shared-answers-failure"); throw error;

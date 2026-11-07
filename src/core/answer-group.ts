@@ -8,6 +8,12 @@ import { shareRepeatedText, shareRepeatedIdentifiers, shareRecordStructure } fro
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const key = z.string().regex(/^[a-f0-9]{64}$/);
+const sourceSupportSchema = z.object({ format: z.literal(1), fromReceipt: z.number().int().min(0).max(524), prefixKey: key,
+  records: z.array(z.object({ id: z.string().min(1), key }).strict()).min(1).max(512),
+  targets: z.array(z.string().min(1)).max(64),
+  recovery: z.object({ additionalRequests: z.literal(4), priorAttempts: z.literal(4), grantID: z.string().uuid(),
+    atRevision: z.number().int().positive(), sourceJobID: z.string().uuid() }).strict().optional(),
+}).strict();
 export const answerGroupLimits = { answers: 5, batches: 32, characters: 96000, draft: 24000, attempts: 4, repairs: 2 } as const;
 export const answerGroupDraftSchema = z.object({ analysis: submissionDraftSchema.extend({
   reviewChanges: z.tuple([]).optional(), reviewResponses: z.tuple([]).optional(),
@@ -46,11 +52,12 @@ export const answerGroupStageSchema = z.object({ policy: z.literal("exact-answer
 export const answerGroupWorkSchema = z.object({ format: z.literal(1), policy: z.literal("exact-answer-group-v1"),
   submissionIDs: z.array(z.string().uuid()).min(2).max(answerGroupLimits.answers).refine(ids => new Set(ids).size === ids.length), epicID: z.string().min(1),
   materialKey: key, planKey: key, batches: z.array(z.array(z.string()).min(1)).min(1).max(answerGroupLimits.batches),
-  attempts: z.number().int().min(0).max(answerGroupLimits.attempts), receipts: z.array(z.object({
-    step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(answerGroupLimits.attempts),
+  sourceSupport: sourceSupportSchema.optional(),
+  attempts: z.number().int().min(0).max(8), receipts: z.array(z.object({
+    step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(8),
     jobID: z.string().uuid(), atRevision: z.number().int().positive(), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
     response: answerGroupResponseSchema,
-  }).strict()).max((answerGroupLimits.batches * (2 + answerGroupLimits.repairs) + answerGroupLimits.repairs) * answerGroupLimits.attempts) }).strict();
+  }).strict()).max((answerGroupLimits.batches * (2 + answerGroupLimits.repairs) + answerGroupLimits.repairs) * answerGroupLimits.attempts + 4) }).strict();
 export type AnswerGroupWork = z.infer<typeof answerGroupWorkSchema>;
 const completes = (response: z.infer<typeof answerGroupResponseSchema>) => "answerGroupDraft" in response || "answerGroupKeep" in response
   || "answerGroupRepair" in response || "answerGroupCheck" in response && response.answerGroupCheck.valid;
@@ -66,6 +73,84 @@ export function answerGroupProgress(w: AnswerGroupWork) {
     phase: rejection ? "repair" as const : completed >= w.batches.length * 2 ? "complete" as const : completed < w.batches.length ? "read" as const : "check" as const };
 }
 export const answerGroupStep = (w: AnswerGroupWork) => answerGroupProgress(w).completed;
+const supportActive = (w: AnswerGroupWork) => !!w.sourceSupport && w.receipts.length >= w.sourceSupport.fromReceipt;
+export const answerGroupRequestLimit = (w: AnswerGroupWork) => supportActive(w) && w.sourceSupport!.recovery
+  && !w.receipts.slice(w.sourceSupport!.fromReceipt).some(r => completes(r.response)) ? 8 : answerGroupLimits.attempts;
+
+/** Exact linked history is readable support, never replacement human authority. */
+function originalSupport(project: Project, originalIDs: Set<string>) {
+  const records = (["sources", "questions", "requirements", "research"] as const).flatMap(field => project[field].map(record => ({ field, record })));
+  const added = new Set<string>();
+  for (const r of project.requirements.filter(r => originalIDs.has(r.id))) for (const id of r.sourceIDs) {
+    if (!project.sources.some(s => s.id === id)) throw new Error("An original requirement source is missing from saved project data. No source was fabricated.");
+    if (!originalIDs.has(id)) added.add(id);
+  }
+  for (const id of [...added]) {
+    const source = project.sources.find(s => s.id === id)!;
+    if (source.questionID && !originalIDs.has(source.questionID)) {
+      const question = project.questions.find(q => q.id === source.questionID);
+      if (!question) throw new Error("An original supporting answer is missing its question. No evidence was substituted.");
+      added.add(question.id);
+    }
+  }
+  return records.filter(r => added.has(r.record.id)).map(r => ({ id: r.record.id, key: hash(r.record) }));
+}
+function supportRecords(m: AnswerGroupMaterials, w: AnswerGroupWork) {
+  if (!supportActive(w)) return [];
+  const keys = w.sourceSupport!.records;
+  if (new Set(keys.map(r => r.id)).size !== keys.length) throw new Error("Original support contains duplicate records.");
+  const all = (["sources", "questions", "requirements", "research"] as const).flatMap(field => m.project[field].map(record => ({ field, record })));
+  const expected = originalSupport(m.project, new Set(m.evidenceIDs));
+  if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new Error("Original supporting evidence changed. Saved requests and earlier work remain retained.");
+  return all.filter(r => keys.some(k => k.id === r.record.id));
+}
+export function answerGroupPublicationIDs(m: AnswerGroupMaterials, w: AnswerGroupWork) {
+  const support = supportRecords(m, w);
+  if (!w.sourceSupport?.recovery) return [...m.evidenceIDs, ...support.map(r => r.record.id)];
+  const detailed = new Set(m.project.requirements.filter(r => w.sourceSupport!.targets.includes(r.id)).flatMap(r => r.sourceIDs));
+  for (const r of w.receipts.slice(w.sourceSupport.fromReceipt)) if ("answerGroupEvidence" in r.response)
+    for (const id of r.response.answerGroupEvidence.recordIDs) detailed.add(id);
+  for (const s of m.project.sources.filter(s => detailed.has(s.id))) if (s.questionID) detailed.add(s.questionID);
+  return [...m.evidenceIDs, ...support.filter(r => detailed.has(r.record.id)).map(r => r.record.id)];
+}
+
+function recoveryTargets(project: Project, w: AnswerGroupWork, originalIDs: Set<string>) {
+  const feedback = w.receipts.flatMap(r => "answerGroupBlocked" in r.response ? [r.response.answerGroupBlocked.reason]
+    : "answerGroupCheck" in r.response && !r.response.answerGroupCheck.valid ? [r.response.answerGroupCheck.reason] : []).join("\n");
+  const targets = project.requirements.filter(r => r.epicID === w.epicID && originalIDs.has(r.id) && feedback.includes(r.id)
+    && r.sourceIDs.some(id => !originalIDs.has(id) && project.sources.some(s => s.id === id))).map(r => r.id);
+  return targets;
+}
+/** Cheap UI eligibility; exact replay and fit are checked again by the grant transaction. */
+export function answerGroupRecoveryPreview(project: Project, job: Job) {
+  const w = job.answerGroupWork;
+  if (!w || w.sourceSupport || job.status !== "failed" || job.expectedRevision !== project.revision || w.attempts !== 4
+    || answerGroupProgress(w).phase !== "repair" || answerGroupProgress(w).repairs >= answerGroupLimits.repairs) return undefined;
+  const originalIDs = new Set([...w.batches.flat(), ...job.context?.taskRecordIDs ?? []]), targets = recoveryTargets(project, w, originalIDs);
+  if (!targets.length || targets.length > 64) return undefined;
+  let records: ReturnType<typeof originalSupport>;
+  try { records = originalSupport(project, originalIDs); } catch { return undefined; }
+  if (!records.length || records.length > 512) return undefined;
+  return { jobID: job.id, targets, sources: records.length, additionalRequests: 4 as const };
+}
+export function authorizeAnswerGroupRecovery(m: AnswerGroupMaterials, w: AnswerGroupWork, job: Job, grantID: string): AnswerGroupWork {
+  const candidate = answerGroupRecoveryPreview(m.project, job);
+  if (!candidate || job.answerGroupWork?.planKey !== w.planKey) throw new Error("This group has no recoverable original-source omission or already used its one recovery grant.");
+  replayAnswerGroup(m, w);
+  const next: AnswerGroupWork = { ...structuredClone(w), sourceSupport: { format: 1, fromReceipt: w.receipts.length,
+    prefixKey: hash(w.receipts), records: originalSupport(m.project, new Set(m.evidenceIDs)), targets: candidate.targets,
+    recovery: { additionalRequests: 4, priorAttempts: 4, grantID, atRevision: m.project.revision, sourceJobID: job.id } } };
+  sourceSupportSchema.parse(next.sourceSupport);
+  const replay = replayAnswerGroup(m, next);
+  answerGroupContext(m, next, replay.draft); // Exact fit before recording consent; never truncate support.
+  for (let batch = 0; batch < w.batches.length; batch++) {
+    // Layout forecast only, not a check receipt or a semantic verdict. Use the
+    // exact saved draft: lossless sharing is non-monotonic when it is omitted.
+    // Every actual corrected-draft request must still independently fit its cap.
+    renderAnswerGroupContext(m, next, replay.draft, { completed: w.batches.length + batch, phase: "check" });
+  }
+  return next;
+}
 
 /** First shared protocol: same-feature concrete unscoped answers only. Targeted
  * answers, reviews, reconciliation, research and paid individual work stay separate. */
@@ -104,7 +189,11 @@ export function answerGroupMaterials(project: Project, items: Submission[]) {
 }
 export type AnswerGroupMaterials = ReturnType<typeof answerGroupMaterials>;
 export function answerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft): ContextPack {
-  const step = answerGroupStep(w), progress = answerGroupProgress(w);
+  return renderAnswerGroupContext(m, w, draft);
+}
+function renderAnswerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft,
+  layout?: { completed: number; phase: "check" }): ContextPack {
+  const progress = { ...answerGroupProgress(w), ...layout }, step = progress.completed;
   if (progress.phase === "complete") throw new Error("No unfinished shared-answer stage.");
   const repairIndex = w.receipts.reduce((last, r, index) => "answerGroupRepair" in r.response ? index : last, -1);
   const cycle = w.receipts.slice(repairIndex + 1);
@@ -112,10 +201,23 @@ export function answerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, 
   // correction cycles, although their earlier verdicts do not verify the new draft.
   const extra = w.receipts.filter(r => r.step === step).flatMap(r => "answerGroupEvidence" in r.response ? r.response.answerGroupEvidence.recordIDs : []);
   const ids = new Set([...m.pins, ...w.batches[step % w.batches.length]!, ...extra]);
-  const records = m.records.filter(r => ids.has(r.record.id));
+  const support = supportRecords(m, w), catalog = [...m.records, ...support];
+  if (supportActive(w)) {
+    if (progress.phase === "repair") for (const id of w.sourceSupport!.targets) ids.add(id);
+    // An old paid batch must not suddenly acquire the entire background's raw
+    // history. Recovery pins the exact edit targets; other support remains loadable.
+    const targets = w.sourceSupport!.recovery ? new Set(progress.phase === "repair" ? w.sourceSupport!.targets : []) : ids;
+    const supportSources = new Set(support.filter(r => r.field === "sources" && ids.has(r.record.id)).map(r => r.record.id));
+    for (const r of m.project.requirements.filter(r => targets.has(r.id))) for (const id of r.sourceIDs) { ids.add(id); supportSources.add(id); }
+    for (const s of m.project.sources.filter(s => supportSources.has(s.id))) if (s.questionID) ids.add(s.questionID);
+  }
+  const records = catalog.filter(r => ids.has(r.record.id));
+  const available = [...m.evidenceIDs, ...support.map(r => r.record.id)];
   let data: unknown = { ...m.base, ...Object.fromEntries(["sources", "questions", "requirements", "research"]
     .map(field => [field, records.filter(r => r.field === field).map(r => r.record)])), draft: draft ?? null,
-    answerGroup: { phase: progress.phase, step, batches: w.batches.length, availableEvidenceIDs: m.evidenceIDs,
+    answerGroup: { phase: progress.phase, step, batches: w.batches.length, availableEvidenceIDs: available,
+      ...(supportActive(w) ? { originalSourceSupport: { format: 1, historicalSourceIDs: support.filter(r => r.field === "sources").map(r => r.record.id),
+        instruction: "These exact original source bodies were omitted by the background current-decision projection. They are historical supporting evidence, not new human decisions, current authorization, or permission to revive superseded rules. Read the original bodies alongside current answers and requirements; do not treat a later quotation as their substitute. Only the current pinned concrete answers authorize edits. Preserve conflicting human intent as a blocker. All batches must verify the corrected draft." } } : {}),
       ...(progress.phase === "repair" ? { repair: { number: progress.repairs + 1, limit: answerGroupLimits.repairs,
         feedback: [...cycle].reverse().find(r => "answerGroupCheck" in r.response && !r.response.answerGroupCheck.valid)!.response,
         instruction: "Repair the complete draft against the original answers and this verification feedback. Feedback is a model finding, not human authority. Preserve unrelated choices; do not invent precedence. Load exact target/supporting evidence before changing actions. If the original human decisions are genuinely ambiguous or conflicting, return answerGroupBlocked with a focused explanation; do not choose for the user. All evidence batches must be checked again after repair." } } : {}) } };
@@ -124,7 +226,7 @@ export function answerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, 
   }
   const manifest: ContextPack["manifest"] = { revision: m.project.revision, focusEpicID: m.epicID,
     characters: JSON.stringify(data).length, budget: answerGroupLimits.characters, includedIDs: records.map(r => r.record.id),
-    omittedIDs: m.evidenceIDs.filter(id => !ids.has(id)), epicIDs: m.base.areas.map(e => e.id),
+    omittedIDs: available.filter(id => !ids.has(id)), epicIDs: m.base.areas.map(e => e.id),
     partial: true, isolatedTask: true, taskRecordIDs: [...m.pins], submissionIDs: w.submissionIDs,
     submissionAuthorizationSourceIDs: [...specificationAuthorizationSources(m.project, m.items, records.map(r => r.record.id))],
     answerGroupStage: { policy: w.policy, planKey: w.planKey, step, phase: progress.phase },
@@ -135,15 +237,18 @@ export function answerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, 
 export function planAnswerGroup(m: AnswerGroupMaterials): AnswerGroupWork {
   const w: AnswerGroupWork = { format: 1, policy: "exact-answer-group-v1", submissionIDs: m.items.map(s => s.id), epicID: m.epicID,
     materialKey: m.materialKey, planKey: "0".repeat(64), batches: [], attempts: 0, receipts: [] };
+  const support = originalSupport(m.project, new Set(m.evidenceIDs));
   let batch: string[] = [], characters = 0;
   for (const { record } of m.records.filter(r => !m.pins.has(r.record.id))) {
-    const size = JSON.stringify(record).length;
+    const size = JSON.stringify(record).length + (support.length && "sourceIDs" in record
+      ? m.project.sources.filter(s => record.sourceIDs.includes(s.id)).reduce((sum, s) => sum + JSON.stringify(s).length, 0) : 0);
     if (batch.length && characters + size > 36000) { w.batches.push(batch); batch = []; characters = 0; }
     batch.push(record.id); characters += size;
   }
   if (batch.length) w.batches.push(batch);
   if (!w.batches.length) w.batches.push([...m.pins]);
   w.planKey = hash([w.policy, w.materialKey, w.submissionIDs, w.batches]);
+  if (support.length) w.sourceSupport = { format: 1, fromReceipt: 0, prefixKey: hash([]), records: support, targets: [] };
   answerGroupWorkSchema.parse(w);
   for (const ids of w.batches) {
     const c = answerGroupContext(m, { ...w, batches: [ids] });
@@ -158,7 +263,7 @@ function accept(m: AnswerGroupMaterials, w: AnswerGroupWork, draft: AnswerGroupD
   if ("answerGroupBlocked" in response) return { response, draft, blocked: response.answerGroupBlocked.reason };
   if ("answerGroupEvidence" in response) {
     const ids = response.answerGroupEvidence.recordIDs;
-    if (ids.some(id => !m.evidenceIDs.includes(id)))
+    if (ids.some(id => ![...context.manifest.includedIDs, ...context.manifest.omittedIDs].includes(id)))
       throw new Error("Shared answer lookup contains unavailable evidence. Only missing original record IDs from this request's lookup schema are allowed; no guessed IDs or identifier-table indexes.");
     if (new Set(ids).size !== ids.length)
       throw new Error("Shared answer lookup contains duplicate evidence. Request each missing original record ID only once.");
@@ -231,16 +336,32 @@ export function replayAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork) {
   if (new Set(actual).size !== actual.length || actual.length !== expected.length || actual.some(id => !expected.includes(id))
     || w.batches.flat().some(id => !m.evidenceIDs.includes(id))) throw new Error("Shared batches must cover every mandatory record exactly once.");
   const prefix: AnswerGroupWork = { ...w, receipts: [], attempts: 0 };
+  if (w.sourceSupport) {
+    const s = w.sourceSupport;
+    if (s.fromReceipt > w.receipts.length || s.prefixKey !== hash(w.receipts.slice(0, s.fromReceipt))
+      || !s.recovery && (s.fromReceipt !== 0 || s.targets.length) || s.recovery && (!s.fromReceipt || s.recovery.atRevision > m.project.revision))
+      throw new Error("Original-source recovery does not match its preserved history or grant.");
+    if (s.recovery) {
+      const before = { ...w, sourceSupport: undefined, receipts: w.receipts.slice(0, s.fromReceipt), attempts: 4 };
+      const targets = recoveryTargets(m.project, before, new Set(m.evidenceIDs));
+      if (answerGroupProgress(before).phase !== "repair" || answerGroupProgress(before).repairs >= answerGroupLimits.repairs
+        || !targets.length || JSON.stringify(targets) !== JSON.stringify(s.targets))
+        throw new Error("Recovery requires an exact original-source omission, not an invented conflict resolution.");
+    }
+  }
   let draft: AnswerGroupDraft | undefined, blocked: string | undefined, attempts = 0;
   for (const r of w.receipts) {
+    if (w.sourceSupport?.recovery && prefix.receipts.length === w.sourceSupport.fromReceipt) blocked = undefined;
     if (blocked || answerGroupProgress(prefix).phase === "complete" || r.step !== answerGroupStep(prefix) || r.attempt <= attempts
+      || r.attempt > answerGroupRequestLimit(prefix)
       || r.model.providerID !== m.model.providerID || r.model.modelID !== m.model.modelID || r.atRevision > m.project.revision
       || r.contextKey !== hash(answerGroupContext(m, prefix, draft).data))
       throw new Error("Shared answer receipt does not match its original step, model, context or spent attempt.");
     const next = accept(m, prefix, draft, r.response); draft = next.draft; blocked = next.blocked;
     prefix.receipts.push(r); attempts = completes(r.response) ? 0 : r.attempt;
   }
-  if (w.attempts < attempts || answerGroupStep(w) > w.batches.length * 2) throw new Error("Shared answer attempts changed.");
+  if (w.sourceSupport?.recovery && w.receipts.length === w.sourceSupport.fromReceipt) blocked = undefined;
+  if (w.attempts < attempts || w.attempts > answerGroupRequestLimit(w) || answerGroupStep(w) > w.batches.length * 2) throw new Error("Shared answer attempts changed.");
   return { draft, blocked };
 }
 export function validateAnswerGroupPublication(project: Project, items: Submission[], job: Job, result: Analysis) {
@@ -249,5 +370,5 @@ export function validateAnswerGroupPublication(project: Project, items: Submissi
     || JSON.stringify(result) !== JSON.stringify(verified.draft.analysis)
     || job.context?.answerGroupStage?.planKey !== w.planKey || job.context.answerGroupStage.phase !== "check"
     || job.context.answerGroupStage.step !== w.batches.length * 2 - 1 || JSON.stringify(job.context.submissionIDs) !== JSON.stringify(w.submissionIDs)
-    || JSON.stringify(job.context.includedIDs) !== JSON.stringify(m.evidenceIDs)) throw new Error("Incomplete or changed shared answer work cannot publish.");
+    || JSON.stringify(job.context.includedIDs) !== JSON.stringify(answerGroupPublicationIDs(m, w))) throw new Error("Incomplete or changed shared answer work cannot publish.");
 }

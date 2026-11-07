@@ -1,5 +1,12 @@
 # Milestone backlog
 
+Shared editing now preserves exact original supporting sources omitted by background
+decision projection. A separate one-time source-recovery action grants at most four
+additional correction requests for an eligible exhausted group, preserving original
+spend/blockers and requiring complete verification. A read-only saved-project layout
+check passed; no live correction or latency qualification is claimed. See
+[migration and limits](migrations.md#original-shared-answer-support-and-explicit-recovery-2026-11-06).
+
 Shared-answer correction now repairs an AI draft after negative verification without
 repeating original evidence reads, then verifies all batches again. Two repairs and
 existing charged step attempts bound the work; real human conflicts remain explicit

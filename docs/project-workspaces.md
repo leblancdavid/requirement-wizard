@@ -1,5 +1,11 @@
 # Local project workspaces
 
+Portable state format 10 is required when a shared-answer checkpoint carries exact
+original-source support or its one-time recovery grant; formats 1–9 remain readable.
+The original blocked grant parent and spent attempts travel with the checkpoint.
+Clone adoption remains paused, cannot grant more recovery, and never reconstructs a
+missing source from a later quotation. See [compatibility](migrations.md#original-shared-answer-support-and-explicit-recovery-2026-11-06).
+
 Status: implemented for browser and terminal clients under DEC-016. Each app project
 can connect to one local directory, including an existing Git repository or a new
 ordinary folder. SQLite remains the working store and revision history; generated

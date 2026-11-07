@@ -1,5 +1,12 @@
 # Browser workspace, epics, and estimated completeness
 
+Processing & queue can show **Recover missing original sources** for an exhausted
+shared-answer group whose original supporting source was omitted. The separate
+**Authorize source recovery · up to 4 requests** button records a one-time allowance
+without inference; Continue/process saved responses uses it explicitly. Original
+four-request spend and the blocker remain recorded. Read/reload/Pause never renew it.
+See [source recovery](coordinated-workflow.md#original-sources-and-one-time-recovery-2026-11-06).
+
 Shared-answer verification can now show **repairing the draft**: original answers
 and reading steps stay saved, while a bounded correction is followed by a full check
 of every evidence batch. Existing eligible rejected groups resume with **Continue

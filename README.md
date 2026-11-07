@@ -42,6 +42,11 @@ Existing eligible rejected groups resume with **Continue specification** after u
 genuine human conflicts still stop. See [draft repair](docs/coordinated-workflow.md#bounded-shared-draft-repair-2026-11-06).
 Shared lookup prompts/schemas now distinguish already detailed records from missing
 original IDs, without resetting saved attempts or changing existing context identities.
+Shared edits also retain exact historical supporting sources. Older exhausted groups
+with an omitted original source can use **Authorize source recovery · up to 4 requests**
+in Processing & queue, then Continue. This one-time allowance preserves the original
+four requests/blocker and still requires complete verification; authorization alone
+starts no model work. See [source recovery](docs/coordinated-workflow.md#original-sources-and-one-time-recovery-2026-11-06).
 When starting new question discovery, continuous runs now collect across eligible
 workflow packages toward five pending questions, rather than stopping at the first
 question. New continuous runs automatically continue between bounded work windows

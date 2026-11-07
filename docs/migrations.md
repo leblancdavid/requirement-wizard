@@ -1,5 +1,87 @@
 # Data migrations and upgrade compatibility
 
+## Original shared-answer support and explicit recovery (2026-11-06)
+
+**Source → target:** SQLite **35 → 36** is a transactional reader boundary with no
+startup payload conversion, consent, model calls or counter resets. The format-1
+shared-answer ledger gains optional versioned `sourceSupport`: a receipt activation
+boundary, the exact preceding receipt hash, ordered original-record fingerprints,
+and (only for explicit recovery) its target IDs and one-time grant. Existing jobs,
+completed work, original material/plan keys and pre-boundary context hashes remain
+unchanged. An explicit recovery action appends grant metadata to the latest blocked
+parent job; its original four spent requests, outcome, diagnostic, timestamps and
+every reply remain intact. Subsequent worker jobs inherit that metadata and history.
+
+The underlying defect was a mismatch between background current-decision projection
+and edit validation: a proven superseded confirmation could be omitted from the task,
+but a revision still required every original target source body. New shared plans
+retain a separately fingerprinted catalogue of those exact original sources (and
+linked original question bodies). Batch sizing accounts for linked-source cost, and
+new batches render their targets' original support without treating it as current
+authorization. The legacy material projection is deliberately unchanged for replay.
+Historical evidence cannot authorize a new requirement or silently revive an old rule.
+
+For an existing exhausted group, **Authorize source recovery · up to 4 requests**
+is available only when stored feedback identifies an original same-feature target,
+its original supporting source exists but was omitted, the group has four spent
+requests and no previous source-support/recovery grant, and the ordinary two-repair
+ceiling remains. The authenticated workflow action checks the current project
+revision, settings version, latest group membership, absence of active execution/
+workers and exact replay/fit inside one transaction. It records metadata and pauses;
+it does not enable a disabled workflow, call a model or silently continue work.
+Continue/process saved responses remains a separate explicit action.
+
+The new allowance is **four additional requests once**, not a refund: the correction
+step continues at attempt **5**, stops at **8 cumulative**, and cannot be granted
+again. After a successful correction, ordinary verification steps retain their own
+four-request ceilings. A grant activates only after the preserved blocked prefix;
+it does not erase that blocker. A new genuine blocker remains terminal. Every original
+evidence batch must check the corrected draft again. Source fingerprints and ordinary
+material checks reject changed evidence without discarding history. Compatible later
+revision numbers alone do not invalidate equivalent saved work.
+
+Recovery details the edit target and its support during correction. Other batches
+retain their original paid layout; exact historical support remains requestable when
+needed during verification. Do not expand every background answer's question/history
+into each request. Fit forecasts use the exact saved draft (lossless encoding is
+non-monotonic), and each actual corrected-draft request still enforces 96,000 characters
+without truncation. Publication's evidence union includes only original paid reads and
+actually detailed supplemental support, never the whole unseen expanded catalogue.
+
+**Portable:** envelopes **1–9 remain supported**; jobs with `sourceSupport` require
+**format 10**, retaining exact record order. Their original grant parent is included,
+and decoding validates its four spent requests, exact reply prefix and grant against
+the continuation. Clone adoption cannot mint another allowance or repeat paid reads/
+an accepted repair. Older readers reject format 10 rather than overwrite it. Future
+support formats reject/roll back the SQLite reader boundary; restoring supported
+payloads permits a retry without reset. Schema versions remain separate from revision
+and workflow-concurrency counters.
+
+Tests cover the superseded-confirmation omission, exact support without authority,
+metadata-only authenticated/CAS-bound consent, stale grant rejection, attempt 5/8,
+one-time exhaustion, preserved blockers/answers, bounded background layouts, changed
+sources, byte-preserving 35→36 reopen, future-format rollback, portable downgrade and
+missing-parent rejection, and actual clone continuation. Browser checks exercise the
+separate authorization/Continue actions, no inference on authorization/reload, retained
+four attempts, correction/reverification and mobile layout.
+
+Verification: full `npm test` passed **1,829 tests** (928 pretest, 775 main,
+126 posttest), and full `npm run test:browser` passed, including source recovery.
+After the final coordinator retry adjustment, the focused shared-answer, diagnostic
+and workflow run passed **113 tests**, and `npm run check` passed. The full suites
+were not rerun after that adjustment. `npm run build:desktop` passed UI building and
+desktop TypeScript compilation, but staged dependency installation failed with
+`EPERM` unlinking `dist/desktop-app/node_modules/better-sqlite3/prebuilds/win32-x64.node`.
+The binary may be held by a running desktop app; no process was terminated or forced
+cleanup attempted. Complete desktop staging remains unverified until the lock is
+released and the build is retried.
+
+A read-only dry run against the reported saved group at revision 3272 confirmed
+eligibility and the exact missing source in a **70,414 / 96,000-character** repair
+request, with all nine saved-draft verification layouts fitting. No grant was saved,
+no project data was changed and no model was called. This qualifies structural recovery
+and fit only, not live repair quality. The separate post-request latency remains open.
+
 ## Shared-answer lookup request contract (2026-11-06)
 
 **Source → target:** SQLite **35 → 35**; no schema, persisted payload, portable

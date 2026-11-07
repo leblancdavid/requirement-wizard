@@ -1,6 +1,6 @@
 import { StaleRevisionError, type Job, type Project, type Submission } from "../core/model.js";
 import { answerGroupMaterials, planAnswerGroup, replayAnswerGroup, answerGroupContext, acceptAnswerGroup,
-  answerGroupProgress, answerGroupLimits } from "../core/answer-group.js";
+  answerGroupProgress, answerGroupLimits, answerGroupRequestLimit, answerGroupPublicationIDs } from "../core/answer-group.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import type { ProjectStore } from "../storage/store.js";
@@ -23,7 +23,7 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
     if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError();
     const done = answerGroupProgress(work).phase === "complete";
     const context = local("context", () => answerGroupContext(material, done ? { ...work, receipts: work.receipts.slice(0, -1) } : work, draft));
-    if (done) { context.manifest.includedIDs = material.evidenceIDs; context.manifest.omittedIDs = []; }
+    if (done) { context.manifest.includedIDs = answerGroupPublicationIDs(material, work); context.manifest.omittedIDs = []; }
     local("checkpoint", () => store.checkpointAnswerGroup(job.id, work, context.manifest));
     if (done) return local("publication", () => store.finishJob(job.id, draft!.analysis));
     if (blocked) throw new Error(`Shared answers need review: ${blocked} All original answers and completed work remain saved.`);
@@ -31,13 +31,15 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
       throw new Error("Shared draft reached its two-repair limit. Original answers, rejected drafts and paid evidence remain saved; human review is required.");
     if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline))
       return store.pauseAnswerGroup(job.id, "Shared answer integration paused. Continue explicitly; completed steps will not repeat.");
-    if (work.attempts >= answerGroupLimits.attempts)
-      throw new Error("Shared answer step used its four-request limit. Original answers, completed work and spent attempts are retained; continuation cannot reset the limit.");
+    if (work.attempts >= answerGroupRequestLimit(work))
+      throw new Error(answerGroupRequestLimit(work) === 8
+        ? "Shared source recovery used its four additional requests (eight cumulative). Original answers, blockers and spent requests are retained; the one-time recovery cannot be extended again."
+        : "Shared answer step used its four-request limit. Original answers, completed work and spent attempts are retained; continuation cannot reset the limit.");
     if (!calls) options.measurement?.planned(context);
     work.attempts++; calls++;
     local("checkpoint", () => store.checkpointAnswerGroup(job.id, work, context.manifest));
     options.onProgress?.(answerGroupProgress(work).phase === "repair"
-      ? `Repairing the shared draft · repair ${answerGroupProgress(work).repairs + 1} / ${answerGroupLimits.repairs}. Original answers and evidence reads are saved. Every evidence batch will be checked again before publication.`
+      ? `${answerGroupRequestLimit(work) === 8 ? `Original-source recovery · ${work.attempts} / 8 cumulative requests (4 original + up to 4 additional). ` : ""}Repairing the shared draft · repair ${answerGroupProgress(work).repairs + 1} / ${answerGroupLimits.repairs}. Original answers and evidence reads are saved. Every evidence batch will be checked again before publication.`
       : `Integrating ${items.length} saved answers together · ${answerGroupProgress(work).completed} / ${work.batches.length * 2} evidence steps saved. No partial changes published.`);
     const timeout = AbortSignal.timeout(options.continuous ? 300000 : Math.max(1, Math.min(300000, deadline - Date.now())));
     const signal = AbortSignal.any([options.signal, timeout]);

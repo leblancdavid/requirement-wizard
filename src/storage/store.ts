@@ -96,7 +96,7 @@ import { reconcileCompletedReview, type AppliedInputChange } from "../core/revie
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
 import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
-import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, type AnswerGroupWork } from "../core/answer-group.js";
+import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, type AnswerGroupWork } from "../core/answer-group.js";
 import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -1636,6 +1636,8 @@ export class ProjectStore {
        COALESCE(json_extract(payload, '$.readinessWork.format'), json_extract(payload, '$.submissionWork.format'), json_extract(payload, '$.answerGroupWork.format')) AS savedStageFormat,
        json_extract(payload, '$.submissionWork.draftRepair.format') AS savedDraftRepairFormat,
        json_extract(payload, '$.context.answerGroupStage.phase') AS answerGroupPhase,
+       json_extract(payload, '$.answerGroupWork.sourceSupport.recovery.additionalRequests') AS groupRecoveryRequests,
+       json_array_length(payload, '$.answerGroupWork.sourceSupport.records') AS groupSupportRecords,
        (SELECT json_extract(w.payload, '$.result.phase') FROM workflow_runs w WHERE w.project_id = jobs.project_id
          AND EXISTS (SELECT 1 FROM json_each(w.payload, '$.jobIDs') WHERE value = jobs.id) ORDER BY w.rowid DESC LIMIT 1) AS workflowPhase,
        (SELECT json_extract(w.payload, '$.result.stopReason') FROM workflow_runs w WHERE w.project_id = jobs.project_id
@@ -2390,6 +2392,31 @@ export class ProjectStore {
       if (!job.answerGroupWork || job.status !== "running" || (job.leaseUntil ?? 0) <= Date.now()) throw new Error("Shared answer worker is no longer live.");
       if (this.projectRevision(job.projectID) !== job.expectedRevision) throw new StaleRevisionError();
       job.status = "interrupted"; job.leaseUntil = null; job.diagnostic = reason; this.saveJob(job); return job;
+    }).immediate();
+  }
+
+  /** Explicit metadata-only grant. Original attempts, blocked replies and job outcome remain intact. */
+  recoverAnswerGroupSources(projectID: string, revision: number, version: number, jobID: string) {
+    this.db.transaction(() => {
+      this.assertNoExecution(projectID);
+      if (this.discoveryActive(projectID) || this.workflowBusy(projectID)) throw new OperationConflictError("Pause active work before authorizing source recovery.");
+      const project = this.get(projectID), state = this.workflow(projectID);
+      if (project.revision !== revision) throw new StaleRevisionError();
+      if (state.settingsVersion !== version) throw new OperationConflictError("Workflow settings changed. Refresh before authorizing recovery.");
+      const job = this.getJob(jobID), w = job.answerGroupWork, submissions = this.submissions(projectID);
+      if (job.projectID !== projectID || !w) throw new OperationConflictError("Recovery requires a group owned by this project.");
+      const items = w.submissionIDs.map(id => submissions.find(s => s.id === id));
+      if (items.some(s => !s || s.status !== "needs-attention" || s.conflict || s.archivedAt || s.jobID !== jobID
+        || this.latestAnswerGroupWorkJob(projectID, s.id)?.id !== jobID)) throw new OperationConflictError("The saved group changed. No additional requests were granted.");
+      const material = answerGroupMaterials(project, items as Submission[]);
+      job.answerGroupWork = authorizeAnswerGroupRecovery(material, w, job, randomUUID());
+      this.saveJob(job);
+      for (const item of items as Submission[]) { item.status = "saved"; this.saveSubmission(item); }
+      state.paused = true; state.phase = "paused"; state.stopReason = "human-pause";
+      if (state.current?.kind === "input") state.current.completed = false;
+      state.settingsVersion++;
+      state.message = "Original supporting sources are available. One recovery allowance of up to four additional repair requests is saved; the original four requests and blocker remain recorded. Continue specification explicitly to use it. Every evidence batch must verify the corrected draft.";
+      this.saveWorkflow(projectID, state);
     }).immediate();
   }
 
