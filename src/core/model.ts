@@ -362,7 +362,7 @@ export type Job = {
   readinessWork?: import("./readiness-stages.js").ReadinessWork;
   submissionWork?: import("./submission-stages.js").SubmissionWork;
   answerGroupWork?: import("./answer-group.js").AnswerGroupWork;
-  answerGroupProgress?: { answers: number; completed: number; total: number; phase: "read" | "check" | "repair" | "complete" };
+  answerGroupProgress?: { answers: number; completed: number; total: number; phase: "read" | "check" | "repair" | "complete"; evidencePage?: { completed: number; total: number } };
   refinementWork?: import("./refinement-stages.js").RefinementWork;
   /** Attempts dispatched by this job only; reused receipts are not new calls. */
   refinementRequests?: number;

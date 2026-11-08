@@ -27,7 +27,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 36;
+export const databaseSchemaVersion = 44;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -248,6 +248,30 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
   // Reader boundary only: retain original receipts/keys; repairs append new evidence.
 } }, { version: 36, name: "shared-original-source-support-and-explicit-recovery-v1", apply() {
   // Reader boundary only. No original evidence, jobs, attempts or consent rewritten.
+} }, { version: 37, name: "bounded-shared-answer-evidence-pages-v1", apply() {
+  // Reader boundary only. Explicit continuation appends authenticated page plans;
+  // original schedules, lookup receipts, attempts and evidence remain unchanged.
+} }, { version: 38, name: "requested-first-evidence-pages-and-explicit-loop-recovery-v1", apply() {
+  // Keep v1 page contexts exact. New v2 layouts and a one-time explicit recovery
+  // activate only at an authenticated receipt boundary; startup grants nothing.
+} }, { version: 39, name: "paid-and-pending-shared-page-capacity-v1", apply() {
+  // Preserve all historical layouts/replies. V3 accounts actual page completions
+  // and pending packets, not superseded unexecuted layouts; no request refunds.
+} }, { version: 40, name: "evidence-complete-shared-verification-v1", apply() {
+  // Keep original reads/checks/blockers. Explicit verification preparation adds
+  // exact original-record fingerprints and no additional request allowance.
+} }, { version: 41, name: "atomic-joint-first-shared-evidence-page-v1", apply() {
+  // V5 retains exact paid joint lookups, but releases their temporary pins after
+  // the joint page passes. Startup does not rewrite work or refund attempts.
+} }, { version: 42, name: "compact-lossless-shared-page-wire-v1", apply() {
+  // V6 uses compact existing lossless encoding explanations. Historical packet
+  // bytes, exact evidence, attempts and completed work remain unchanged.
+} }, { version: 43, name: "scoped-original-unit-shared-verification-v1", apply() {
+  // V7 schedules every frozen-draft original across mandatory check units rather
+  // than pinning all unrelated histories on each page. Keep old verdicts/attempts.
+} }, { version: 44, name: "stable-read-units-and-exact-staged-planning-v1", apply() {
+  // Reader boundary for v8 read layouts, dense v5 schedules and derived staged
+  // context bundles. Preserve all historical payloads, attempts and live leases.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

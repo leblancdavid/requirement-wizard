@@ -62,6 +62,8 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
       linked.add(job.submissionWork.draftRepair.sourceJobID); linked.add(job.submissionWork.draftRepair.clarificationJobID);
     }
     if (job.answerGroupWork?.sourceSupport?.recovery) linked.add(job.answerGroupWork.sourceSupport.recovery.sourceJobID);
+    if (job.answerGroupWork?.pageRecovery) linked.add(job.answerGroupWork.pageRecovery.sourceJobID);
+    if (job.answerGroupWork?.verificationRecovery) linked.add(job.answerGroupWork.verificationRecovery.sourceJobID);
   }
   // Only original publishers needed by current assessments and current baseline
   // work, not every obsolete definition job in the activity archive.
@@ -370,9 +372,11 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   // New change-review exports, including retained v1 work, preserve the exact
   // array base used by historical deltas. Older format-4 files remain readable.
   const answerState = !!continuation?.jobs.some(j => j.answerGroupWork);
-  const evidenceState = requiresChangeReviewState(project, continuation) || answerState;
+  const efficientState = !!continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 8)
+    || j.context?.epicReview?.contextPolicy === "staged-dense-records-v5" || j.retrievalWork?.epicStages?.contextPolicy === "staged-dense-records-v5");
+  const evidenceState = requiresChangeReviewState(project, continuation) || answerState || efficientState;
   const recordOrder = evidenceState ? Object.fromEntries(portableRecordFields.map((field) => [field, project[field].map((record) => record.id)])) : undefined;
-  return { "state.json": json({ formatVersion: continuation?.jobs.some(j => j.answerGroupWork?.sourceSupport) ? 10 : answerState ? 9 : requiresSharedChangeState(project, continuation) ? 8 : requiresIncrementalChangeState(project, continuation) ? 7 : requiresEvidenceChangeState(project, continuation, 3) ? 6 : evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
+   return { "state.json": json({ formatVersion: efficientState ? 18 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 7)) ? 17 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 6)) ? 16 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 5)) ? 15 : continuation?.jobs.some(j => j.answerGroupWork?.verificationRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 4)) ? 14 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 3)) ? 13 : continuation?.jobs.some(j => j.answerGroupWork?.pageRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 2)) ? 12 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages) ? 11 : continuation?.jobs.some(j => j.answerGroupWork?.sourceSupport) ? 10 : answerState ? 9 : requiresSharedChangeState(project, continuation) ? 8 : requiresIncrementalChangeState(project, continuation) ? 7 : requiresEvidenceChangeState(project, continuation, 3) ? 6 : evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
     "continuation.json": json(continuation ?? { formatVersion: 1, jobs: [], submissions: [], snapshots: {}, objects: {} }) };
 }
 
@@ -488,8 +492,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–10 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13), z.literal(14), z.literal(15), z.literal(16), z.literal(17), z.literal(18)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–18 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -530,6 +534,40 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
   }).strict().parse(read("continuation.json")) as Continuation;
   if (state.formatVersion < 9 && continuation.jobs.some(j => j.answerGroupWork)) throw new Error("Shared answer work requires portable state format 9. Saved work was not overwritten.");
   if (state.formatVersion < 10 && continuation.jobs.some(j => j.answerGroupWork?.sourceSupport)) throw new Error("Original supporting evidence requires portable state format 10. Saved work was not overwritten.");
+  if (state.formatVersion < 11 && continuation.jobs.some(j => j.answerGroupWork?.evidencePages)) throw new Error("Shared evidence pages require portable state format 11. Saved work was not overwritten.");
+  if (state.formatVersion < 12 && continuation.jobs.some(j => j.answerGroupWork?.pageRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 2)))
+    throw new Error("Requested-first evidence pages require portable state format 12. Saved work was not overwritten.");
+  if (state.formatVersion < 13 && continuation.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 3)))
+    throw new Error("Paid-and-pending evidence pages require portable state format 13. Saved work was not overwritten.");
+  if (state.formatVersion < 14 && continuation.jobs.some(j => j.answerGroupWork?.verificationRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 4)))
+    throw new Error("Evidence-complete verification requires portable state format 14. Saved work was not overwritten.");
+  if (state.formatVersion < 15 && continuation.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 5)))
+    throw new Error("Atomic joint-first evidence pages require portable state format 15. Saved work was not overwritten.");
+  if (state.formatVersion < 16 && continuation.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 6)))
+    throw new Error("Compact lossless shared pages require portable state format 16. Saved work was not overwritten.");
+  if (state.formatVersion < 17 && continuation.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 7)))
+    throw new Error("Scoped original-unit verification requires portable state format 17. Saved work was not overwritten.");
+  if (state.formatVersion < 18 && continuation.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 8)
+    || j.context?.epicReview?.contextPolicy === "staged-dense-records-v5" || j.retrievalWork?.epicStages?.contextPolicy === "staged-dense-records-v5"))
+    throw new Error("Scoped reading and dense staged schedules require portable state format 18. Saved work was not overwritten.");
+  for (const job of continuation.jobs) if (job.answerGroupWork?.verificationRecovery) {
+    const recovery = job.answerGroupWork.verificationRecovery, parent = continuation.jobs.find(j => j.id === recovery.sourceJobID);
+    if (!parent?.answerGroupWork || parent.expectedRevision !== recovery.atRevision || parent.status !== "failed"
+      || parent.answerGroupWork.attempts !== recovery.priorAttempts || parent.answerGroupWork.planKey !== job.answerGroupWork.planKey
+      || JSON.stringify(parent.answerGroupWork.verificationRecovery) !== JSON.stringify(recovery)
+      || JSON.stringify(parent.answerGroupWork.evidencePages) !== JSON.stringify(job.answerGroupWork.evidencePages?.slice(0, parent.answerGroupWork.evidencePages?.length))
+      || JSON.stringify(parent.answerGroupWork.receipts) !== JSON.stringify(job.answerGroupWork.receipts.slice(0, recovery.fromReceipt)))
+      throw new Error("Verification preparation must retain its exact blocked parent, paid replies and spent attempts.");
+  }
+  for (const job of continuation.jobs) if (job.answerGroupWork?.pageRecovery) {
+    const recovery = job.answerGroupWork.pageRecovery, parent = continuation.jobs.find(j => j.id === recovery.sourceJobID);
+    if (!parent?.answerGroupWork || parent.expectedRevision !== recovery.atRevision || parent.status !== "failed"
+      || parent.answerGroupWork.attempts !== 4 || parent.answerGroupWork.planKey !== job.answerGroupWork.planKey
+      || JSON.stringify(parent.answerGroupWork.pageRecovery) !== JSON.stringify(recovery)
+      || JSON.stringify(parent.answerGroupWork.evidencePages) !== JSON.stringify(job.answerGroupWork.evidencePages?.slice(0, parent.answerGroupWork.evidencePages?.length))
+      || JSON.stringify(parent.answerGroupWork.receipts) !== JSON.stringify(job.answerGroupWork.receipts.slice(0, recovery.fromReceipt)))
+      throw new Error("Page recovery must retain its exact four-request parent, page plans and receipt prefix.");
+  }
   for (const job of continuation.jobs) {
     const support = job.answerGroupWork?.sourceSupport, recovery = support?.recovery;
     if (!support || !recovery) continue;

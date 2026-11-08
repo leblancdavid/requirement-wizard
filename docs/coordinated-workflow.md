@@ -1,5 +1,129 @@
 # Coordinated workflow preview (DEC-032)
 
+## Read and planning efficiency (2026-11-07)
+
+Continue now retains successful shared-read coverage across evidence relayouts,
+keeps each rule with its exact linked support, and carries unchanged draft actions
+without asking to reconstruct their histories. A specific joint comparison can
+still request previously read bodies with detailed counterparts, and must fit whole.
+All original verification steps remain mandatory. Saved paid replies and attempts
+are preserved; no reset or extra consent allowance is introduced.
+
+Exact-snapshot staged planning can reuse bounded local computation after a work
+window or restart; this never substitutes for model checks. New questions-only
+fallback schedules use encoded-size packing. Compatible old schedules keep their
+original batches. Planned scheduler yields mean **continuing in the next work
+window**, not failed model requests. See [upgrade and verification boundaries](migrations.md#stable-shared-reads-and-exact-staged-planning-2026-11-07).
+
+## Original-unit verification instead of global history pins (2026-11-07)
+
+New scoped check pages compare the **full frozen draft and every original answer**
+against explicit original units, each kept together with its entire original
+requirement/source/question/current-answer closure. Every draft-affected original
+and every original batch record remains scheduled for an actual check; absence from
+one local page is not approval of an unseen rule. Specific indispensable cross-unit
+comparisons still load together and block if their full closures cannot fit. No
+partial publication or inferred cross-page consistency is allowed.
+
+Compatible saved global-history unit overflows use ordinary **Continue specification**
+after updating, without new preparation/grants or restarting completed original
+steps. Prior stronger checks and their dated evidence remain retained. See
+[scope/upgrade boundaries and measured geometry](migrations.md#scoped-original-unit-shared-verification-2026-11-07).
+
+## Near-limit shared packet overhead (2026-11-07)
+
+New packets use compact instructions for existing lossless text/ID/record tables.
+All original wording, provenance and complete joint evidence are preserved; the
+96,000-character input bound and reserve remain unchanged. Compatible older size
+stops can use ordinary **Continue specification** after updating, without a new
+preparation/grant or repeating the paid lookup. Fit errors now distinguish complete
+input from reserved overhead rather than blaming human constraints alone. See
+[wire compatibility and measured limits](migrations.md#compact-lossless-shared-page-wire-instructions-2026-11-07).
+
+## A fitting joint comparison blocked by background packing (2026-11-07)
+
+V4 could retain a requested joint comparison beside every remaining background unit,
+then claim that one unit could not fit even when the comparison alone fits. V5 keeps
+the whole comparison on a mandatory first page; only a positive check releases its
+temporary pins. Draft-referenced originals stay detailed on every page and all remaining
+background checks still gate publication. A truly unfit whole comparison still blocks.
+Use ordinary **Continue specification** for a compatible saved v4 size stop after
+updating. Do not repeat preparation or re-enter answers; no additional attempts are
+granted and the paid lookup is reused. See [migration and fit evidence](migrations.md#atomic-joint-first-evidence-pages-2026-11-07).
+
+## Missing originals during shared verification (2026-11-07)
+
+When an older check stopped because draft-referenced original rules/support were
+omitted, **Prepare evidence-complete verification** supplies those exact bodies in
+every new verification packet. Preparation makes no model call, grants no attempts
+and retains the blocker and frozen draft. Use **Continue specification** afterward
+to reevaluate it with the remaining allowance. A new rejection/blocker is still possible.
+Checks are explicitly page-local; every remaining page/batch must pass before any
+specification change publishes. See [compatibility](migrations.md#evidence-complete-shared-verification-2026-11-07).
+
+## Page capacity is not an input-size failure (2026-11-07)
+
+The earlier page planner could stop at its historical 32-extra-page total even when
+the next exact input could fit: abandoned future pages from superseded layouts were
+counted repeatedly. New page layouts count paid replies plus pending packets, with
+separate finite per-step/group/layout/reply limits. Actual calls still use the existing
+workflow permission and per-page attempt ceiling; input remains capped at 96,000
+characters. Old successful work and all spent attempts remain saved.
+
+A compatible saved size-labelled capacity stop can use **Continue specification**
+after updating. It does not need another recovery allowance, reset or answer re-entry.
+The earlier one-time source/page-loop allowances retain their original spend. This
+unblocks packing; it does not promise quick model work or completed verification.
+
+Exports now distinguish original-step progress from successful page replies and show
+page-accounting numbers separately. Earlier exports could overstate original progress
+and infer a check phase too early. See [upgrade and measured limits](migrations.md#paidpending-page-capacity-and-accurate-shared-progress-2026-11-07).
+
+## Repeated evidence-request recovery (2026-11-07)
+
+The first paging implementation could repeatedly show the same first page while
+putting requested bodies on later pages, consuming the four-attempt limit without
+finishing a read. New layouts bring unresolved requested evidence forward and tell
+the model which other records are already queued on mandatory later pages. Scheduled
+records are not offered as repeat lookups or treated as reviewed evidence. A read
+may retain a provisional no-change draft until later evidence permits a change;
+every page and original verification step still has to finish.
+
+For a saved group exhausted by that specific v1 loop, open **Processing & queue →
+Recover repeated evidence requests → Authorize page recovery · up to 4 requests**,
+then **Continue specification** / **Submit saved responses**. Authorization only
+records a one-time allowance and corrected layout, starts no AI work and preserves
+the original four requests. The next request is attempt five, not a fresh attempt
+one; it consumes AI plan usage. The extra allowance cannot be renewed or stacked
+with original-source recovery. Other failures/true conflicting choices do not qualify.
+The recovery transaction must prove that requested bodies actually move into the
+next bounded input; it does not simply extend an unchanged loop.
+
+See [upgrade/provenance details](migrations.md#requested-first-pages-and-explicit-loop-recovery-2026-11-07).
+
+## Oversized lookup recovery and fuller shared batches (2026-11-07)
+
+Shared-answer evidence lookups can expand a previously fitting input beyond its
+96,000-character cap. Explicit **Continue specification** / saved-response processing
+now retains that lookup and pages an overflowing unfinished read/check into smaller
+exact evidence packets. Each packet keeps the original answers and complete carried
+draft; all pages must finish before the original step completes, and every original
+verification batch remains mandatory. Processing & queue shows the current evidence
+page separately from original completed steps. No answer re-entry or reset is needed
+for compatible saved work, and startup alone starts no calls.
+
+Paging never shortens a record or refunds a spent request. An unfit pinned base,
+whole linked unit or repair still stops; models must request exact bodies together
+or block when the draft cannot support a necessary joint comparison. At most 32
+extra page steps can be introduced under the existing workflow consent. See
+[upgrade and recovery](migrations.md#bounded-shared-answer-evidence-pages-2026-11-07).
+
+New shared schedules use more of the existing input allowance, with exact sizing
+and the unchanged full draft reserve. The large deterministic five-answer fixture
+now needs six read batches plus six checks rather than nine plus nine (12 instead
+of 18 adapter requests). This is a fixture request-count reduction, not a measured
+live speedup. Already-paid schedules keep their original boundaries and identities.
+
 ## Original sources and one-time recovery (2026-11-06)
 
 Original supporting confirmations can be historical without being disposable. Shared

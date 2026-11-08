@@ -49,6 +49,16 @@ export class SnapshotRefresh<T extends VersionedSnapshot> {
   begin(projectID: string): RefreshTicket<T> {
     return { sequence: ++this.requested, projectID, baseline: this.cached?.snapshot.project.id === projectID ? this.cached : null };
   }
+  /** A durable mutation reply may update a small section without waiting for a
+   * full refresh. Invalidate older polls and changed wire tokens together. */
+  acknowledge(projectID: string, update: (snapshot: T) => T, changed: (keyof T & string)[]): T | null {
+    if (this.cached?.snapshot.project.id !== projectID) return null;
+    this.accepted = ++this.requested;
+    const snapshot = update(this.cached.snapshot), tokens = { ...this.cached.tokens };
+    for (const section of changed) delete tokens[section];
+    this.cached = { snapshot, tokens };
+    return snapshot;
+  }
   complete(ticket: RefreshTicket<T>, sections: Partial<T>, tokens: SnapshotTokens | null, selectedID: string | null, aborted = false): T | null {
     if (aborted || selectedID !== ticket.projectID || ticket.sequence <= this.accepted) return null;
     let snapshot = tokens ? mergeSnapshotSections(ticket.baseline, sections, tokens) : shareSnapshot(ticket.baseline?.snapshot ?? null, sections as T);

@@ -7,8 +7,9 @@ import { workspaceMenu } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { dimensions } from "../core/epics.js";
 import type { Analysis } from "../core/model.js";
+import { ContextBudgetError } from "../core/context.js";
 import type { Connections } from "../providers/connections.js";
-import { answerGroupMaterials, planAnswerGroup, answerGroupContext, acceptAnswerGroup, type AnswerGroupDraft } from "../core/answer-group.js";
+import { answerGroupMaterials, planAnswerGroup, planAnswerGroupEvidencePages, answerGroupContext, answerGroupProgress, acceptAnswerGroup, type AnswerGroupDraft } from "../core/answer-group.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -46,6 +47,76 @@ function sourceRecoveryFixture() {
   return { p, job: store.getJob(job.id), historical };
 }
 const recovery = sourceRecoveryFixture();
+function pagedLookupFixture(loop = false) {
+  let project = store.create(loop ? "Repeated saved lookup" : "Oversized saved lookup", "Retain exact evidence and original answers", { providerID: "openai", modelID: "fixture" });
+  for (let i = 0; i < 40; i++) project = store.note(project.id, project.revision, randomBytes(i >= 32 ? 5000 : 1000).toString("hex"), "project");
+  const seed = store.beginJob(project.id, project.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+  store.finishJob(seed.id, { ...empty(), questions: ["Keep first behavior?", "Keep second behavior?"].map(text => ({ epicID: "project", text,
+    whyItMatters: "Explicit choice", evidenceIDs: [project.sources[0]!.id], options: [{ label: "Keep", consequence: "Retain" }, { label: "Change", consequence: "Review" }] })) });
+  project = store.get(project.id);
+  const submitted = project.questions.map(q => store.enqueue(project.id, { id: randomUUID(), auto: false, research: false,
+    input: { type: "answer", questionID: q.id, questionText: q.text, sourceID: null, answer: { kind: "answer", text: "Keep this exact behavior" } } }));
+  store.applyQueued(project.id, submitted.map(s => s.id)); project = store.get(project.id);
+  const items = store.submissions(project.id), material = answerGroupMaterials(project, items), work = planAnswerGroup(material);
+  const job = store.beginJob(project.id, project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  const context = answerGroupContext(material, work); work.attempts = 1;
+  acceptAnswerGroup(material, work, undefined, { answerGroupEvidence: { recordIDs: project.sources.filter(s => s.kind === "note").slice(-8).map(s => s.id) } }, job);
+  let overflow = context.manifest;
+  assert.throws(() => answerGroupContext(material, work), error => {
+    assert.ok(error instanceof ContextBudgetError); overflow = error.manifest; return true;
+  });
+  if (loop) {
+    for (let attempt = 2; attempt <= 4; attempt++) {
+      const plan = planAnswerGroupEvidencePages(material, work, undefined, 1); assert.ok(plan);
+      work.evidencePages = [...work.evidencePages ?? [], plan];
+      const page = answerGroupContext(material, work); work.attempts = attempt;
+      acceptAnswerGroup(material, work, undefined, { answerGroupEvidence: { recordIDs: project.sources.filter(s => s.kind === "note").slice(-8).map(s => s.id).filter(id => !page.manifest.includedIDs.includes(id)) } }, job);
+    }
+    const plan = planAnswerGroupEvidencePages(material, work, undefined, 1); assert.ok(plan);
+    work.evidencePages = [...work.evidencePages ?? [], plan]; overflow = answerGroupContext(material, work).manifest;
+  }
+  store.checkpointAnswerGroup(job.id, work, overflow); store.failJob(job.id, "failed", "Saved lookup exceeded the bounded input budget");
+  for (const item of items) { item.status = "needs-attention"; item.jobID = job.id; store.saveSubmission(item); }
+  const state = store.workflow(project.id); state.enabled = true; state.paused = true; state.phase = "needs-decision";
+  state.inputBatchPolicy = { format: 1 }; state.reviewPolicy = { format: 1 };
+  state.current = { kind: "input", key: "0".repeat(64), jobIDs: [job.id], completed: true }; store.saveWorkflow(project.id, state);
+  return { project, original: store.getJob(job.id) };
+}
+const paged = pagedLookupFixture();
+const repeated = pagedLookupFixture(true);
+function verificationFixture() {
+  let project = store.create("Missing verification originals", "Retain original rules in checks", { providerID: "openai", modelID: "fixture" });
+  const seed = store.beginJob(project.id, project.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+  store.finishJob(seed.id, { ...empty(), questions: ["Keep first?", "Keep second?"].map(text => ({ epicID: "project", text,
+    whyItMatters: "Choose behavior", options: [{ label: "Keep", consequence: "Retain" }, { label: "Change", consequence: "Review" }] })) });
+  project = store.get(project.id);
+  for (let i = 0; i < 40; i++) project = store.note(project.id, project.revision, randomBytes(2000).toString("hex"), "project");
+  for (const q of project.questions) store.enqueue(project.id, { id: randomUUID(), auto: false, research: false,
+    input: { type: "answer", questionID: q.id, questionText: q.text, sourceID: null, answer: { kind: "answer", text: "Keep this behavior" } } });
+  store.applyQueued(project.id, store.submissions(project.id).map(s => s.id)); project = store.get(project.id);
+  const items = store.submissions(project.id), material = answerGroupMaterials(project, items), work = planAnswerGroup(material);
+  const job = store.beginJob(project.id, project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  const originalID = work.batches[0]!.find(id => project.sources.some(s => s.kind === "note" && s.id === id))!;
+  assert.ok(originalID);
+  let draft: AnswerGroupDraft | undefined;
+  while (answerGroupProgress(work).phase === "read") {
+    work.attempts = 1;
+    draft = acceptAnswerGroup(material, work, draft, draft ? { answerGroupKeep: true } : { answerGroupDraft: {
+      analysis: { ...empty(), requirements: [{ epicID: "project", statement: "Retain this exact behavior", rationale: "Original answer and rule",
+        acceptance: ["Behavior remains available"], sourceIDs: [items[0]!.appliedSourceID!, originalID] }] },
+      answers: items.map(s => ({ submissionID: s.id, outcome: "integrated", explanation: "Retained exact human choice" })) } }, job).draft;
+  }
+  work.attempts = 1; acceptAnswerGroup(material, work, draft, { answerGroupCheck: { valid: true, reason: "First original batch agrees" } }, job);
+  const context = answerGroupContext(material, work, draft); assert.ok(!context.manifest.includedIDs.includes(originalID));
+  work.attempts = 1; acceptAnswerGroup(material, work, draft, { answerGroupBlocked: { reason: "Original referenced rule is unavailable" } }, job);
+  store.checkpointAnswerGroup(job.id, work, context.manifest); store.failJob(job.id, "failed", "Original referenced rule unavailable");
+  for (const s of items) { s.status = "needs-attention"; s.jobID = job.id; store.saveSubmission(s); }
+  const state = store.workflow(project.id); state.enabled = true; state.paused = true; state.phase = "needs-decision";
+  state.inputBatchPolicy = { format: 1 }; state.reviewPolicy = { format: 1 };
+  state.current = { kind: "input", key: "0".repeat(64), jobIDs: [job.id], completed: true }; store.saveWorkflow(project.id, state);
+  return { project, original: store.getJob(job.id), originalID };
+}
+const verification = verificationFixture();
 let p = store.create("Shared answer browser", "Retain each original human choice", { providerID: "openai", modelID: "fixture" });
 const seed = store.beginJob(p.id, p.revision).job; store.claimJob(seed.id, Date.now() + 60000);
 store.finishJob(seed.id, { ...empty(), questions: Array.from({ length: 5 }, (_, i) => ({ epicID: "project", text: `Keep behavior ${i}?`,
@@ -56,12 +127,28 @@ for (let i = 0; i < 20; i++) p = store.note(p.id, p.revision, `Original rule ${i
 const connections: Connections = { async accounts() { return []; }, async models() { return [{ id: "fixture", name: "Fixture" }]; },
   async beginLogin() { throw new Error("No sign-in"); }, loginStatus() { throw new Error("No sign-in"); }, cancelLogin() {},
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {} };
-const calls: string[] = []; let holdCheck = true, holdRepair = true, rejected = false;
+const calls: string[] = []; let holdCheck = true, holdRepair = true, rejected = false, holdPage = true, holdLoop = true;
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(project, { context, signal, research }) {
   assert.equal(research, false);
   const stage = context.manifest.answerGroupStage;
   if (stage) {
     calls.push(`${stage.phase}:${stage.step}`);
+    if (project.id === verification.project.id) {
+      assert.equal(stage.phase, "check"); assert.ok(context.manifest.includedIDs.includes(verification.originalID));
+      return { answerGroupCheck: { valid: true, reason: "Exact original rule and current local constraints agree" } };
+    }
+    if (project.id === paged.project.id) {
+      assert.ok(context.manifest.characters <= 96000);
+      if (holdPage) return new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    }
+    if (project.id === repeated.project.id) {
+      assert.ok(context.manifest.characters <= 96000);
+      if (holdLoop) {
+        const wanted = repeated.original.answerGroupWork!.receipts.at(-1)!.response; assert.ok("answerGroupEvidence" in wanted);
+        assert.ok(wanted.answerGroupEvidence.recordIDs.some(id => context.manifest.includedIDs.includes(id)));
+        return new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      }
+    }
     if (stage.phase === "check") {
       if (holdCheck) return new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
       if (!rejected) { rejected = true; return { answerGroupCheck: { valid: false, reason: "The draft left the original cancellation restriction unchanged" } }; }
@@ -165,7 +252,77 @@ try {
   assert.equal(recovered.answerGroupWork!.receipts[recovery.job.answerGroupWork!.receipts.length]!.attempt, 5);
   assert.ok(!calls.slice(beforeGrant).some(c => c.startsWith("read:")));
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  console.log("Shared answer browser passed: bounded draft repair and explicit one-time source recovery, no calls on authorization/reload, preserved original four requests/blocker, attempt-five correction, retained reads, complete recheck, atomic publication and mobile. No live inference.");
+  await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: "Oversized saved lookup", exact: true }).click();
+  await page.locator(".topbar .queue-trigger").click();
+  await flow.getByRole("button", { name: /^(Continue specification|Submit saved responses)$/ }).click();
+  await expect(shared).toContainText("Evidence page 1 /");
+  await expect(shared).toContainText("original");
+  assert.equal(store.get(paged.project.id).requirements.length, 0);
+  await flow.getByRole("button", { name: "Pause specification workflow", exact: true }).click();
+  await expect.poll(() => store.workflowBusy(paged.project.id)).toBe(false);
+  const pausedPage = store.jobs(paged.project.id).reverse().find(j => j.answerGroupWork)!;
+  assert.equal(pausedPage.answerGroupWork!.attempts, 2);
+  assert.deepEqual(pausedPage.answerGroupWork!.receipts, paged.original.answerGroupWork!.receipts);
+  const pageSpend = calls.length;
+  await page.reload(); await page.locator(".topbar .queue-trigger").click();
+  await expect(shared).toContainText("Evidence page 1 /"); assert.equal(calls.length, pageSpend);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-shared-evidence-pages-mobile.png", fullPage: true });
+  holdPage = false;
+  await flow.getByRole("button", { name: /^(Continue specification|Submit saved responses)$/ }).click();
+  await expect.poll(() => store.submissions(paged.project.id).every(s => s.status === "completed"), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => store.workflowBusy(paged.project.id), { timeout: 20000 }).toBe(false);
+  const finishedPages = store.jobs(paged.project.id).reverse().find(j => j.answerGroupWork)!;
+  assert.equal(finishedPages.status, "completed", finishedPages.diagnostic);
+  assert.deepEqual(finishedPages.answerGroupWork!.receipts[0], paged.original.answerGroupWork!.receipts[0]);
+  assert.equal(finishedPages.answerGroupWork!.receipts[1]!.attempt, 3);
+  await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: "Repeated saved lookup", exact: true }).click();
+  await page.locator(".topbar .queue-trigger").click();
+  const loopRecovery = queue.getByRole("region", { name: "Evidence page-loop recovery", exact: true });
+  await expect(loopRecovery).toContainText("original four requests"); const beforeLoopGrant = calls.length;
+  await loopRecovery.getByRole("button", { name: "Authorize page recovery · up to 4 requests", exact: true }).click();
+  await expect(loopRecovery).toHaveCount(0); assert.equal(calls.length, beforeLoopGrant);
+  assert.equal(store.getJob(repeated.original.id).answerGroupWork!.attempts, 4);
+  assert.deepEqual(store.getJob(repeated.original.id).answerGroupWork!.receipts, repeated.original.answerGroupWork!.receipts);
+  await page.reload(); await page.locator(".topbar .queue-trigger").click();
+  assert.equal(calls.length, beforeLoopGrant); await expect(flow).toContainText("page-loop recovery allowance");
+  await flow.getByRole("button", { name: /^(Continue specification|Submit saved responses)$/ }).click();
+  await expect(shared).toContainText("Evidence page 1 /");
+  await flow.getByRole("button", { name: "Pause specification workflow", exact: true }).click();
+  await expect.poll(() => store.workflowBusy(repeated.project.id)).toBe(false);
+  assert.equal(store.jobs(repeated.project.id).reverse().find(j => j.answerGroupWork)!.answerGroupWork!.attempts, 5);
+  const loopSpend = calls.length; await page.reload(); await page.locator(".topbar .queue-trigger").click();
+  assert.equal(calls.length, loopSpend); await expect(loopRecovery).toHaveCount(0);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-shared-page-loop-recovery-mobile.png", fullPage: true });
+  holdLoop = false;
+  await flow.getByRole("button", { name: /^(Continue specification|Submit saved responses)$/ }).click();
+  await expect.poll(() => store.submissions(repeated.project.id).every(s => s.status === "completed"), { timeout: 30000 }).toBe(true);
+  await expect.poll(() => store.workflowBusy(repeated.project.id), { timeout: 30000 }).toBe(false);
+  const loopComplete = store.jobs(repeated.project.id).reverse().find(j => j.answerGroupWork)!;
+  assert.equal(loopComplete.status, "completed", loopComplete.diagnostic);
+  assert.deepEqual(loopComplete.answerGroupWork!.receipts.slice(0, 4), repeated.original.answerGroupWork!.receipts);
+  assert.equal(loopComplete.answerGroupWork!.receipts[4]!.attempt, 6);
+  await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: "Missing verification originals", exact: true }).click();
+  await page.locator(".topbar .queue-trigger").click();
+  const verificationRegion = queue.getByRole("region", { name: "Evidence-complete verification", exact: true });
+  await expect(verificationRegion).toContainText("grants no extra attempts"); const beforePreparation = calls.length;
+  await verificationRegion.getByRole("button", { name: "Prepare evidence-complete verification", exact: true }).click();
+  await expect(verificationRegion).toHaveCount(0); assert.equal(calls.length, beforePreparation);
+  assert.equal(store.getJob(verification.original.id).answerGroupWork!.attempts, 1);
+  assert.deepEqual(store.getJob(verification.original.id).answerGroupWork!.receipts, verification.original.answerGroupWork!.receipts);
+  await page.reload(); await page.locator(".topbar .queue-trigger").click();
+  assert.equal(calls.length, beforePreparation); await expect(verificationRegion).toHaveCount(0);
+  await flow.getByRole("button", { name: /^(Continue specification|Submit saved responses)$/ }).click();
+  await expect.poll(() => store.submissions(verification.project.id).every(s => s.status === "completed"), { timeout: 20000 }).toBe(true);
+  const verified = store.jobs(verification.project.id).reverse().find(j => j.answerGroupWork)!;
+  assert.equal(verified.status, "completed", verified.diagnostic);
+  assert.equal(verified.answerGroupWork!.receipts[verification.original.answerGroupWork!.receipts.length]!.attempt, 2);
+  assert.ok(calls.slice(beforePreparation).every(c => c.startsWith("check:")));
+  console.log("Shared answer browser passed: repair, source/page recovery and evidence-complete verification; no calls on preparation/reload, no extra attempts, retained blocker/draft/read work, exact originals, full verification and mobile. Fixture only; no live inference.");
 } catch (error) {
   console.error({ calls, workflow: store.workflow(p.id).message, jobs: store.jobs(p.id).filter(j => j.answerGroupWork).map(j => ({ status: j.status, diagnostic: j.diagnostic, attempts: j.answerGroupWork!.attempts })) });
   await diagnose?.(".reqwizit-state/browser-shared-answers-failure"); throw error;

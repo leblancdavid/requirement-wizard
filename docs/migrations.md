@@ -1,5 +1,487 @@
 # Data migrations and upgrade compatibility
 
+## Stable shared reads and exact staged planning (2026-11-07)
+
+**Source → target: SQLite 43 → 44; conditional portable format 18.** Startup is a
+transactional reader-boundary upgrade, not a data rewrite or a model call. Original
+answers, receipt prefixes, schedules, completed work, assessments and live leases
+are retained. Formats 1–7 and existing staged policies retain their original packet
+rendering/replay and verification meaning. No allowance is increased or refunded.
+Unsupported future formats and downgraded portable envelopes reject without overwrite.
+No assessment or completion fingerprint changes, and no reassessment is required.
+
+Explicit continuation can append **read-page format 8** to unfinished shared reads.
+Each primary unit expands the complete recursive requirement.sourceIDs /
+source.questionID / question.sourceID support before measuring fit. Every pinned
+answer and the complete carried draft remain present. Successful read-page coverage
+is derived from authenticated receipt/layout prefixes, not merely requested IDs.
+Relayouts retain completed primary units (and v8 detailed support coverage), while
+uncompleted pages and newly requested bodies remain mandatory. Historical paid
+replies are never rewritten or relabelled as verification. Every original check
+step still follows, using the existing v7 check protocol.
+
+Unchanged draft actions do not require repeated history reconstruction. New/changed
+actions still require detailed bodies; v8 also rejects removing an old action whose
+references are unavailable. Previously completed units cannot be requested again
+without explicit `withRecordIDs` naming currently detailed counterparts for a
+specific indispensable joint comparison. Those full closures stay atomic and
+genuinely oversized comparisons still block. This is not permission to assume that
+separate evidence agrees or to replace any original body with a draft or summary.
+
+The **staged-dense-records-v5** questions-only fallback packs new work by actual
+encoded input size plus the existing full 8,000-character draft/envelope reserve,
+instead of the v4 raw 50,000-character grouping threshold. It retains v4's exact
+mandatory evidence union, pins, no-load/no-research restrictions and all-batch
+read/check publication gate. Saved v4 schedules are reconstructed **before** the
+new policy is considered; their plan keys, replies and spent attempts survive.
+Binary prefix probes need not find a mathematically optimal packing, but every
+selected packet independently passes the unchanged 96,000-character bound.
+
+Derived local context checkpoints now support a **staged** bundle: complete computed
+review/batches, never model output or approval. Cache keys bind the entire exact
+project snapshot (including revision), review, policy and algorithm/budget version.
+Changed evidence, scope or revision recomputes. Copies prevent caller mutation;
+reopening preserves wire metadata and review identities. Bundles share the existing
+128-entry/16-MiB success pool, separate from the bounded failure pool. Overlarge
+bundles simply proceed uncached. Pending model work and paid stage ledgers still
+undergo the normal exact matching, attempt, stale-input and publication checks.
+Disposable cache contents are not exported as project evidence.
+
+Context-computation storage generations are separate from resolved task receipts:
+changing saved job progress no longer evicts exact project/review computations.
+Resolved task receipts remain bound to jobs, focus and submissions; they cannot
+silently skip new model work. Inner staged keys still require the **entire exact
+snapshot**, even where older individual context computations support proven
+bookkeeping-only revision rebinding. Old job-bound context generations can be
+adopted only through their matching original input keys. No model ledger is moved,
+rewritten or refunded by this derived-cache adoption.
+
+Optional metadata-only `publicationMs` measurements separate shared publication
+replay, completion-input reconstruction, review-history reads and reconciliation.
+Submission progress/revision checks are also measured. These are nested local
+timings, not additive wall-time attribution; missing old timings remain unknown.
+The previously observed unexplained completion tail is **not yet attributed or
+claimed fixed**. Planned scheduler yields are described as continuation into the
+next work window, not request failures. Actual failure, timeout, Pause and human
+decision boundaries remain unchanged.
+
+Deterministic comparison: one 30-note fixture uses **4 dense batches vs 6 v4
+batches** with identical exact evidence coverage (8 vs 12 scheduled read/check
+requests). Exact-snapshot replay uses **0 new context preparations vs 21 cold**.
+These are fixture measurements, not live latency or semantic-quality qualification.
+No live provider inference or user-project write is needed for these changes.
+
+Verification completed: `npm test` passed (930 pretests, 776 main tests, 142
+posttests), along with type checking, the full browser suite/postchecks, final UI
+build, focused shared-answer/question-collection browser checks and diff checks.
+The 43→44 fixture preserves old paid work across repeated startup, rejects a future
+page format transactionally and safely retries after restoring the original bytes.
+Read relayout, exact support closure, portable 18/downgrade rejection, cache copies,
+changed snapshots, repeated cache reopen, and saved v4 attempt/schedule preservation
+are covered. A real service continuation with changed job receipts and a SQLite
+reopen performs zero new context preparations while retaining its spent attempt.
+No live latency check, user-data migration/write or installed desktop rebuild was
+performed; the post-request tail still needs measurements from a subsequent run.
+
+## Scoped original-unit shared verification (2026-11-07)
+
+**Source → target:** SQLite **42 → 43** preserves all payloads, frozen drafts,
+material/plan identities, historical verdicts, spent attempts and completed work.
+Startup is a reader-boundary migration only. Formats 1–6 keep their exact original
+rendering/replay; older checks with broader supplied evidence are not invalidated
+merely because later packets gain a more bounded scope. Explicit continuation may
+append format **7** to an unfinished check. No inference starts at upgrade, and no
+attempt or recovery allowance is created, renewed or refunded.
+
+V4–6 detailed every draft-referenced original and its history in **every** check
+packet. That can make one unrelated background rule appear indivisible even though
+its own full provenance fits beside the complete draft and human answers. V7 makes
+the comparison scope explicit: a primary original unit, its **whole requirement
+`sourceIDs` / source `questionID` / question `sourceID` closure**, the **entire frozen
+draft** and **every pinned human answer**. Closure traversal is recursive and rejects
+missing authenticated support. Other `evidenceIDs`/dependencies remain references,
+not implicitly reviewed bodies; indispensable interactions require an explicit joint
+lookup. No wording, source body, acceptance scenario, provenance or draft action is
+summarized, truncated or replaced by a citation.
+
+Every original batch record **and every draft-referenced original/support record**
+is scheduled across the mandatory pages of each new scoped original check step,
+rather than supplied globally on every page. Units are packed using their actual
+full closures, so a rule is never approved with its source/question/answer history
+split onto another page. A positive verdict asserts agreement only between the full
+unchanged draft/answers and the detailed units, not unseen rules or global consistency.
+Every remaining unit/page/batch must pass before atomic publication. Actual conflicts
+still reject the draft, invalidate its check pass and route to bounded repair.
+
+Explicit `withRecordIDs` comparisons retain their complete requested and counterpart
+closures as one atomic first unit. A genuinely unfit joint set still blocks; scoped
+packing cannot silently convert it into separate passing checks. Preparation of an
+old missing-original blocker still produces its exact v6 evidence-complete cohort.
+If scoped continuation is chosen, that **entire authenticated cohort remains atomic
+for the first reevaluation**, until a successful page verdict (or a real draft repair),
+not merely until a lookup is requested. The old blocker receipt remains in history
+and feedback; preparation never supplies approval or a product preference.
+
+Original schedules/receipt keys and paid original steps are unchanged. Compatible
+saved unit-overflow failures use ordinary **Continue specification**; no answer
+re-entry, reset, repeat preparation or extra grant is needed. Character, draft,
+attempt, page/layout/receipt and ledger-byte ceilings remain unchanged. Conditional
+portable **format 17** protects v7 scopes; formats **1–16 remain readable**. Exact
+recovery parents and receipt prefixes remain required, and unsupported future formats
+or downgraded envelopes reject without overwriting data. This changes future check
+scope, not assessment fingerprints, specification revisions or valid completed work.
+
+Read-only inspection of the real checkpoint retained **136 replies**, **28/34
+original steps** and **attempt 0** (no request spent on the next original step).
+Its v6 packet required **103,320 complete-input characters**. Additional exact phrase
+sharing still exceeded **102,000**, so this is not another small wire-header fix.
+The current rule with its own whole support, full draft and pinned answers measured
+about **73,752 characters** in a geometry-only projection. Actual v7 packing/replay
+produced a **93,262 / 96,000-character** first packet and two mandatory packets for
+the unfinished original step, with the draft/counters unchanged and ordinary
+continuation admitted.
+
+A separate **geometry-only** inspection packed all six remaining initial check
+layouts against the unchanged draft: 2, 2, 1, 2, 2 and 1 pages; first-packet sizes
+were 93,262, 93,489, 90,424, 95,512, 94,448 and 82,876 characters. It created no
+receipts or semantic verdicts, invoked no provider and wrote no user data. It does
+**not** qualify future model-requested joint comparisons or promise completion.
+
+Verification: `npm test` passed (928 pretests, 776 main tests, 141 posttests), as did
+the UI build, full browser suite/postchecks, final focused shared browser runner,
+type checking and focused preparation/scoped-upgrade tests. The 42→43 fixture
+reproduces a v6 whole-unit overflow, retains old bytes across repeated startup,
+continues at attempt 1 without replaying paid steps, checks every batch/draft-original
+unit with its complete support and full draft, retains real negative verdicts and
+refuses to split an unfit declared four-history joint comparison. Portable 17 decoding
+and downgraded-envelope rejection pass. Legacy protocol tests remain explicit where
+their original global-pin semantics matter. No live provider inference, actual
+user-data upgrade/write or installed desktop rebuild was performed.
+
+## Compact lossless shared-page wire instructions (2026-11-07)
+
+**Source → target:** SQLite **41 → 42** is a reader boundary. It does not rewrite
+historical packets, replies, draft/task identities, grants, counters or completed work.
+Formats 1–5 retain exact original replay. Explicit continuation can append format
+**6**, using the existing compact explanations in the three lossless wire encoders
+(shared text, identifier dictionaries and record tables). Source text, question and
+answer bodies, draft content, IDs, ordering and missing-versus-null values do not
+change. Shorter explanation overhead can also make an existing exact record-table
+representation worth selecting where its longer explanation was not. This is wire
+packing, not semantic compression, truncation or assessment/freshness rebasing.
+
+V5's complete joint evidence could fit just below 96,000 characters while conservative
+candidate-page metadata and its reserve pushed the packing estimate over the limit.
+V6 reduces explanatory overhead without removing the reserve, raising the bound,
+separating the joint comparison or skipping any background verification. New v6 fit
+errors separately state measured complete-input characters, draft reserve and page
+metadata reserve; they do not claim that human constraints alone are oversized.
+All prior attempt/work limits and exact-original/joint-first checks remain in force.
+
+Portable formats **1–15 remain supported**; v6 pages require **format 16**. Unknown
+future page formats and downgraded envelopes reject without overwriting data. Upgrade
+tests preserve a paid v5 lookup/context across repeated 41→42 startup, transactionally
+reject future format 7, retry after restoring supported data, and expand compact record
+tables to prove unchanged evidence/IDs/array order/null and absent fields. Original
+recovery parents remain mandatory. There is no new recovery grant: compatible saved
+size stops use ordinary **Continue specification**, retaining the paid lookup and
+the next charged attempt. A genuinely unfit complete joint set still blocks.
+
+Read-only inspection of the latest real checkpoint found **133 replies**, **27/34
+original steps** and **attempt 1**. Its minimal full comparison measured **95,960
+characters**, while conservative candidate metadata/reserve produced the reported
+**96,149** stop. V6 packs the next complete joint comparison at **95,682 / 96,000**
+with three required packets in the replacement layout. No user-data writes/migration
+or provider calls were performed. Historical replay alone took approximately **30
+seconds** in this local preflight; it is not pure model time or a cross-machine
+benchmark. An earlier combined multi-replay preflight timed out at 120 seconds;
+splitting metadata-only replay/packing inspection avoided claiming that timeout as
+a passing check. This verifies local packing only, not future semantic verdicts or
+every possible later evidence request.
+
+Verification: `npm test` passed (928 pretests, 776 main tests, 140 posttests), as did
+the final 48 shared-answer tests, type checking, UI build, full browser suite/postchecks,
+CLI help entry points and diff checking. The expanded v6 ledger replay and ordinary
+continuation admission both passed read-only against all 133 real replies, preserving
+the frozen draft and attempt 1. Upgrade tests compare expanded tables rather than
+raw wire objects because compact overhead can enable an additional lossless table;
+decoded evidence remains identical. No live model call, actual user-data upgrade/write
+or installed desktop rebuild was performed.
+
+## Atomic joint-first evidence pages (2026-11-07)
+
+**Source → target:** SQLite **40 → 41** is a reader boundary only. Startup retains
+all payloads, paid replies, blockers, grants, attempts, draft and task identities.
+Formats 1–4 keep their original replay/packing rules; no completed work is rebased.
+Explicit continuation may append format **5** to an unfinished overflowing layout.
+No additional attempts, inference consent or automatic retry is introduced.
+
+V4 pinned a pending `withRecordIDs` comparison beside **every** proposed background
+page. This could reject a joint comparison that fits by itself because an unrelated
+single background record could not fit beside it. V5 places the complete requested
+bodies and named counterparts in one **atomic first unit**. All frozen-draft original
+references/support remain pinned on every page. Temporary joint bodies release only
+after the first page's positive local check; every remaining background page and
+original batch must still pass before publication. A negative verdict still routes
+to repair, and a genuinely unfit joint unit still blocks without splitting bodies.
+Multiple unfinished joint lookups remain combined until a successful page verdict;
+re-layout cannot silently discard a paid comparison. Character and work limits do
+not change. A finished joint page is not a group-wide consistency certificate.
+
+Compatible saved v4 fit failures use ordinary **Continue specification** after the
+update; no second verification preparation or recovery grant is needed. The exact
+paid lookup remains in the receipt prefix and the next request uses the next charged
+attempt. An interrupted/failed continuation cannot refresh the per-page allowance.
+
+Portable formats **1–14 remain supported**; v5 layouts require **format 15**. Exact
+recovery parents, ordering and ledger prefixes remain mandatory. Future page formats
+and downgraded envelopes reject without overwriting work. Assessment semantics and
+freshness are unchanged. Upgrade tests cover repeated 40→41 reopen with a paid v4
+joint lookup, original page/verification-recovery parents, format-15 portable decoding,
+unchanged attempts/replies, rejection after co-location, and temporary-pin release
+only after the complete joint page passes while background remains unfinished.
+
+A read-only real-checkpoint audit found a **93,803-character** minimal complete
+comparison, despite the **101,596-character** failure when an unrelated unit was
+added. The new planner replays all **83 retained replies**, keeps **attempt 2**, and
+prepares an exact joint first packet at **94,081 / 96,000 characters**, with three
+mandatory packets in the replacement layout. Ordinary continuation admission succeeds.
+No user-database migration/write or model call was performed. This is local packing
+qualification, not a guarantee of future semantic verdicts, lookups or completion.
+
+Verification: `npm test` passed (928 pretests, 776 main tests, 139 posttests), as did
+type checking, the UI build, full browser suite/postchecks and the focused shared
+browser runner. The focused 40→41 upgrade/portable/continuation test also passed
+after adding actual service continuation at the next charged attempt, with no read
+or lookup replay. Earlier fixture failures distinguished the old spurious v4 unit
+failure from a genuinely oversized complete joint set and corrected the fixture's
+required historical recovery parents. No live provider or installed desktop build
+was exercised; all inference behavior in automated checks used deterministic adapters.
+
+## Evidence-complete shared verification (2026-11-07)
+
+**Source → target:** SQLite **39 → 40** is a reader-boundary migration; startup
+does not rewrite work, rebase evidence, grant attempts, resolve blockers or invoke a
+provider. Original formats 1–3 still replay their exact historical context. New
+format **4** check layouts include every existing record directly referenced or
+changed by the frozen draft, original sources of affected requirements and linked
+question/current-answer bodies in every packet. Whole bodies remain exact and the
+96,000-character budget and paid/pending capacity ceilings remain unchanged. An
+indispensable set that cannot fit blocks rather than being truncated or split.
+
+V4 check instructions explicitly limit a positive verdict to supplied page constraints
+and those mandatory originals; **all** other pages and original batches remain
+mandatory before atomic publication. Scheduled background is not described as text
+belonging to the current page. Specific joint lookups may request scheduled missing
+bodies and name already detailed counterparts via `withRecordIDs`; the next packet
+must co-locate both sets. Read-phase scheduled lookup protection is unchanged.
+
+Existing blocked checks with missing originals offer **Prepare evidence-complete
+verification**. This is an authenticated, revision/workflow-version checked local
+transaction, not AI consent or a passing verdict. It appends a v4 layout and provenance
+(exact receipt-prefix hash, original job/revision, prior attempts and original-record
+fingerprints). It retains the original blocker receipt, all read/check replies and the
+frozen draft. Only that authenticated boundary permits reevaluation; prior blocker
+feedback is included in the new packet and can still produce rejection or a new
+blocker. **No extra attempts** are granted. Explicit Continue is required for inference.
+Preparation is one-time, cannot revive an exhausted check and rolls back on fit or
+validation failure. Reopen/retry retain committed metadata without repeating calls.
+
+Portable formats **1–13 remain readable**; format **14** protects v4 layouts and
+verification-preparation metadata. Continuation retains and validates the exact
+blocked parent, prefix replies and spent attempts. Future formats and downgraded
+envelopes reject without overwriting existing data. Assessment identities/freshness
+and completed work are unaffected; this is not a semantic assessment migration.
+
+A read-only real-checkpoint preflight preserved **82 replies**, **17/34 original
+steps**, **attempt 1** and the unchanged frozen draft; it supplied **38 original
+records** in a **94,921 / 96,000-character** packet (two remaining packets in the
+new layout). No user-database writes/migrations or provider calls were performed.
+This demonstrates exact local replay/fit, not live semantic verification or completion.
+
+Verification: type checking, UI build, the full browser suite/postchecks and the
+focused shared-answer browser runner passed. The deterministic suites passed as
+928 pretests, 776 main tests and a final separate `npm run posttest` (139 tests).
+Earlier runs exposed an empty-layout regression (fixed) and a new fixture requesting
+an intentionally unfit joint set; the fixture now asserts that honest budget stop
+and separately exercises a fitting scheduled-body/counterpart lookup. Upgrade tests
+cover repeated 39→40 reopen, unchanged paid evidence, rollback after a simulated
+interrupted preparation write, stale revision/settings rejection, portable 14,
+earlier page-recovery ancestry, every check packet's original-record closure and
+real negative verdicts after preparation. No live provider call or installed desktop
+rebuild was performed; live semantic behavior remains unqualified.
+
+## Paid/pending page capacity and accurate shared progress (2026-11-07)
+
+**Source → target:** SQLite **38 → 39** is a transactional reader boundary only.
+Startup retains original snapshots, batches, material/plan/context identities, replies,
+attempts, grants and finished work. It neither invokes models nor changes project
+revisions or assessment freshness. Explicit continuation can append page **format 3**
+to a compatible unfinished ledger. Formats 1/2 still replay using their original
+packing/capacity rules, including their historical 32-extra-page bound. No old page
+layout or receipt is rewritten to make it look newly validated.
+
+The prior cap summed `pages.length - 1` for **every historical layout**, including
+abandoned future pages after a replacement layout. It also used that global layout
+sum to throw an ordinary input-size error even when whole units could fit. New v3
+packing counts actual successful page replies and the proposed remaining packets:
+at most **64 paid/pending pages per original step**, **256 successful/pending pages
+per group**, **128 retained layouts**, **32 packets per layout**, and **1,024 accepted
+replies**. Already completed pages count even after re-layout or draft repair; only
+unexecuted superseded plans stop consuming future capacity. Real per-page attempt
+limits, the one-time recovery spend and workflow request consent are unchanged.
+The existing **2-MiB saved-ledger bound** is checked with a full next-reply UTF-8
+reserve before dispatch, so the larger layout ceiling cannot create work that the
+startup/portable readers refuse on reopen.
+No unused attempts are refunded and no new four-request allowance is introduced.
+New capacity failures have a distinct bounded-work explanation, not a claim that
+human constraints exceed 96,000 characters. A genuinely unfit whole unit still
+reports its exact packet plus draft/metadata reserve without truncating evidence.
+
+Shared diagnostics formerly counted all successful page replies as original completed
+steps and could falsely report verification underway. Export now reconstructs the
+same cursor as the engine from a **metadata-only SQLite projection** (step numbers,
+response-kind booleans and page counts, never model output). `completedBatches`,
+`remainingSteps` and `phase` refer to original steps; `pageAccounting` separately
+reports successful page replies, current-step replies, layout count and historical
+planned extras. Superseded plan totals are not spent calls or available allowances.
+New measured request contexts optionally record the original step/phase and page
+number/count/format. Older measurements remain unchanged; absent page details are
+not invented. The diagnostic envelope remains format 1 with additive fields and
+corrected shared-progress semantics; no saved evidence is rebased.
+
+**Portable:** formats **1–12 remain supported**; v3 pages require **format 13**.
+Ordering, historical replies, original recovery parents and compatible continuations
+survive export/adoption. Unknown future page/measurement formats reject without
+overwriting data. Interrupted upgrade retries preserve supported original bytes.
+
+A metadata-only local inspection confirmed a real size-labelled stop with 16 layouts
+and 32 historical planned extras. Its 30 successful page replies represented **6 of
+34 original steps**, still reading, not 30 original steps/four remaining checks. A
+bounded read-only preflight validated all 53 saved replies and packed the next input
+at **76,571 / 96,000 characters**, retaining the spent attempt and original draft.
+No user-database migration/write or provider call was performed for that inspection;
+this qualifies exact local continuation/fit, not future model reasoning or completion.
+
+Verification: `npm test` passed (928 pretests, 776 main tests and 137 posttests),
+as did type checking, the full browser suite/postchecks on retry, final 45 shared-answer
+regressions, the focused shared browser runner and diff checking. The first browser
+run hit a Windows `EBUSY` cleanup lock after its recovery assertions passed; the full
+rerun completed. Upgrade tests retain a legacy size-labelled capacity stop across
+repeated 38→39 reopen, continue at the next charged attempt without replaying saved
+pages, verify accurate original/page diagnostic counts, preserve portable format-13
+continuation and reject a downgraded envelope. A final read-only check found the real
+checkpoint's 98,070-byte ledger safely within the next-reply reserve. No provider
+inference, user-data upgrade/write or installed desktop rebuild was performed.
+
+## Requested-first pages and explicit loop recovery (2026-11-07)
+
+**Source → target:** SQLite **37 → 38** is a transactional reader boundary; no
+startup job conversion, new consent, reset or model call. Page **format 1** remains
+replayable byte-for-byte. New page **format 2** orders unresolved requested records
+before background evidence and explicitly identifies bodies already scheduled for
+later pages. Those IDs remain unreviewed, but are excluded from repeat-lookup schema
+enums and validation. Read drafts remain provisional until every original page and
+check completes; missing indispensable joint bodies still block rather than approve.
+An unfinished, unexhausted v1 page may append a v2 layout at the same receipt boundary.
+No original batch, material key, paid receipt or context body is rewritten.
+
+The defect reproduced a paid load → overflowing union → unchanged first page →
+same load cycle. Merely fitting the first page was insufficient. V2 packet sizing
+includes the actual scheduling advice and full draft reserve. Already completed
+pages are not pulled back in as newly requested records. Existing limits, pinned
+input and whole linked-support units remain enforced.
+
+V1 prefix hashes also depended on receipt property insertion order before SQLite
+checkpoint parsing normalized it. Replay now recognizes only the known original
+producer ordering, database ordering, or a database prefix plus the final producer
+job's suffix. Every receipt body/model/context/attempt is still validated; changed
+values do not gain equivalence. V2 plans and new recovery metadata hash schema-
+normalized receipt prefixes instead. Original bytes and historical hashes are kept.
+
+An exhausted first v1 page can offer **Authorize page recovery · up to 4 requests**
+only for a retained same-step lookup loop. The grant transaction checks exact current
+inputs, original history, identical detailed bodies across the last two paid loads
+and the stalled result, and that the new bounded layout actually details previously
+requested evidence. Generic failures, conflicts, changed evidence, completed pages,
+other projects and groups with an existing recovery allowance are excluded. The
+authenticated revision/settings-CAS action preserves four spent attempts and every
+reply, adds one format-1 `pageRecovery` grant and an authenticated v2 layout, and
+pauses without inference. A later explicit Continue spends attempts **5–8**, not
+1–4. Cancellation/reopen retain that spend. Successful page completion opens the
+next ordinary four-attempt page; failure at eight cannot renew the grant. Original
+source recovery cannot stack with page-loop recovery. All verification remains required.
+
+**Portable:** formats **1–11 remain supported**. V2 pages or page-loop recovery
+require **format 12** with original ordering, snapshots, plans and paid receipts.
+The grant's original failed four-request parent is retained and authenticated during
+decode; clone adoption cannot mint another allowance. Unsupported future page/grant
+formats roll back startup unchanged and can be retried after restoring supported data.
+Project revisions, assessment identities and concurrency counters are not migrated.
+
+Regression coverage reproduces the repeated first-page loop and mixed-job checkpoint
+ordering, verifies actual requested-body delivery and deferred lookup rejection, and
+exercises no-call explicit consent, attempt five/eight, exhaustion, changed-input/CAS/
+origin/auth rejection, repeated reopen, future-format rollback, portable missing-parent
+rejection and actual clone completion. Live semantics and the private user's exact
+project are not qualified by these fixtures.
+
+Verification: type checking, `npm test` (928 pretests, 776 main tests and 135
+posttests), all default browser runners/postchecks and diff checking passed. The
+shared browser check separately exercises the new recovery action, no inference on
+consent/reload, requested-body delivery, attempt-five cancellation, attempt-six retry,
+full verification and mobile. No live provider calls, user-data edits or installed
+desktop rebuild were performed.
+
+## Bounded shared-answer evidence pages (2026-11-07)
+
+**Source → target:** SQLite **36 → 37** is a transactional reader boundary only.
+Startup does not rewrite jobs, reset attempts, renew consent or make model calls.
+Existing material keys, frozen batch schedules and receipt/context hashes remain
+unchanged. New schedules target 54,000 estimated evidence characters rather than
+36,000, then split any packet that fails exact sizing with the full 24,000-character
+draft reserve. This affects new work only, not paid schedules or assessment freshness.
+
+A format-1 shared ledger can now append optional `evidencePages`, each with its own
+format-1 marker, exact receipt-prefix hash/activation index, original read/check step
+and ordered whole-record pages. On explicit continuation, an unfinished overflowing
+read/check can partition its current evidence and any outstanding pages while retaining
+all pinned answers, the full draft, exact linked support and the paid lookup. Replay
+recomputes each page plan at its original boundary before accepting later receipts;
+changed/omitted pages and future formats reject. No original step finishes until all
+its pages succeed. A revised draft still requires the full original verification pass;
+old page checks do not survive a repair. Each successful page is a distinct bounded
+request step; its first attempt inherits the unfinished page's spent attempts, and
+only its successful completion opens the next page's ordinary four-attempt allowance.
+Repartitioning, reload, cancellation or retry never refunds an unfinished attempt.
+There are at most 32 additional page steps across the ledger, and every actual call
+still enforces the unchanged 96,000-character cap and coordinator request consent.
+
+Oversized pinned constraints, an indivisible record with its required support, and
+oversized repairs still stop without truncation or partial publication. Page guidance
+requires an explicit blocker or original-body lookup when a joint comparison cannot
+be established from the carried draft; paging does not presume semantic independence.
+
+**Portable:** formats **1–10 remain supported**. Ledgers containing evidence pages
+require **format 11**, preserving exact record order, original snapshots, lookup
+receipts and attempts. Older readers reject the new envelope. Unknown page formats
+roll back the SQLite upgrade; restoring supported bytes allows retry. No project
+revision, assessment identity or workflow-concurrency version is migrated.
+
+Regression coverage includes overflowing read/check lookups, unchanged receipt
+prefixes and schedules, whole-record coverage, per-page bounded requests, delayed
+original-step completion, tampered/future page rejection, repeated 36→37 reopening,
+transactional future-format rollback, partial-page continuation and actual portable
+clone completion. The diagnostic attachment is metadata-only: tests reproduce the
+failure class, not the user's exact private project or live model reasoning.
+
+Verification: `npm test` passed (928 pretests, 776 main tests, 131 posttests), as
+did type checking, the complete browser suite/postchecks and final focused shared/
+workflow regressions. Browser coverage includes real Continue admission of a saved
+overflow, bounded page display, charged Pause/reload/resume and complete publication;
+save-first coverage holds workspace responses while saving five answers. No live
+provider calls, user-database migration or installed-desktop rebuild was performed.
+
 ## Original shared-answer support and explicit recovery (2026-11-06)
 
 **Source → target:** SQLite **35 → 36** is a transactional reader boundary with no

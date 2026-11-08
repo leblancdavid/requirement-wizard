@@ -1,6 +1,6 @@
 import { StaleRevisionError, type Job, type Project, type Submission } from "../core/model.js";
 import { answerGroupMaterials, planAnswerGroup, replayAnswerGroup, answerGroupContext, acceptAnswerGroup,
-  answerGroupProgress, answerGroupLimits, answerGroupRequestLimit, answerGroupPublicationIDs } from "../core/answer-group.js";
+  answerGroupProgress, answerGroupLimits, answerGroupRequestLimit, answerGroupPublicationIDs, boundAnswerGroupEvidence, assertAnswerGroupPageCapacity } from "../core/answer-group.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import type { ProjectStore } from "../storage/store.js";
@@ -20,12 +20,17 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
   let calls = 0;
   for (;;) {
     options.signal.throwIfAborted();
-    if (store.projectRevision(project.id) !== project.revision) throw new StaleRevisionError();
-    const done = answerGroupProgress(work).phase === "complete";
-    const context = local("context", () => answerGroupContext(material, done ? { ...work, receipts: work.receipts.slice(0, -1) } : work, draft));
+    if (local("revisionChecks", () => store.projectRevision(project.id)) !== project.revision) throw new StaleRevisionError();
+    const done = local("progress", () => answerGroupProgress(work).phase === "complete");
+    const context = local("context", () => done ? answerGroupContext(material, { ...work, receipts: work.receipts.slice(0, -1) }, draft)
+      : boundAnswerGroupEvidence(material, work, draft));
     if (done) { context.manifest.includedIDs = answerGroupPublicationIDs(material, work); context.manifest.omittedIDs = []; }
+    if (!done) assertAnswerGroupPageCapacity(work);
     local("checkpoint", () => store.checkpointAnswerGroup(job.id, work, context.manifest));
-    if (done) return local("publication", () => store.finishJob(job.id, draft!.analysis));
+    if (done) {
+      const timings = options.measurement ? options.measurement.value.publicationMs ??= {} : undefined;
+      return local("publication", () => store.finishJob(job.id, draft!.analysis, timings));
+    }
     if (blocked) throw new Error(`Shared answers need review: ${blocked} All original answers and completed work remain saved.`);
     if (answerGroupProgress(work).phase === "repair" && answerGroupProgress(work).repairs >= answerGroupLimits.repairs)
       throw new Error("Shared draft reached its two-repair limit. Original answers, rejected drafts and paid evidence remain saved; human review is required.");
@@ -33,14 +38,15 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
       return store.pauseAnswerGroup(job.id, "Shared answer integration paused. Continue explicitly; completed steps will not repeat.");
     if (work.attempts >= answerGroupRequestLimit(work))
       throw new Error(answerGroupRequestLimit(work) === 8
-        ? "Shared source recovery used its four additional requests (eight cumulative). Original answers, blockers and spent requests are retained; the one-time recovery cannot be extended again."
+        ? `Shared ${work.pageRecovery ? "page-loop" : "source"} recovery used its four additional requests (eight cumulative). Original answers, blockers and spent requests are retained; the one-time recovery cannot be extended again.`
         : "Shared answer step used its four-request limit. Original answers, completed work and spent attempts are retained; continuation cannot reset the limit.");
     if (!calls) options.measurement?.planned(context);
     work.attempts++; calls++;
     local("checkpoint", () => store.checkpointAnswerGroup(job.id, work, context.manifest));
-    options.onProgress?.(answerGroupProgress(work).phase === "repair"
+    const progress = answerGroupProgress(work);
+    options.onProgress?.(progress.phase === "repair"
       ? `${answerGroupRequestLimit(work) === 8 ? `Original-source recovery · ${work.attempts} / 8 cumulative requests (4 original + up to 4 additional). ` : ""}Repairing the shared draft · repair ${answerGroupProgress(work).repairs + 1} / ${answerGroupLimits.repairs}. Original answers and evidence reads are saved. Every evidence batch will be checked again before publication.`
-      : `Integrating ${items.length} saved answers together · ${answerGroupProgress(work).completed} / ${work.batches.length * 2} evidence steps saved. No partial changes published.`);
+      : `Integrating ${items.length} saved answers together · ${progress.completed} / ${work.batches.length * 2} evidence steps saved.${progress.evidencePage ? ` Evidence page ${progress.evidencePage.completed + 1} / ${progress.evidencePage.total} of this step; original lookup retained.` : ""}${answerGroupRequestLimit(work) === 8 && work.pageRecovery ? ` Page-loop recovery · ${work.attempts} / 8 cumulative requests (4 original + up to 4 additional).` : ""} No partial changes published.`);
     const timeout = AbortSignal.timeout(options.continuous ? 300000 : Math.max(1, Math.min(300000, deadline - Date.now())));
     const signal = AbortSignal.any([options.signal, timeout]);
     let abort: () => void = () => {}, violation: Error | undefined;

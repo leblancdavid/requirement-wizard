@@ -9,7 +9,7 @@ export const workflowLabels: Record<WorkflowView["phase"], string> = {
   idle: "Not started", working: "Working", "needs-decision": "Needs your decision", blocked: "Blocked",
   paused: "Paused—progress saved", "ready-to-plan": "Specification checks passed", "ready-to-implement": "Ready to implement",
 };
-export type WorkflowAction = "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "pause" | "disable";
+export type WorkflowAction = "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "pause" | "disable";
 export const mayContinueProject = (workflow: WorkflowView) => !workflow.active
   && (!workflow.enabled || workflow.paused || workflow.suspended || ["blocked", "idle"].includes(workflow.phase)
     || !!workflow.answerBatch?.waiting && (workflow.answerBatch.savedResponses > 0 || workflow.decisions.length === 0));
@@ -57,6 +57,16 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
       <p>Authorize one allowance of up to four additional repair requests for this group. Saved reading steps will not repeat; every evidence batch must check the corrected draft. This consumes AI plan usage, does not resolve conflicting human choices, and cannot be extended a second time. Authorizing this allowance alone starts no AI work.</p>
       <button className="secondary" disabled={disabled} onClick={() => configure("recover-shared-sources")}>Authorize source recovery · up to 4 requests</button>
     </section>}
+    {workflow.pageRecovery && !workflow.active && <section aria-label="Evidence page-loop recovery"><h4>Recover repeated evidence requests</h4>
+      <p>An earlier paging bug kept showing the same evidence instead of the requested records. The original four requests and answers stay saved. The corrected layout brings requested evidence forward.</p>
+      <p>Authorize up to four additional requests for this stalled page once, using your AI plan’s usage. This starts no AI work until you Continue. Later pages and checks use the normal workflow permission and limits. No completed reads are discarded and every evidence check remains required.</p>
+      <button className="secondary" disabled={disabled} onClick={() => configure("recover-shared-pages")}>Authorize page recovery · up to 4 requests</button>
+    </section>}
+    {workflow.verificationRecovery && !workflow.active && <section aria-label="Evidence-complete verification"><h4>Supply original rules for verification</h4>
+      <p>The saved check lacked {workflow.verificationRecovery.missingRecords} original records referenced by its frozen draft. Prepare a layout that keeps all affected original rules and linked supporting bodies together in every verification page.</p>
+      <p>This starts no AI work, grants no extra attempts and does not resolve or approve the blocker. Your {workflow.verificationRecovery.attemptsRemaining} remaining attempts, original answers and completed reading steps are retained. Continue afterward to re-evaluate the saved blocker.</p>
+      <button className="secondary" disabled={disabled} onClick={() => configure("prepare-shared-verification")}>Prepare evidence-complete verification</button>
+    </section>}
     <div className="button-row">{mayContinue && <button className="primary" disabled={disabled} onClick={() => configure("continue-continuous")}>{workflowContinueLabel(workflow)}</button>}
       {!settings && !workflow.active && workflow.enabled && <button className="secondary" disabled={disabled} title="Review the accumulated changes in one bounded burst (up to eight AI requests and five active minutes). Process saved responses first. Remaining questions are not approved or answered by this review." onClick={() => configure("review-changes")}>Review changes</button>}
       {workflow.enabled && !workflow.paused && !workflow.suspended && <button className="secondary" disabled={pending} onClick={() => configure("pause")}>Pause specification workflow</button>}
@@ -64,7 +74,8 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
     </div>
     {!settings && <>
       {workflow.lastRun && <section aria-label="Last specification run"><h4>Last specification run</h4>
-        <p>{workflow.lastRun.status === "running" ? "Work is still running. Its final summary is not available yet."
+        <p>{workflow.continuingWindow ? "Continuing in the next work window. This planned boundary is not a failure; completed steps and charged attempts are saved."
+          : workflow.lastRun.status === "running" ? "Work is still running. Its final summary is not available yet."
           : workflow.lastRun.status === "interrupted" ? "This run ended without a complete summary. Saved work and recorded AI attempts are retained."
             : "This run has stopped. See the remaining work below."}</p>
         <p>{workflow.lastRun.requests} AI request attempts recorded for this run.</p>

@@ -96,7 +96,7 @@ import { reconcileCompletedReview, type AppliedInputChange } from "../core/revie
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
 import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
-import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, type AnswerGroupWork } from "../core/answer-group.js";
+import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, type AnswerGroupWork } from "../core/answer-group.js";
 import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -182,7 +182,7 @@ function readStoredJob(payload: string): Job {
   if (job.epicReviewReport !== undefined) epicReviewReportSchema.parse(job.epicReviewReport);
   if (job.retrievalWork !== undefined) retrievalWorkSchema.parse(job.retrievalWork);
   if (job.retrievalWork?.epicStages && !isStagedPolicy(job.context?.epicReview?.contextPolicy)) throw new Error("Staged checkpoints require their saved staged context policy; original work was not overwritten.");
-  if (job.retrievalWork?.epicStages && ((["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"].includes(job.context?.epicReview?.contextPolicy ?? "")
+  if (job.retrievalWork?.epicStages && ((["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5"].includes(job.context?.epicReview?.contextPolicy ?? "")
     && job.retrievalWork.epicStages.contextPolicy !== job.context?.epicReview?.contextPolicy) || job.retrievalWork.epicStages.contextPolicy !== undefined
     && job.retrievalWork.epicStages.contextPolicy !== job.context?.epicReview?.contextPolicy))
     throw new Error("Staged checkpoint policy does not match its saved protocol. Original work was not overwritten.");
@@ -1636,8 +1636,21 @@ export class ProjectStore {
        COALESCE(json_extract(payload, '$.readinessWork.format'), json_extract(payload, '$.submissionWork.format'), json_extract(payload, '$.answerGroupWork.format')) AS savedStageFormat,
        json_extract(payload, '$.submissionWork.draftRepair.format') AS savedDraftRepairFormat,
        json_extract(payload, '$.context.answerGroupStage.phase') AS answerGroupPhase,
-       json_extract(payload, '$.answerGroupWork.sourceSupport.recovery.additionalRequests') AS groupRecoveryRequests,
-       json_array_length(payload, '$.answerGroupWork.sourceSupport.records') AS groupSupportRecords,
+       COALESCE(json_extract(payload, '$.answerGroupWork.sourceSupport.recovery.additionalRequests'), json_extract(payload, '$.answerGroupWork.pageRecovery.additionalRequests')) AS groupRecoveryRequests,
+        json_array_length(payload, '$.answerGroupWork.sourceSupport.records') AS groupSupportRecords,
+        CASE WHEN json_type(payload, '$.answerGroupWork') IS NOT NULL THEN json_object(
+          'batches', json_object('length', json_array_length(payload, '$.answerGroupWork.batches')),
+          'receipts', json((SELECT json_group_array(json_object('step', json_extract(r.value, '$.step'), 'response', json(CASE
+            WHEN json_type(r.value, '$.response.answerGroupDraft') IS NOT NULL THEN '{"answerGroupDraft":true}'
+            WHEN json_type(r.value, '$.response.answerGroupRepair') IS NOT NULL THEN '{"answerGroupRepair":true}'
+            WHEN json_extract(r.value, '$.response.answerGroupKeep') = 1 THEN '{"answerGroupKeep":true}'
+            WHEN json_type(r.value, '$.response.answerGroupCheck') IS NOT NULL THEN CASE WHEN json_extract(r.value, '$.response.answerGroupCheck.valid') = 1 THEN '{"answerGroupCheck":{"valid":true}}' ELSE '{"answerGroupCheck":{"valid":false}}' END
+            WHEN json_type(r.value, '$.response.answerGroupEvidence') IS NOT NULL THEN '{"answerGroupEvidence":true}'
+            WHEN json_type(r.value, '$.response.answerGroupBlocked') IS NOT NULL THEN '{"answerGroupBlocked":true}' ELSE 'null' END)))
+            FROM json_each(jobs.payload, '$.answerGroupWork.receipts') r)),
+          'evidencePages', json((SELECT json_group_array(json_object('fromReceipt', json_extract(p.value, '$.fromReceipt'),
+            'step', json_extract(p.value, '$.step'), 'phase', json_extract(p.value, '$.phase'), 'pages', json_object('length', json_array_length(p.value, '$.pages'))))
+            FROM json_each(jobs.payload, '$.answerGroupWork.evidencePages') p))) END AS groupProgress,
        (SELECT json_extract(w.payload, '$.result.phase') FROM workflow_runs w WHERE w.project_id = jobs.project_id
          AND EXISTS (SELECT 1 FROM json_each(w.payload, '$.jobIDs') WHERE value = jobs.id) ORDER BY w.rowid DESC LIMIT 1) AS workflowPhase,
        (SELECT json_extract(w.payload, '$.result.stopReason') FROM workflow_runs w WHERE w.project_id = jobs.project_id
@@ -1790,7 +1803,7 @@ export class ProjectStore {
     if (rows.some((row) => row.format !== 1)) throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
     for (const row of rows) {
       const value = JSON.parse(row.payload) as { format?: unknown; planningPolicy?: unknown };
-      if (value.format !== 1 || value.planningPolicy !== undefined && (typeof value.planningPolicy !== "string" || !["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4"].includes(value.planningPolicy)))
+      if (value.format !== 1 || value.planningPolicy !== undefined && (typeof value.planningPolicy !== "string" || !["staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5"].includes(value.planningPolicy)))
         throw new Error("Unsupported local planning receipt policy. Saved work was not overwritten.");
     }
     return new Map(rows.filter((row) => row.input_key === inputKey).map((row) => [row.group_key, epicPlanningCheckpointSchema.parse(JSON.parse(row.payload))]));
@@ -1805,7 +1818,7 @@ export class ProjectStore {
         throw new Error("Unsupported local planning receipt format. Saved work was not overwritten.");
       if (this.db.prepare(`SELECT 1 FROM epic_planning_receipts WHERE project_id = ? AND
         (COALESCE(json_extract(payload, '$.format'), 0) != 1 OR
-        (json_type(payload, '$.planningPolicy') IS NOT NULL AND json_extract(payload, '$.planningPolicy') NOT IN ('staged-headroom-v2', 'staged-current-spec-v3', 'staged-records-v4')))` ).get(projectID))
+        (json_type(payload, '$.planningPolicy') IS NOT NULL AND json_extract(payload, '$.planningPolicy') NOT IN ('staged-headroom-v2', 'staged-current-spec-v3', 'staged-records-v4', 'staged-dense-records-v5')))` ).get(projectID))
         throw new Error("Unsupported local planning receipt policy. Saved work was not overwritten.");
       // One input generation per project, capped at 4 MiB/2,000 roots/subtrees.
       // This is disposable derived state, never original decisions or checks.
@@ -1835,7 +1848,7 @@ export class ProjectStore {
     // for each checkpoint. Reject future variants before deleting a generation.
     if (this.db.prepare(`SELECT 1 FROM epic_planning_contexts INDEXED BY epic_planning_context_pool WHERE project_id = ? AND
       (format != 1 OR COALESCE(json_extract(payload, '$.format'), 0) != 1 OR
-       COALESCE(json_extract(payload, '$.outcome'), '') NOT IN ('context', 'budget', 'planning-failure') OR
+       COALESCE(json_extract(payload, '$.outcome'), '') NOT IN ('context', 'staged', 'budget', 'planning-failure') OR
        (json_extract(payload, '$.outcome') = 'planning-failure' AND
         COALESCE(json_extract(payload, '$.kind'), '') NOT IN ('context', 'target', 'seed', 'stage-limit')))` ).get(projectID))
       throw new Error("Unsupported intermediate planning context format. Saved work was not overwritten.");
@@ -1844,7 +1857,7 @@ export class ProjectStore {
   saveEpicPlanningContext(projectID: string, expectedRevision: number, inputKey: string, contextKey: string, value: EpicContextCheckpoint) {
     z.string().regex(/^[a-f0-9]{64}$/).parse(inputKey); z.string().regex(/^[a-f0-9]{64}$/).parse(contextKey);
     const payload = JSON.stringify(epicContextCheckpointSchema.parse(value));
-    const bytes = Buffer.byteLength(payload), success = value.outcome === "context";
+    const bytes = Buffer.byteLength(payload), success = value.outcome === "context" || value.outcome === "staged";
     const limits = epicPlanningCacheLimits[success ? "context" : "failure"];
     this.db.transaction(() => {
       const current = this.db.prepare("SELECT revision FROM projects WHERE id = ?").get(projectID) as { revision: number } | undefined;
@@ -1855,7 +1868,7 @@ export class ProjectStore {
       // Separate FIFO pools: large wire contexts cannot evict the small failed
       // probes proving why an expensive partition must split or cannot finish.
       const rows = this.db.prepare(`SELECT context_key, bytes FROM epic_planning_contexts WHERE project_id = ?
-        AND (json_extract(payload, '$.outcome') = 'context') = ? ORDER BY rowid`)
+        AND (json_extract(payload, '$.outcome') IN ('context', 'staged')) = ? ORDER BY rowid`)
         .all(projectID, Number(success)) as { context_key: string; bytes: number }[];
       if (rows.some((row) => row.context_key === contextKey)) return;
       let total = rows.reduce((sum, row) => sum + row.bytes, 0), count = rows.length;
@@ -2395,11 +2408,12 @@ export class ProjectStore {
     }).immediate();
   }
 
-  /** Explicit metadata-only grant. Original attempts, blocked replies and job outcome remain intact. */
-  recoverAnswerGroupSources(projectID: string, revision: number, version: number, jobID: string) {
+  /** Explicit metadata-only preparation/grant. Verification grants no attempts.
+   * Original attempts, blocked replies and job outcome remain intact. */
+  recoverAnswerGroupSources(projectID: string, revision: number, version: number, jobID: string, kind: "sources" | "pages" | "verification" = "sources") {
     this.db.transaction(() => {
       this.assertNoExecution(projectID);
-      if (this.discoveryActive(projectID) || this.workflowBusy(projectID)) throw new OperationConflictError("Pause active work before authorizing source recovery.");
+      if (this.discoveryActive(projectID) || this.workflowBusy(projectID)) throw new OperationConflictError("Pause active work before authorizing shared-answer recovery.");
       const project = this.get(projectID), state = this.workflow(projectID);
       if (project.revision !== revision) throw new StaleRevisionError();
       if (state.settingsVersion !== version) throw new OperationConflictError("Workflow settings changed. Refresh before authorizing recovery.");
@@ -2409,13 +2423,18 @@ export class ProjectStore {
       if (items.some(s => !s || s.status !== "needs-attention" || s.conflict || s.archivedAt || s.jobID !== jobID
         || this.latestAnswerGroupWorkJob(projectID, s.id)?.id !== jobID)) throw new OperationConflictError("The saved group changed. No additional requests were granted.");
       const material = answerGroupMaterials(project, items as Submission[]);
-      job.answerGroupWork = authorizeAnswerGroupRecovery(material, w, job, randomUUID());
+      job.answerGroupWork = kind === "verification" ? authorizeAnswerGroupVerification(material, w, job)
+        : kind === "pages" ? authorizeAnswerGroupPageRecovery(material, w, job, randomUUID()) : authorizeAnswerGroupRecovery(material, w, job, randomUUID());
       this.saveJob(job);
       for (const item of items as Submission[]) { item.status = "saved"; this.saveSubmission(item); }
       state.paused = true; state.phase = "paused"; state.stopReason = "human-pause";
       if (state.current?.kind === "input") state.current.completed = false;
       state.settingsVersion++;
-      state.message = "Original supporting sources are available. One recovery allowance of up to four additional repair requests is saved; the original four requests and blocker remain recorded. Continue specification explicitly to use it. Every evidence batch must verify the corrected draft.";
+      state.message = kind === "verification"
+        ? "Evidence-complete verification is prepared. Original reading steps, the frozen draft, blocker and spent attempts are retained. No additional attempts were granted. Continue explicitly to re-evaluate the saved blocker with full original rules and supporting bodies."
+        : kind === "pages"
+        ? "Requested evidence now appears first instead of repeating the old page. One page-loop recovery allowance of up to four additional requests is saved; the original four requests remain recorded. Continue specification explicitly to use it. Every page and evidence check remains mandatory."
+        : "Original supporting sources are available. One recovery allowance of up to four additional repair requests is saved; the original four requests and blocker remain recorded. Continue specification explicitly to use it. Every evidence batch must verify the corrected draft.";
       this.saveWorkflow(projectID, state);
     }).immediate();
   }
@@ -2591,7 +2610,11 @@ export class ProjectStore {
     });
   }
 
-  finishJob(id: string, raw: unknown): Job {
+  finishJob(id: string, raw: unknown, timings?: Partial<Record<"sharedReplay" | "completionInputs" | "reviewHistory" | "reconciliation", number>>): Job {
+    const timed = <T>(phase: keyof NonNullable<typeof timings>, run: () => T): T => {
+      const start = performance.now();
+      try { return run(); } finally { if (timings) timings[phase] = (timings[phase] ?? 0) + performance.now() - start; }
+    };
     return this.db.transaction(() => {
       const job = this.getJob(id);
       let { result, omittedConcepts } = job.definitionWork
@@ -2646,7 +2669,7 @@ export class ProjectStore {
             const submissions = this.submissions(project.id);
             const items = job.answerGroupWork.submissionIDs.map(id => submissions.find(s => s.id === id));
             if (items.some(s => !s)) throw new Error("Shared answer source submission is missing.");
-            validateAnswerGroupPublication(project, items as Submission[], job, result);
+            timed("sharedReplay", () => validateAnswerGroupPublication(project, items as Submission[], job, result));
           }
           if (job.refinementWork || job.context?.refinementStage) {
             if (!job.refinementWork || !job.context?.refinementOnly || job.context.submissionIDs?.length
@@ -2829,8 +2852,9 @@ export class ProjectStore {
           if (omittedConcepts) project.roundChanges.push(`Omitted ${omittedConcepts} malformed concept annotations; question wording was preserved.`);
           if (job.context?.refinementOnly) project.roundChanges.push(`Requirement refinement (bounded working set): ${result.summary}`);
           if (interpretation) Object.assign(project, interpretation);
-          const reviewJobs = this.specificationWorkflowJobs(project.id, "resolution");
-          reconcileCompletedReview(before, project, { ...job, result }, this.completionInputs(job, submissions), submissions, reviewJobs);
+          const reviewJobs = timed("reviewHistory", () => this.specificationWorkflowJobs(project.id, "resolution"));
+          const inputs = timed("completionInputs", () => this.completionInputs(job, submissions));
+          timed("reconciliation", () => reconcileCompletedReview(before, project, { ...job, result }, inputs, submissions, reviewJobs));
           if (!job.context?.refinementOnly) {
             // The receipt commits with discovery. A crash cannot lose the pair
             // stage or require replaying a successful (possibly paid) round.

@@ -1,5 +1,104 @@
 # Browser workspace, epics, and estimated completeness
 
+Shared reading now preserves completed page coverage across relayouts and packs
+complete rule/support units. Exact-snapshot staged planning is locally reusable;
+new questions-only schedules pack measured encoded inputs without dropping evidence
+or raising request/attempt limits. Old saved schedules remain replayable. Planned
+work-window yields are continuation, not failures; real errors and human decisions
+still stop work. See [compatibility and fixture measurements](migrations.md#stable-shared-reads-and-exact-staged-planning-2026-11-07).
+
+## Scoped original-unit verification (2026-11-07)
+
+For a compatible saved size stop caused by globally pinned draft-target histories,
+use **Continue specification** after updating. New pages keep each checked rule and
+its complete original source/question/current-answer closure together beside the
+**whole frozen draft and every pinned answer**. Other draft originals remain mandatory
+separate units; one local pass never approves them or publishes changes. Indispensable
+joint comparisons still stay atomic and can genuinely block. No reset, repeat
+preparation or extra attempt grant is required. See [compatibility and limits](migrations.md#scoped-original-unit-shared-verification-2026-11-07).
+
+## Compact shared packets near the limit (2026-11-07)
+
+Existing saved shared-size stops may continue with **Continue specification** after
+updating. Compact decoding instructions reduce wire overhead without dropping any
+evidence or increasing the bound. No new recovery allowance or preparation is needed;
+original replies and attempts remain saved. New fit errors distinguish exact input
+from reserve. See [compatibility and actual preflight](migrations.md#compact-lossless-shared-page-wire-instructions-2026-11-07).
+
+## Joint-first verification continuation (2026-11-07)
+
+A saved v4 size stop after an evidence lookup can use **Continue specification**
+after updating. The next layout keeps the complete joint comparison together, then
+releases its temporary pins only after that local page passes. Original draft-linked
+rules stay detailed on every page; remaining background checks are not skipped.
+No extra grant/preparation or reset is needed. See [bounds and compatibility](migrations.md#atomic-joint-first-evidence-pages-2026-11-07).
+
+## Evidence-complete shared checks (2026-11-07)
+
+A saved verification blocker caused by omitted affected original rules can expose
+**Prepare evidence-complete verification** in the queue. This local, one-time action
+retains all reading, the frozen draft and blocker; it grants no extra attempts and
+starts no AI work. Continue explicitly afterward. Every check now receives exact
+draft-referenced original rules and linked support, and each positive verdict is
+page-local until every original batch/page passes. Actual conflicts still reject.
+See [migration/recovery boundaries](migrations.md#evidence-complete-shared-verification-2026-11-07).
+
+## Shared capacity stops and diagnostic progress (2026-11-07)
+
+An older shared job may show an input-budget error even though its actual stop was
+the historical page-layout counter. Compatible saved work now continues using
+**Continue specification** without another recovery grant. New layout accounting
+retains paid replies, replaces only unexecuted future packets, and still enforces
+finite work bounds and the unchanged 96,000-character input limit. Genuine capacity
+stops now name the work limit rather than asking for smaller human constraints.
+
+The queue's engine-derived original-step progress is now also used by diagnostic
+exports. Successful page replies and historical layout sizes are separate counts;
+neither establishes current verification or requests remaining. New request diagnostics
+include the current original step/phase and page number where known. See
+[compatibility and read-only fit check](migrations.md#paidpending-page-capacity-and-accurate-shared-progress-2026-11-07).
+
+## Recovery after repeated evidence loads (2026-11-07)
+
+The queue can offer **Recover repeated evidence requests** for a first-generation
+shared page exhausted by the unchanged-first-page bug. Choose **Authorize page
+recovery · up to 4 requests**, then explicitly Continue. The grant alone starts
+nothing; original answers, all four paid requests and diagnostic history remain.
+New pages bring requested bodies forward and exclude already queued later-page
+bodies from duplicate lookups, without treating them as reviewed. See
+[behavior and eligibility](coordinated-workflow.md#repeated-evidence-request-recovery-2026-11-07).
+
+The shared-answer browser runner covers no-call authorization/reload, the corrected
+first input, attempt-five Pause, charged retry, full verification and mobile. Its
+new screenshot is `.reqwizit-state/browser-shared-page-loop-recovery-mobile.png`.
+
+## Save acknowledgement, search and oversized evidence (2026-11-07)
+
+Save-first workflow answer cards now finish saving when the durable submission reply arrives, rather
+than waiting for a full workspace refresh and project-list reload. The submitted
+response is projected locally from that reply; old in-flight polls cannot undo it,
+and the next poll refreshes the changed submission section from the server. Saving
+still grants no AI permission. Legacy processing, notes and requirement-review actions
+retain their existing refresh path so immediate follow-up uses the updated revision
+after local application. Specification search retains review lists/readiness calculations
+while only search text changes, invalidating them for changed project data, jobs,
+submissions and editable drafts.
+
+Oversized shared-answer read/check lookups can resume as bounded evidence pages
+with the paid lookup and attempts retained. The queue shows page progress separately
+from the original step count. New shared batches also use more of the unchanged
+budget; existing paid schedules are not repacked. See
+[workflow behavior and limits](coordinated-workflow.md#oversized-lookup-recovery-and-fuller-shared-batches-2026-11-07).
+
+The deterministic question-batch browser check holds workspace GET replies while
+saving all five answers, then releases a stale reply and reloads without starting
+inference. This verifies save/refresh separation, not real-project server latency.
+The shared-answer browser check also resumes an old overflowing lookup through real
+Continue controls, pauses/reloads the first page, preserves charged attempts and
+finishes full verification. Mobile screenshot:
+`.reqwizit-state/browser-shared-evidence-pages-mobile.png`. The complete browser suite
+and postchecks passed; no live model calls were made.
+
 Processing & queue can show **Recover missing original sources** for an exhausted
 shared-answer group whose original supporting source was omitted. The separate
 **Authorize source recovery · up to 4 requests** button records a one-time allowance

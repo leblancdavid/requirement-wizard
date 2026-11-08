@@ -24,6 +24,7 @@ export function DiscoveryDiagnostics({ jobs, load }: { jobs: Job[]; load: (jobID
     <h3>Discovery diagnostics</h3>
     <p>Export metadata for up to 20 recent discovery runs. No requirement text, answers, prompts, responses, credentials or local paths. Counts and durations can still reveal project scale; review the file before sharing.</p>
     <p>Older runs have unknown timings; running/interrupted measurements may be partial. Request time includes connection startup and tools, not just model inference. Export never starts model calls or changes your specification.</p>
+    <p>A recorded scheduler-yield means continuing in the next work window, not a failed request. Saved stages continue without repeating completed calls. Timeouts, failures, Pause and requests for your decision remain separate stops.</p>
     {!eligible.length ? <p>No discovery runs available yet.</p> : <details><summary>Select runs · {ids.length} selected</summary>
       <div className="button-row"><button type="button" className="secondary" disabled={busy} onClick={() => setSelected(eligible.map((job) => job.id))}>Select all recent runs</button>
         <button type="button" className="secondary" disabled={busy} onClick={() => setSelected([])}>Clear run selection</button></div>

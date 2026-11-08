@@ -1,5 +1,105 @@
 # Architecture outline
 
+Shared read format 8 derives completed coverage from authenticated paid page/layout
+prefixes and packs recursive original-support closures. Explicit joint comparisons
+remain atomic, unchanged draft actions survive, and every original check remains
+mandatory. New dense v5 question-only schedules measure encoded packets with the
+full draft/envelope reserve. Bounded exact-snapshot staged computation bundles are
+local scheduling caches, not evidence or model authority. SQLite 44 / portable 18
+guard the new reader variants; [migration details](migrations.md#stable-shared-reads-and-exact-staged-planning-2026-11-07).
+
+## Scoped exact-original verification units (2026-11-07)
+
+V7 preserves the complete draft and pinned human answers but schedules frozen-draft
+originals across mandatory units instead of pinning every unrelated history on every
+page. Each primary unit expands its complete requirement.sourceIDs/source.questionID/
+question.sourceID closure before measuring fit. Requested joint units and first
+missing-original-blocker reevaluation cohorts remain indivisible. Full original-batch
+and draft-original coverage still gates publication; a local verdict certifies only
+supplied units against the full draft, not unseen constraints. Legacy formats 1–6
+replay unchanged; SQLite 43 and portable 17 guard the new protocol. See
+[migration and geometry-only qualification](migrations.md#scoped-original-unit-shared-verification-2026-11-07).
+
+## Compact decoding instructions for exact shared packets (2026-11-07)
+
+V6 retains v5 joint-first scheduling but opts into existing compact explanations in
+the lossless text/identifier/record-table encoders. Selection still measures the whole
+encoded packet; decoded evidence is unchanged. Formats 1–5 preserve their original
+bytes for replay. SQLite 42 and portable 16 guard the new wire reader boundary; see
+[migration and measured fit](migrations.md#compact-lossless-shared-page-wire-instructions-2026-11-07).
+
+## Atomic joint-first packing (2026-11-07)
+
+Format 5 packs each pending requested/counterpart joint comparison as one indivisible
+first unit, not a global pin on unrelated future pages. A positive first-page verdict
+discharges only that unit; the cursor still requires all remaining background pages.
+Frozen-draft originals remain global verification pins. Formats 1–4 replay unchanged;
+SQLite 41 and portable 15 protect the additive protocol. Existing paid v4 overflow
+can append a bounded v5 layout without a new grant or lookup. See [migration](migrations.md#atomic-joint-first-evidence-pages-2026-11-07).
+
+## Original-record closure in shared verification (2026-11-07)
+
+V4 check rendering pins the frozen draft's existing references/changed records and
+original requirement sources plus linked question/answer bodies. The planner measures
+these whole originals in every packet. Page-local prompts distinguish scheduled
+background from detailed current-page constraints; every page/batch still gates
+publication. Specific cross-page lookups co-locate requested and named loaded bodies.
+An authenticated verification-preparation boundary retains old blocker evidence while
+allowing reevaluation with exact originals, never new attempts or approval. SQLite 40
+and portable 14 protect these readers; [migration details](migrations.md#evidence-complete-shared-verification-2026-11-07).
+
+## Executed/pending page accounting and shared diagnostic cursor (2026-11-07)
+
+V3 layouts keep the v2 exact data projection but replace the all-history layout-sum
+capacity rule with actual successful replies plus proposed pending packets. Per-step,
+group, layout-count, packet-count and receipt ceilings stay finite and are distinct
+from request attempts and character fit. V1/v2 replay retains its original rules;
+v3 plans append at authenticated boundaries without rewriting paid evidence. True
+unit-fit and technical-capacity failures have different explanations.
+
+`answerGroupProgress` accepts a compact typed cursor projection as well as the full
+ledger. On-demand diagnostic export selects only response-kind booleans, step numbers
+and page counts in SQLite, then uses that same cursor instead of treating every
+successful page as an original completed step. New request measurements retain
+allowlisted step/phase/page metadata; no bodies or identifiers are added to exports.
+SQLite 39 and conditional portable format 13 protect the new readers. See
+[migration and local preflight](migrations.md#paidpending-page-capacity-and-accurate-shared-progress-2026-11-07).
+
+## Requested-first page protocol and bounded loop recovery (2026-11-07)
+
+Page format 2 prioritizes unresolved requested bodies and adds an exact deferred
+inventory to the bounded data. Reconstructed dispatch-only advice excludes already
+scheduled IDs from lookup enums; core validation independently enforces it. New
+layouts size the actual advice, complete pinned input, linked support and draft
+reserve. Format-1 contexts stay unchanged, and v2 activates at an authenticated
+receipt boundary, including a same-boundary v1→v2 transition. Prefix hashing is
+schema-normalized for v2; legacy replay recognizes only known producer/database
+ordering, never changed evidence values.
+
+A separate one-time page-loop grant requires an exhausted unchanged first v1 page,
+exact history replay and actual requested-body delivery under the new layout. It
+retains attempts 1–4 and permits 5–8 only after explicit metadata-only consent;
+starting inference remains a separate Continue action. SQLite 38 and conditional
+portable format 12 protect the new readers. See
+[compatibility and recovery](migrations.md#requested-first-pages-and-explicit-loop-recovery-2026-11-07).
+
+## Bounded shared lookups and independent answer acknowledgement (2026-11-07)
+
+Shared ledgers may append prefix-authenticated read/check page plans without changing
+original material/plan keys, batches or paid receipt bodies. Replay reproduces each
+partition at its activation boundary; partial pages cannot complete an original step.
+Pinned human input, exact linked support, the full draft and the actual request cap
+remain enforced. Successful repair invalidates earlier check-page layouts/results.
+New initial schedules use fuller estimated packets with exact reserved-draft fit and
+whole-record splitting before freezing their key. SQLite 37 and conditional portable
+format 11 protect older readers; see [migration details](migrations.md#bounded-shared-answer-evidence-pages-2026-11-07).
+
+The renderer's snapshot coordinator acknowledges a durable save-first answer reply by updating
+only submissions, invalidating older refresh tickets and that section's wire token.
+The save does not await polling or reload the project catalogue. Search memoization
+is limited to immutable review inputs plus an explicit editable-draft version; it is
+not a cache of semantic authority or a change to persisted evidence.
+
 ## Original supporting evidence and bounded recovery (2026-11-06)
 
 Shared-answer material/plan identities retain the original projection for compatibility.

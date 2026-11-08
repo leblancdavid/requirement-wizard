@@ -14,6 +14,11 @@ import { epicPlanningProjectKey } from "../core/epic-planning-input.js";
 export function epicPlanningInputKey(project: Project, jobs: Job[], focusEpicID: string | undefined, submissions: Submission[]) {
   return createHash("sha256").update(JSON.stringify(["resolved-prefix-v2", epicPlanningProjectKey(project), jobs, focusEpicID, submissions])).digest("hex");
 }
+/** Packing reads only the project/review, not mutable worker receipts. Inner
+ * computation keys still bind the exact review, policy and algorithm inputs. */
+export function epicPlanningContextInputKey(project: Project) {
+  return createHash("sha256").update(JSON.stringify(["context-computation-generation-v1", epicPlanningProjectKey(project)])).digest("hex");
+}
 
 export type EpicPlan = Omit<ReturnType<typeof planEpicReview>, "tasks">;
 export class PlanningTimeoutError extends Error {
@@ -37,18 +42,22 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
     saveContext?: (inputKey: string, key: string, value: EpicContextCheckpoint) => void } ): Promise<EpicPlan> {
   options.signal.throwIfAborted();
   const inputKey = epicPlanningInputKey(project, jobs, focusEpicID, submissions);
+  const contextInputKey = epicPlanningContextInputKey(project);
   // Lazy adoption of the previous exact-input cache only when its original full
   // inputs still match. These are disposable CPU receipts, never model evidence.
   const legacyKey = createHash("sha256").update(JSON.stringify(["resolved-prefix-v1", project, jobs, focusEpicID, submissions])).digest("hex");
   const resolved = options.loadReceipts?.(inputKey) ?? new Map<string, EpicPlanningCheckpoint>();
-  const contexts = options.loadContexts?.(inputKey) ?? new Map<string, EpicContextCheckpoint>();
+  const contexts = options.loadContexts?.(contextInputKey) ?? new Map<string, EpicContextCheckpoint>();
   if (!resolved.size) for (const [key, value] of options.loadReceipts?.(legacyKey) ?? []) {
     options.signal.throwIfAborted();
     options.saveReceipt?.(inputKey, key, value); resolved.set(key, value);
   }
-  if (!contexts.size) for (const [key, value] of options.loadContexts?.(legacyKey) ?? []) {
-    options.signal.throwIfAborted();
-    options.saveContext?.(inputKey, key, value); contexts.set(key, value);
+  for (const generation of [inputKey, legacyKey]) {
+    if (contexts.size) break;
+    for (const [key, value] of options.loadContexts?.(generation) ?? []) {
+      options.signal.throwIfAborted();
+      options.saveContext?.(contextInputKey, key, value); contexts.set(key, value);
+    }
   }
   options.signal.throwIfAborted();
   const data = { project, jobs, focusEpicID, submissions, resolved, contexts };
@@ -90,7 +99,7 @@ export async function prepareEpicReview(project: Project, jobs: Job[], focusEpic
           else if (message.type === "context-checkpoint") {
             if (!message.key || !/^[a-f0-9]{64}$/.test(message.key)) throw new Error("Invalid intermediate planning context key.");
             options.signal.throwIfAborted();
-            options.saveContext?.(inputKey, message.key, epicContextCheckpointSchema.parse(message.value) as EpicContextCheckpoint);
+            options.saveContext?.(contextInputKey, message.key, epicContextCheckpointSchema.parse(message.value) as EpicContextCheckpoint);
           }
           else if (message.type === "result") { report(); if (!settled) { settled = true; resolve(message.value as EpicPlan); } }
           else if (message.type === "revision") {

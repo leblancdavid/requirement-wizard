@@ -164,7 +164,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   clarifyDefinition?: (epicID: string) => Promise<void>;
 }) {
   const allDefinitionFindings = useMemo(() => definitionDecisions(project, jobs).filter((f) => epicID === "all" || f.epicID === epicID), [project, jobs, epicID]);
-  const definitionFindings = allDefinitionFindings.filter((f) => !f.evidenceIssue);
+  const definitionFindings = useMemo(() => allDefinitionFindings.filter((f) => !f.evidenceIssue), [allDefinitionFindings]);
   const [filter, setFilter] = useState<ReviewFilter>(() => reviewItems(project, submissions, "pending").length || definitionFindings.length ? "pending" : "current");
   const filterChosen = useRef(false);
   const [readinessFilter, setReadinessFilter] = useState<ReviewReadiness | "all">("all");
@@ -175,7 +175,7 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
   const localDrafts = useRef<Record<string, ReviewDraft>>({});
   const definitionDrafts = useRef<Record<string, string>>({});
   const drafts = draftStore ?? localDrafts;
-  const [, refreshDrafts] = useState(0);
+  const [draftVersion, refreshDrafts] = useState(0);
   const [message, setMessage] = useState("");
   const [recoveryTarget, setRecoveryTarget] = useState<string>();
   const [changeTarget, setChangeTarget] = useState<string>();
@@ -186,23 +186,24 @@ export function ReviewQueue({ project, submissions, jobs = [], epicID, sending, 
     return saved;
   });
   const scoped = (id: string) => id === focusRequirementID || epicID === "all" || project.requirements.find((r) => r.id === id)?.epicID === epicID;
-  const pending = reviewItems(project, submissions, "pending", epicID);
+  const basePending = useMemo(() => reviewItems(project, submissions, "pending", epicID), [project, submissions, epicID]);
   // A matching refinement normally hides its original card. Explicit recovery
   // must still open the requirement so its retained review note can be edited.
-  const recovered = pendingReviews(project, submissions).find((r) => r.id === recoveryTarget && scoped(r.id));
-  if (recovered && !pending.some((item) => item.kind === "requirement" && item.requirement.id === recovered.id)) pending.unshift({ id: `requirement:${recovered.id}`, kind: "requirement", requirement: recovered });
-  const refinements = reviewItems(project, submissions, "refinements", epicID);
+  const recovered = useMemo(() => recoveryTarget ? pendingReviews(project, submissions).find((r) => r.id === recoveryTarget && scoped(r.id)) : undefined, [project, submissions, recoveryTarget, focusRequirementID, epicID]);
+  const pending = useMemo(() => recovered && !basePending.some((item) => item.kind === "requirement" && item.requirement.id === recovered.id)
+    ? [{ id: `requirement:${recovered.id}`, kind: "requirement" as const, requirement: recovered }, ...basePending] : basePending, [basePending, recovered]);
+  const refinements = useMemo(() => reviewItems(project, submissions, "refinements", epicID), [project, submissions, epicID]);
   const reviews = submissions.filter((s) => s.input.type === "review" && scoped(s.input.requirementID));
   const resolvedAttempts = useMemo(() => resolvedReviewAttempts(project, submissions), [project, submissions]);
   const submitted = reviews.filter((s) => s.status !== "completed" && s.status !== "superseded" && !resolvedAttempts.has(s.id));
-  const reviewed = reviewItems(project, submissions, "reviewed", epicID);
-  const current = reviewItems(project, submissions, "current", epicID);
+  const reviewed = useMemo(() => reviewItems(project, submissions, "reviewed", epicID), [project, submissions, epicID]);
+  const current = useMemo(() => reviewItems(project, submissions, "current", epicID), [project, submissions, epicID]);
   useEffect(() => { if (!filterChosen.current) setFilter(pending.length || definitionFindings.length ? "pending" : "current"); }, [pending.length, definitionFindings.length]);
-  const readinessByID = new Map(pending.map((item) => {
+  const readinessByID = useMemo(() => new Map(pending.map((item) => {
     const draft = item.kind === "requirement" ? drafts.current[item.requirement.id] : undefined;
     const changed = !!draft && item.kind === "requirement" && (draft.fingerprint !== reviewFingerprint(item.requirement) || draft.contextKey !== decisionContextKey(project, [item.requirement.id]));
     return [item.id, reviewReadiness(project, item, submissions, jobs, changed)] as const;
-  }));
+  })), [pending, project, submissions, jobs, drafts, draftVersion]);
   const readiness = (item: ReviewItem) => readinessByID.get(item.id) ?? reviewReadiness(project, item, submissions, jobs);
   const focused = project.requirements.find((r) => r.id === focusRequirementID);
   const visible: ReviewItem[] = focusRequirementID ? [...(focused ? [{ id: `requirement:${focused.id}`, kind: "requirement" as const, requirement: focused }] : []), ...project.refinements.filter((p) => p.status === "pending" && (p.requirementID === focusRequirementID || p.resolution?.relatedRequirementID === focusRequirementID)).map((refinement): ReviewItem => ({ id: `refinement:${refinement.id}`, kind: "refinement", refinement }))] : filter === "current" ? current : filter === "pending" ? pending.filter((item) => readinessFilter === "all" || readiness(item) === readinessFilter) : filter === "refinements" ? refinements : filter === "reviewed" ? reviewed : [];

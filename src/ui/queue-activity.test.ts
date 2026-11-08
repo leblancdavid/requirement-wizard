@@ -33,6 +33,15 @@ test("Continue specification consistently distinguishes consent, waiting decisio
       policy: "coordinated-checks-v1", revision: 1, requirementIDs: [], specificationChecked: false, readyToImplement: false,
       explanation: "Checks pending", limitation: "No coding authority" } };
   assert.equal(mayContinueProject(workflow), true);
+  const lastRun: NonNullable<WorkflowView["lastRun"]> = { format: 1, id: "00000000-0000-4000-8000-000000000001", grantID: "fixture",
+    fromRevision: 1, fromSnapshotKey: "a".repeat(64), startedAt: "2026-11-07T00:00:00.000Z", initialUsed: 0, requests: 0, jobIDs: [], status: "interrupted" };
+  const renderWindow = (continuingWindow: boolean) => renderToStaticMarkup(createElement(WorkflowControls, {
+    workflow: { ...workflow, lastRun, continuingWindow }, disabled: false, pending: false, configure() {},
+  }));
+  assert.match(renderWindow(true), /Continuing in the next work window/);
+  assert.match(renderWindow(true), /planned boundary is not a failure/);
+  assert.doesNotMatch(renderWindow(true), /ended without a complete summary/);
+  assert.match(renderWindow(false), /ended without a complete summary/);
   const consent = renderToStaticMarkup(createElement(WorkflowControls, { workflow, disabled: false, pending: false, configure() {} }));
   assert.match(consent, /Continue specification lets the app guide your next steps/);
   assert.match(consent, /across all project areas/); assert.match(consent, /More actions/);

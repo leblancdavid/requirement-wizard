@@ -130,6 +130,27 @@ test("checkpoint polling preserves nested execution identities and calculation i
   assert.equal(stopped.execution.assessmentRuns![0]!.status, "interrupted", "Same-version worker projections still update visible state");
 });
 
+test("durable answer acknowledgement finishes locally, invalidates old polls and requests fresh submission tokens", () => {
+  type Snapshot = { project: { id: string; revision: number }; execution: { version: number }; submissions: string[] };
+  const encoder = new SnapshotEncoder(), refresh = new SnapshotRefresh<Snapshot>();
+  const original: Snapshot = { project: { id: "p", revision: 1 }, execution: { version: 1 }, submissions: [] };
+  const ticket = refresh.begin("p"), encoded = encoder.encode(original, {});
+  refresh.complete(ticket, JSON.parse(encoded.body), encoded.tokens, "p");
+  const oldPoll = refresh.begin("p");
+  const saved = refresh.acknowledge("p", current => ({ ...current, submissions: [...current.submissions, "saved"] }), ["submissions"])!;
+  assert.deepEqual(saved.submissions, ["saved"]);
+  assert.equal(refresh.complete(oldPoll, original, null, "p"), null, "An older poll cannot undo the durable response");
+  const next = refresh.begin("p");
+  assert.equal(next.baseline!.tokens.submissions, undefined);
+  assert.equal(next.baseline!.tokens.project, encoded.tokens.project);
+  const wire = encoder.encode({ ...original, submissions: ["saved", "processed"] }, next.baseline!.tokens);
+  assert.deepEqual(Object.keys(JSON.parse(wire.body)), ["submissions"]);
+  assert.deepEqual(refresh.complete(next, JSON.parse(wire.body), wire.tokens, "p")!.submissions, ["saved", "processed"]);
+  const other = refresh.begin("p");
+  assert.equal(refresh.acknowledge("different", () => { throw new Error("Must not update another project"); }, ["submissions"]), null);
+  assert.ok(refresh.complete(other, { ...original, submissions: ["saved", "processed"] }, null, "p"), "A late save from another project must not invalidate current polling");
+});
+
 test("calculation projection matches full-state freshness and updates for checkpoints and changed decisions", () => {
   const project = projectSchema.parse({ id: "p", name: "Projection", revision: 1, model: { providerID: "openai", modelID: "fixture" },
     sources: [{ id: "source", kind: "initial", epicID: "project", text: "Keep work" }], questions: [], summary: "", goals: [], actors: [], assumptions: [],

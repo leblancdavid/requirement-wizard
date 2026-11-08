@@ -339,7 +339,17 @@ function App() {
     try {
       const saved = await api<Submission>(`projects/${projectID}/submit`, { id: submissionID, input, auto: processAutomatically, research: useResearch, ...(replaces ? { replaces } : {}) });
       requests.current.delete(payload);
-      await load(projectID); await list(); return saved.status !== "needs-attention";
+      if (input.type === "answer" && data?.workflow?.answerBatch?.waiting) {
+        const snapshot = refresh.current.acknowledge(projectID, (current) => ({ ...current,
+          submissions: current.submissions.some(s => s.id === saved.id) ? current.submissions : [
+            ...current.submissions.map(s => s.id === saved.replaces && s.status === "queued"
+              ? { ...s, status: "superseded" as const, conflict: true } : s), saved],
+        }), ["submissions"]);
+        if (snapshot && selected.current === projectID) setData(snapshot);
+        // Polling refreshes progress and any subsequent processing independently.
+        // The response is already durable; an unrelated refresh cannot fail its save.
+      } else { await load(projectID); await list(); }
+      return saved.status !== "needs-attention";
     } catch (error) { setItemErrors((errors) => ({ ...errors, [key]: error instanceof Error ? error.message : "Could not submit response. Your draft is retained." })); return false; }
     finally { inFlight.current.delete(key); setSending([...inFlight.current]); }
   }
@@ -451,7 +461,7 @@ function App() {
     if (!project || !data) return null;
     const submission = [...data.submissions].reverse().find((s) => s.input.type === "answer" && s.input.questionID === question.id && !s.conflict && ["queued", "saved", "processing", "needs-attention"].includes(s.status)
       && (s.applied ? question.sourceID === s.appliedSourceID : s.input.questionText === question.text && (s.input.sourceID ?? null) === (question.sourceID ?? null)));
-    if (submission) return <section className="save-notice" key={question.id} aria-label={`Updating clarification: ${question.text}`}><h5>{question.text}</h5><p>Answer saved. Process its follow-up, then review the updated requirement here. Your review note is retained.</p><ItemProcessingNotice submission={submission} error={itemErrors[question.id]} resume={() => processBlocking([submission.id])} disabled={busy || connectionChanged} /><ActionButton className="secondary" disabled={busy || connectionChanged} onClick={() => processBlocking([submission.id])}>Process blocking input</ActionButton></section>;
+    if (submission) return <section className="save-notice" key={question.id} aria-label={`Updating clarification: ${question.text}`}><h5>{question.text}</h5><p>Answer saved. Process its follow-up, then review the updated requirement here. Your review note is retained.</p><ItemProcessingNotice submission={submission} error={itemErrors[question.id]} resume={() => processBlocking([submission.id])} disabled={busy || connectionChanged} /><ActionButton className="secondary" disabled={busy || connectionChanged} onClick={() => processBlocking([submission.id])}>Process this clarification</ActionButton></section>;
     const source = project.sources.find((s) => s.id === question.sourceID);
     return <QuestionCard key={`${project.id}:review:${question.id}:${question.sourceID ?? "new"}`} inline question={question} area={areaTitle(epics.find((e) => e.id === question.epicID))} expanded={true} onToggle={() => {}} onCancel={() => { drafts.current.delete(question.id); }} help={help} draft={drafts.current.get(question.id)} onDraft={(draft) => drafts.current.set(question.id, draft)} initialText={source?.text} initialKind="answer" number={0} disabled={sending.includes(question.id)} dismissDisabled={true} onSave={(kind, text) => saveAnswer(question, kind, text)} notice={<ItemProcessingNotice error={itemErrors[question.id]} />} />;
   };

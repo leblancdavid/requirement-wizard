@@ -30,12 +30,38 @@ questions and specification checks with a shared bounded allowance and decision
 inbox in Processing & queue. Opt-in per project; saved work and advanced actions
 remain. Passed checks lead to planning, not automatic coding. See
 [coordinated workflow](docs/coordinated-workflow.md) for consent and limitations.
+Shared reading retains completed evidence coverage across rearrangements; exact
+staged planning is reusable across work windows, and new question-only batches use
+measured encoded-size packing. Saved schedules/attempts and full verification are
+preserved. See [efficiency and upgrade limits](docs/migrations.md#stable-shared-reads-and-exact-staged-planning-2026-11-07).
 New continuous runs save answers without AI work while waiting for decisions;
 choose **Submit saved responses** when ready to process the saved set. Later responses
 wait for another submission. Compatible sets of two to five new unscoped answers in
 one feature now share evidence reading and verification before atomic publication;
 scoped or already-started work keeps its original path. New local timings help diagnose
 staged-answer overhead. See [shared integration](docs/coordinated-workflow.md#shared-answer-integration-2026-11-06).
+Save-first answer saves now acknowledge the durable reply without waiting for a full refresh.
+Oversized shared read/check lookups can resume in bounded evidence pages, preserving
+the paid lookup and answers. New shared batches use more of the same budget; existing
+paid schedules remain intact. See [recovery and limits](docs/coordinated-workflow.md#oversized-lookup-recovery-and-fuller-shared-batches-2026-11-07).
+First-generation pages could repeat the same input while deferring requested bodies.
+Corrected pages bring those bodies forward. An eligible exhausted group offers
+**Authorize page recovery · up to 4 requests** in Processing & queue, then explicit
+Continue, preserving the original four requests. See [loop recovery](docs/coordinated-workflow.md#repeated-evidence-request-recovery-2026-11-07).
+Older page-layout capacity stops could also masquerade as input-size errors. Compatible
+saved work now continues without another grant; diagnostics distinguish original steps
+from page replies. See [capacity and progress](docs/coordinated-workflow.md#page-capacity-is-not-an-input-size-failure-2026-11-07).
+For an older verification blocker missing draft-referenced originals, use **Prepare
+evidence-complete verification**, then Continue; this preserves work and grants no
+extra attempts. See [verification evidence](docs/coordinated-workflow.md#missing-originals-during-shared-verification-2026-11-07).
+An older verification lookup may fit jointly but fail when pinned beside unrelated
+background. Updated joint-first packing reuses that lookup with ordinary Continue;
+see [joint-first continuation](docs/coordinated-workflow.md#a-fitting-joint-comparison-blocked-by-background-packing-2026-11-07).
+Near-limit packets also use compact lossless decoding instructions without dropping
+evidence or changing the budget; [wire compatibility](docs/migrations.md#compact-lossless-shared-page-wire-instructions-2026-11-07).
+Larger checks use scoped original units with complete linked support beside the full
+draft, rather than globally pinning unrelated histories. Every unit still requires
+verification; [scope and continuation](docs/coordinated-workflow.md#original-unit-verification-instead-of-global-history-pins-2026-11-07).
 Rejected shared drafts now have a bounded correction path: retain original answers
 and reads, repair against the verification feedback, then recheck every evidence batch.
 Existing eligible rejected groups resume with **Continue specification** after updating;

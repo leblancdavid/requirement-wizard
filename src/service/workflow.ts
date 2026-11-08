@@ -19,7 +19,7 @@ import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } 
 import { planWorkflowSchedule } from "../core/workflow-schedule.js";
 import type { WorkflowJobReceipt } from "../core/workflow-receipts.js";
 import { definitionInputKey } from "../core/definition-identity.js";
-import { answerGroupProgress, answerGroupLimits, answerGroupRecoveryPreview, answerGroupRequestLimit } from "../core/answer-group.js";
+import { answerGroupProgress, answerGroupLimits, answerGroupRecoveryPreview, answerGroupPageRecoveryPreview, answerGroupVerificationPreview, answerGroupRequestLimit, canPageAnswerGroup } from "../core/answer-group.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Run = { controller: AbortController; promise: Promise<void> };
@@ -74,10 +74,14 @@ export class ProjectWorkflow {
     const changeGroup = changeJob ? this.store.definitionChangeGroupProgress(id, changeJob) : undefined;
     const remainingMs = state.grant && Math.max(0, state.grant.remainingMs - (state.owner && state.leaseUntil
       ? Math.max(0, Date.now() - (state.leaseUntil - 360000)) : 0));
-    const sourceRecovery = submissions.filter(s => !s.archivedAt && !s.conflict && s.status === "needs-attention" && s.jobID)
-      .map(s => this.store.getJob(s.jobID!)).map(job => answerGroupRecoveryPreview(project, job)).find(Boolean);
+    const recoveryJobs = [...new Set(submissions.filter(s => !s.archivedAt && !s.conflict && s.status === "needs-attention" && s.jobID).map(s => s.jobID!))].map(jobID => this.store.getJob(jobID));
+    const sourceRecovery = recoveryJobs.map(job => answerGroupRecoveryPreview(project, job)).find(Boolean);
+    const pageRecovery = recoveryJobs.map(job => answerGroupPageRecoveryPreview(project, job)).find(Boolean);
+    const verificationRecovery = recoveryJobs.map(job => answerGroupVerificationPreview(project, job)).find(Boolean);
     return { version: state.settingsVersion, enabled, paused: state.paused, suspended,
       ...(sourceRecovery ? { sourceRecovery } : {}),
+      ...(pageRecovery ? { pageRecovery } : {}),
+      ...(verificationRecovery ? { verificationRecovery } : {}),
       phase: !state.enabled && state.phase === "idle" ? "idle" : suspended ? "paused" : state.phase === "blocked" ? "blocked" : state.paused ? "paused" : readiness.readyToImplement ? "ready-to-implement" : changed ? "working" : state.phase,
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
        current: state.current && { kind: state.current.kind, target: state.current.target },
@@ -97,16 +101,20 @@ export class ProjectWorkflow {
         title: project.epics.find((e) => e.id === area.epicID)?.title ?? area.epicID })),
        artifacts, decisionSchedule, ...(state.reviewCheckpoint ? { reviewCheckpoint: state.reviewCheckpoint } : {}),
        ...(state.reviewPolicy ? { checkpointScheduling: true } : {}),
-       lastRun: this.store.latestWorkflowRun(id) };
+        ...(state.stopReason === "scheduler-yield" && state.phase === "working" && !state.paused ? { continuingWindow: true } : {}),
+        lastRun: this.store.latestWorkflowRun(id) };
   }
-  configure(id: string, revision: number, version: number, action: "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "pause" | "disable") {
+  configure(id: string, revision: number, version: number, action: "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "pause" | "disable") {
     let state = this.store.workflow(id);
     if (state.settingsVersion !== version) throw new OperationConflictError("Project workflow settings changed. Refresh before continuing.");
-    if (action === "recover-shared-sources") {
-      if (this.closing || this.active(id)) throw new OperationConflictError("Pause active work before authorizing source recovery.");
-      const candidate = this.view(id).sourceRecovery;
-      if (!candidate) throw new OperationConflictError("No eligible exhausted source-omission group is available for recovery.");
-      this.store.recoverAnswerGroupSources(id, revision, version, candidate.jobID);
+    if (action === "recover-shared-sources" || action === "recover-shared-pages" || action === "prepare-shared-verification") {
+      if (this.closing || this.active(id)) throw new OperationConflictError("Pause active work before authorizing shared-answer recovery.");
+      const view = this.view(id), candidate = action === "prepare-shared-verification" ? view.verificationRecovery : action === "recover-shared-pages" ? view.pageRecovery : view.sourceRecovery;
+      if (!candidate) throw new OperationConflictError(action === "recover-shared-pages"
+        ? "No eligible exhausted evidence-page loop is available for recovery."
+        : action === "prepare-shared-verification" ? "No eligible check missing original draft-referenced evidence is available."
+          : "No eligible exhausted source-omission group is available for recovery.");
+      this.store.recoverAnswerGroupSources(id, revision, version, candidate.jobID, action === "prepare-shared-verification" ? "verification" : action === "recover-shared-pages" ? "pages" : "sources");
       this.armed.delete(id); return this.view(id);
     }
     if (action === "disable" && this.store.processingPolicy(id).mode === "guided") throw new OperationConflictError("Guided processing is selected. Choose another processing mode before using separate task settings.");
@@ -120,7 +128,8 @@ export class ProjectWorkflow {
       new DiscoveryService(this.store, this.adapter).assertCanDiscover(id);
       // Explicit continuation can recover this coordinator's interrupted input,
       // never unrelated failed submissions or old rejected proposals.
-      if (state.current?.kind === "input") for (const item of this.store.submissions(id)) {
+      const pageableGroups = new Map<string, boolean>();
+      if (state.current?.kind === "input") for (const item of submissions) {
         if (item.status !== "needs-attention" || item.conflict || !item.jobID || !state.current.jobIDs.includes(item.jobID)) continue;
         const job = this.store.getJob(item.jobID);
         const group = job.answerGroupWork, progress = group && answerGroupProgress(group);
@@ -128,7 +137,8 @@ export class ProjectWorkflow {
         const repairable = action !== "review-changes" && job.status === "failed" && group && progress?.phase === "repair"
           && progress.repairs < answerGroupLimits.repairs && group.attempts < answerGroupRequestLimit(group)
           && !activeReplies!.some(r => "answerGroupBlocked" in r.response);
-        if ((["interrupted", "cancelled"].includes(job.status) || repairable) && job.context?.submissionIDs?.includes(item.id)) {
+        if (action !== "review-changes" && !pageableGroups.has(job.id)) pageableGroups.set(job.id, canPageAnswerGroup(project, submissions, job));
+        if ((["interrupted", "cancelled"].includes(job.status) || repairable || pageableGroups.get(job.id)) && job.context?.submissionIDs?.includes(item.id)) {
           item.status = item.applied ? "saved" : "queued"; this.store.saveSubmission(item);
           // Earlier workers marked an input pass complete even after queue cancellation.
           // Explicit recovery of its unfinished job must not inherit that loop guard.

@@ -385,7 +385,8 @@ test("scoped provenance is dated original evidence, not a current/equal-version 
 });
 
 test("older completed scope results and saved-reply recovery gain no-call provenance without any migration or backfill", async (t) => {
-  const f = fixture(); let calls = 0;
+  const f = fixture(), db = new Database(f.path); let calls = 0;
+  const schemaVersion = db.pragma("user_version", { simple: true }), migrations = db.prepare("SELECT * FROM migration_history ORDER BY version").all();
   try {
     const mock = t.mock.method(f.store, "finishDefinitionScopeReview", () => { throw new Error("Injected completion loss"); });
     const service = new DefinitionScopeReviewService(f.store, { async review(packet) { calls++; return reply(packet); } });
@@ -403,8 +404,10 @@ test("older completed scope results and saved-reply recovery gain no-call proven
     f.reopen(); assert.deepEqual(f.store.inspectDefinitionScopeProvenance(f.p.id, { jobID: completed.job.id }), before);
     const reused = await new DefinitionScopeReviewService(f.store, { async review() { assert.fail("No requalification calls for provenance"); } }).review(f.p.id, f.input);
     assert.equal(reused.job.id, completed.job.id); assert.equal(calls, 1);
-    assert.equal(databaseSchemaVersion, 36); assert.deepEqual(f.store.get(f.p.id), f.p);
-  } finally { f.cleanup(); }
+    assert.equal(db.pragma("user_version", { simple: true }), schemaVersion);
+    assert.deepEqual(db.prepare("SELECT * FROM migration_history ORDER BY version").all(), migrations);
+    assert.deepEqual(f.store.get(f.p.id), f.p);
+  } finally { db.close(); f.cleanup(); }
 });
 
 test("scoped provenance rejects incomplete work and damaged original witnesses without fallback or mutations", async () => {

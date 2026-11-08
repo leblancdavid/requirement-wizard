@@ -36,8 +36,11 @@ const app = await startApp({ store, port: 0,
   } } });
 const browser = await chromium.launch();
 let diagnose: ReturnType<typeof browserDiagnostics> | undefined;
+let releaseRefresh = () => {};
+let clearRoutes = async () => {};
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }); diagnose = browserDiagnostics(page);
+  clearRoutes = () => page.unrouteAll({ behavior: "wait" });
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => { localStorage.setItem("reqwizit-auto", "false"); localStorage.setItem("reqwizit-research", "false"); });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: "Question collection browser", exact: true }).click();
@@ -66,15 +69,27 @@ try {
   await page.screenshot({ path: ".reqwizit-state/browser-question-batch-mobile.png", fullPage: true });
   await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
   const originalCalls = topics.length;
+  // A slow/stale workspace read must not hold a response's durable save open.
+  const heldRefresh = new Promise<void>(resolve => { releaseRefresh = resolve; });
+  let refreshHeld = false;
+  const projectURL = `${app.origin}/api/projects/${p.id}`;
+  await page.route(projectURL, async route => {
+    if (route.request().method() !== "GET") { await route.continue(); return; }
+    const response = await route.fetch(); refreshHeld = true; await heldRefresh;
+    await route.fulfill({ response });
+  });
+  await expect.poll(() => refreshHeld).toBe(true);
   for (const question of store.get(p.id).questions) {
     await page.getByRole("button", { name: new RegExp(`Choose Retry ${question.epicID}\\.`) }).click();
     await page.getByRole("button", { name: "Save response →", exact: true }).click();
     await expect.poll(() => store.submissions(p.id).filter(s => s.input.type === "answer" && s.input.questionID === question.id).length).toBe(1);
+    await expect(page.getByRole("heading", { name: question.text, exact: true })).toHaveCount(0);
     assert.equal(topics.length, originalCalls);
   }
   assert.ok(store.submissions(p.id).every(s => s.status === "queued"));
+  releaseRefresh(); await clearRoutes();
   await expect(page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true })).toBeVisible();
   await page.reload(); assert.equal(topics.length, originalCalls); assert.deepEqual(errors, []);
-  console.log("Question collection browser passed: multi-topic collection, automatic bounded-window continuation without another Continue click, owned Pause/reload/explicit resume, retained counters and paid work, no repeated finished topic, mobile, five save-only answers and separate submission. Fixture only; no live inference.");
+   console.log("Question collection browser passed: multi-topic collection, automatic bounded-window continuation, owned Pause/reload/explicit resume, retained paid work, mobile, five durable save-only answers while workspace refresh is held, stale-reply protection and separate submission. Fixture only; no live inference.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-question-batch-failure"); throw error; }
-finally { await browser.close(); await app.close(); store.close(); }
+finally { releaseRefresh(); await clearRoutes(); await browser.close(); await app.close(); store.close(); }
