@@ -2,6 +2,17 @@
 
 ## Confirmed product direction
 
+**Simple Play / Pause / Stop processing (2026-11-08).** The user approved replacing
+routine technical authorizations with one processing action. Play should own evidence
+loading, technical continuation and faithful reconciliation across feature boundaries;
+users decide actual product questions, not packet layouts or repair allowances.
+Keep original evidence, usage history, revision checks, full verification and hidden
+loop/usage safeguards. Do not infer conflicting intent, approve proposals, start coding,
+scan files or research the web from Play. The first implemented slice adds unified
+controls, cooperative Pause/owned Stop and shared-answer Play adoption. Other legacy
+engines retain their existing safety/recovery behavior; this is not yet universal
+automatic recovery. See [implemented scope](coordinated-workflow.md#simple-processing-2026-11-08).
+
 **Bounded change-review batches (2026-11-04).** The user approved a broader fix after
 cumulative exact change-check evidence again exceeded the joint limit despite lossless
 ID sharing. Preserve paid lookups, exact source evidence and charged attempts; save

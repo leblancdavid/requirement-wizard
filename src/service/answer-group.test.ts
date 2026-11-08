@@ -20,6 +20,7 @@ import { ConnectedDiscovery } from "../providers/discovery.js";
 import { ProjectWorkflow } from "./workflow.js";
 import { authorizeAnswerGroupVerification, answerGroupVerificationPreview } from "../core/answer-group.js";
 import { startApp } from "../web/server.js";
+import { workflowInputKey } from "../core/workflow.js";
 
 const empty = (): Analysis => ({ summary: "Shared answer integration", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 function fixture(store: ProjectStore, answers = 5, large = false, answerText?: (index: number) => string, waitingRule = false, supersededSupport = false, noteText?: (index: number) => string, noteCount = 150) {
@@ -313,7 +314,7 @@ test("41 to 42 retains paid v5 packets across reopen and rollback; compact v6 ch
     store.checkpointAnswerGroup(job.id, w, oldContext.manifest); store.failJob(job.id, "failed", "Retained original packet");
     const original = store.getJob(job.id); store.close();
     let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 42; PRAGMA user_version=41");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 9;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); db.close();
     assert.throws(() => new ProjectStore(path));
     db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 41);
@@ -380,7 +381,7 @@ test("42 to 43 scopes exact original units without dropping draft targets, split
       input: { type: "answer", questionID: q.id, questionText: q.text, sourceID: null, answer: { kind: "answer", text: "Keep the existing rules and route exactly." } } }));
     store.applyQueued(p.id, queued.map(s => s.id)); p = store.get(p.id);
     const items = queued.map(s => store.submissions(p.id).find(t => t.id === s.id)!), m = answerGroupMaterials(p, items), w = planAnswerGroup(m);
-    const readProbe = structuredClone(w), scopedRead = boundAnswerGroupEvidence(m, readProbe);
+    const readProbe = structuredClone(w), scopedRead = boundAnswerGroupEvidence(m, readProbe, undefined, 8);
     assert.equal(scopedRead.answerGroupPagingAdvice!.format, 8);
     for (const rule of p.requirements.filter(r => scopedRead.manifest.includedIDs.includes(r.id))) for (const id of rule.sourceIDs) {
       assert.ok(scopedRead.manifest.includedIDs.includes(id));
@@ -567,6 +568,147 @@ test("38 to 39 resumes a size-labelled legacy page-capacity stop without replayi
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("44 to 45 retains a reserve-only read stop and fits its atomic joint unit without refunding or splitting genuine overflow", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "tight-read-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const f = legacyPageLoop(store, 1, false, 40);
+    const first = boundAnswerGroupEvidence(f.m, f.w, undefined, 8);
+    f.w.attempts++;
+    const draft = acceptAnswerGroup(f.m, f.w, undefined, { answerGroupDraft: output(f.items) }, f.job).draft!;
+    const next = boundAnswerGroupEvidence(f.m, f.w, draft, 8);
+    const jointIDs = [...f.requested.slice(0, 7)];
+    const missing = jointIDs.filter(id => !next.manifest.includedIDs.includes(id));
+    const counterparts = jointIDs.filter(id => next.manifest.includedIDs.includes(id));
+    assert.ok(missing.length && counterparts.length);
+    f.w.attempts++;
+    acceptAnswerGroup(f.m, f.w, draft, { answerGroupEvidence: { recordIDs: missing, withRecordIDs: counterparts } }, f.job);
+    let overflow: ContextBudgetError | undefined;
+    try { boundAnswerGroupEvidence(f.m, f.w, draft, 8); }
+    catch (error) { assert.ok(error instanceof ContextBudgetError); overflow = error; }
+    assert.ok(overflow, "An actual v8 reserve-only failure must be reproduced");
+    const job = store.beginJob(f.p.id, f.p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.checkpointAnswerGroup(job.id, f.w, overflow.manifest); store.failJob(job.id, "failed", overflow.message);
+    const original = store.getJob(job.id), paid = structuredClone(f.w.receipts), progress = answerGroupProgress(f.w);
+    store.close(); let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 45; PRAGMA user_version=44");
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 44);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(original), job.id); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(job.id), original); store.close(); }
+    store = new ProjectStore(path);
+    assert.ok(canPageAnswerGroup(f.p, f.items, original));
+    const tight = structuredClone(original.answerGroupWork!), context = boundAnswerGroupEvidence(f.m, tight, draft);
+    assert.equal(tight.evidencePages!.at(-1)!.format, 9);
+    assert.ok(context.manifest.characters + 128 <= 96000);
+    assert.ok(context.manifest.characters + 24000 - JSON.stringify(draft).length + 128 > 96000,
+      "The new dispatch fits because only speculative future growth is released");
+    assert.ok(jointIDs.every(id => context.manifest.includedIDs.includes(id)));
+    assert.ok(jointIDs.every(id => tight.evidencePages!.at(-1)!.pages[0]!.includes(id)), "The whole explicit joint set stays on one page");
+    for (const id of f.m.pins) assert.ok(context.manifest.includedIDs.includes(id));
+    assert.deepEqual(tight.receipts, paid); assert.equal(tight.attempts, original.answerGroupWork!.attempts);
+    assert.deepEqual(replayAnswerGroup(f.m, tight).draft, draft);
+    assert.match(discoveryPrompt(f.p, context), /current-input capacity/);
+    const unfit = structuredClone(tight);
+    const more = f.p.sources.filter(s => s.kind === "note" && !context.manifest.includedIDs.includes(s.id))
+      .sort((a, b) => b.text.length - a.text.length).slice(0, 8).map(s => s.id);
+    assert.equal(more.length, 8); unfit.attempts++;
+    acceptAnswerGroup(f.m, unfit, draft, { answerGroupEvidence: { recordIDs: more, withRecordIDs: [jointIDs[0]!] } }, job);
+    assert.throws(() => boundAnswerGroupEvidence(f.m, unfit, draft), (error: unknown) => error instanceof ContextBudgetError && error.manifest.characters > 96000,
+      "Genuinely oversized atomic evidence still blocks without splitting or dropping anything");
+    assert.deepEqual(unfit.receipts.slice(0, paid.length), paid); assert.equal(unfit.receipts.length, paid.length + 1);
+    const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id).map(j => j.id === job.id ? { ...j, answerGroupWork: tight, context: context.manifest } : j), store.submissions(f.p.id), rev => store.get(f.p.id, rev)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 19);
+    assert.deepEqual(decodePortable(files, f.p.model).continuation.jobs.find(j => j.id === job.id)!.answerGroupWork, tight);
+    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 18 }) }, f.p.model), /format 19/);
+    let calls = 0;
+    const resumed = await new DiscoveryService(store, { async analyze(_p, { context: dispatched }) {
+      calls++; assert.ok(dispatched.manifest.characters <= 96000);
+      assert.ok(jointIDs.every(id => dispatched.manifest.includedIDs.includes(id)));
+      return { answerGroupKeep: true };
+    } }, { stagedLimits: { requests: 1, durationMs: 60000 } }).analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id) });
+    assert.equal(resumed.status, "interrupted", resumed.diagnostic); assert.equal(calls, 1);
+    assert.deepEqual(resumed.answerGroupWork!.receipts.slice(0, paid.length), paid);
+    assert.equal(resumed.answerGroupWork!.receipts[paid.length]!.attempt, original.answerGroupWork!.attempts + 1);
+    assert.equal(answerGroupProgress(resumed.answerGroupWork!).completed, progress.completed);
+    assert.deepEqual(store.get(f.p.id), f.p); assert.ok(first.manifest.characters <= 96000);
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("Continue adopts an intact separately started packing-only group but does not retry a later semantic blocker", async () => {
+  const store = new ProjectStore(":memory:"); let workflow: ProjectWorkflow | undefined;
+  try {
+    const f = legacyPageLoop(store, 2, false, 40);
+    // Historical packing-stop envelope; exact new-layout replay still has to fit.
+    const job = store.beginJob(f.p.id, f.p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.checkpointAnswerGroup(job.id, f.w, { ...f.job.context!, characters: 96001 });
+    store.failJob(job.id, "failed", "Historical exact evidence packing stop");
+    for (const item of f.items) { item.status = "needs-attention"; item.jobID = job.id; store.saveSubmission(item); }
+    const original = store.getJob(job.id), paid = structuredClone(original.answerGroupWork!.receipts);
+    assert.ok(canPageAnswerGroup(f.p, store.submissions(f.p.id), original));
+    const state = store.workflow(f.p.id);
+    state.current = { kind: "input", key: createHash("sha256").update(JSON.stringify(["input", workflowInputKey(f.p), f.items.map(s => s.id).sort().join(",")])).digest("hex"),
+      jobIDs: [f.job.id], completed: true };
+    state.phase = "needs-decision"; state.paused = false; store.saveWorkflow(f.p.id, state);
+    assert.ok(!state.current.jobIDs.includes(job.id));
+    let calls = 0;
+    workflow = new ProjectWorkflow(store, { async analyze(_p, { context }) {
+      calls++; assert.ok(context.manifest.characters <= 96000);
+      return calls === 1 ? { answerGroupDraft: output(f.items) }
+        : { answerGroupBlocked: { reason: "A genuine unresolved human choice needs review" } };
+    } });
+    assert.equal(workflow.view(f.p.id).packingContinuation, true);
+    const saveSubmission = store.saveSubmission.bind(store); let restoreWrites = 0;
+    store.saveSubmission = item => { if (++restoreWrites === 2) throw new Error("Fixture interrupted input restoration"); saveSubmission(item); };
+    assert.throws(() => workflow!.configure(f.p.id, f.p.revision, state.settingsVersion, "continue-continuous"), /interrupted input restoration/);
+    store.saveSubmission = saveSubmission;
+    assert.equal(calls, 0); assert.equal(store.submissions(f.p.id).filter(s => s.status === "saved").length, 1);
+    assert.equal(store.workflow(f.p.id).settingsVersion, state.settingsVersion);
+    assert.equal(workflow.view(f.p.id).packingContinuation, true, "A partially persisted restore must remain recoverable on explicit retry");
+    workflow.configure(f.p.id, f.p.revision, state.settingsVersion, "continue-continuous"); await workflow.wait(f.p.id);
+    assert.equal(calls, 2);
+    const resumed = store.jobs(f.p.id).filter(j => !!j.answerGroupWork).at(-1)!;
+    assert.notEqual(resumed.id, job.id); assert.equal(resumed.status, "failed");
+    assert.deepEqual(resumed.answerGroupWork!.receipts.slice(0, paid.length), paid);
+    assert.equal(resumed.answerGroupWork!.receipts[paid.length]!.attempt, original.answerGroupWork!.attempts + 1);
+    assert.deepEqual(store.getJob(job.id), original); assert.deepEqual(store.get(f.p.id), f.p);
+    assert.equal(store.workflow(f.p.id).phase, "needs-decision");
+    assert.equal(workflow.view(f.p.id).packingContinuation, undefined);
+    workflow.configure(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion, "continue-continuous"); await workflow.wait(f.p.id);
+    assert.equal(calls, 2, "Explicit Continue cannot revive a genuine semantic blocker");
+  } finally { await workflow?.close(); store.close(); }
+});
+
+for (const boundary of ["generic-failure", "exhausted", "conflict", "archived", "partial-cohort", "changed-input", "review-only"] as const)
+test(`Continue does not adopt a separately started packing group across ${boundary}`, async () => {
+  const store = new ProjectStore(":memory:"); let workflow: ProjectWorkflow | undefined;
+  try {
+    const f = legacyPageLoop(store, boundary === "exhausted" ? 4 : 2, false, 40);
+    const job = store.beginJob(f.p.id, f.p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    store.checkpointAnswerGroup(job.id, f.w, { ...f.job.context!, characters: boundary === "generic-failure" ? 100 : 96001 });
+    store.failJob(job.id, "failed", "Historical fixture stop");
+    for (const [index, item] of f.items.entries()) {
+      item.status = "needs-attention"; item.jobID = boundary === "partial-cohort" && index === 0 ? f.job.id : job.id;
+      if (boundary === "archived" && index === 0) item.archivedAt = new Date().toISOString();
+      if (boundary === "conflict" && index === 0) item.conflict = true;
+      store.saveSubmission(item);
+    }
+    if (boundary === "changed-input") store.note(f.p.id, f.p.revision, "Newer human input remains authoritative", "project");
+    const revision = store.get(f.p.id).revision;
+    const before = store.submissions(f.p.id), original = store.getJob(job.id);
+    const state = store.workflow(f.p.id); state.current = { kind: "input", key: "0".repeat(64), jobIDs: [], completed: true }; store.saveWorkflow(f.p.id, state);
+    workflow = new ProjectWorkflow(store, { async analyze() { assert.fail("An ineligible group must not infer"); } });
+    if (boundary !== "review-only") assert.equal(workflow.view(f.p.id).packingContinuation, undefined);
+    workflow.configure(f.p.id, revision, state.settingsVersion, boundary === "review-only" ? "review-changes" : "continue-continuous");
+    // Configuration must never partially revive an ineligible cohort. Stop before
+    // unrelated review/discovery could start under the explicitly chosen action.
+    assert.deepEqual(store.submissions(f.p.id), before);
+    workflow.configure(f.p.id, revision, store.workflow(f.p.id).settingsVersion, "pause"); await workflow.wait(f.p.id);
+    assert.deepEqual(store.getJob(job.id), original); assert.deepEqual(store.submissions(f.p.id), before);
+  } finally { await workflow?.close(); store.close(); }
+});
+
 test("v8 read relayout retains paid coverage and requires explicit counterparts for rereads", () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, "stable-read-upgrade-")), path = join(directory, "state.sqlite");
@@ -575,7 +717,7 @@ test("v8 read relayout retains paid coverage and requires explicit counterparts 
     const f = legacyPageLoop(store, 2), paid = structuredClone(f.w.receipts);
     const original = store.getJob(f.job.id); store.close();
     let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 44; PRAGMA user_version=43");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 9;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), f.job.id); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
     assert.equal(db.pragma("user_version", { simple: true }), 43);
@@ -583,14 +725,14 @@ test("v8 read relayout retains paid coverage and requires explicit counterparts 
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(original), f.job.id); db.close();
     for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(f.job.id), original); store.close(); }
     store = new ProjectStore(path);
-    const first = boundAnswerGroupEvidence(f.m, f.w);
+    const first = boundAnswerGroupEvidence(f.m, f.w, undefined, 8);
     assert.equal(first.answerGroupPagingAdvice!.format, 8);
     assert.match(discoveryPrompt(f.p, first), /ORIGINAL-UNIT continuation/);
     const firstUnits = [...f.w.evidencePages!.at(-1)!.pages[0]!];
     f.w.attempts++;
     const draft = acceptAnswerGroup(f.m, f.w, undefined, { answerGroupDraft: output(f.items) }, f.job).draft!;
     assert.equal(answerGroupProgress(f.w).completed, 0);
-    const next = boundAnswerGroupEvidence(f.m, f.w, draft);
+    const next = boundAnswerGroupEvidence(f.m, f.w, draft, 8);
     const rereadIDs = f.requested.filter(id => firstUnits.includes(id) && !next.manifest.includedIDs.includes(id)).slice(0, 6);
     const absentRead = rereadIDs[0]!; assert.ok(absentRead);
     const invalid = structuredClone(f.w); invalid.attempts++;
@@ -682,7 +824,7 @@ test("37 to 38 preserves mixed-job v1 page hashes, rejects future data transacti
     const tampered = structuredClone(reordered); tampered.receipts[0]!.jobID = randomUUID();
     assert.throws(() => replayAnswerGroup(f.m, tampered), /evidence pages/);
     store.close(); let db = new Database(path);
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 9;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), f.job.id);
     db.exec("DELETE FROM migration_history WHERE version >= 38; PRAGMA user_version=37"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 37);
@@ -699,7 +841,7 @@ test("37 to 38 preserves mixed-job v1 page hashes, rejects future data transacti
     for (const item of f.items) { item.status = "needs-attention"; item.jobID = paused.id; store.saveSubmission(item); }
     store.close(); store = new ProjectStore(path); assert.deepEqual(store.getJob(f.job.id), granted);
     const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id), store.submissions(f.p.id), rev => store.get(f.p.id, rev)));
-    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 18);
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 19);
     const decoded = decodePortable(files, f.p.model);
     assert.deepEqual(decoded.continuation.jobs.find(j => j.id === paused.id)!.answerGroupWork, paused.answerGroupWork);
     const missingParent = JSON.parse(files["continuation.json"]!); missingParent.jobs = missingParent.jobs.filter((j: { id: string }) => j.id !== f.job.id);
@@ -799,7 +941,7 @@ for (const phase of ["read", "check"] as const) test(`oversized shared ${phase} 
     assert.deepEqual(work.receipts.slice(0, originalReceipts.length), originalReceipts);
     const tampered = structuredClone(work); tampered.evidencePages![0]!.pages[0]!.pop();
     assert.throws(() => replayAnswerGroup(m, tampered), /evidence pages/);
-    const future = structuredClone(work); (future.evidencePages![0] as { format: number }).format = 9;
+    const future = structuredClone(work); (future.evidencePages![0] as { format: number }).format = 10;
     assert.equal(answerGroupWorkSchema.safeParse(future).success, false);
   } finally { store.close(); }
 });
@@ -844,11 +986,11 @@ test("36 to 37 retains an overflowing paid lookup; explicit paged continuation s
     assert.equal(answerGroupProgress(paused.answerGroupWork!).completed, 0, "One completed page is not the original complete step");
     for (const item of items) { item.status = "needs-attention"; item.jobID = paused.id; store.saveSubmission(item); }
     const files = renderWorkspace(p, undefined, continuationState(p, store.jobs(p.id), store.submissions(p.id), rev => store.get(p.id, rev)));
-    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 18);
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 19);
     assert.deepEqual(decodePortable(files, p.model).continuation.jobs.find(j => j.id === paused.id)!.answerGroupWork, paused.answerGroupWork);
-    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 17 }) }, p.model), /format 18/);
+    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 18 }) }, p.model), /format 19/);
     store.close(); db = new Database(path);
-    const future = structuredClone(paused); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 9;
+    const future = structuredClone(paused); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), paused.id);
     db.exec("DELETE FROM migration_history WHERE version >= 37; PRAGMA user_version=36"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
@@ -1522,7 +1664,7 @@ test("shared saved stages survive repeated reopen, future-format rollback and ac
     for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(job.id), original); store.close(); }
     store = new ProjectStore(path);
     const files = renderWorkspace(p, undefined, continuationState(p, store.jobs(p.id), store.submissions(p.id), revision => store.get(p.id, revision)));
-    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 18);
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 19);
     const imported = decodePortable(files, p.model);
     assert.deepEqual(imported.continuation.jobs.find(j => j.id === job.id)!.answerGroupWork, original.answerGroupWork);
     const older = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 8 }) };

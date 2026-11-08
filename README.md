@@ -25,6 +25,15 @@ User-facing guidance is being kept at product-owner level: plain explanations fi
 with internal processing details available separately. See the
 [language conventions](docs/user-facing-language.md) for scope and compatibility.
 
+**Play / Pause / Stop** are the main specification controls. Play resumes saved work
+and handles routine shared-answer evidence/recovery without separate technical
+permission prompts. Pause saves the current reply before waiting; Stop cancels current
+work. Product decisions still require review. Technical details and legacy controls
+are collapsed under **Processing details and advanced actions**. See
+[implemented scope and remaining legacy limits](docs/coordinated-workflow.md#simple-processing-2026-11-08).
+
+The following dated capability notes refer to retained advanced workflows:
+
 **Specification workflow (preview)** offers **Continue specification** to sequence saved input,
 questions and specification checks with a shared bounded allowance and decision
 inbox in Processing & queue. Opt-in per project; saved work and advanced actions

@@ -1,5 +1,56 @@
 # Coordinated workflow preview (DEC-032)
 
+## Simple processing (2026-11-08)
+
+The primary controls are **Play**, **Pause**, **Stop**. Play starts/resumes saved
+specification work using the selected AI connection. Save product answers, then Play
+to process that saved set. Pause allows the current reply to be saved before waiting;
+Stop immediately cancels the owned request and disarms the coordinator. Both retain
+completed work and usage. Reload/restart never starts work. The previous controls,
+run accounting and recovery details remain under collapsed **Processing details and
+advanced actions**, not in the ordinary workflow. Coding, scanning and web research
+remain separate operations.
+
+Play adopts compatible current-revision **shared-answer** checkpoints in place,
+including the reported exhausted final evidence lookup. The original plan, paid
+receipts, spent attempts and historical checks are not reset. Technical source/scope
+and missing-original preparation can be handled at adoption without separate user
+consent. Existing original requirements may be revised across feature boundaries
+only when justified by the concrete original answers and complete detailed support.
+New out-of-feature records, withdrawals, inferred conflict precedence and approvals
+remain prohibited. Every original batch verifies again after an actual repair.
+
+Useful shared lookups no longer exhaust a four-request repair allowance. The internal
+Play policy reserves total requests before dispatch, with a 256-request task safety
+ceiling and three consecutive unsuccessful validation/request reservations. Accepted
+useful replies clear the consecutive-failure count, not total usage. Pause/Stop/reopen
+and repeated Play cannot renew a task safety stop. Existing two-repair, packet, storage
+and page-capacity guards remain. A run-wide 256-request ceiling also prevents an
+unbounded coordinator episode. These are safety checks, not new user authorizations.
+
+**Implemented boundary:** shared-answer adoption and new shared work use the new
+policy. Legacy individual-answer, assessment, refinement and other specialized
+engines keep their existing durable retry semantics; they can still stop for
+technical failures requiring advanced inspection. Unclassified model blockers,
+unavailable evidence, real human conflicts, provider errors and genuinely unfit
+inputs are not silently overridden. This slice does not claim universal recovery
+or live model correctness. See [upgrade and qualification](migrations.md#play-owned-specification-processing-2026-11-08).
+
+Compatible shared packing stops can be resumed through **Continue specification**
+even when originally started by separate response processing. The whole saved
+cohort must remain intact, and explicit continuation must prove exact current-input
+compatibility and fit before requeueing anything. A visible offer is not approval
+or a fresh retry allowance; real failures and human blockers remain stopped. See
+[standalone continuation compatibility](migrations.md#separately-started-shared-packing-continuation-2026-11-08).
+
+A saved read can now continue when its whole exact comparison fits the current
+96,000-character input bound but speculative space for a maximum future draft does
+not. Normal pages retain draft headroom; a tight indivisible unit stays alone with
+the full current draft, all answers and complete support. Later inputs are measured
+again and can still genuinely block. All verification remains mandatory. Use
+ordinary **Continue specification**, not reset or a new grant. See
+[tight read compatibility](migrations.md#measured-current-draft-read-units-2026-11-08).
+
 ## Read and planning efficiency (2026-11-07)
 
 Continue now retains successful shared-read coverage across evidence relayouts,
@@ -146,6 +197,17 @@ missing support remains requestable when needed; a source's historical presence 
 not approve its old wording or authorize a new rule. The earlier repair/request limits
 below remain the default, with only this explicit one-time recovery exception.
 See [compatibility and checks](migrations.md#original-shared-answer-support-and-explicit-recovery-2026-11-06).
+
+## Exact affected-rule permission (2026-11-08)
+
+A saved scope-blocked repair may offer a separate unchecked consent action for
+one named existing out-of-feature rule. Granting it is metadata-only and leaves
+the workflow paused; Continue is still explicit. It is not a new product choice,
+approval of wording, a broader feature edit or extra attempt allowance. Original
+answers, paid replies, blockers and historical checks remain retained. Only a
+`revise` of that exact requirement can cross the feature boundary, using detailed
+original support; actual conflicts still block. After repair all original batches
+must verify again. See [migration and recovery](migrations.md#exact-rule-scoped-shared-repair-permission-2026-11-08).
 
 ## Bounded shared-draft repair (2026-11-06)
 

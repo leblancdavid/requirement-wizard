@@ -20,7 +20,7 @@
     "runtime:skills": "tsx src/runtime/skills-check.ts",
     "provider": "tsx src/providers/cli.ts",
     "check": "tsc --noEmit",
-    "posttest": "tsx --test src/storage/definition-change-review.test.ts src/service/definition-change-review.test.ts src/storage/definition-change-batches.test.ts src/storage/definition-change-group.test.ts src/service/answer-group.test.ts src/service/question-batch.test.ts",
+    "posttest": "tsx --test src/storage/definition-change-review.test.ts src/service/definition-change-review.test.ts src/storage/definition-change-batches.test.ts src/storage/definition-change-group.test.ts src/service/answer-group.test.ts src/service/answer-group-rule-repair.test.ts src/service/question-batch.test.ts",
     "test:question-batches": "tsx --test src/service/question-batch.test.ts",
     "test:answer-groups": "tsx --test src/service/answer-group.test.ts",
     "posttest:browser": "tsx src/web/definition-change-browser-check.ts && tsx src/web/definition-change-batches-browser-check.ts && tsx src/web/definition-change-group-browser-check.ts && tsx src/web/answer-group-browser-check.ts && tsx src/web/question-batch-browser-check.ts",

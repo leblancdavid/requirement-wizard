@@ -1,5 +1,18 @@
 # Processing permissions
 
+## Primary controls (2026-11-08)
+
+Use **Play / Pause / Stop** for normal specification work. No processing-mode
+change, per-rule checkbox or separate shared-recovery allowance is required before
+Play. It adopts compatible shared checkpoints while preserving original answers,
+paid evidence and usage. Technical accounting and the old controls remain under
+collapsed **Processing details and advanced actions**. Product decisions and approvals
+are still yours; coding, scans and research remain separate. See
+[implemented scope and remaining legacy recovery limits](coordinated-workflow.md#simple-processing-2026-11-08).
+
+The retained settings below support advanced/legacy task workflows. Merely viewing
+them or installing an upgrade never starts work or changes existing preferences.
+
 **Settings → Project settings → Processing permissions** offers three choices for
 this project on this computer. Choose a radio and explicitly **Save processing mode**.
 Opening Settings or selecting a radio starts nothing. Stop active work before switching.

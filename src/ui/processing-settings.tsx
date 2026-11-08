@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import type { WorkflowView } from "../service/workflow.js";
 import type { MaintenanceView } from "../core/maintenance.js";
-import { WorkflowControls, type WorkflowAction } from "./workflow-controls.js";
+import { WorkflowControls, type WorkflowConfigure } from "./workflow-controls.js";
 import { MaintenanceSettings, type MaintenanceAction } from "./maintenance-controls.js";
 import type { ProcessingPolicy, ProcessingPolicyChange } from "../core/processing-policy.js";
 
@@ -10,7 +10,7 @@ import type { ProcessingPolicy, ProcessingPolicyChange } from "../core/processin
 export function ProcessingSettings({ policy, configurePolicy, workflow, maintenance, auto, setAuto, disabled, pending, configureWorkflow, configureMaintenance, openQueue }: {
   policy?: ProcessingPolicy; configurePolicy?: (change: ProcessingPolicyChange) => Promise<boolean>;
   workflow?: WorkflowView; maintenance?: MaintenanceView; auto: boolean; setAuto: (value: boolean) => void;
-  disabled: boolean; pending: boolean; configureWorkflow: (action: WorkflowAction) => void;
+  disabled: boolean; pending: boolean; configureWorkflow: WorkflowConfigure;
   configureMaintenance: (action: MaintenanceAction) => void; openQueue: () => void;
 }) {
   const [draft, setDraft] = useState<ProcessingPolicyChange | null>(null);

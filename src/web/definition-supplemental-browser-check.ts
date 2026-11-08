@@ -84,7 +84,7 @@ try {
   await expect(page.locator(".queue-header")).toContainText("Runtime");
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  await page.locator(".queue-header").getByRole("button", { name: "Pause assessment", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Stop", exact: true }).click();
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("cancelled");
   const paused = store.jobs(project.id).at(-1)!;
   assert.deepEqual(paused.definitionWork!.receipts, originalReceipts); assert.equal(paused.definitionWork!.attempts, 9);

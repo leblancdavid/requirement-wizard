@@ -1,5 +1,13 @@
 import type { Page } from "@playwright/test";
 
+/** Historical runners explicitly exercise retained advanced APIs. Normal Play
+ * tests must not install this helper: details are collapsed for users. */
+export async function legacyWorkflowDetails(page: Page) {
+  const toggle = page.locator("details:not([open]) > summary").filter({ hasText: /^Processing details and advanced actions$/ });
+  await page.addLocatorHandler(toggle, async () => { await toggle.click(); });
+  return () => page.removeLocatorHandler(toggle);
+}
+
 export async function applicationMenu(page: Page) {
   const toggle = page.getByRole("button", { name: "Application menu", exact: true });
   if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();

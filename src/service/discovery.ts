@@ -73,7 +73,7 @@ function schemaDiagnostic(error: z.ZodError): string {
 export class DiscoveryService {
   constructor(readonly store: ProjectStore, private readonly adapter: DiscoveryAdapter,
     private readonly navigation: { searchEvidence?: typeof searchSavedEvidence; stagedLimits?: { requests: number; durationMs: number }; definitionRequestMs?: number;
-      workflow?: { owner: string; continuous?: boolean; cooperativeWindow?: boolean; beforeJob: () => { requests: number; durationMs: number }; beforeRequest: (jobID: string) => void } } = {}) {
+      workflow?: { owner: string; continuous?: boolean; play?: boolean; shouldPause?: () => boolean; cooperativeWindow?: boolean; beforeJob: () => { requests: number; durationMs: number }; beforeRequest: (jobID: string) => void } } = {}) {
     if (navigation.stagedLimits) z.object({ requests: z.number().int().min(1).max(stagedRunRequestLimit),
       durationMs: z.number().int().min(1).max(stagedRunDurationMs) }).strict().parse(navigation.stagedLimits);
     if (navigation.definitionRequestMs !== undefined) z.number().int().min(1).max(300000).parse(navigation.definitionRequestMs);
@@ -570,6 +570,7 @@ export class DiscoveryService {
         if (!this.navigation.workflow?.continuous) timer = setTimeout(timeout, (workflowLimits?.durationMs ?? this.navigation.stagedLimits?.durationMs ?? stagedRunDurationMs) + 1000);
         return completeMeasurement(await runAnswerGroup(this.store, inferenceAdapter, project, job, items as Submission[], {
           signal: controller.signal, continuous: this.navigation.workflow?.continuous, limits: workflowLimits ?? this.navigation.stagedLimits,
+          play: this.navigation.workflow?.play, shouldPause: this.navigation.workflow?.shouldPause,
           onProgress: options.onProgress, measurement,
         }));
       }

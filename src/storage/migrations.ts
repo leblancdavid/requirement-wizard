@@ -27,7 +27,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 44;
+export const databaseSchemaVersion = 47;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -272,6 +272,15 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 44, name: "stable-read-units-and-exact-staged-planning-v1", apply() {
   // Reader boundary for v8 read layouts, dense v5 schedules and derived staged
   // context bundles. Preserve all historical payloads, attempts and live leases.
+} }, { version: 45, name: "measured-current-draft-tight-read-units-v1", apply() {
+  // V9 allows an indivisible read unit beside the entire current draft when
+  // speculative maximum-growth reserve alone prevents it fitting. No rewrites.
+} }, { version: 46, name: "exact-rule-scoped-shared-repair-permission-v1", apply() {
+  // Explicit consent may append one rule-bound permission to retained repair
+  // work. Preserve all original blockers, replies, attempts and completed work.
+} }, { version: 47, name: "play-owned-specification-processing-v1", apply() {
+  // Reader boundary only. Play adopts old work explicitly at an authenticated
+  // receipt boundary; startup never arms work, refunds usage or rewrites evidence.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

@@ -7,7 +7,7 @@ import { coverage } from "../core/coverage.js";
 import { expandChangeIdentifiers, expandChangeCitationAuthority } from "../core/definition-change-wire.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, legacyWorkflowDetails } from "./menu-check-helpers.js";
 import { discoveryPrompt } from "../runtime/discovery.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -64,6 +64,7 @@ const app = await startApp({ store, port: 0,
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }), errors: string[] = [];
+  await legacyWorkflowDetails(page);
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: p.name, exact: true }).click();
   await page.getByRole("button", { name: /Processing & queue:/ }).click();

@@ -72,7 +72,7 @@ try {
   await expect.poll(() => waiting).toBe(true);
   await overview.getByRole("button", { name: "Close progress", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  await page.locator(".queue-header").getByRole("button", { name: "Pause assessment", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Stop", exact: true }).click();
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("cancelled");
   const paused = store.jobs(project.id).at(-1)!;
   assert.equal(paused.definitionWork!.attempts, 10); assert.deepEqual(paused.definitionWork!.receipts, original.receipts);

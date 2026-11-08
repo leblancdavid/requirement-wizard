@@ -567,7 +567,7 @@ try {
   await expect(page.getByText(/Connection changes are not saved/)).toContainText("OpenCode");
   await discoveryActions(page);
   await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toBeDisabled();
-   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue specification" })).toBeDisabled();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Play", exact: true })).toBeDisabled();
   assert.equal(rounds, 1, "An unsaved connection must not start another inference round");
   await page.getByRole("button", { name: "Review connection settings", exact: true }).click();
   await page.getByRole("button", { name: "Save model", exact: true }).click();
@@ -1036,7 +1036,7 @@ try {
     const headerInk = await header.evaluate((element) => getComputedStyle(element).color);
     const surfaceHex = await page.locator("html").evaluate((element) => getComputedStyle(element).getPropertyValue("--surface").trim());
     const surfaceColor = `rgb(${[1, 3, 5].map((start) => parseInt(surfaceHex.slice(start, start + 2), 16)).join(", ")})`;
-    for (const control of [headerStatus, header.locator(".progress-trigger"), header.locator(".queue-header-action")]) {
+    for (const control of [headerStatus, header.locator(".progress-trigger"), ...await header.locator(".queue-header-action").all()]) {
       await expect(control).toHaveCSS("color", headerInk);
       await expect(control).not.toHaveCSS("background-color", surfaceColor);
     }
@@ -1052,7 +1052,7 @@ try {
     }
     if (width >= 1440) assert.ok((await header.boundingBox())!.height < 220, "Desktop header uses a compact summary instead of a narrow, tall progress card");
     assert.ok((await workspaceTabs.boundingBox())!.y >= (await page.locator(".queue-header").boundingBox())!.y + (await page.locator(".queue-header").boundingBox())!.height, "Workspace tabs sit below current processing controls");
-    await expect(header.getByRole("button", { name: "Stop discovery", exact: true })).toBeInViewport();
+    await expect(header.getByRole("button", { name: "Stop", exact: true })).toBeInViewport();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Sticky header fits viewport");
     await page.screenshot({ path: resolve(`.reqwizit-state/header-${width}.png`) });
     await headerStatus.click();
@@ -1150,22 +1150,22 @@ try {
   const headerControls = page.locator(".queue-header");
   // Submission completion may precede the end of its background follow-up.
   // Stop the still-active work rather than trying to start a concurrent round.
-  await expect(headerControls.getByRole("button", { name: "Stop discovery", exact: true })).toBeVisible();
+  await expect(headerControls.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
-  await headerControls.getByRole("button", { name: "Stop discovery", exact: true }).focus();
+  await headerControls.getByRole("button", { name: "Stop", exact: true }).focus();
   await page.keyboard.press("Enter");
-  await expect(headerControls.getByRole("button", { name: "Process saved responses only", exact: true })).toBeVisible();
+  await expect(headerControls.getByRole("button", { name: "Play", exact: true })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
   assert.equal(store.jobs(store.list()[0]!.id).at(-1)!.status, "cancelled", "Header Stop cancels discovery without opening the drawer");
   await page.reload();
-  await expect(headerControls.getByRole("button", { name: "Process saved responses only", exact: true })).toBeInViewport();
+  await expect(headerControls.getByRole("button", { name: "Play", exact: true })).toBeInViewport();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Header resume fits mobile width");
   const callsBeforeResume = releases.length;
   await runQueueAction(page, "Process saved responses only");
   await expect.poll(() => releases.length).toBe(callsBeforeResume + 1);
   await expect(page.getByRole("dialog", { name: "Processing & queue", exact: true })).toHaveCount(0);
-  await headerControls.getByRole("button", { name: "Stop discovery", exact: true }).click();
-  await expect(headerControls.getByRole("button", { name: "Process saved responses only", exact: true })).toBeVisible();
+  await headerControls.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(headerControls.getByRole("button", { name: "Play", exact: true })).toBeVisible();
    await page.getByRole("tab", { name: /^Design/ }).click();
   await page.getByRole("button", { name: /Previous answers/ }).click();
   await expect(detailsCard.locator(".answer-preview")).toHaveText("Corrected job details");
@@ -1201,7 +1201,7 @@ try {
   await discoveryActions(page);
   await expect(page.locator(".gap-controls").getByRole("button", { name: "Discover missing decisions" })).toBeDisabled();
   await expect(page.locator(".queue-header").getByRole("button", { name: "Discover missing decisions" })).toHaveCount(0);
-   await expect(page.locator(".queue-header").getByRole("button", { name: "Continue specification", exact: true })).toBeDisabled();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Play", exact: true })).toBeDisabled();
   await page.getByRole("tab", { name: /^Specification/ }).click();
   await expect(page.getByRole("button", { name: "Start new scan", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Source initialization" })).toContainText("batches saved");

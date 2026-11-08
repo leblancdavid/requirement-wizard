@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState } from "react";
+import type { AnswerGroupRuleRepairConsent } from "../core/answer-group.js";
 import type { WorkflowView } from "../service/workflow.js";
 import type { WorkflowDecision } from "../core/workflow.js";
 import { PagedList } from "./pagination.js";
@@ -9,21 +10,58 @@ export const workflowLabels: Record<WorkflowView["phase"], string> = {
   idle: "Not started", working: "Working", "needs-decision": "Needs your decision", blocked: "Blocked",
   paused: "Paused—progress saved", "ready-to-plan": "Specification checks passed", "ready-to-implement": "Ready to implement",
 };
-export type WorkflowAction = "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "pause" | "disable";
+export type WorkflowAction = "play" | "stop" | "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "allow-shared-rule-repair" | "pause" | "disable";
+export type WorkflowConfigure = (action: WorkflowAction, ruleConsent?: AnswerGroupRuleRepairConsent) => void;
+function RuleRepairPermission({ preview, disabled, configure }: { preview: NonNullable<WorkflowView["ruleRepair"]>; disabled: boolean; configure: WorkflowConfigure }) {
+  const [checked, setChecked] = useState(false);
+  return <section aria-label="Affected rule repair permission"><h4>Allow repair of this affected rule</h4>
+    <p>Feature: {preview.feature}</p><p>{preview.statement}</p>
+    <p>The saved repair reports that this rule is outside the answer group's edit scope. Permission is for this existing rule only—not a new gameplay decision or approval of replacement wording. Actual ambiguity must still stop for review.</p>
+    <p>{preview.remainingAttempts} repair request attempt{preview.remainingAttempts === 1 ? " remains" : "s remain"}. Paid replies, original answers and spent attempts stay saved. This adds no attempts and starts no AI work; continue separately afterward. Every verification batch must pass after repair.</p>
+    <label className="check"><input type="checkbox" checked={checked} disabled={disabled} onChange={event => setChecked(event.target.checked)} />Allow this saved answer group to revise only this existing rule using my original answers.</label>
+    <button className="secondary" disabled={disabled || !checked} onClick={() => configure("allow-shared-rule-repair", { jobID: preview.jobID, requirementID: preview.requirementID, previewKey: preview.previewKey })}>Allow repair of this affected rule</button>
+  </section>;
+}
 export const mayContinueProject = (workflow: WorkflowView) => !workflow.active
   && (!workflow.enabled || workflow.paused || workflow.suspended || ["blocked", "idle"].includes(workflow.phase)
-    || !!workflow.answerBatch?.waiting && (workflow.answerBatch.savedResponses > 0 || workflow.decisions.length === 0));
+    || workflow.packingContinuation || !!workflow.answerBatch?.waiting && (workflow.answerBatch.savedResponses > 0 || workflow.decisions.length === 0));
 export const workflowContinueLabel = (workflow: WorkflowView) => workflow.enabled && workflow.answerBatch && workflow.answerBatch.savedResponses > 0
   ? "Submit saved responses" : "Continue specification";
-export function WorkflowControls({ workflow, disabled, pending, configure, openDecision, settings = false, guided = false }: {
-  workflow: WorkflowView; disabled: boolean; pending: boolean; configure: (action: WorkflowAction) => void;
+type WorkflowControlsProps = {
+  workflow: WorkflowView; disabled: boolean; pending: boolean; configure: WorkflowConfigure;
   openDecision?: (decision: WorkflowDecision) => void; settings?: boolean; guided?: boolean;
-}) {
+  standaloneActive?: boolean; stopStandalone?: () => void;
+};
+export function WorkflowControls(props: WorkflowControlsProps) {
+  const { workflow, disabled, pending, configure, openDecision, settings, standaloneActive, stopStandalone } = props;
+  return <section className="workflow-controls" aria-label={settings ? "Processing settings" : "Project workflow"}>
+    <h3>Specification · {workflow.stopped ? "Stopped" : workflowLabels[workflow.phase]}</h3>
+    <div className="button-row">
+      <button className="primary" disabled={disabled || workflow.active} onClick={() => configure("play")}>Play</button>
+      <button className="secondary" disabled={pending || !workflow.active || workflow.paused} onClick={() => configure("pause")}>Pause</button>
+      <button className="secondary" disabled={pending || !standaloneActive && !workflow.active && (!workflow.enabled || !!workflow.stopped)} onClick={() => standaloneActive && !workflow.active ? stopStandalone?.() : configure("stop")}>Stop</button>
+    </div>
+    <p>Play reviews saved answers, updates affected rules and checks the specification. Evidence loading and technical recovery are handled automatically. Uses your selected AI plan; it does not start coding, scan files or research the web.</p>
+    <p role="status">{workflow.active && workflow.paused ? "Pausing after the current reply is saved…"
+      : workflow.active ? "Working on your specification…" : workflow.stopped ? "Stopped. Saved answers and progress are kept."
+      : workflow.phase === "needs-decision" ? "Your product decisions are needed. Save your answers, then press Play."
+      : workflow.phase === "blocked" ? "Processing could not finish. Your work is saved; see processing details for the cause."
+      : workflow.suspended ? "Ready to resume saved work. Press Play when ready." : workflowLabels[workflow.phase]}</p>
+    <p>Pause saves the current reply before waiting. Stop cancels current work. Both keep completed progress.</p>
+    {workflow.enabled && workflow.decisions.some(d => d.kind !== "input") && <section aria-label="Product decisions"><h4>Needs your decision</h4>
+      <PagedList items={workflow.decisions.filter(d => d.kind !== "input")} itemID={d => `${d.kind}:${d.id}`} label="Product decisions">{decision => <article>
+        <p>{decision.title}</p>{openDecision && <button className="secondary" onClick={() => openDecision(decision)}>Review and decide</button>}
+      </article>}</PagedList>
+    </section>}
+    <details><summary>Processing details and advanced actions</summary><LegacyWorkflowControls {...props} /></details>
+  </section>;
+}
+function LegacyWorkflowControls({ workflow, disabled, pending, configure, openDecision, settings = false, guided = false }: WorkflowControlsProps) {
   const mayContinue = mayContinueProject(workflow);
   const decisionSchedule = workflow.decisionSchedule;
    const relatedArtifacts = workflow.artifacts?.filter((item) => !workflow.enabled || !workflow.decisions.some((decision) =>
     decision.kind === "refinement" && item.id === `refinement:${decision.id}`)) ?? [];
-  return <section className="workflow-controls" aria-label={settings ? "Coordinated workflow settings" : "Project workflow"}>
+  return <section className="workflow-controls" aria-label={settings ? "Coordinated workflow settings" : "Advanced specification workflow"}>
     <h3>{settings ? "Specification workflow (preview)" : `Specification workflow · ${workflowLabels[workflow.phase]}`}</h3>
     {settings ? <>
       <p>Let the app guide the next steps: review your saved answers, update requirements, check for conflicting choices and ask about missing details. It can record clear decisions from your answers; uncertain choices and existing proposals still need your decision.</p>
@@ -33,6 +71,7 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
       {!workflow.enabled && <p><strong>Continue specification lets the app guide your next steps.</strong> It reviews saved answers and checks requirements across all project areas. To run just one task instead, use More actions below.</p>}
       <p role="status">{workflow.suspended ? "Choose Continue specification to resume after reopening the app. Completed checks are saved." : workflowLabels[workflow.phase]}</p>
       {workflow.enabled && workflow.phase !== "blocked" && <p role="status">{workflow.message}</p>}
+      {workflow.packingContinuation && !workflow.active && <p role="status">Saved shared-answer work stopped at an input-size bound. Continue specification will recheck its exact layout before resuming. Original answers, paid replies and spent attempts stay saved; this grants no fresh step allowance.</p>}
       {workflow.active && workflow.current?.kind === "definition-change" && <p role="status">Checking the effect of your new decisions on the saved review. Original findings remain saved.</p>}
       {workflow.changeGroup && <p role="status">Shared change check: {workflow.changeGroup.areas} features in one request · {workflow.changeGroup.attempts} / 3 attempts saved. Each feature needs its own verdict; missing evidence goes to individual review. Original findings remain saved.</p>}
       {workflow.changeEvidence && <p role="status">Exact source lookups saved: {workflow.changeEvidence.lookups} / 6 · unfinished request attempts: {workflow.changeEvidence.attempts} / 3. Loaded evidence is retained across Pause and restart; this is not yet a completed change check.</p>}
@@ -52,21 +91,22 @@ export function WorkflowControls({ workflow, disabled, pending, configure, openD
       {workflow.grant && <p>{workflow.grant.continuous ? `${workflow.grant.used} AI request attempts recorded · continuous run` : `${workflow.grant.used} of ${workflow.limits.requests} AI requests used · ${Math.ceil(workflow.grant.remainingMs / 1000)} seconds remaining in the earlier bounded allowance. Continue again to authorize continuous work.`}</p>}
       {workflow.phase === "blocked" && <LogLink detail={workflow.message} title="Project workflow" />}
     </>}
-    {workflow.sourceRecovery && !workflow.active && <section aria-label="Original source recovery"><h4>Recover missing original sources</h4>
+    {!workflow.simpleProcessing && workflow.sourceRecovery && !workflow.active && <section aria-label="Original source recovery"><h4>Recover missing original sources</h4>
       <p>The saved draft needs original supporting records omitted from its earlier evidence set. Those records still exist. The original four requests and blocker stay saved.</p>
       <p>Authorize one allowance of up to four additional repair requests for this group. Saved reading steps will not repeat; every evidence batch must check the corrected draft. This consumes AI plan usage, does not resolve conflicting human choices, and cannot be extended a second time. Authorizing this allowance alone starts no AI work.</p>
       <button className="secondary" disabled={disabled} onClick={() => configure("recover-shared-sources")}>Authorize source recovery · up to 4 requests</button>
     </section>}
-    {workflow.pageRecovery && !workflow.active && <section aria-label="Evidence page-loop recovery"><h4>Recover repeated evidence requests</h4>
+    {!workflow.simpleProcessing && workflow.pageRecovery && !workflow.active && <section aria-label="Evidence page-loop recovery"><h4>Recover repeated evidence requests</h4>
       <p>An earlier paging bug kept showing the same evidence instead of the requested records. The original four requests and answers stay saved. The corrected layout brings requested evidence forward.</p>
       <p>Authorize up to four additional requests for this stalled page once, using your AI plan’s usage. This starts no AI work until you Continue. Later pages and checks use the normal workflow permission and limits. No completed reads are discarded and every evidence check remains required.</p>
       <button className="secondary" disabled={disabled} onClick={() => configure("recover-shared-pages")}>Authorize page recovery · up to 4 requests</button>
     </section>}
-    {workflow.verificationRecovery && !workflow.active && <section aria-label="Evidence-complete verification"><h4>Supply original rules for verification</h4>
+    {!workflow.simpleProcessing && workflow.verificationRecovery && !workflow.active && <section aria-label="Evidence-complete verification"><h4>Supply original rules for verification</h4>
       <p>The saved check lacked {workflow.verificationRecovery.missingRecords} original records referenced by its frozen draft. Prepare a layout that keeps all affected original rules and linked supporting bodies together in every verification page.</p>
       <p>This starts no AI work, grants no extra attempts and does not resolve or approve the blocker. Your {workflow.verificationRecovery.attemptsRemaining} remaining attempts, original answers and completed reading steps are retained. Continue afterward to re-evaluate the saved blocker.</p>
       <button className="secondary" disabled={disabled} onClick={() => configure("prepare-shared-verification")}>Prepare evidence-complete verification</button>
     </section>}
+    {!workflow.simpleProcessing && workflow.ruleRepair && !workflow.active && <RuleRepairPermission key={workflow.ruleRepair.previewKey} preview={workflow.ruleRepair} disabled={disabled || pending} configure={configure} />}
     <div className="button-row">{mayContinue && <button className="primary" disabled={disabled} onClick={() => configure("continue-continuous")}>{workflowContinueLabel(workflow)}</button>}
       {!settings && !workflow.active && workflow.enabled && <button className="secondary" disabled={disabled} title="Review the accumulated changes in one bounded burst (up to eight AI requests and five active minutes). Process saved responses first. Remaining questions are not approved or answered by this review." onClick={() => configure("review-changes")}>Review changes</button>}
       {workflow.enabled && !workflow.paused && !workflow.suspended && <button className="secondary" disabled={pending} onClick={() => configure("pause")}>Pause specification workflow</button>}

@@ -1,8 +1,8 @@
 import { randomUUID, createHash } from "node:crypto";
-import type { Job, Project } from "../core/model.js";
+import type { Job, Project, Submission } from "../core/model.js";
 import { resolvedReviewAttempts } from "../core/review-attempts.js";
 import { workflowLimits, workflowInputKey, workflowWakeKey, workflowDecisions, workflowRequirements, workflowAreas,
-   workflowReadiness, workflowReviewInputKey, definitionGatesPass, questionBatchLimits, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
+   workflowReadiness, workflowReviewInputKey, definitionGatesPass, questionBatchLimits, playRunRequestLimit, WorkflowBudgetPause, type WorkflowState } from "../core/workflow.js";
 import { refinementCheckCurrent } from "./refinement-tasks.js";
 import { refinementCandidates } from "../core/refinement.js";
 import { refinementIsStale, resolutionPairEligible, resolutionContextMatches } from "../core/resolution.js";
@@ -19,11 +19,23 @@ import { artifactFollowThrough, definitionFollowThrough, followThroughOutcome } 
 import { planWorkflowSchedule } from "../core/workflow-schedule.js";
 import type { WorkflowJobReceipt } from "../core/workflow-receipts.js";
 import { definitionInputKey } from "../core/definition-identity.js";
-import { answerGroupProgress, answerGroupLimits, answerGroupRecoveryPreview, answerGroupPageRecoveryPreview, answerGroupVerificationPreview, answerGroupRequestLimit, canPageAnswerGroup } from "../core/answer-group.js";
+import { answerGroupProgress, answerGroupLimits, answerGroupRecoveryPreview, answerGroupPageRecoveryPreview, answerGroupVerificationPreview, answerGroupRuleRepairPreview, answerGroupRequestLimit, canPageAnswerGroup, type AnswerGroupRuleRepairConsent } from "../core/answer-group.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 type Run = { controller: AbortController; promise: Promise<void> };
 type RequirementProof = NonNullable<WorkflowState["readiness"]>["requirementProofs"][number];
+
+/** Cheap offer only, never dispatch authority. Exact replay/packing is required
+ * on explicit Continue, not on every browser poll. */
+function sharedPackingCandidate(project: Project, submissions: Submission[], job: Job, resolved: ReturnType<typeof resolvedReviewAttempts>) {
+  const group = job.answerGroupWork;
+  return !!(group && job.status === "failed" && job.expectedRevision === project.revision && job.context
+    && job.context.characters > job.context.budget && group.attempts < answerGroupRequestLimit(group)
+    && ["read", "check"].includes(answerGroupProgress(group).phase)
+    && !("answerGroupBlocked" in (group.receipts.at(-1)?.response ?? {}))
+    && group.submissionIDs.every(id => submissions.some(s => s.id === id && !s.archivedAt && !resolved.has(s.id)
+      && s.applied && ["needs-attention", "saved"].includes(s.status) && !s.conflict && !s.contextBlock && s.jobID === job.id)));
+}
 
 /** Coordinates existing operations; never an alternate write/approval pipeline.
  * Saved jobs remain the source of model output, checkpoints and provenance. */
@@ -78,10 +90,14 @@ export class ProjectWorkflow {
     const sourceRecovery = recoveryJobs.map(job => answerGroupRecoveryPreview(project, job)).find(Boolean);
     const pageRecovery = recoveryJobs.map(job => answerGroupPageRecoveryPreview(project, job)).find(Boolean);
     const verificationRecovery = recoveryJobs.map(job => answerGroupVerificationPreview(project, job)).find(Boolean);
-    return { version: state.settingsVersion, enabled, paused: state.paused, suspended,
+    const ruleRepair = recoveryJobs.map(job => answerGroupRuleRepairPreview(project, job)).find(Boolean);
+    const packingContinuation = recoveryJobs.some(job => sharedPackingCandidate(project, submissions, job, resolved));
+    return { version: state.settingsVersion, enabled, paused: state.paused, suspended, ...(state.playPolicy ? { simpleProcessing: true, stopped: state.playPolicy.stopped } : {}),
       ...(sourceRecovery ? { sourceRecovery } : {}),
       ...(pageRecovery ? { pageRecovery } : {}),
       ...(verificationRecovery ? { verificationRecovery } : {}),
+      ...(ruleRepair ? { ruleRepair } : {}),
+      ...(packingContinuation ? { packingContinuation: true } : {}),
       phase: !state.enabled && state.phase === "idle" ? "idle" : suspended ? "paused" : state.phase === "blocked" ? "blocked" : state.paused ? "paused" : readiness.readyToImplement ? "ready-to-implement" : changed ? "working" : state.phase,
       message: changed ? "Saved decisions changed. Outstanding checks will be reconsidered within the remaining workflow allowance." : readiness.readyToImplement ? readiness.explanation : state.message,
        current: state.current && { kind: state.current.kind, target: state.current.target },
@@ -104,21 +120,25 @@ export class ProjectWorkflow {
         ...(state.stopReason === "scheduler-yield" && state.phase === "working" && !state.paused ? { continuingWindow: true } : {}),
         lastRun: this.store.latestWorkflowRun(id) };
   }
-  configure(id: string, revision: number, version: number, action: "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "pause" | "disable") {
+  configure(id: string, revision: number, version: number, action: "play" | "stop" | "continue" | "continue-continuous" | "review-changes" | "recover-shared-sources" | "recover-shared-pages" | "prepare-shared-verification" | "allow-shared-rule-repair" | "pause" | "disable", ruleConsent?: AnswerGroupRuleRepairConsent) {
     let state = this.store.workflow(id);
+    if ((action === "allow-shared-rule-repair") !== !!ruleConsent) throw new OperationConflictError("Rule-repair permission requires its exact preview and separate consent action.");
     if (state.settingsVersion !== version) throw new OperationConflictError("Project workflow settings changed. Refresh before continuing.");
-    if (action === "recover-shared-sources" || action === "recover-shared-pages" || action === "prepare-shared-verification") {
+    if (action === "recover-shared-sources" || action === "recover-shared-pages" || action === "prepare-shared-verification" || action === "allow-shared-rule-repair") {
       if (this.closing || this.active(id)) throw new OperationConflictError("Pause active work before authorizing shared-answer recovery.");
-      const view = this.view(id), candidate = action === "prepare-shared-verification" ? view.verificationRecovery : action === "recover-shared-pages" ? view.pageRecovery : view.sourceRecovery;
+      const view = this.view(id), candidate = action === "allow-shared-rule-repair" ? view.ruleRepair : action === "prepare-shared-verification" ? view.verificationRecovery : action === "recover-shared-pages" ? view.pageRecovery : view.sourceRecovery;
       if (!candidate) throw new OperationConflictError(action === "recover-shared-pages"
         ? "No eligible exhausted evidence-page loop is available for recovery."
         : action === "prepare-shared-verification" ? "No eligible check missing original draft-referenced evidence is available."
-          : "No eligible exhausted source-omission group is available for recovery.");
-      this.store.recoverAnswerGroupSources(id, revision, version, candidate.jobID, action === "prepare-shared-verification" ? "verification" : action === "recover-shared-pages" ? "pages" : "sources");
+           : "No eligible exhausted source-omission group is available for recovery.");
+      if (action === "allow-shared-rule-repair" && (!view.ruleRepair || ruleConsent!.jobID !== view.ruleRepair.jobID
+        || ruleConsent!.requirementID !== view.ruleRepair.requirementID || ruleConsent!.previewKey !== view.ruleRepair.previewKey))
+        throw new OperationConflictError("The displayed rule-repair permission preview changed. Review the exact rule again.");
+      this.store.recoverAnswerGroupSources(id, revision, version, candidate.jobID, action === "allow-shared-rule-repair" ? "rule" : action === "prepare-shared-verification" ? "verification" : action === "recover-shared-pages" ? "pages" : "sources", ruleConsent);
       this.armed.delete(id); return this.view(id);
     }
     if (action === "disable" && this.store.processingPolicy(id).mode === "guided") throw new OperationConflictError("Guided processing is selected. Choose another processing mode before using separate task settings.");
-    if (action === "continue" || action === "continue-continuous" || action === "review-changes") {
+    if (action === "play" || action === "continue" || action === "continue-continuous" || action === "review-changes") {
       if (this.closing || this.active(id) || this.store.discoveryActive(id)) throw new OperationConflictError("Wait for the active task before continuing the project.");
       this.store.assertNoExecution(id);
       const project = this.store.get(id); if (project.revision !== revision) throw new OperationConflictError("Project changed. Refresh before continuing.");
@@ -126,23 +146,34 @@ export class ProjectWorkflow {
       const pendingInput = submissions.some(s => !s.archivedAt && !resolved.has(s.id) && ["queued", "saved", "processing"].includes(s.status));
       if (action === "review-changes" && pendingInput) throw new OperationConflictError("Process saved responses before starting a review checkpoint. No review was started.");
       new DiscoveryService(this.store, this.adapter).assertCanDiscover(id);
-      // Explicit continuation can recover this coordinator's interrupted input,
-      // never unrelated failed submissions or old rejected proposals.
+      if (action === "play") {
+        const prepared = this.store.prepareAnswerGroupPlay(id, revision, version);
+        if (prepared.length && state.current?.kind === "input") state.current.completed = false;
+        state.playPolicy = { format: 1, stopped: false };
+      }
+      // Interrupted/repair recovery stays coordinator-owned. A separately started
+      // packing-only shared stop may join explicit continuation only when the
+      // whole active cohort is intact and exact replay proves a fitting new layout.
       const pageableGroups = new Map<string, boolean>();
-      if (state.current?.kind === "input") for (const item of submissions) {
-        if (item.status !== "needs-attention" || item.conflict || !item.jobID || !state.current.jobIDs.includes(item.jobID)) continue;
+      let resumedInput = action === "play" && this.store.submissions(id).some(s => s.status === "saved");
+      for (const item of submissions) {
+        if (item.archivedAt || resolved.has(item.id) || item.status !== "needs-attention" || item.conflict || !item.jobID) continue;
+        const ownedInput = state.current?.kind === "input" && state.current.jobIDs.includes(item.jobID);
         const job = this.store.getJob(item.jobID);
         const group = job.answerGroupWork, progress = group && answerGroupProgress(group);
         const activeReplies = group?.sourceSupport?.recovery ? group.receipts.slice(group.sourceSupport.fromReceipt) : group?.receipts;
-        const repairable = action !== "review-changes" && job.status === "failed" && group && progress?.phase === "repair"
+        const repairable = ownedInput && action !== "review-changes" && job.status === "failed" && group && progress?.phase === "repair"
           && progress.repairs < answerGroupLimits.repairs && group.attempts < answerGroupRequestLimit(group)
           && !activeReplies!.some(r => "answerGroupBlocked" in r.response);
-        if (action !== "review-changes" && !pageableGroups.has(job.id)) pageableGroups.set(job.id, canPageAnswerGroup(project, submissions, job));
-        if ((["interrupted", "cancelled"].includes(job.status) || repairable || pageableGroups.get(job.id)) && job.context?.submissionIDs?.includes(item.id)) {
+        if (action !== "review-changes" && !pageableGroups.has(job.id)) {
+          pageableGroups.set(job.id, (ownedInput || sharedPackingCandidate(project, submissions, job, resolved)) && canPageAnswerGroup(project, submissions, job));
+        }
+        if ((ownedInput && ["interrupted", "cancelled"].includes(job.status) || repairable || pageableGroups.get(job.id)) && job.context?.submissionIDs?.includes(item.id)) {
           item.status = item.applied ? "saved" : "queued"; this.store.saveSubmission(item);
           // Earlier workers marked an input pass complete even after queue cancellation.
           // Explicit recovery of its unfinished job must not inherit that loop guard.
-          state.current.completed = false;
+          if (state.current?.kind === "input") state.current.completed = false;
+          resumedInput = true;
         }
       }
        state.enabled = true; state.paused = false; state.phase = "working";
@@ -150,7 +181,7 @@ export class ProjectWorkflow {
       state.reviewPolicy = { format: 1 };
       // Adopt only on explicit continuous consent. Old bounded/live grants keep
       // their original wake-up behavior; startup never rewrites or arms them.
-       if (action === "continue-continuous") {
+        if (action === "continue-continuous" || action === "play") {
          state.inputBatchPolicy = { format: 1 };
          state.questionBatchPolicy = { format: 2 };
          if (state.questionBatch?.format === 1) {
@@ -165,23 +196,25 @@ export class ProjectWorkflow {
       // Resuming identical input retains the checkpoint and the paid jobs it
       // references through existing task identities. Changed input needs a new
       // checkpoint, never a rewrite/restart of the older one.
-      if (pendingInput || state.reviewCheckpoint?.inputKey !== workflowReviewInputKey(project)) delete state.reviewCheckpoint;
+      if (pendingInput || resumedInput || state.reviewCheckpoint?.inputKey !== workflowReviewInputKey(project)) delete state.reviewCheckpoint;
       if (action === "review-changes") state.reviewCheckpoint = {
         format: 1, inputKey: workflowReviewInputKey(project), revision: state.reviewCheckpoint?.revision ?? project.revision, state: "reviewing", explicit: true };
       state.message = "Coordinating saved input and specification checks. Product choices still require your decision.";
       state.grant = { id: randomUUID(), used: 0, remainingMs: workflowLimits.durationMs,
-        ...(action === "continue-continuous" ? { continuous: { format: 1 as const } } : {}),
+        ...(action === "continue-continuous" || action === "play" ? { continuous: { format: 1 as const } } : {}),
         submissionIDs: this.store.submissions(id).filter((s) => !s.archivedAt && ["queued", "saved"].includes(s.status)).map((s) => s.id) };
       delete state.waitKey; delete state.owner; delete state.leaseUntil;
     } else {
        state.paused = true; state.phase = "paused";
        state.stopReason = "human-pause";
-      state.message = action === "disable" ? "Coordinated workflow is off. Existing advanced actions remain available." : "Project workflow paused. Saved decisions and completed checks are retained.";
+       if (action === "stop" && state.playPolicy) state.playPolicy.stopped = true;
+       state.message = action === "stop" ? "Processing stopped. Saved answers and completed work are kept. Play starts processing again."
+         : action === "disable" ? "Coordinated workflow is off. Existing advanced actions remain available." : "Processing paused. Saving any current reply before waiting; Play resumes saved work.";
       if (action === "disable") state.enabled = false;
     }
     state.settingsVersion++; this.store.saveWorkflow(id, state);
-    if (action === "continue" || action === "continue-continuous" || action === "review-changes") { this.armed.add(id); this.tick(id); }
-    else { this.armed.delete(id); this.runs.get(id)?.controller.abort(definitionAbortReason("user-stop")); }
+    if (action === "play" || action === "continue" || action === "continue-continuous" || action === "review-changes") { this.armed.add(id); this.tick(id); }
+    else { this.armed.delete(id); if (action !== "pause" || !state.playPolicy) this.runs.get(id)?.controller.abort(definitionAbortReason("user-stop")); }
     return this.view(id);
   }
   tick(id: string) {
@@ -228,7 +261,7 @@ export class ProjectWorkflow {
     const heartbeat = continuous ? setInterval(() => {
       try {
         const state = owned();
-        if (state.paused || !state.enabled) { controller.abort(definitionAbortReason("user-stop")); return; }
+        if (!state.enabled || state.paused && !state.playPolicy) { controller.abort(definitionAbortReason("user-stop")); return; }
         state.leaseUntil = Date.now() + 360000; this.store.saveWorkflow(id, state);
       } catch (error) { controller.abort(error); }
     }, 30000) : undefined;
@@ -247,7 +280,8 @@ export class ProjectWorkflow {
       state.questionBatch!.activeSince = Date.now();
       this.store.saveWorkflow(id, state);
     };
-    const navigation = { owner, continuous,
+    const navigation = { owner, continuous, play: !!initial.playPolicy,
+      shouldPause: () => owned().paused,
       beforeJob: () => {
         controller.signal.throwIfAborted(); const state = owned(), remaining = workflowLimits.requests - state.grant!.used;
         // Ordinary retrieval can require three calls. Reserve its upper bound;
@@ -259,6 +293,7 @@ export class ProjectWorkflow {
       beforeRequest: (jobID: string) => {
         controller.signal.throwIfAborted(); const state = owned();
         if (state.paused || !state.enabled || !continuous && (state.grant!.used >= workflowLimits.requests || Date.now() >= deadline)) throw new WorkflowBudgetPause("Project workflow paused before model dispatch.");
+        if (state.playPolicy && state.grant!.used >= playRunRequestLimit) throw new WorkflowBudgetPause("Processing paused at its run safety limit. Saved work is kept; see Logs before continuing.");
         if (collecting) {
           const batch = state.questionBatch!;
           batch.remainingMs = Math.max(0, batchRemainingMs - Math.max(0, Date.now() - batchStarted));
@@ -620,7 +655,7 @@ export class ProjectWorkflow {
     this.closing = true; clearInterval(this.timer); for (const run of this.runs.values()) run.controller.abort(definitionAbortReason("shutdown"));
     await Promise.allSettled([...this.runs.values()].map((run) => run.promise));
   }
-  stop(id: string) { return this.configure(id, this.store.projectRevision(id), this.store.workflow(id).settingsVersion, "pause"); }
+  stop(id: string) { return this.configure(id, this.store.projectRevision(id), this.store.workflow(id).settingsVersion, "stop"); }
   async wait(id: string) { await this.runs.get(id)?.promise; }
 }
 export type WorkflowView = ReturnType<ProjectWorkflow["view"]>;

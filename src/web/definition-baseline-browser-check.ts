@@ -75,7 +75,7 @@ try {
   await expect(queue).toContainText(notice);
   await expect(queue).toContainText("1 changed record");
   await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
-  await page.locator(".queue-header").getByRole("button", { name: "Pause assessment", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Stop", exact: true }).click();
   await expect.poll(() => store.jobs(p.id).at(-1)?.status).toBe("cancelled");
   const paused = store.jobs(p.id).at(-1)!;
   const savedCollections = collections;

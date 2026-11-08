@@ -1,5 +1,35 @@
 # Browser workspace, epics, and estimated completeness
 
+The main processing controls are now **Play / Pause / Stop**. Play handles routine
+specification sequencing and adopts compatible saved shared-answer recovery without
+rule checkboxes or extra-allowance buttons. Pause saves the current reply before
+waiting; Stop cancels current work. Both preserve progress. Technical history and
+legacy actions are collapsed under **Processing details and advanced actions**.
+Save actual product answers, then Play; reload alone starts nothing. See
+[scope and remaining legacy limits](coordinated-workflow.md#simple-processing-2026-11-08).
+
+The dated sections below describe retained advanced workflows, not the primary UI.
+
+For a retained repair blocked by a single out-of-feature rule, Processing & queue
+can display **Allow repair of this affected rule**. Review the named existing rule
+and feature, check the initially unchecked consent box, then grant permission.
+This saves scope permission only: no AI work, extra attempts or wording approval.
+Use **Continue specification** separately afterward. Paid replies and spent attempts
+remain saved; a repaired draft must pass every original verification batch again.
+Reload clears unsaved checkbox consent. See [permission and upgrade boundaries](migrations.md#exact-rule-scoped-shared-repair-permission-2026-11-08).
+
+For an eligible separately started shared packing stop, **Continue specification**
+now remains visible beside the historical failure notice and rechecks the exact
+layout before resuming the saved group. Opening the view starts no work; genuine
+human blockers and exhausted attempts still need their original resolution. See
+[continuation routing](migrations.md#separately-started-shared-packing-continuation-2026-11-08).
+
+For a compatible shared-read stop caused only by speculative future draft reserve,
+ordinary **Continue specification** can now prepare a tight exact unit beside the
+whole current draft. Saved replies and spent attempts stay intact; genuine current
+input overflow still blocks and all verification remains mandatory. See
+[current-draft read bounds](migrations.md#measured-current-draft-read-units-2026-11-08).
+
 Shared reading now preserves completed page coverage across relayouts and packs
 complete rule/support units. Exact-snapshot staged planning is locally reusable;
 new questions-only schedules pack measured encoded inputs without dropping evidence

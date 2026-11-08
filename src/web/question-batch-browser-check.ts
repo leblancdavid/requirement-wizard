@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
 import { startApp } from "./server.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, legacyWorkflowDetails } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { questionBatchLimits, workflowReviewInputKey } from "../core/workflow.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
@@ -40,11 +40,12 @@ let releaseRefresh = () => {};
 let clearRoutes = async () => {};
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }); diagnose = browserDiagnostics(page);
+  await legacyWorkflowDetails(page);
   clearRoutes = () => page.unrouteAll({ behavior: "wait" });
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => { localStorage.setItem("reqwizit-auto", "false"); localStorage.setItem("reqwizit-research", "false"); });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: "Question collection browser", exact: true }).click();
-  await page.locator(".queue-header").getByRole("button", { name: "Continue specification", exact: true }).click();
+  await page.locator(".topbar .queue-trigger").click();
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   await queue.getByRole("button", { name: "Continue specification", exact: true }).click();
   await expect.poll(() => topics.length).toBe(2);
@@ -88,7 +89,7 @@ try {
   }
   assert.ok(store.submissions(p.id).every(s => s.status === "queued"));
   releaseRefresh(); await clearRoutes();
-  await expect(page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true })).toBeVisible();
+   await expect(page.locator(".queue-header").getByRole("button", { name: "Play", exact: true })).toBeVisible();
   await page.reload(); assert.equal(topics.length, originalCalls); assert.deepEqual(errors, []);
    console.log("Question collection browser passed: multi-topic collection, automatic bounded-window continuation, owned Pause/reload/explicit resume, retained paid work, mobile, five durable save-only answers while workspace refresh is held, stale-reply protection and separate submission. Fixture only; no live inference.");
 } catch (error) { await diagnose?.(".reqwizit-state/browser-question-batch-failure"); throw error; }

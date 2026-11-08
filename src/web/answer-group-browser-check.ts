@@ -3,13 +3,13 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { ProjectStore } from "../storage/store.js";
 import { startApp } from "./server.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, legacyWorkflowDetails } from "./menu-check-helpers.js";
 import { browserDiagnostics } from "./browser-diagnostics.js";
 import { dimensions } from "../core/epics.js";
 import type { Analysis } from "../core/model.js";
 import { ContextBudgetError } from "../core/context.js";
 import type { Connections } from "../providers/connections.js";
-import { answerGroupMaterials, planAnswerGroup, planAnswerGroupEvidencePages, answerGroupContext, answerGroupProgress, acceptAnswerGroup, type AnswerGroupDraft } from "../core/answer-group.js";
+import { answerGroupMaterials, planAnswerGroup, planAnswerGroupEvidencePages, answerGroupContext, answerGroupProgress, acceptAnswerGroup, answerGroupDraftSchema, type AnswerGroupDraft } from "../core/answer-group.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -77,9 +77,10 @@ function pagedLookupFixture(loop = false) {
   }
   store.checkpointAnswerGroup(job.id, work, overflow); store.failJob(job.id, "failed", "Saved lookup exceeded the bounded input budget");
   for (const item of items) { item.status = "needs-attention"; item.jobID = job.id; store.saveSubmission(item); }
-  const state = store.workflow(project.id); state.enabled = true; state.paused = true; state.phase = "needs-decision";
+  const state = store.workflow(project.id); state.enabled = true; state.paused = loop; state.phase = "needs-decision";
   state.inputBatchPolicy = { format: 1 }; state.reviewPolicy = { format: 1 };
-  state.current = { kind: "input", key: "0".repeat(64), jobIDs: [job.id], completed: true }; store.saveWorkflow(project.id, state);
+  // The ordinary packing fixture was started separately, not by this coordinator.
+  state.current = { kind: "input", key: "0".repeat(64), jobIDs: loop ? [job.id] : [], completed: true }; store.saveWorkflow(project.id, state);
   return { project, original: store.getJob(job.id) };
 }
 const paged = pagedLookupFixture();
@@ -117,6 +118,38 @@ function verificationFixture() {
   return { project, original: store.getJob(job.id), originalID };
 }
 const verification = verificationFixture();
+function rulePermissionFixture() {
+  let project = store.create("Affected feature repair", "Retain settled original answers", { providerID: "openai", modelID: "fixture" });
+  project = store.organize(project.id, project.revision, [{ type: "upsert", epicID: "departure", title: "Departure feature", purpose: "Departure rules", dependencies: [] }]);
+  const seed = store.beginJob(project.id, project.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+  store.finishJob(seed.id, { ...empty(), requirements: [{ epicID: "departure", statement: "Both players must arrive", rationale: "Original rule",
+    acceptance: ["Wait for both players"], sourceIDs: [project.sources[0]!.id] }] });
+  project = store.get(project.id); project = store.review(project.id, project.revision, project.requirements[0]!.id, "accepted", "Retain original intent");
+  const target = project.requirements[0]!;
+  const questions = store.beginJob(project.id, project.revision).job; store.claimJob(questions.id, Date.now() + 60000);
+  store.finishJob(questions.id, { ...empty(), questions: ["Allow a sole survivor?", "Require both living players?"].map(text => ({ epicID: "project", text,
+    evidenceIDs: [target.id], whyItMatters: "Settle behavior", options: [{ label: "Yes", consequence: "Keep" }, { label: "No", consequence: "Review" }] })) });
+  project = store.get(project.id);
+  for (const q of project.questions) store.enqueue(project.id, { id: randomUUID(), auto: false, research: false,
+    input: { type: "answer", questionID: q.id, questionText: q.text, sourceID: null, answer: { kind: "answer", text: "Allow the survivor exception and require both living players to arrive." } } });
+  store.applyQueued(project.id, store.submissions(project.id).map(s => s.id)); project = store.get(project.id);
+  const items = store.submissions(project.id), material = answerGroupMaterials(project, items), work = planAnswerGroup(material);
+  const job = store.beginJob(project.id, project.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  const draft = answerGroupDraftSchema.parse({ analysis: empty(), answers: items.map(s => ({ submissionID: s.id, outcome: "no-change", explanation: "Provisional saved draft" })) });
+  work.attempts = 1; acceptAnswerGroup(material, work, undefined, { answerGroupDraft: draft }, job);
+  work.attempts = 1; acceptAnswerGroup(material, work, draft, { answerGroupCheck: { valid: false, reason: `Rule ${target.id} still contradicts the original survivor answer` } }, job);
+  const context = answerGroupContext(material, work, draft); work.attempts = 3;
+  acceptAnswerGroup(material, work, draft, { answerGroupBlocked: { reason: `Permission to revise rule ${target.id} in departure feature is needed; the group scope is project.` } }, job);
+  store.checkpointAnswerGroup(job.id, work, context.manifest); store.failJob(job.id, "failed", "Repair needs exact rule permission");
+  for (const item of items) { item.status = "needs-attention"; item.jobID = job.id; store.saveSubmission(item); }
+  const state = store.workflow(project.id); state.enabled = true; state.paused = true; state.phase = "needs-decision";
+  state.current = { kind: "input", key: "0".repeat(64), jobIDs: [job.id], completed: true }; store.saveWorkflow(project.id, state);
+  const repaired = structuredClone(draft); repaired.analysis.specificationUpdates = { format: 1, changes: [{ type: "revise", requirementID: target.id,
+    statement: "Both living players must arrive; a sole survivor may depart", rationale: "Retain original answers", acceptance: ["Both living players arrive", "A sole survivor may depart"],
+    sourceIDs: [items[0]!.appliedSourceID!], reason: "Record the settled answer" }] };
+  return { project, target, original: store.getJob(job.id), repaired };
+}
+const rulePermission = rulePermissionFixture(), rulePermissionCalls: string[] = [];
 let p = store.create("Shared answer browser", "Retain each original human choice", { providerID: "openai", modelID: "fixture" });
 const seed = store.beginJob(p.id, p.revision).job; store.claimJob(seed.id, Date.now() + 60000);
 store.finishJob(seed.id, { ...empty(), questions: Array.from({ length: 5 }, (_, i) => ({ epicID: "project", text: `Keep behavior ${i}?`,
@@ -133,6 +166,11 @@ const app = await startApp({ store, connections, port: 0, adapter: { async analy
   const stage = context.manifest.answerGroupStage;
   if (stage) {
     calls.push(`${stage.phase}:${stage.step}`);
+    if (project.id === rulePermission.project.id) {
+      rulePermissionCalls.push(stage.phase); assert.ok(context.manifest.includedIDs.includes(rulePermission.target.id));
+      if (stage.phase === "repair") return { answerGroupRepair: rulePermission.repaired };
+      assert.equal(stage.phase, "check"); return { answerGroupCheck: { valid: true, reason: "Full repaired draft agrees with original evidence" } };
+    }
     if (project.id === verification.project.id) {
       assert.equal(stage.phase, "check"); assert.ok(context.manifest.includedIDs.includes(verification.originalID));
       return { answerGroupCheck: { valid: true, reason: "Exact original rule and current local constraints agree" } };
@@ -173,9 +211,10 @@ const browser = await chromium.launch();
 let diagnose: ReturnType<typeof browserDiagnostics> | undefined;
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } }); diagnose = browserDiagnostics(page);
+  const stopLegacyDetails = await legacyWorkflowDetails(page);
   await page.addInitScript(() => { localStorage.setItem("reqwizit-auto", "false"); localStorage.setItem("reqwizit-research", "false"); });
   await page.goto(app.origin); await (await workspaceMenu(page)).getByRole("button", { name: "Shared answer browser", exact: true }).click();
-  await page.locator(".queue-header").getByRole("button", { name: "Continue specification", exact: true }).click();
+  await page.locator(".topbar .queue-trigger").click();
   const queue = page.getByRole("dialog", { name: "Processing & queue", exact: true });
   await queue.getByRole("button", { name: "Continue specification", exact: true }).click();
   await expect.poll(() => store.workflow(p.id).phase).toBe("needs-decision");
@@ -186,11 +225,11 @@ try {
     await expect.poll(() => store.submissions(p.id).length).toBe(i + 1); assert.deepEqual(calls, []);
   }
   assert.ok(store.submissions(p.id).every(s => s.status === "queued"));
-  await page.locator(".queue-header").getByRole("button", { name: "Submit saved responses", exact: true }).click();
+  await page.locator(".topbar .queue-trigger").click();
+  await queue.getByRole("button", { name: "Submit saved responses", exact: true }).click();
   await expect.poll(() => calls.some(c => c.startsWith("check:"))).toBe(true);
   assert.equal(store.get(p.id).requirements.length, 0);
   const readCount = calls.filter(c => c.startsWith("read:")).length;
-  await page.locator(".topbar .queue-trigger").click();
   const shared = queue.getByRole("region", { name: "Shared answer integration", exact: true });
   await expect(shared).toContainText("Integrating 5 answers together");
   const selection = queue.getByRole("region", { name: "Response integration selection", exact: true });
@@ -255,6 +294,7 @@ try {
   await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
   await (await workspaceMenu(page)).getByRole("button", { name: "Oversized saved lookup", exact: true }).click();
   await page.locator(".topbar .queue-trigger").click();
+  await expect(flow).toContainText("recheck its exact layout");
   await flow.getByRole("button", { name: /^(Continue specification|Submit saved responses)$/ }).click();
   await expect(shared).toContainText("Evidence page 1 /");
   await expect(shared).toContainText("original");
@@ -322,7 +362,36 @@ try {
   assert.equal(verified.status, "completed", verified.diagnostic);
   assert.equal(verified.answerGroupWork!.receipts[verification.original.answerGroupWork!.receipts.length]!.attempt, 2);
   assert.ok(calls.slice(beforePreparation).every(c => c.startsWith("check:")));
-  console.log("Shared answer browser passed: repair, source/page recovery and evidence-complete verification; no calls on preparation/reload, no extra attempts, retained blocker/draft/read work, exact originals, full verification and mobile. Fixture only; no live inference.");
+  await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: "Affected feature repair", exact: true }).click();
+  await stopLegacyDetails();
+  await page.locator(".topbar .queue-trigger").click();
+  // Normal processing is simple by default; technical controls are collapsed.
+  const details = flow.locator("details").filter({ has: page.getByText("Processing details and advanced actions", { exact: true }) });
+  await expect(details).not.toHaveAttribute("open");
+  await expect(flow.getByRole("button", { name: "Allow repair of this affected rule", exact: true })).not.toBeVisible();
+  await expect(flow.getByRole("button", { name: "Play", exact: true })).toBeEnabled();
+  assert.deepEqual(rulePermissionCalls, []);
+  await page.reload(); await page.locator(".topbar .queue-trigger").click();
+  assert.deepEqual(rulePermissionCalls, []);
+  const ruleGrant = store.getJob(rulePermission.original.id);
+  assert.equal(store.get(rulePermission.project.id).requirements[0]!.statement, "Both players must arrive");
+  await flow.getByRole("button", { name: "Play", exact: true }).click();
+  await expect.poll(() => store.submissions(rulePermission.project.id).every(s => s.status === "completed"), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => store.workflowBusy(rulePermission.project.id)).toBe(false);
+  assert.deepEqual(rulePermissionCalls, ["repair", "check"]);
+  const ruleFinished = store.jobs(rulePermission.project.id).filter(j => j.answerGroupWork).at(-1)!;
+  assert.equal(ruleFinished.answerGroupWork!.receipts[ruleGrant.answerGroupWork!.receipts.length]!.attempt, 4);
+  assert.equal(store.get(rulePermission.project.id).requirements[0]!.statement, "Both living players must arrive; a sole survivor may depart");
+  assert.equal(store.getJob(rulePermission.original.id).answerGroupWork!.ruleRepairPermission, undefined);
+  assert.deepEqual(store.getJob(rulePermission.original.id).answerGroupWork!.receipts, ruleGrant.answerGroupWork!.receipts);
+  await flow.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect.poll(() => store.workflow(rulePermission.project.id).playPolicy!.stopped).toBe(true);
+  await page.reload(); await page.locator(".topbar .queue-trigger").click();
+  await expect(flow).toContainText("Stopped. Saved answers and progress are kept.");
+  assert.deepEqual(rulePermissionCalls, ["repair", "check"]);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  console.log("Shared answer browser passed: Play handles cross-feature repair without technical consent, collapsed advanced controls, no-call reload, preserved history, complete recheck and Stop/reload; legacy packing/source/page recovery and mobile. Fixture only; no live inference.");
 } catch (error) {
   console.error({ calls, workflow: store.workflow(p.id).message, jobs: store.jobs(p.id).filter(j => j.answerGroupWork).map(j => ({ status: j.status, diagnostic: j.diagnostic, attempts: j.answerGroupWork!.attempts })) });
   await diagnose?.(".reqwizit-state/browser-shared-answers-failure"); throw error;

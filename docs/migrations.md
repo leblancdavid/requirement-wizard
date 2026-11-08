@@ -1,5 +1,247 @@
 # Data migrations and upgrade compatibility
 
+## Play-owned specification processing (2026-11-08)
+
+**Source → target: SQLite 46 → 47; conditional portable format 21.** Startup is a
+transactional reader-boundary upgrade only: it rewrites no answers, projects, paid
+receipts, attempts, assessments, leases or workflow grants, and never arms work.
+Unsupported future automation formats reject transactionally; the saved original
+can be restored and startup retried without resetting the project. Assessment and
+semantic checkpoint identities remain unchanged. Old advanced APIs/protocols retain
+their original semantics; explicit **Play** is required to adopt the new policy.
+
+The user approved replacing routine technical permission management with Play,
+Pause and Stop. Play binds a shared-answer automation policy to the exact original
+receipt prefix, project revision, original support fingerprints and retained parent.
+Adoption/restoration of each intact cohort is transactional and checks the current
+project/settings revision. No historical request is refunded: the reported exhausted
+attempt 4 remains attempt 4; a later repair is attempt 5, not a fresh attempt 1.
+The new policy owns faithful `revise` reconciliation of existing original requirements
+across feature boundaries using concrete pinned answers and full detailed support.
+It cannot authorize new out-of-feature records, retirements, approvals or resolution
+of genuinely conflicting human decisions. Only conservatively recognized historical
+scope/missing-original blockers can be re-evaluated; unknown blockers stay retained.
+
+New shared requests are reserved durably before dispatch. Useful lookups count
+toward total usage rather than exhausting a four-request repair step. Internal bounds
+are 256 requests per adopted task, three consecutive failed reservations/validation
+attempts and the existing two accepted repairs plus unchanged packet/storage/page
+limits. Accepted progress clears only consecutive failures. Reopen, Pause, Stop and
+Play do not renew an exhausted task limit. The coordinator also stops at 256 reserved
+requests per run. Transport/auth errors and cancellation are not silently retried.
+Malformed output retries are bounded by the same durable consecutive-failure guard.
+
+Pause saves an in-flight shared reply and waits before dispatching another request;
+Stop cancels immediately and disarms the coordinator. Shutdown cancels and requires
+explicit Play after reopen. All original verification steps remain mandatory after
+repair. Portable 21 retains consent/automation parents and validates exact prefixes;
+downgraded envelopes reject without overwriting saved state. Machine-local workflow
+arming is not exported. The completed work remains dated evidence, not a fresh grant.
+
+Read-only preflight of the actual revision **3304** checkpoint passed on a cloned
+work object: all **102 receipts**, **24/34** original steps, **0 repairs** and
+**attempt 4** remained intact. The Play repair input measured **91,848 / 96,000**
+characters. No live database was migrated, no grant was persisted and no model call
+was made. Live repair quality, full live completion and desktop packaging remain
+unqualified. This slice simplifies shared-answer processing; other specialized
+engines still retain their earlier safety/recovery semantics and can stop technically.
+
+Deterministic coverage includes scope adoption without a checkbox, useful lookup
+followed by repair beyond attempt 4, mandatory full rechecks, no-progress exhaustion
+without renewal, cooperative Pause/owned Stop, repeated 46→47 reopen, portable
+roundtrip/downgrade rejection and unsupported-format rollback/retry. The normal browser
+fixture verifies collapsed advanced controls, Play without per-rule consent, preserved
+paid history, full recheck, Stop/reload and mobile. Legacy browser fixtures explicitly
+expand advanced actions to continue testing their old APIs.
+
+Verification: full `npm test` passed (930 pretests, 776 main tests, 165 posttests).
+Full `npm run test:browser`, including all postchecks, passed after updating the
+historical runners to use the new header labels or explicitly open advanced actions.
+The final focused 14-test permission/Play suite and 13-test queue/UI suite passed,
+as did type checking, UI build, CLI help smoke checks and diff checking. The focused
+tests additionally cover already-prepared saved cohorts, before-dispatch counters,
+self-origin Pause/resume and no-call recovery after atomic publication failure.
+No live provider requests or real project writes were used; desktop packaging was
+not rebuilt. Restart the development app (`npm run desktop` or `npm run app`), then
+use **Play**—do not reset the project or resubmit its settled answers.
+
+## Exact rule-scoped shared repair permission (2026-11-08)
+
+**Source → target: SQLite 45 → 46; conditional portable format 20.** The
+transactional reader-boundary migration rewrites no project, answer, paid reply,
+attempt, completed read/check, assessment or lease. Old work retains its original
+replay semantics. Only work carrying the new permission requires portable 20;
+older envelopes cannot carry it. Unsupported future permission formats reject
+without advancing the database version; correcting the unsupported input permits
+startup retry. Deterministic tests cover repeated startup, rollback/retry, retained
+grants, portable reopen/adoption and missing-parent/downgrade rejection.
+
+An eligible current-revision failed repair can offer **Allow repair of this affected
+rule** only when its retained scope/permission blocker names exactly one detailed,
+active accepted/needs-review original requirement outside the group's feature, and
+repair/request allowance remains. The browser displays the existing rule and
+feature. Its checkbox starts unchecked and resets when the preview changes or the
+view reloads. The separate authenticated consent action binds the job, requirement,
+complete saved work and project revision through an exact preview key, plus project
+revision/settings CAS. Opening the view, polling, Continue or the model's complaint
+cannot grant permission.
+
+The metadata-only grant preserves the blocker, whole draft, original receipt prefix,
+spent attempts and support fingerprints. It pauses without inference; **Continue
+specification** remains a separate action. Permission activates only after the saved
+blocker boundary and permits only `specificationUpdates.changes` / `type: revise`
+for the named existing rule. It does not authorize another target, new records,
+questions, retirement, refinements, pending changes, gameplay decisions, replacement
+wording approval or precedence between conflicting human decisions. Complete original
+support must fit; request inputs remain capped at 96,000 characters. Every original
+verification batch must pass after an actual repair. No attempts are added/refunded,
+including cancellation or malformed output on the final attempt. Checkpoint and
+publication require the retained failed consent parent and unchanged paid prefix;
+portable export retains that parent and import checks the relationship.
+
+A read-only preflight of the reported revision **3304** checkpoint passed using a
+cloned work object only: **101 receipts**, **24/34** original steps, **0 repairs**,
+**attempt 3**, **1 remaining attempt**; the permission-bound repair input measured
+**85,997 / 96,000** characters with the complete target/support present. The real
+database was opened read-only, not migrated or granted permission; no provider call
+was made. Live repair quality, full live completion, desktop packaging and the
+previous post-request latency remain unqualified.
+
+Focused deterministic tests and the shared browser fixture passed: exact consent,
+auth/CAS/staleness, scope/source restrictions, paid-prefix replay, final-attempt
+repair followed by rechecks, cancellation/malformed exhaustion and upgrade recovery.
+The browser additionally verifies unchecked/reload consent and no-call grant/reload.
+Full `npm test` and `npm run test:browser` (including postchecks), type checking,
+UI build and diff checking passed. The final focused seven-test permission run
+also covers atomic rollback/retry of an interrupted grant write and conservative
+preview eligibility. Tests use isolated fixtures only; these results do not qualify
+live provider repair quality or installed desktop packaging.
+Close/relaunch the development app (`npm run desktop` or `npm run app`) to load the
+updated backend and UI; then review/check the named rule permission, grant it, and
+continue explicitly. Do not reset the project or resubmit its settled answers.
+
+## Separately started shared packing continuation (2026-11-08)
+
+**Compatibility:** SQLite **45** and portable **19** remain unchanged. No stored
+format, assessment fingerprint, source provenance, paid ledger or completed result
+changes. This corrects explicit continuation eligibility and a derived browser offer;
+startup/reload/polling still cannot resume work or grant model calls.
+
+The first tight-read fix proved that the saved packet fits, but ordinary Continue
+still recovered only input jobs owned by its earlier coordinator step. A shared
+group started through separate response processing could remain `needs-attention`
+outside that job list. The saved-input decisions also hid Continue while the
+coordinator was armed and waiting, so the same historical packing notice remained
+visible without a fresh shared job. Restarting alone could not fix this routing bug.
+
+Explicit **Continue specification** can now adopt a separately started shared
+packing-only stop when the entire original cohort is active, nonconflicting,
+unresolved, linked to that exact failed job, current-revision and unexhausted.
+The job must retain an oversized context marker and exact replay must prove a newly
+fitting layout through `canPageAnswerGroup` **before** any response is requeued.
+Original grouping, stable submissions, paid replies and spent step attempts are
+retained; the next request spends the next attempt. Existing coordinator-owned
+interruption/repair/preparation recovery remains unchanged.
+
+The browser exposes a cheap structural **candidate** to keep Continue visible
+beside the retained size stop; it says that the exact layout will be rechecked.
+Polling does not perform expensive full receipt replay or treat the offer as model
+authority. The explicit action still performs exact freshness, replay, scope and
+packing validation. Genuine generic failures, exhausted stages, actual human
+blockers, changed inputs, archived/conflicting or incomplete cohorts do not receive
+this separate-job recovery. **Review changes** does not adopt these failed groups.
+An old completed input-loop pointer may reopen only for this explicit input
+continuation; no old completed job/verdict is rewritten. Restored inputs clear only
+the coordinator's obsolete review-checkpoint routing, not saved findings or checks.
+
+Read-only inspection of the reported state found database **45**, the same failed
+shared job at revision **3304**, **60 receipts**, **attempt 1**, and the old v8
+110,189-character failure envelope. Exact current-code packing preflight passed.
+All five active answers pointed to that job, while the coordinator's completed
+input pointer excluded it. There was no newer shared job. No workflow was started,
+no model was called and no user data was written during this inspection.
+
+If a storage interruption persists only part of the input-status restoration,
+those original already-applied `saved` members may remain beside the same group's
+`needs-attention` members. A subsequent explicit Continue revalidates the whole
+cohort and finishes restoration without regrouping or inference during the failed
+configuration. Different job links, new/unapplied input, conflicts or archival
+still prevent adoption. No background worker is armed by the interrupted action.
+
+Regression coverage exercises the separately started group, including a completed
+input-loop key, preserved paid prefix/next attempt, and a later genuine semantic
+blocker that cannot be revived. Negative cases cover generic failures, exhaustion,
+conflicts, archival, partial cohorts and review-only actions. UI checks cover the
+otherwise-hidden Continue button; the shared browser fixture now begins with a
+separately owned packing stop and verifies explicit continuation/Pause/reload.
+
+Verification: `npm test` passed (930 pretests, 776 main tests, 151 posttests), as
+did the full browser suite/postchecks, UI build, type checking and diff checking.
+Final focused continuation/UI tests additionally passed with an injected second
+status-write failure and explicit recovery; the shared browser runner passed
+again. No live model calls, user-data changes or installed desktop rebuilds were
+performed. Close/relaunch the development app (`npm run desktop` or `npm run app`)
+to load both updated backend code and UI; a browser refresh alone is insufficient.
+
+## Measured current-draft read units (2026-11-08)
+
+**Source → target: SQLite 44 → 45; conditional portable format 19.** This is a
+transactional reader-boundary migration only: startup changes no saved answers,
+drafts, paid receipts, attempts, schedules, completed work, assessments or leases.
+Formats 1–8 replay with their original rendering/packing semantics. Unsupported
+future formats reject transactionally and can retry after the unsupported input is
+resolved; downgraded portable envelopes cannot import v9 work as an older protocol.
+No assessment fingerprint, revision identity or existing verdict is invalidated.
+
+Read format **9** retains v8's full original-support closures, carried draft, pinned
+answers, paid coverage, atomic explicit joint comparisons and unchanged-action
+validation. Ordinary packing still reserves the full remaining growth to the
+24,000-character draft limit. If **one indivisible read unit** cannot fit solely
+because of that speculative reserve, and a complete draft already exists, it may
+stand alone using its **measured current input plus 128 metadata-reserve characters**.
+It is never joined to other optional units to fill that tight page. No original
+body or draft action is removed, summarized, truncated or approved by packing.
+
+This permits reading an exact comparison that actually fits today; it does **not**
+guarantee that every possible future draft will fit. Dispatch advice explains the
+tight capacity: retain unchanged actions, use Keep when no change is justified,
+and block honestly if an indispensable revised draft cannot fit. The existing
+24,000-character response bound and all attempt/page/work limits are unchanged.
+Every subsequent actual request is measured afresh against **96,000 characters**;
+a newly accepted bounded draft remains saved if a later packet genuinely cannot
+fit. All original verification steps remain mandatory before atomic publication.
+A tight read does not issue a verification verdict or establish unseen consistency.
+Actual current-input overflow still blocks without splitting the declared joint set.
+
+Compatible failed reserve-only stops use ordinary **Continue specification** after
+updating. The new layout appends to the authenticated old receipt prefix; it grants
+no fresh allowance and does not replay paid reads. Startup alone starts no model
+work. No reset, answer re-entry or new recovery grant is required.
+
+The reported revision-3304 checkpoint was inspected **read-only**. Its latest
+lookup requests six records with three detailed counterparts, expanding to 46
+original support records. V8 required **94,762 input + 15,299 speculative growth +
+128 metadata = 110,189 / 96,000 characters**. V9 packs the same complete comparison
+at **94,762 / 96,000**, as the first of two mandatory remaining read pages for that
+original step. All **60 receipts**, the complete **8,701-character draft**, **one
+spent attempt** and **1/34 completed original steps** replay unchanged. Normal
+continuation preflight passed. These are layout/replay checks, not model verdicts
+or a promise that future changes/joint requests fit. No live inference or user-data
+write/upgrade was performed.
+
+The 44→45 regression reproduces a genuine v8 reserve-only failure, preserves old
+payloads across repeated startup, rejects a future format with rollback/retry,
+retains the whole joint unit and paid prefix, decodes portable 19 and refuses a
+downgraded envelope. A one-request service continuation spends the next original
+attempt without publishing partial work; a larger genuinely unfit joint lookup
+remains saved and blocks rather than being split.
+
+Verification: `npm test` passed (930 pretests, 776 main tests, 143 posttests), along
+with type checking, focused v8/v9 upgrade/packing tests, the shared-answer browser
+runner and `git diff --check`. The real checkpoint's exact v9 layout/replay was
+checked locally without creating receipts, dispatching inference or writing user
+data. Live model behavior and installed desktop packaging were not exercised.
+
 ## Stable shared reads and exact staged planning (2026-11-07)
 
 **Source → target: SQLite 43 → 44; conditional portable format 18.** Startup is a

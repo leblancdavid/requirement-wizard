@@ -16,7 +16,7 @@ import { Pagination, PagedList, usePagination } from "./pagination.js";
 import "./pagination.css";
 import { ProcessingQueue } from "./processing-queue.js";
 import type { MaintenanceAction } from "./maintenance-controls.js";
-import type { WorkflowAction } from "./workflow-controls.js";
+import type { WorkflowConfigure } from "./workflow-controls.js";
 import { ProcessingSettings } from "./processing-settings.js";
 import type { WorkflowView } from "../service/workflow.js";
 import type { WorkflowDecision } from "../core/workflow.js";
@@ -170,8 +170,8 @@ function App() {
   const configureMaintenance = (action: MaintenanceAction) => void act(async () => {
     if (project && data) await api(`projects/${project.id}/maintenance`, { revision: project.revision, version: data.maintenance.version, action });
   }, "Updating automatic maintenance…");
-  const configureWorkflow = (action: WorkflowAction) => void act(async () => {
-    if (project && data?.workflow) await api(`projects/${project.id}/workflow`, { revision: project.revision, version: data.workflow.version, action });
+  const configureWorkflow: WorkflowConfigure = (action, ruleConsent) => void act(async () => {
+    if (project && data?.workflow) await api(`projects/${project.id}/workflow`, { revision: project.revision, version: data.workflow.version, action, ...(ruleConsent ? { ruleConsent } : {}) });
   }, "Updating project workflow…");
   const openWorkflowDecision = (decision: WorkflowDecision) => {
     if (!project) return;

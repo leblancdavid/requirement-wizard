@@ -33,6 +33,12 @@ test("Continue specification consistently distinguishes consent, waiting decisio
       policy: "coordinated-checks-v1", revision: 1, requirementIDs: [], specificationChecked: false, readyToImplement: false,
       explanation: "Checks pending", limitation: "No coding authority" } };
   assert.equal(mayContinueProject(workflow), true);
+  const packingStop: WorkflowView = { ...workflow, enabled: true, paused: false, suspended: false, phase: "needs-decision",
+    packingContinuation: true, answerBatch: { savedResponses: 0, waiting: true },
+    decisions: [{ kind: "input", id: "saved-group", title: "Saved shared work needs continuation" }] };
+  assert.equal(mayContinueProject(packingStop), true, "A packing continuation must not be hidden behind its saved-input issue");
+  assert.equal(mayContinueProject({ ...packingStop, packingContinuation: undefined }), false, "Other saved-input issues must still require resolution");
+  assert.match(renderToStaticMarkup(createElement(WorkflowControls, { workflow: packingStop, disabled: false, pending: false, configure() {} })), /recheck its exact layout/);
   const lastRun: NonNullable<WorkflowView["lastRun"]> = { format: 1, id: "00000000-0000-4000-8000-000000000001", grantID: "fixture",
     fromRevision: 1, fromSnapshotKey: "a".repeat(64), startedAt: "2026-11-07T00:00:00.000Z", initialUsed: 0, requests: 0, jobIDs: [], status: "interrupted" };
   const renderWindow = (continuingWindow: boolean) => renderToStaticMarkup(createElement(WorkflowControls, {
@@ -43,6 +49,10 @@ test("Continue specification consistently distinguishes consent, waiting decisio
   assert.doesNotMatch(renderWindow(true), /ended without a complete summary/);
   assert.match(renderWindow(false), /ended without a complete summary/);
   const consent = renderToStaticMarkup(createElement(WorkflowControls, { workflow, disabled: false, pending: false, configure() {} }));
+  const primaryControls = consent.split("<details>")[0]!;
+  assert.match(primaryControls, />Play<\/button>/); assert.match(primaryControls, />Pause<\/button>/); assert.match(primaryControls, />Stop<\/button>/);
+  assert.doesNotMatch(primaryControls, /Authorize|Allow repair|Continue specification|four-request|eight-request/);
+  assert.match(consent, /<details><summary>Processing details and advanced actions<\/summary>/, "Technical controls must start collapsed");
   assert.match(consent, /Continue specification lets the app guide your next steps/);
   assert.match(consent, /across all project areas/); assert.match(consent, /More actions/);
   assert.doesNotMatch(consent, /Resume processing/);

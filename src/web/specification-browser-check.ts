@@ -369,12 +369,12 @@ try {
     input: { type: "note", text: "Retained decision awaiting processing", epicID: "project" } });
   await page.reload(); await page.getByRole("tab", { name: /^Design/ }).click();
   await expect(stagedNotice.getByRole("button", { name: "Continue clarification", exact: true })).toBeDisabled();
-  await expect(page.locator(".queue-header-action", { hasText: "Process saved responses only" })).toBeVisible();
+  await expect(page.locator(".queue-header-action", { hasText: "Play" })).toBeVisible();
   assert.equal(calls, beforeContinuation, "Saved input priority never dispatches inference on render");
   waitingDecision.archivedAt = new Date().toISOString(); store.saveSubmission(waitingDecision);
   await page.reload();
   await page.getByRole("tab", { name: /^Specification/ }).click();
-  await expect(page.locator(".queue-header-action", { hasText: "Continue clarification" })).toBeVisible();
+  await expect(page.locator(".queue-header-action", { hasText: "Play" })).toBeVisible();
   await page.getByRole("button", { name: /^Processing & queue:/ }).click();
   const clarificationRecovery = page.getByRole("region", { name: "Saved clarification progress", exact: true });
   await expect(clarificationRecovery).toContainText("1 / 2 exact read/check steps saved");
@@ -422,8 +422,8 @@ try {
   await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: followup.name, exact: true }).click();
   const beforeReviewResume = calls;
   await page.reload(); assert.equal(calls, beforeReviewResume, "Opening the saved review cannot start inference");
-  await expect(page.locator(".queue-header-action", { hasText: "Review additional allowance" })).toBeVisible();
-  await page.getByRole("button", { name: "Review additional allowance", exact: true }).click();
+  await expect(page.locator(".queue-header-action", { hasText: "Play" })).toBeVisible();
+  await page.getByRole("button", { name: /^Processing & queue:/ }).click();
   const retained = page.getByRole("region", { name: "Additional saved-response allowance", exact: true });
   await expect(retained).toContainText("eight total");
   await expect(retained).toContainText("does not guarantee completion");
@@ -485,7 +485,8 @@ try {
     store.saveWorkflow(conflict.id, { ...store.workflow(conflict.id), enabled: true, paused: true, phase: "blocked", message: "Coordinator stopped before manual saved-response recovery." });
     await page.reload(); await (await workspaceMenu(page)).getByRole("button", { name: conflict.name, exact: true }).click();
     const conflictCalls: number = calls;
-    await page.locator(".queue-header-action", { hasText: "Process saved responses only" }).click();
+    await page.getByRole("button", { name: /^Processing & queue:/ }).click();
+    await page.getByRole("region", { name: "Process retained responses", exact: true }).getByRole("button", { name: "Process saved responses only", exact: true }).click();
     if (noQuestion) {
       await expect.poll(() => store.submissions(conflict.id).find((s) => s.id === conflictInput.id)!.status).toBe("completed");
       assert.equal(store.get(conflict.id).questions.length, 0);

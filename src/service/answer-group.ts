@@ -1,12 +1,13 @@
 import { StaleRevisionError, type Job, type Project, type Submission } from "../core/model.js";
 import { answerGroupMaterials, planAnswerGroup, replayAnswerGroup, answerGroupContext, acceptAnswerGroup,
-  answerGroupProgress, answerGroupLimits, answerGroupRequestLimit, answerGroupPublicationIDs, boundAnswerGroupEvidence, assertAnswerGroupPageCapacity } from "../core/answer-group.js";
+  answerGroupProgress, answerGroupLimits, answerGroupRequestLimit, answerGroupPublicationIDs, boundAnswerGroupEvidence, assertAnswerGroupPageCapacity,
+  adoptAnswerGroupPlay, answerGroupPlayLimits } from "../core/answer-group.js";
 import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import type { ProjectStore } from "../storage/store.js";
 
 export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, items: Submission[], options: {
-  signal: AbortSignal; continuous?: boolean; limits?: { requests: number; durationMs: number };
+  signal: AbortSignal; continuous?: boolean; play?: boolean; shouldPause?: () => boolean; limits?: { requests: number; durationMs: number };
   onProgress?: (message: string) => void; measurement?: DiscoveryMeasurement;
 }) {
   const local = <T>(phase: Parameters<DiscoveryMeasurement["submissionLocal"]>[0], run: () => T): T => options.measurement ? options.measurement.submissionLocal(phase, run) : run();
@@ -14,7 +15,8 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
   if (!previous && items.some(s => store.submissionHasJob(project.id, s.id, job.id)))
     throw new Error("Already-started answer work cannot be regrouped. Its original work and attempts are retained.");
   const material = local("preparation", () => answerGroupMaterials(project, items));
-  const work = local("preparation", () => previous?.answerGroupWork ? structuredClone(previous.answerGroupWork) : planAnswerGroup(material));
+  let work = local("preparation", () => previous?.answerGroupWork ? structuredClone(previous.answerGroupWork) : planAnswerGroup(material));
+  if (options.play && !previous) work = adoptAnswerGroupPlay(material, work, job);
   let { draft, blocked } = local("replay", () => replayAnswerGroup(material, work));
   const limits = options.limits ?? { requests: 32, durationMs: 900000 }, deadline = Date.now() + limits.durationMs;
   let calls = 0;
@@ -32,6 +34,9 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
       return local("publication", () => store.finishJob(job.id, draft!.analysis, timings));
     }
     if (blocked) throw new Error(`Shared answers need review: ${blocked} All original answers and completed work remain saved.`);
+    if (options.shouldPause?.()) return store.pauseAnswerGroup(job.id, "Processing paused. Current reply and completed work are saved; Play resumes.");
+    if (work.automation && (work.automation.requests >= answerGroupPlayLimits.requests || work.automation.failures >= answerGroupPlayLimits.failures))
+      throw new Error("Processing paused because this task is not making reliable progress or reached its safety limit. Saved answers, evidence and usage are retained; see Logs.");
     if (answerGroupProgress(work).phase === "repair" && answerGroupProgress(work).repairs >= answerGroupLimits.repairs)
       throw new Error("Shared draft reached its two-repair limit. Original answers, rejected drafts and paid evidence remain saved; human review is required.");
     if (!options.continuous && (calls >= limits.requests || Date.now() >= deadline))
@@ -42,6 +47,7 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
         : "Shared answer step used its four-request limit. Original answers, completed work and spent attempts are retained; continuation cannot reset the limit.");
     if (!calls) options.measurement?.planned(context);
     work.attempts++; calls++;
+    if (work.automation) { work.automation.requests++; work.automation.failures++; }
     local("checkpoint", () => store.checkpointAnswerGroup(job.id, work, context.manifest));
     const progress = answerGroupProgress(work);
     options.onProgress?.(progress.phase === "repair"
@@ -65,7 +71,17 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
       });
       const raw = await Promise.race([options.measurement ? options.measurement.request(request, context, signal) : request(), interrupted]);
       signal.throwIfAborted(); if (violation) throw violation;
-      const next = local("validation", () => acceptAnswerGroup(material, work, draft, raw, job)); draft = next.draft; blocked = next.blocked;
+      let next: ReturnType<typeof acceptAnswerGroup>;
+      try {
+        next = local("validation", () => acceptAnswerGroup(material, work, draft, raw, job));
+      } catch (error) {
+        // Invalid/repeated lookups and malformed drafts spend the same overall
+        // allowance, not a new repair grant. Never retry transport/auth/cancel.
+        if (work.automation && work.automation.failures < answerGroupPlayLimits.failures) continue;
+        throw error;
+      }
+      draft = next.draft; blocked = next.blocked;
+      if (work.automation && !blocked) work.automation.failures = 0;
       // Retain an accepted reply before detecting a concurrent edit. Publication
       // still checks current inputs; no stale response becomes a current decision.
       local("checkpoint", () => store.checkpointAnswerGroup(job.id, work, context.manifest));

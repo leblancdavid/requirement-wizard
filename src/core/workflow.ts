@@ -11,6 +11,7 @@ import { workflowScheduleSchema } from "./workflow-schedule.js";
 import { workflowStopSchema } from "./workflow-stop.js";
 
 export const workflowLimits = { requests: 8, durationMs: 300000, steps: 20 } as const;
+export const playRunRequestLimit = 256;
 /** Scheduling budget only; original package evidence, checks and retry limits stay authoritative. */
 export const questionBatchLimits = { target: 5, packages: 5, requests: 16, durationMs: 300000 } as const;
 const hash = (value: unknown) => bytesToHex(sha256(JSON.stringify(value)));
@@ -46,6 +47,7 @@ export const workflowSchema = z.object({ format: z.literal(1), version: z.number
   reviewPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   inputBatchPolicy: z.object({ format: z.literal(1) }).strict().optional(),
   questionBatchPolicy: z.object({ format: z.union([z.literal(1), z.literal(2)]) }).strict().optional(),
+  playPolicy: z.object({ format: z.literal(1), stopped: z.boolean() }).strict().optional(),
   questionBatch: z.discriminatedUnion("format", [questionBatchSchema, continuousQuestionBatchSchema])
     .refine(batch => (batch.state === "finished") === !!batch.reason, "Finished collection requires an explicit stopping reason.")
     .refine(batch => batch.format === 1 || batch.window.packages <= batch.packages && batch.window.requests <= batch.requests,

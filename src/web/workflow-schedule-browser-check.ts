@@ -6,7 +6,7 @@ import { dimensions } from "../core/epics.js";
 import { runDefinitionStages } from "../service/definition-stages.js";
 import { startApp } from "./server.js";
 import { OpenCodeCatalog } from "../runtime/catalog.js";
-import { workspaceMenu } from "./menu-check-helpers.js";
+import { workspaceMenu, legacyWorkflowDetails } from "./menu-check-helpers.js";
 import type { Analysis } from "../core/model.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
@@ -45,6 +45,7 @@ let app = await startApp(options);
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 960 } });
+  await legacyWorkflowDetails(page);
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.origin);
   await (await workspaceMenu(page)).getByRole("button", { name: "Decision-aware browser fixture", exact: true }).click();

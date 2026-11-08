@@ -76,7 +76,7 @@ try {
   await page.screenshot({ path: ".reqwizit-state/browser-definition-refresh-progress-mobile.png", fullPage: true });
   await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
   await page.setViewportSize({ width: 1280, height: 960 });
-  await page.locator(".queue-header").getByRole("button", { name: "Pause assessment", exact: true }).click();
+  await page.locator(".queue-header").getByRole("button", { name: "Stop", exact: true }).click();
   await expect.poll(() => store.jobs(project.id).at(-1)!.status).toBe("cancelled");
   const paused = store.jobs(project.id).at(-1)!;
   assert.equal(paused.definitionWork!.receipts.length, 1); assert.equal(paused.definitionWork!.attempts, 1);

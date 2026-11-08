@@ -1,5 +1,28 @@
 # Architecture outline
 
+Play processing appends a versioned automation policy at an authenticated shared
+receipt boundary; it does not reinterpret historical hashes or reset spent attempts.
+The workflow owns technical adoption, cross-feature existing-rule reconciliation
+and a run safety ceiling. Shared-work reservations distinguish useful evidence
+progress from consecutive failed requests; task limits survive reopen. SQLite 47 /
+conditional portable 21 guard this reader capability. Earlier formats retain their
+original replay semantics. See [migration](migrations.md#play-owned-specification-processing-2026-11-08).
+
+Rule-scoped shared repair consent is app-owned metadata, not model authority.
+The exact preview/revision/CAS grant pins one existing requirement, feature, original
+support and paid prefix; storage/publication and portable import require its
+retained consent parent. Activation at the original blocker boundary leaves earlier
+receipt hashes unchanged. Only the named rule's `revise` may cross feature scope;
+all post-repair verification stays mandatory. SQLite 46 / conditional portable 20
+guard this capability without rewriting older work. See [compatibility](migrations.md#exact-rule-scoped-shared-repair-permission-2026-11-08).
+
+Read format 9 preserves ordinary maximum-draft headroom but allows a standalone
+indivisible unit with an existing whole draft when only speculative growth reserve
+prevents packing. Every actual input remains capped at 96,000 characters; later
+drafts are independently measured and can still block. SQLite 45 / portable 19 guard
+this packing capability without changing older receipt semantics. See
+[measured current-draft reads](migrations.md#measured-current-draft-read-units-2026-11-08).
+
 Shared read format 8 derives completed coverage from authenticated paid page/layout
 prefixes and packs recursive original-support closures. Explicit joint comparisons
 remain atomic, unchanged draft actions survive, and every original check remains

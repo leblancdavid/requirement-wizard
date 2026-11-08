@@ -16,6 +16,7 @@ const sourceSupportSchema = z.object({ format: z.literal(1), fromReceipt: z.numb
 }).strict();
 export const answerGroupLimits = { answers: 5, batches: 32, characters: 96000, draft: 24000, attempts: 4, repairs: 2,
   pagePlans: 128, pagesPerStep: 64, completedPages: 256, receipts: 1024, storedBytes: 2097152 } as const;
+export const answerGroupPlayLimits = { requests: 256, failures: 3 } as const;
 export class AnswerGroupCapacityError extends Error {
   constructor(kind: "page layouts" | "pages in one layout" | "pages for this original step" | "completed pages" | "saved replies" | "saved work bytes", used: number, limit: number) {
     super(`Shared answer work reached its bounded ${kind} limit (${used} / ${limit}). This is a work-capacity stop, not proof that human constraints exceed the input budget. No additional model call was made; original answers, completed work and spent attempts are retained.`);
@@ -57,11 +58,11 @@ export function answerGroupLookupInventory(context: ContextPack) {
     throw new Error("Shared answer lookup inventory is inconsistent. No lookup permission was inferred.");
   const scheduled = new Set(context.answerGroupPagingAdvice?.scheduledIDs ?? []);
   if ([...scheduled].some(id => !omittedIDs.includes(id))) throw new Error("Shared scheduled evidence must be omitted from this page, not unavailable or already detailed.");
-  return { loadedIDs: [...includedIDs], requestableIDs: context.answerGroupPagingAdvice?.format === 8 || (context.answerGroupPagingAdvice?.format ?? 0) >= 4 && context.manifest.answerGroupStage?.phase === "check" ? [...omittedIDs] : omittedIDs.filter(id => !scheduled.has(id)), scheduledIDs: [...scheduled] };
+  return { loadedIDs: [...includedIDs], requestableIDs: (context.answerGroupPagingAdvice?.format ?? 0) >= 8 || (context.answerGroupPagingAdvice?.format ?? 0) >= 4 && context.manifest.answerGroupStage?.phase === "check" ? [...omittedIDs] : omittedIDs.filter(id => !scheduled.has(id)), scheduledIDs: [...scheduled] };
 }
 export const answerGroupStageSchema = z.object({ policy: z.literal("exact-answer-group-v1"), planKey: key,
   step: z.number().int().min(0).max(64), phase: z.enum(["read", "check", "repair"]) }).strict();
-const evidencePagesSchema = z.object({ format: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8)]), fromReceipt: z.number().int().min(0).max(1024), prefixKey: key,
+const evidencePagesSchema = z.object({ format: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9)]), fromReceipt: z.number().int().min(0).max(1024), prefixKey: key,
   step: z.number().int().min(0).max(63), phase: z.enum(["read", "check"]),
   pages: z.array(z.array(z.string().min(1)).min(1)).min(1).max(32),
 }).strict().refine(p => p.format !== 1 || p.pages.length >= 2, "Legacy evidence plans require at least two pages.");
@@ -76,8 +77,17 @@ export const answerGroupWorkSchema = z.object({ format: z.literal(1), policy: z.
   verificationRecovery: z.object({ format: z.literal(1), fromReceipt: z.number().int().positive().max(1024), prefixKey: key,
     atRevision: z.number().int().positive(), sourceJobID: z.string().uuid(), priorAttempts: z.number().int().min(1).max(8),
     records: z.array(z.object({ id: z.string().min(1), key }).strict()).min(1).max(512) }).strict().optional(),
-  attempts: z.number().int().min(0).max(8), receipts: z.array(z.object({
-    step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(8),
+  ruleRepairPermission: z.object({ format: z.literal(1), fromReceipt: z.number().int().positive().max(1024), prefixKey: key,
+    atRevision: z.number().int().positive(), sourceJobID: z.string().uuid(), grantID: z.string().uuid(), priorAttempts: z.number().int().min(1).max(8),
+    requirementID: z.string().uuid(), epicID: z.string().min(1), targetKey: key, epicKey: key,
+    records: z.array(z.object({ id: z.string().min(1), key }).strict()).min(1).max(512) }).strict().optional(),
+  automation: z.object({ format: z.literal(1), fromReceipt: z.number().int().min(0).max(1024), prefixKey: key,
+    sourceJobID: z.string().uuid(), atRevision: z.number().int().positive(), priorAttempts: z.number().int().min(0).max(8),
+    resumedBlocker: z.enum(["scope", "missing-originals"]).optional(),
+    requests: z.number().int().min(0).max(answerGroupPlayLimits.requests), failures: z.number().int().min(0).max(answerGroupPlayLimits.failures),
+    records: z.array(z.object({ id: z.string().min(1), key }).strict()).max(512) }).strict().optional(),
+  attempts: z.number().int().min(0).max(answerGroupPlayLimits.requests + 8), receipts: z.array(z.object({
+    step: z.number().int().min(0).max(63), contextKey: key, attempt: z.number().int().min(1).max(answerGroupPlayLimits.requests + 8),
     jobID: z.string().uuid(), atRevision: z.number().int().positive(), model: z.object({ providerID: z.string(), modelID: z.string() }).strict(),
     response: answerGroupResponseSchema,
   }).strict()).max(answerGroupLimits.receipts) }).strict();
@@ -148,7 +158,8 @@ export function assertAnswerGroupPageCapacity(w: AnswerGroupProgressInput, pendi
 }
 export const answerGroupStep = (w: AnswerGroupWork) => answerGroupProgress(w).completed;
 const supportActive = (w: AnswerGroupWork) => !!w.sourceSupport && w.receipts.length >= w.sourceSupport.fromReceipt;
-export const answerGroupRequestLimit = (w: AnswerGroupWork) => (supportActive(w) && w.sourceSupport!.recovery
+export const answerGroupPlayActive = (w: AnswerGroupWork) => !!w.automation && w.receipts.length >= w.automation.fromReceipt;
+export const answerGroupRequestLimit = (w: AnswerGroupWork) => answerGroupPlayActive(w) ? answerGroupPlayLimits.requests + 8 : (supportActive(w) && w.sourceSupport!.recovery
   && !w.receipts.slice(w.sourceSupport!.fromReceipt).some(r => completes(r.response)))
   || (w.pageRecovery && w.receipts.length >= w.pageRecovery.fromReceipt && !w.receipts.slice(w.pageRecovery.fromReceipt).some(r => completes(r.response)))
     ? 8 : answerGroupLimits.attempts;
@@ -172,6 +183,12 @@ function originalSupport(project: Project, originalIDs: Set<string>) {
   return records.filter(r => added.has(r.record.id)).map(r => ({ id: r.record.id, key: hash(r.record) }));
 }
 function supportRecords(m: AnswerGroupMaterials, w: AnswerGroupWork) {
+  if (answerGroupPlayActive(w)) {
+    const expected = originalSupport(m.project, new Set(m.evidenceIDs));
+    if (JSON.stringify(w.automation!.records) !== JSON.stringify(expected)) throw new Error("Saved original supporting evidence changed. Progress is retained.");
+    const ids = new Set(expected.map(r => r.id));
+    return (["sources", "questions", "requirements", "research"] as const).flatMap(field => m.project[field].filter(r => ids.has(r.id)).map(record => ({ field, record })));
+  }
   if (!supportActive(w)) return [];
   const keys = w.sourceSupport!.records;
   if (new Set(keys.map(r => r.id)).size !== keys.length) throw new Error("Original support contains duplicate records.");
@@ -182,8 +199,9 @@ function supportRecords(m: AnswerGroupMaterials, w: AnswerGroupWork) {
 }
 export function answerGroupPublicationIDs(m: AnswerGroupMaterials, w: AnswerGroupWork) {
   const support = supportRecords(m, w);
-  if (!w.sourceSupport?.recovery) return [...m.evidenceIDs, ...support.map(r => r.record.id)];
+  if (!w.sourceSupport?.recovery || answerGroupPlayActive(w)) return [...m.evidenceIDs, ...support.map(r => r.record.id)];
   const detailed = new Set(m.project.requirements.filter(r => w.sourceSupport!.targets.includes(r.id)).flatMap(r => r.sourceIDs));
+  if (rulePermissionActive(w)) for (const record of w.ruleRepairPermission!.records) detailed.add(record.id);
   for (const r of w.receipts.slice(w.sourceSupport.fromReceipt)) if ("answerGroupEvidence" in r.response)
     for (const id of r.response.answerGroupEvidence.recordIDs) detailed.add(id);
   for (const s of m.project.sources.filter(s => detailed.has(s.id))) if (s.questionID) detailed.add(s.questionID);
@@ -264,6 +282,65 @@ export function answerGroupMaterials(project: Project, items: Submission[]) {
     materialKey: hash({ policy: "exact-answer-group-v1", base, records, pins: [...pins], model }) };
 }
 export type AnswerGroupMaterials = ReturnType<typeof answerGroupMaterials>;
+const rulePermissionActive = (w: AnswerGroupWork) => !!w.ruleRepairPermission && w.receipts.length >= w.ruleRepairPermission.fromReceipt;
+
+/** A model's scope complaint proposes a candidate only. This is neither product
+ * approval nor authority to issue a grant; exact replay is required on consent. */
+export function answerGroupRuleRepairPreview(project: Project, job: Pick<Job, "id" | "status" | "expectedRevision" | "answerGroupWork" | "context">) {
+  const w = job.answerGroupWork, last = w?.receipts.at(-1)?.response;
+  if (!w || w.ruleRepairPermission || job.status !== "failed" || job.expectedRevision !== project.revision
+    || w.attempts >= answerGroupRequestLimit(w) || answerGroupProgress(w).phase !== "repair"
+    || answerGroupProgress(w).repairs >= answerGroupLimits.repairs || !last || !("answerGroupBlocked" in last)
+    || !/permission|permitted|permits|scope/i.test(last.answerGroupBlocked.reason)) return undefined;
+  const detailed = new Set(job.context?.includedIDs), original = new Set([...w.batches.flat(), ...w.sourceSupport?.records.map(r => r.id) ?? []]);
+  const targets = project.requirements.filter(r => r.epicID !== w.epicID && original.has(r.id) && detailed.has(r.id)
+    && ["accepted", "needs-review"].includes(r.status) && last.answerGroupBlocked.reason.includes(r.id)
+    && project.epics.some(e => e.id === r.epicID && !e.archived));
+  if (targets.length !== 1) return undefined;
+  const target = targets[0]!, epic = project.epics.find(e => e.id === target.epicID)!;
+  return { jobID: job.id, requirementID: target.id, epicID: epic.id, statement: target.statement, feature: epic.title,
+    remainingAttempts: answerGroupRequestLimit(w) - w.attempts,
+    previewKey: hash(["rule-repair-consent-v1", project.revision, job.id, w, target, epic]) };
+}
+export type AnswerGroupRuleRepairConsent = Pick<NonNullable<ReturnType<typeof answerGroupRuleRepairPreview>>, "jobID" | "requirementID" | "previewKey">;
+/** Technical recovery only. A new processing policy never resolves human intent. */
+function playTechnicalBlock(project: Project, job: Job): "scope" | "missing-originals" | undefined {
+  const w = job.answerGroupWork!, last = w.receipts.at(-1)?.response;
+  if (!last || !("answerGroupBlocked" in last) || /conflict|ambig|contradictory human|choose.*precedence/i.test(last.answerGroupBlocked.reason)) return undefined;
+  const unexhausted = { ...job, answerGroupWork: { ...w, attempts: Math.min(w.attempts, 3) } };
+  if (answerGroupRuleRepairPreview(project, unexhausted)) return "scope";
+  if (answerGroupVerificationPreview(project, unexhausted)) return "missing-originals";
+  if (/missing|unavailable|omitted/i.test(last.answerGroupBlocked.reason) && /original|source|evidence/i.test(last.answerGroupBlocked.reason)
+    && answerGroupRecoveryPreview(project, { ...job, answerGroupWork: { ...w, attempts: 4 } })) return "missing-originals";
+  return undefined;
+}
+export function adoptAnswerGroupPlay(m: AnswerGroupMaterials, w: AnswerGroupWork, job: Job): AnswerGroupWork {
+  if (w.automation) return structuredClone(w); // Play never renews a safety stop.
+  const before = replayAnswerGroup(m, w), resumedBlocker = before.blocked ? playTechnicalBlock(m.project, { ...job, answerGroupWork: w }) : undefined;
+  if (before.blocked && !resumedBlocker) throw new Error("A saved product or unclassified blocker still needs review. Play does not resolve it.");
+  const next = structuredClone(w);
+  next.automation = { format: 1, fromReceipt: w.receipts.length, prefixKey: receiptPrefixKey(w.receipts), sourceJobID: job.id,
+    atRevision: m.project.revision, priorAttempts: w.attempts, requests: 0, failures: 0,
+    ...(resumedBlocker ? { resumedBlocker } : {}), records: originalSupport(m.project, new Set(m.evidenceIDs)) };
+  replayAnswerGroup(m, next);
+  boundAnswerGroupEvidence(m, next, before.draft);
+  return next;
+}
+export function authorizeAnswerGroupRuleRepair(m: AnswerGroupMaterials, w: AnswerGroupWork, job: Job, consent: AnswerGroupRuleRepairConsent, grantID: string) {
+  const preview = answerGroupRuleRepairPreview(m.project, job);
+  if (!preview || consent.jobID !== job.id || consent.requirementID !== preview.requirementID || consent.previewKey !== preview.previewKey
+    || hash(answerGroupWorkSchema.parse(w)) !== hash(answerGroupWorkSchema.parse(job.answerGroupWork))) throw new Error("The exact rule-repair preview changed or is unavailable. No permission was granted.");
+  const before = replayAnswerGroup(m, w);
+  if (!before.blocked || !before.draft) throw new Error("Rule permission requires the retained blocked repair and complete draft.");
+  const catalog = [...m.records, ...supportRecords(m, w)], records = originalEvidenceClosure(catalog, [preview.requirementID]);
+  const next = structuredClone(w), target = m.project.requirements.find(r => r.id === preview.requirementID)!, epic = m.project.epics.find(e => e.id === target.epicID)!;
+  next.ruleRepairPermission = { format: 1, fromReceipt: w.receipts.length, prefixKey: receiptPrefixKey(w.receipts),
+    atRevision: m.project.revision, sourceJobID: job.id, grantID, priorAttempts: w.attempts, requirementID: target.id, epicID: target.epicID,
+    targetKey: hash(target), epicKey: hash(epic), records: records.map(r => ({ id: r.record.id, key: hash(r.record) })) };
+  replayAnswerGroup(m, next);
+  answerGroupContext(m, next, before.draft); // Never grant a scope whose complete repair evidence cannot fit.
+  return next;
+}
 /** Exact originals directly referenced/changed by the frozen draft, plus original
  * requirement support and linked question/current-answer bodies. Never summaries. */
 function verificationCatalogue(catalog: AnswerGroupMaterials["records"], draft?: AnswerGroupDraft) {
@@ -312,7 +389,7 @@ function completedReadUnits(m: AnswerGroupMaterials, w: AnswerGroupWork, step: n
     const plan = activeEvidencePages(w, step, "read", index);
     const seeds = plan ? plan.pages[evidencePageIndex(w, plan, index)]! : w.batches[step % w.batches.length]!;
     for (const id of seeds) covered.add(id);
-    if (plan?.format === 8) for (const r of originalEvidenceClosure([...m.records, ...supportRecords(m, w)], seeds)) covered.add(r.record.id);
+    if (plan && plan.format >= 8) for (const r of originalEvidenceClosure([...m.records, ...supportRecords(m, w)], seeds)) covered.add(r.record.id);
   }
   return covered;
 }
@@ -331,19 +408,25 @@ function renderAnswerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, d
   const extra = w.receipts.slice(pagePlan?.fromReceipt ?? 0).filter(r => r.step === step).flatMap(r => "answerGroupEvidence" in r.response ? r.response.answerGroupEvidence.recordIDs : []);
   const ids = new Set([...m.pins, ...(packing?.ids ?? [...(pagePlan ? pagePlan.pages[page]! : w.batches[step % w.batches.length]!), ...extra])]);
   const support = supportRecords(m, w), catalog = [...m.records, ...support];
-  const scopedRead = pagePlan?.format === 8 && progress.phase === "read";
-  const scoped = (pagePlan?.format === 7 || pagePlan?.format === 8) && progress.phase === "check";
+  if (answerGroupPlayActive(w) && progress.phase === "repair") {
+    const feedback = [...cycle].reverse().find(r => "answerGroupCheck" in r.response && !r.response.answerGroupCheck.valid)?.response;
+    for (const target of m.project.requirements.filter(r => catalog.some(c => c.record.id === r.id)
+      && (JSON.stringify(feedback) ?? "").includes(r.id))) for (const record of originalEvidenceClosure(catalog, [target.id])) ids.add(record.record.id);
+  }
+  if (rulePermissionActive(w) && progress.phase === "repair") for (const r of originalEvidenceClosure(catalog, [w.ruleRepairPermission!.requirementID])) ids.add(r.record.id);
+  const scopedRead = (pagePlan?.format ?? 0) >= 8 && progress.phase === "read";
+  const scoped = (pagePlan?.format ?? 0) >= 7 && progress.phase === "check";
   const unitIDs = scoped ? [...ids].filter(id => !m.pins.has(id)) : [];
   if (scopedRead) for (const r of originalEvidenceClosure(catalog, ids)) ids.add(r.record.id);
   if (pagePlan && pagePlan.format >= 4 && progress.phase === "check") {
     for (const r of scoped ? originalEvidenceClosure(catalog, ids) : verificationRecords(m, w, draft)) ids.add(r.record.id);
     if (pagePlan.format === 4) for (const id of jointComparisonIDs(w, step)) ids.add(id);
   }
-  if (supportActive(w)) {
-    if (progress.phase === "repair") for (const id of w.sourceSupport!.targets) ids.add(id);
+  if (supportActive(w) || answerGroupPlayActive(w)) {
+    if (progress.phase === "repair") for (const id of w.sourceSupport?.targets ?? []) ids.add(id);
     // An old paid batch must not suddenly acquire the entire background's raw
     // history. Recovery pins the exact edit targets; other support remains loadable.
-    const targets = w.sourceSupport!.recovery ? new Set(progress.phase === "repair" ? w.sourceSupport!.targets : []) : ids;
+    const targets = w.sourceSupport?.recovery && !answerGroupPlayActive(w) ? new Set(progress.phase === "repair" ? w.sourceSupport.targets : []) : ids;
     const supportSources = new Set(support.filter(r => r.field === "sources" && ids.has(r.record.id)).map(r => r.record.id));
     for (const r of m.project.requirements.filter(r => targets.has(r.id))) for (const id of r.sourceIDs) { ids.add(id); supportSources.add(id); }
     for (const s of m.project.sources.filter(s => supportSources.has(s.id))) if (s.questionID) ids.add(s.questionID);
@@ -354,6 +437,11 @@ function renderAnswerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, d
   let data: unknown = { ...m.base, ...Object.fromEntries(["sources", "questions", "requirements", "research"]
     .map(field => [field, records.filter(r => r.field === field).map(r => r.record)])), draft: draft ?? null,
     answerGroup: { phase: progress.phase, step, batches: w.batches.length, availableEvidenceIDs: available,
+      ...(answerGroupPlayActive(w) ? { processingPolicy: { format: 1,
+        instruction: "Play handles evidence loading, packing and faithful reconciliation across feature boundaries. Features organize records, not edit permissions. Revise existing original requirements only using the pinned concrete human answers and complete detailed original support. Do not add out-of-feature records, retire rules, reverse settled choices, approve proposals or choose precedence between conflicting human decisions. Ask only genuine product questions; never ask the user for technical scope permission, evidence loading or attempt allowances. Load only indispensable missing originals; accepted lookups are progress, not failed repairs. Every original verification batch must pass after repair." } } : {}),
+      ...(rulePermissionActive(w) && !answerGroupPlayActive(w) ? { ruleRepairPermission: { requirementID: w.ruleRepairPermission!.requirementID, epicID: w.ruleRepairPermission!.epicID,
+        instruction: "The human permits revising ONLY this existing out-of-feature rule in this saved group, using the original concrete answers. This is scope permission, not approval of any wording, a new product decision, conflict precedence or extra attempts. No new records, question edits, retirement, refinements or other out-of-feature changes are permitted. The original blocker remains dated feedback, not presumed resolved. Preserve settled intent; block real ambiguity. After repair every original verification batch must pass again.",
+        priorBlocker: w.receipts[w.ruleRepairPermission!.fromReceipt - 1]!.response } } : {}),
       ...(pagePlan ? { evidencePage: { number: page + 1, total: pagePlan.pages.length,
         ...(scopedRead ? { readingScope: { unitRecordIDs: [...ids].filter(id => !m.pins.has(id)),
           instruction: "Read only these exact original units and their complete source/question/answer support. Retain carried draft actions unchanged unless this page supplies evidence for a change. Previously completed pages remain read across relayouts, not approved or available as missing bodies. Do not reload them merely to reconstruct every draft action. For a specific indispensable joint comparison, request missing IDs with withRecordIDs naming the currently detailed counterparts. If that whole comparison cannot fit, block rather than cycle. All original verification steps remain mandatory." } } : {}),
@@ -395,15 +483,15 @@ function renderAnswerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, d
 }
 /** Split only an unfinished overflowing read/check. The original schedule and paid
  * receipts never change. Each page must finish before the original step can finish. */
-export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft, format?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8) {
+export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft, format?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9) {
   const progress = answerGroupProgress(w);
-  format ??= progress.phase === "read" ? 8 : 7;
+  format ??= progress.phase === "read" ? 9 : 7;
   const context = renderAnswerGroupContext(m, w, draft, undefined, { unbounded: true });
   const prior = activeEvidencePages(w, progress.completed, progress.phase);
-  const scopedRead = format === 8 && progress.phase === "read";
+  const scopedRead = format >= 8 && progress.phase === "read";
   const scoped = format >= 7 && progress.phase === "check";
   const originals = scoped ? verificationRecords(m, w, draft).map(r => r.record.id) : [];
-  const needsUnits = (scopedRead && prior?.format !== 8 || scoped && prior?.format !== format) && [...w.batches[progress.completed % w.batches.length]!, ...originals].some(id => !m.pins.has(id));
+  const needsUnits = (scopedRead && prior?.format !== format || scoped && prior?.format !== format) && [...w.batches[progress.completed % w.batches.length]!, ...originals].some(id => !m.pins.has(id));
   if (context.manifest.characters <= answerGroupLimits.characters && !(format !== 1 && prior?.format === 1)
     && !needsUnits && !(format >= 4 && !scoped && progress.phase === "check" && (prior && prior.format < 4
       || verificationRecords(m, w, draft).some(r => !context.manifest.includedIDs.includes(r.record.id))))) return undefined;
@@ -412,7 +500,7 @@ export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerG
   const requested = format !== 1 ? w.receipts.slice(lastCompleted + 1).filter(r => r.step === progress.completed && "answerGroupEvidence" in r.response)
     .slice().reverse().flatMap(r => "answerGroupEvidence" in r.response ? r.response.answerGroupEvidence.recordIDs : []) : [];
   const covered = scopedRead ? completedReadUnits(m, w, progress.completed) : new Set<string>();
-  const explicitJoint = format === 8 ? jointComparisonIDs(w, progress.completed) : [];
+  const explicitJoint = format >= 8 ? jointComparisonIDs(w, progress.completed) : [];
   const ids = [...new Set([...requested, ...context.manifest.includedIDs, ...(prior?.pages.slice(evidencePageIndex(w, prior) + 1).flat() ?? []), ...originals])]
     .filter(id => !m.pins.has(id) && (!covered.has(id) || explicitJoint.includes(id)));
   const reserve = progress.phase === "read" ? Math.max(0, answerGroupLimits.draft - JSON.stringify(draft ?? null).length) : 0;
@@ -421,11 +509,17 @@ export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerG
   const packet = (selected: string[]) => renderAnswerGroupContext(m, w, draft, undefined, { ids: selected, unbounded: true,
     ...(format !== 1 ? { pagePlan: { ...base, pages: [selected, ids.filter(id => !selected.includes(id))] } } : {}) });
   const fits = (selected: string[]) => packet(selected).manifest.characters + reserve + (format === 1 ? 512 : 128) <= answerGroupLimits.characters;
+  // Preserve the ordinary full-growth reserve. An indivisible read unit with an
+  // existing complete draft may instead stand alone at its measured current size.
+  // This never splits a declared joint set or authorizes a later oversized input.
+  const tightRead = format === 9 && progress.phase === "read" && !!draft;
+  const fitsCurrent = (selected: string[]) => packet(selected).manifest.characters + 128 <= answerGroupLimits.characters;
   const unfit = (selected: string[]) => {
     if (format < 3) return new ContextBudgetError(context.manifest);
-    const actual = packet(selected).manifest, error = new ContextBudgetError({ ...actual, characters: actual.characters + reserve + 128 });
+    const actual = packet(selected).manifest, requiredReserve = tightRead ? 0 : reserve;
+    const error = new ContextBudgetError({ ...actual, characters: actual.characters + requiredReserve + 128 });
     error.message = format >= 6
-      ? `Exact shared evidence cannot fit the safe dispatch bound: ${actual.characters.toLocaleString("en-US")} characters of complete input + ${reserve.toLocaleString("en-US")} draft reserve + 128 page-metadata reserve = ${error.manifest.characters.toLocaleString("en-US")} / ${answerGroupLimits.characters.toLocaleString("en-US")} characters. This packing stop does not establish that human constraints alone are oversized. No additional model call was made; original answers, paid replies and spent attempts are retained.`
+      ? `Exact shared evidence cannot fit the safe dispatch bound: ${actual.characters.toLocaleString("en-US")} characters of complete input + ${requiredReserve.toLocaleString("en-US")} draft reserve + 128 page-metadata reserve = ${error.manifest.characters.toLocaleString("en-US")} / ${answerGroupLimits.characters.toLocaleString("en-US")} characters. This packing stop does not establish that human constraints alone are oversized. No additional model call was made; original answers, paid replies and spent attempts are retained.`
       : `One complete shared evidence unit cannot fit beside the pinned answers, linked support, full draft and page-metadata reserve. ${error.message}`;
     return error;
   };
@@ -442,9 +536,11 @@ export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerG
   const units = [...(joint.length ? [joint] : []), ...ids.filter(id => !jointSet.has(id)).map(id => [id])];
   for (const unit of units) {
     if (!fits([...page, ...unit])) {
-      if (!page.length) throw unfit(unit);
-      pages.push(page); page = [];
-      if (!fits(unit)) throw unfit(unit);
+      if (page.length) { pages.push(page); page = []; }
+      if (!fits(unit)) {
+        if (tightRead && fitsCurrent(unit)) { pages.push([...unit]); continue; }
+        throw unfit(unit);
+      }
     }
     page.push(...unit);
   }
@@ -459,7 +555,7 @@ export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerG
   }
   return evidencePagesSchema.parse({ ...base, pages });
 }
-export function boundAnswerGroupEvidence(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft, format?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8) {
+export function boundAnswerGroupEvidence(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft, format?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9) {
   const plan = w.attempts < answerGroupRequestLimit(w) ? planAnswerGroupEvidencePages(m, w, draft, format) : undefined;
   if (plan) w.evidencePages = [...w.evidencePages ?? [], plan];
   return answerGroupContext(m, w, draft);
@@ -583,7 +679,7 @@ function accept(m: AnswerGroupMaterials, w: AnswerGroupWork, draft: AnswerGroupD
       throw new Error("Shared answer lookup contains duplicate evidence. Request each missing original record ID only once.");
     if (ids.some(id => context.manifest.includedIDs.includes(id)))
       throw new Error("Shared answer lookup contains already loaded evidence. Use the detailed bodies already in this request; only missing original record IDs may be loaded.");
-    const scopedRead = context.answerGroupPagingAdvice?.format === 8 && context.manifest.answerGroupStage?.phase === "read";
+    const scopedRead = (context.answerGroupPagingAdvice?.format ?? 0) >= 8 && context.manifest.answerGroupStage?.phase === "read";
     const withIDs = response.answerGroupEvidence.withRecordIDs;
     if (scopedRead && !withIDs?.length && ids.some(id => completedReadUnits(m, w, answerGroupStep(w)).has(id)))
       throw new Error("Previously completed read units require a specific joint comparison with detailed counterparts, not repeated reconstruction of unchanged draft actions.");
@@ -630,19 +726,21 @@ function accept(m: AnswerGroupMaterials, w: AnswerGroupWork, draft: AnswerGroupD
     if (Array.isArray(value)) value.forEach(v => references(v, field));
     else if (value && typeof value === "object") Object.entries(value).forEach(([k, v]) => references(v, k));
   };
-  for (const field of new Set([...Object.keys(output), ...(context.answerGroupPagingAdvice?.format === 8 ? Object.keys(draft?.analysis ?? {}) : [])])) {
+  for (const field of new Set([...Object.keys(output), ...((context.answerGroupPagingAdvice?.format ?? 0) >= 8 ? Object.keys(draft?.analysis ?? {}) : [])])) {
     const value = output[field as keyof Analysis];
     if (["summary", "goals", "actors", "assumptions"].includes(field)) continue;
     const old = draft?.analysis[field as keyof Analysis];
     const array = (v: unknown): unknown[] => Array.isArray(v) ? v : v && typeof v === "object" && "changes" in v ? (v as { changes: unknown[] }).changes : [v];
     for (const action of array(value)) if (!array(old).some(a => JSON.stringify(a) === JSON.stringify(action))) references(action);
-    if (context.answerGroupPagingAdvice?.format === 8) for (const action of array(old))
+    if ((context.answerGroupPagingAdvice?.format ?? 0) >= 8) for (const action of array(old))
       if (!array(value).some(a => JSON.stringify(a) === JSON.stringify(action))) references(action);
   }
   for (const change of output.specificationUpdates?.changes ?? []) {
     if (draft?.analysis.specificationUpdates?.changes.some(c => JSON.stringify(c) === JSON.stringify(change))) continue;
     const target = m.project.requirements.find(r => r.id === change.requirementID);
-    if (target && (target.epicID !== m.epicID || target.sourceIDs.some(id => !loaded.has(id))))
+    const permittedRule = change.type === "revise" && (answerGroupPlayActive(w) && [...m.evidenceIDs, ...supportRecords(m, w).map(r => r.record.id)].includes(change.requirementID)
+      || rulePermissionActive(w) && change.requirementID === w.ruleRepairPermission!.requirementID);
+    if (target && (target.epicID !== m.epicID && !permittedRule || target.sourceIDs.some(id => !loaded.has(id))))
       throw new Error("Shared changes require the exact same-feature target and every original supporting source loaded first.");
   }
   return { response, draft: next };
@@ -662,6 +760,20 @@ export function replayAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork): 
   if (new Set(actual).size !== actual.length || actual.length !== expected.length || actual.some(id => !expected.includes(id))
     || w.batches.flat().some(id => !m.evidenceIDs.includes(id))) throw new Error("Shared batches must cover every mandatory record exactly once.");
   const prefix: AnswerGroupWork = { ...w, receipts: [], attempts: 0 };
+  if (w.automation) {
+    const a = w.automation, before: AnswerGroupWork = { ...w, automation: undefined, receipts: w.receipts.slice(0, a.fromReceipt), attempts: a.priorAttempts,
+      evidencePages: w.evidencePages?.filter(p => p.fromReceipt < a.fromReceipt) };
+    if (!before.evidencePages?.length) delete before.evidencePages;
+    if (a.fromReceipt > w.receipts.length || a.prefixKey !== receiptPrefixKey(before.receipts) || a.atRevision > m.project.revision
+      || a.requests < w.receipts.length - a.fromReceipt)
+      throw new Error("Play continuation does not match its original paid prefix. Saved work is retained.");
+    const retained = replayAnswerGroup(m, before);
+    const technical = retained.blocked ? playTechnicalBlock(m.project, {
+        id: a.sourceJobID, status: "failed", expectedRevision: a.atRevision, answerGroupWork: before,
+        context: answerGroupContext(m, before, retained.draft).manifest } as Job) : undefined;
+    if (retained.blocked && !technical || a.resumedBlocker !== technical)
+      throw new Error("Play continuation does not match its original paid prefix or technical stop. Saved work is retained.");
+  }
   if (w.sourceSupport) {
     const s = w.sourceSupport;
     if (s.fromReceipt > w.receipts.length || s.prefixKey !== hash(w.receipts.slice(0, s.fromReceipt))
@@ -681,7 +793,7 @@ export function replayAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork): 
     || p.format < 3 && i >= 32)) throw new Error("Shared evidence pages exceed their preserved history or bound.");
   if (w.pageRecovery) {
     const r = w.pageRecovery;
-    const before = { ...w, pageRecovery: undefined, verificationRecovery: undefined, evidencePages: w.evidencePages?.filter(p => p.fromReceipt < r.fromReceipt || p.fromReceipt === r.fromReceipt && p.format === 1),
+    const before = { ...w, automation: undefined, pageRecovery: undefined, verificationRecovery: undefined, ruleRepairPermission: undefined, evidencePages: w.evidencePages?.filter(p => p.fromReceipt < r.fromReceipt || p.fromReceipt === r.fromReceipt && p.format === 1),
       receipts: w.receipts.slice(0, r.fromReceipt), attempts: 4 };
     if (r.fromReceipt > w.receipts.length || r.prefixKey !== receiptPrefixKey(before.receipts) || r.atRevision > m.project.revision
       || !answerGroupPageRecoveryPreview({ ...m.project, revision: r.atRevision }, { id: r.sourceJobID, expectedRevision: r.atRevision, status: "failed", answerGroupWork: before })
@@ -691,7 +803,7 @@ export function replayAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork): 
   if (w.verificationRecovery) {
     const r = w.verificationRecovery;
     const oldPages = w.evidencePages?.filter(p => p.fromReceipt < r.fromReceipt);
-    const before: AnswerGroupWork = { ...w, verificationRecovery: undefined, evidencePages: oldPages?.length ? oldPages : undefined,
+    const before: AnswerGroupWork = { ...w, automation: undefined, verificationRecovery: undefined, ruleRepairPermission: undefined, evidencePages: oldPages?.length ? oldPages : undefined,
       receipts: w.receipts.slice(0, r.fromReceipt), attempts: r.priorAttempts };
     if (r.fromReceipt > w.receipts.length || r.prefixKey !== receiptPrefixKey(before.receipts) || r.atRevision > m.project.revision
       || r.priorAttempts !== before.receipts.at(-1)?.attempt
@@ -702,6 +814,22 @@ export function replayAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork): 
     if (!replay.blocked || originals.every(record => oldContext.manifest.includedIDs.includes(record.record.id))
       || JSON.stringify(r.records) !== JSON.stringify(originals.map(record => ({ id: record.record.id, key: hash(record.record) }))))
       throw new Error("Verification preparation must preserve its exact genuinely missing original bodies, not override an unrelated blocker.");
+  }
+  if (w.ruleRepairPermission) {
+    const r = w.ruleRepairPermission, before: AnswerGroupWork = { ...w, automation: undefined, ruleRepairPermission: undefined,
+      receipts: w.receipts.slice(0, r.fromReceipt), attempts: r.priorAttempts,
+      evidencePages: w.evidencePages?.filter(p => p.fromReceipt < r.fromReceipt) };
+    if (!before.evidencePages?.length) delete before.evidencePages;
+    const target = m.project.requirements.find(t => t.id === r.requirementID), epic = m.project.epics.find(e => e.id === r.epicID);
+    if (r.fromReceipt > w.receipts.length || r.prefixKey !== receiptPrefixKey(before.receipts) || r.atRevision > m.project.revision
+      || r.priorAttempts !== before.receipts.at(-1)?.attempt || !target || target.epicID !== r.epicID || r.epicID === w.epicID
+      || !epic || epic.archived || hash(target) !== r.targetKey || hash(epic) !== r.epicKey
+      || !answerGroupRuleRepairPreview({ ...m.project, revision: r.atRevision }, { id: r.sourceJobID, status: "failed", expectedRevision: r.atRevision,
+        answerGroupWork: before, context: answerGroupContext(m, before, replayAnswerGroup(m, before).draft).manifest }))
+      throw new Error("Rule-repair permission does not match its exact original blocker, target and spent attempts.");
+    const records = originalEvidenceClosure([...m.records, ...supportRecords(m, before)], [r.requirementID]);
+    if (JSON.stringify(r.records) !== JSON.stringify(records.map(record => ({ id: record.record.id, key: hash(record.record) }))))
+      throw new Error("Rule-repair permission original support changed. Saved evidence is retained.");
   }
   const validatePages = () => {
     for (const [index, plan] of (w.evidencePages ?? []).entries()) if (plan.fromReceipt === prefix.receipts.length) {
@@ -716,6 +844,8 @@ export function replayAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork): 
     validatePages();
     if (w.verificationRecovery && prefix.receipts.length === w.verificationRecovery.fromReceipt) blocked = undefined;
     if (w.sourceSupport?.recovery && prefix.receipts.length === w.sourceSupport.fromReceipt) blocked = undefined;
+    if (w.ruleRepairPermission && prefix.receipts.length === w.ruleRepairPermission.fromReceipt) blocked = undefined;
+    if (w.automation?.resumedBlocker && prefix.receipts.length === w.automation.fromReceipt) blocked = undefined;
     if (blocked || answerGroupProgress(prefix).phase === "complete" || r.step !== answerGroupStep(prefix) || r.attempt <= attempts
       || r.attempt > answerGroupRequestLimit(prefix)
       || r.model.providerID !== m.model.providerID || r.model.modelID !== m.model.modelID || r.atRevision > m.project.revision
@@ -727,6 +857,8 @@ export function replayAnswerGroup(m: AnswerGroupMaterials, w: AnswerGroupWork): 
   validatePages();
   if (w.verificationRecovery && w.receipts.length === w.verificationRecovery.fromReceipt) blocked = undefined;
   if (w.sourceSupport?.recovery && w.receipts.length === w.sourceSupport.fromReceipt) blocked = undefined;
+  if (w.ruleRepairPermission && w.receipts.length === w.ruleRepairPermission.fromReceipt) blocked = undefined;
+  if (w.automation?.resumedBlocker && w.receipts.length === w.automation.fromReceipt) blocked = undefined;
   if (w.attempts < attempts || w.attempts > answerGroupRequestLimit(w) || answerGroupStep(w) > w.batches.length * 2) throw new Error("Shared answer attempts changed.");
   return { draft, blocked };
 }

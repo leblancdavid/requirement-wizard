@@ -96,7 +96,7 @@ import { reconcileCompletedReview, type AppliedInputChange } from "../core/revie
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
 import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
-import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, type AnswerGroupWork } from "../core/answer-group.js";
+import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, authorizeAnswerGroupRuleRepair, adoptAnswerGroupPlay, replayAnswerGroup, answerGroupPlayLimits, type AnswerGroupRuleRepairConsent, type AnswerGroupWork } from "../core/answer-group.js";
 import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -2392,6 +2392,14 @@ export class ProjectStore {
         || JSON.stringify(context.submissionIDs) !== JSON.stringify(work.submissionIDs)) throw new Error("Shared answers require their original group and plan.");
       if (job.answerGroupWork && (job.answerGroupWork.materialKey !== work.materialKey || job.answerGroupWork.planKey !== work.planKey))
         throw new Error("Shared answer checkpoint cannot replace its original material or plan.");
+      this.assertAnswerGroupRulePermission(job, work);
+      const previous = job.answerGroupWork ?? this.latestAnswerGroupWorkJob(job.projectID, work.submissionIDs[0]!, job.id)?.answerGroupWork;
+      if (previous?.automation) {
+        if (!work.automation || work.automation.requests < previous.automation.requests
+          || JSON.stringify(work.receipts.slice(0, previous.receipts.length)) !== JSON.stringify(previous.receipts)
+          || work.automation.failures < previous.automation.failures && !work.receipts.slice(previous.receipts.length).some(r => !("answerGroupBlocked" in r.response)))
+          throw new Error("Play cannot discard paid progress or renew its retained safety counters.");
+      }
       job.answerGroupWork = structuredClone(work);
       // Validate exclusive binding even before the first response is accepted.
       readStoredJob(JSON.stringify({ ...job, context }));
@@ -2408,9 +2416,65 @@ export class ProjectStore {
     }).immediate();
   }
 
+  private assertAnswerGroupRulePermission(job: Job, work: AnswerGroupWork) {
+    if (work.automation) {
+      const a = work.automation;
+      if (a.sourceJobID === job.id && a.fromReceipt === 0 && a.priorAttempts === 0) {
+        const workflow = this.workflow(job.projectID);
+        if (!workflow.playPolicy || !workflow.owner || (workflow.leaseUntil ?? 0) <= Date.now()) throw new Error("New Play work requires its owning specification workflow.");
+      } else {
+        const parent = this.getJob(a.sourceJobID), original = parent.answerGroupWork;
+        const identity = (value: NonNullable<AnswerGroupWork["automation"]>) => ({ ...answerGroupWorkSchema.shape.automation.unwrap().parse(value), requests: 0, failures: 0 });
+        const selfOrigin = a.fromReceipt === 0 && a.priorAttempts === 0 && original?.automation?.sourceJobID === parent.id;
+        if (parent.projectID !== job.projectID || !original?.automation || !selfOrigin && original.receipts.length !== a.fromReceipt
+          || JSON.stringify(identity(original.automation)) !== JSON.stringify(identity(a))
+          || JSON.stringify(original.receipts) !== JSON.stringify(work.receipts.slice(0, selfOrigin ? original.receipts.length : a.fromReceipt)))
+          throw new Error("Play requires its retained original checkpoint and paid prefix.");
+      }
+    }
+    if (!work.ruleRepairPermission) return;
+    const grant = work.ruleRepairPermission, parent = this.getJob(grant.sourceJobID);
+    if (parent.projectID !== job.projectID || parent.status !== "failed" || parent.expectedRevision !== grant.atRevision
+      || JSON.stringify(parent.answerGroupWork?.ruleRepairPermission) !== JSON.stringify(grant)
+      || parent.answerGroupWork?.receipts.length !== grant.fromReceipt
+      || JSON.stringify(work.receipts.slice(0, grant.fromReceipt)) !== JSON.stringify(parent.answerGroupWork.receipts))
+      throw new Error("Rule-repair permission requires its retained human-authorized parent and exact paid prefix.");
+  }
+
+  /** Called only by explicit Play, never startup/polling. One atomic adoption per
+   * intact saved cohort; a failed write cannot lose its original paid checkpoint. */
+  prepareAnswerGroupPlay(projectID: string, revision: number, version: number) {
+    return this.db.transaction(() => {
+      this.assertNoExecution(projectID);
+      if (this.discoveryActive(projectID) || this.workflowBusy(projectID)) throw new OperationConflictError("Wait for active work before Play.");
+      const project = this.get(projectID), state = this.workflow(projectID);
+      if (project.revision !== revision) throw new StaleRevisionError();
+      if (state.settingsVersion !== version) throw new OperationConflictError("Processing changed. Refresh before Play.");
+      const submissions = this.submissions(projectID), prepared: string[] = [];
+      for (const id of new Set(submissions.filter(s => !s.archivedAt && !s.conflict && ["needs-attention", "saved"].includes(s.status) && s.jobID).map(s => s.jobID!))) {
+        const job = this.getJob(id), w = job.answerGroupWork;
+        if (!w || job.expectedRevision !== revision || !["failed", "interrupted", "cancelled"].includes(job.status)) continue;
+        const items = w.submissionIDs.map(id => submissions.find(s => s.id === id));
+        if (items.some(s => !s || s.archivedAt || s.conflict || !s.applied || s.jobID !== job.id
+          || !["needs-attention", "saved"].includes(s.status) || this.latestAnswerGroupWorkJob(projectID, s.id)?.id !== job.id)) continue;
+        const m = answerGroupMaterials(project, items as Submission[]);
+        let next: AnswerGroupWork;
+        try {
+          next = adoptAnswerGroupPlay(m, w, job);
+          if (replayAnswerGroup(m, next).blocked || next.automation!.requests >= answerGroupPlayLimits.requests
+            || next.automation!.failures >= answerGroupPlayLimits.failures) continue;
+        } catch { continue; } // Preserve genuine/unclassified blockers for review.
+        job.answerGroupWork = next; this.saveJob(job);
+        for (const item of items as Submission[]) { item.status = "saved"; this.saveSubmission(item); }
+        prepared.push(job.id);
+      }
+      return prepared;
+    }).immediate();
+  }
+
   /** Explicit metadata-only preparation/grant. Verification grants no attempts.
    * Original attempts, blocked replies and job outcome remain intact. */
-  recoverAnswerGroupSources(projectID: string, revision: number, version: number, jobID: string, kind: "sources" | "pages" | "verification" = "sources") {
+  recoverAnswerGroupSources(projectID: string, revision: number, version: number, jobID: string, kind: "sources" | "pages" | "verification" | "rule" = "sources", consent?: AnswerGroupRuleRepairConsent) {
     this.db.transaction(() => {
       this.assertNoExecution(projectID);
       if (this.discoveryActive(projectID) || this.workflowBusy(projectID)) throw new OperationConflictError("Pause active work before authorizing shared-answer recovery.");
@@ -2423,14 +2487,18 @@ export class ProjectStore {
       if (items.some(s => !s || s.status !== "needs-attention" || s.conflict || s.archivedAt || s.jobID !== jobID
         || this.latestAnswerGroupWorkJob(projectID, s.id)?.id !== jobID)) throw new OperationConflictError("The saved group changed. No additional requests were granted.");
       const material = answerGroupMaterials(project, items as Submission[]);
-      job.answerGroupWork = kind === "verification" ? authorizeAnswerGroupVerification(material, w, job)
+      if ((kind === "rule") !== !!consent) throw new OperationConflictError("Rule repair requires an exact separate consent preview.");
+      job.answerGroupWork = kind === "rule" ? authorizeAnswerGroupRuleRepair(material, w, job, consent!, randomUUID())
+        : kind === "verification" ? authorizeAnswerGroupVerification(material, w, job)
         : kind === "pages" ? authorizeAnswerGroupPageRecovery(material, w, job, randomUUID()) : authorizeAnswerGroupRecovery(material, w, job, randomUUID());
       this.saveJob(job);
       for (const item of items as Submission[]) { item.status = "saved"; this.saveSubmission(item); }
       state.paused = true; state.phase = "paused"; state.stopReason = "human-pause";
       if (state.current?.kind === "input") state.current.completed = false;
       state.settingsVersion++;
-      state.message = kind === "verification"
+      state.message = kind === "rule"
+        ? "Permission to repair only the named affected rule is saved. Original decisions, blocker, paid replies and spent attempts remain unchanged. No AI work or extra attempts were granted. Continue explicitly; every original verification batch must pass after repair."
+        : kind === "verification"
         ? "Evidence-complete verification is prepared. Original reading steps, the frozen draft, blocker and spent attempts are retained. No additional attempts were granted. Continue explicitly to re-evaluate the saved blocker with full original rules and supporting bodies."
         : kind === "pages"
         ? "Requested evidence now appears first instead of repeating the old page. One page-loop recovery allowance of up to four additional requests is saved; the original four requests remain recorded. Continue specification explicitly to use it. Every page and evidence check remains mandatory."
@@ -2669,6 +2737,7 @@ export class ProjectStore {
             const submissions = this.submissions(project.id);
             const items = job.answerGroupWork.submissionIDs.map(id => submissions.find(s => s.id === id));
             if (items.some(s => !s)) throw new Error("Shared answer source submission is missing.");
+            this.assertAnswerGroupRulePermission(job, job.answerGroupWork);
             timed("sharedReplay", () => validateAnswerGroupPublication(project, items as Submission[], job, result));
           }
           if (job.refinementWork || job.context?.refinementStage) {

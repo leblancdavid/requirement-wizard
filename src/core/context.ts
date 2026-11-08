@@ -4,7 +4,7 @@ import type { GapReport } from "./gap-types.js";
 
 export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]>; gapReport?: GapReport;
   /** Reconstructed page inventory, not persisted authority or freshness metadata. */
-  answerGroupPagingAdvice?: { scheduledIDs: string[]; format: 2 | 3 | 4 | 5 | 6 | 7 | 8; number: number; total: number };
+  answerGroupPagingAdvice?: { scheduledIDs: string[]; format: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9; number: number; total: number };
   /** Reconstructed request advice only, never persisted or used as new freshness
    * authority. It exposes the existing v3 validator's historical-source exclusions. */
   definitionChangeCitationAuthority?: { format: 1; historicalEvidenceIDs: string[];
