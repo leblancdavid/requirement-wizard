@@ -1,5 +1,64 @@
 # Coordinated workflow preview (DEC-032)
 
+Ordinary shared packets still target 96k characters. After explicit Play adoption,
+a single indivisible read/check unit can use a guarded 200k exception page alone;
+fresh selected-model/full-prompt capacity admission is required before inference.
+All paid inspection/grouping work, joint constraints and verification remain intact.
+See [capacity compatibility](migrations.md#guarded-200k-joint-evidence-exception-2026-11-09).
+
+An exclusive v2 clarification stop can now enter a one-pass, Play-owned evidence-only
+inspection stage before comparison planning. Each full original and support is read
+with all counterparts and pinned answers; observations flag conservative joint sets,
+never verdicts. Resulting groups must preserve every flag and receive exact-body
+read/check turns before ordinary full verification. No attempt/usage reset or approval
+is inferred. See [inspection compatibility and limits](migrations.md#evidence-first-blocked-lookup-inspection-2026-11-09).
+
+Oversized lookups with non-pinned counterparts can now receive one charged, explicit
+model scope clarification under Play. Confirmation schedules each requested original
+with ALL counterparts/support, not a weakened comparison. No read/check verdict or
+product choice is inferred, and genuine joint requirements still block. See
+[lookup clarification v2](migrations.md#counterpart-preserving-lookup-clarification-2026-11-09).
+
+Real joint evidence is never split merely to fit. Play now first tries v10 lossless
+literal phrase pooling, retaining every exact body/support and all pinned answers in
+the same joint packet. Existing paid work, attempts and full verification are unchanged.
+Incompressible joint evidence still stops honestly. See [lossless joint packing](migrations.md#lossless-joint-evidence-phrase-pooling-2026-11-08).
+
+An oversized lookup whose explicit counterparts are only the always-pinned human
+answers can now enter a bounded, charged model clarification. The model must explicitly
+confirm separate original-unit retrieval before packing can split that request; it
+must block if all bodies really are indispensable together. The original paid lookup,
+completed reads and usage remain saved. No clarification grants a read/check verdict
+or weakens mandatory verification. See [lookup clarification compatibility](migrations.md#oversized-pin-relative-lookup-clarification-2026-11-08).
+
+## Progress-based technical correction (2026-11-08)
+
+Explicit Play now replaces the flat two-repair cap for compatible saved shared-answer
+work. Beyond the first two corrections, verification must identify a distinct existing
+draft target/current human-evidence comparison, with the full originals supplied.
+Unchanged corrections, repeated comparisons and exact earlier target versions stop.
+Unrelated draft actions remain intact; genuine conflicting intent still needs review.
+Every accepted correction restarts complete verification. Eight total repairs and the
+unchanged overall request, failure, page and storage ceilings bound processing; no
+usage or attempts are reset. See [migration and qualification](migrations.md#progress-based-shared-answer-corrections-2026-11-08).
+
+Play can recover a completed shared-answer reply rejected solely by the old aggregate
+output reserve. It validates the exact original prompt/model/completion and no-tools
+contract, retains the spent attempt and usage, and resumes all verification. The
+no-progress safety stop is not reset to make another repair request. See
+[output capacity and no-inference recovery](migrations.md#shared-answer-output-capacity-and-completed-reply-recovery-2026-11-08).
+
+## Bounded repair evidence (2026-11-08)
+
+Play can resume a saved repair whose original background packet grew too large after
+an accepted correction. It supplies the existing rules named by the rejected comparison
+and their full original support beside all answers and the whole saved draft. Other
+draft actions remain unchanged unless their originals are loaded. This is automatic
+technical packing, not a new permission or product choice. Every original verification
+batch/page still runs again after repair, and genuine unfit joint evidence still stops.
+Saved replies, earlier repairs and usage survive reopen unchanged. See
+[compatibility and the read-only reported-checkpoint preflight](migrations.md#bounded-rejected-comparison-repair-contexts-2026-11-08).
+
 ## Simple processing (2026-11-08)
 
 The primary controls are **Play**, **Pause**, **Stop**. Play starts/resumes saved
@@ -24,8 +83,9 @@ Useful shared lookups no longer exhaust a four-request repair allowance. The int
 Play policy reserves total requests before dispatch, with a 256-request task safety
 ceiling and three consecutive unsuccessful validation/request reservations. Accepted
 useful replies clear the consecutive-failure count, not total usage. Pause/Stop/reopen
-and repeated Play cannot renew a task safety stop. Existing two-repair, packet, storage
-and page-capacity guards remain. A run-wide 256-request ceiling also prevents an
+and repeated Play cannot renew a task safety stop. Legacy work retains two repairs;
+explicitly adopted progress-based work uses the distinct-comparison gates and finite
+eight-total-repair backstop above. Packet, storage and page guards remain. A run-wide 256-request ceiling also prevents an
 unbounded coordinator episode. These are safety checks, not new user authorizations.
 
 **Implemented boundary:** shared-answer adoption and new shared work use the new

@@ -66,6 +66,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (job.answerGroupWork?.verificationRecovery) linked.add(job.answerGroupWork.verificationRecovery.sourceJobID);
     if (job.answerGroupWork?.ruleRepairPermission) linked.add(job.answerGroupWork.ruleRepairPermission.sourceJobID);
     if (job.answerGroupWork?.automation) linked.add(job.answerGroupWork.automation.sourceJobID);
+    if (job.answerGroupWork?.responseRecovery) linked.add(job.answerGroupWork.responseRecovery.sourceJobID);
   }
   // Only original publishers needed by current assessments and current baseline
   // work, not every obsolete definition job in the activity archive.
@@ -377,11 +378,15 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const tightReadState = !!continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 9));
   const rulePermissionState = !!continuation?.jobs.some(j => j.answerGroupWork?.ruleRepairPermission);
   const playState = !!continuation?.jobs.some(j => j.answerGroupWork?.automation);
+  const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
+  const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
+  const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
+  const sharedFormat = continuation?.jobs.some(j=>j.answerGroupWork?.blockerReviews) ? 31 : continuation?.jobs.some(j=>j.answerGroupWork?.blockerReview||j.answerGroupWork?.receipts.some(r=>"answerGroupBlockerReview"in r.response)) ? 30 : continuation?.jobs.some(j=>j.answerGroupWork?.inputCapacity||j.answerGroupWork?.evidencePages?.some(p=>p.format===11)) ? 29 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupInspections || j.answerGroupWork?.receipts.some(r=>"answerGroupInspection"in r.response||"answerGroupComparisons"in r.response)) ? 28 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews?.some(p=>p.format===2)) ? 27 : continuation?.jobs.some(j=>j.answerGroupWork?.evidencePages?.some(p=>p.format===10)) ? 26 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews) ? 25 : progressRepairState ? 24 : responseCapacityState ? 23 : boundedRepairState ? 22 : playState ? 21 : undefined;
   const efficientState = !!continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 8)
     || j.context?.epicReview?.contextPolicy === "staged-dense-records-v5" || j.retrievalWork?.epicStages?.contextPolicy === "staged-dense-records-v5");
   const evidenceState = requiresChangeReviewState(project, continuation) || answerState || efficientState;
   const recordOrder = evidenceState ? Object.fromEntries(portableRecordFields.map((field) => [field, project[field].map((record) => record.id)])) : undefined;
-  return { "state.json": json({ formatVersion: playState ? 21 : rulePermissionState ? 20 : tightReadState ? 19 : efficientState ? 18 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 7)) ? 17 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 6)) ? 16 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 5)) ? 15 : continuation?.jobs.some(j => j.answerGroupWork?.verificationRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 4)) ? 14 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 3)) ? 13 : continuation?.jobs.some(j => j.answerGroupWork?.pageRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 2)) ? 12 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages) ? 11 : continuation?.jobs.some(j => j.answerGroupWork?.sourceSupport) ? 10 : answerState ? 9 : requiresSharedChangeState(project, continuation) ? 8 : requiresIncrementalChangeState(project, continuation) ? 7 : requiresEvidenceChangeState(project, continuation, 3) ? 6 : evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1, project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
+  return { "state.json": json({ formatVersion: sharedFormat ?? (rulePermissionState ? 20 : tightReadState ? 19 : efficientState ? 18 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 7)) ? 17 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 6)) ? 16 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 5)) ? 15 : continuation?.jobs.some(j => j.answerGroupWork?.verificationRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 4)) ? 14 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 3)) ? 13 : continuation?.jobs.some(j => j.answerGroupWork?.pageRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 2)) ? 12 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages) ? 11 : continuation?.jobs.some(j => j.answerGroupWork?.sourceSupport) ? 10 : answerState ? 9 : requiresSharedChangeState(project, continuation) ? 8 : requiresIncrementalChangeState(project, continuation) ? 7 : requiresEvidenceChangeState(project, continuation, 3) ? 6 : evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1), project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
     "continuation.json": json(continuation ?? { formatVersion: 1, jobs: [], submissions: [], snapshots: {}, objects: {} }) };
 }
 
@@ -497,8 +502,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13), z.literal(14), z.literal(15), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–21 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13), z.literal(14), z.literal(15), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23), z.literal(24), z.literal(25), z.literal(26), z.literal(27), z.literal(28), z.literal(29), z.literal(30), z.literal(31)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–31 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -561,6 +566,33 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     throw new Error("Exact rule-repair permission requires portable state format 20. Saved work was not overwritten.");
   if (state.formatVersion < 21 && continuation.jobs.some(j => j.answerGroupWork?.automation))
     throw new Error("Play processing requires portable state format 21. Saved work was not overwritten.");
+  if (state.formatVersion < 22 && continuation.jobs.some(j => j.answerGroupWork?.repairContexts))
+    throw new Error("Bounded rejected-comparison repair contexts require portable state format 22. Saved work was not overwritten.");
+  if (state.formatVersion < 23 && continuation.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery)))
+    throw new Error("Shared response capacity/recovery requires portable state format 23. Saved work was not overwritten.");
+  if (state.formatVersion < 24 && continuation.jobs.some(j => j.answerGroupWork?.repairPolicy))
+    throw new Error("Progress-based repair requires portable state format 24. Saved work was not overwritten.");
+  if (state.formatVersion < 25 && continuation.jobs.some(j => j.answerGroupWork?.lookupReviews || j.answerGroupWork?.receipts.some(r=>"answerGroupLoadPlan" in r.response)))
+    throw new Error("Lookup scope clarification requires portable state format 25. Saved work was not overwritten.");
+  if (state.formatVersion < 26 && continuation.jobs.some(j=>j.answerGroupWork?.evidencePages?.some(p=>p.format===10)))
+    throw new Error("Exact joint phrase-pooling layouts require portable state format 26. Saved work was not overwritten.");
+  if (state.formatVersion < 27 && continuation.jobs.some(j=>j.answerGroupWork?.lookupReviews?.some(p=>p.format===2)))
+    throw new Error("Counterpart-preserving lookup clarification requires portable state format 27. Saved work was not overwritten.");
+  if(state.formatVersion<28&&continuation.jobs.some(j=>j.answerGroupWork?.lookupInspections||j.answerGroupWork?.receipts.some(r=>"answerGroupInspection"in r.response||"answerGroupComparisons"in r.response)))
+    throw new Error("Evidence-first lookup inspection requires portable state format 28. Saved work was not overwritten.");
+  if(state.formatVersion<29&&continuation.jobs.some(j=>j.answerGroupWork?.inputCapacity||j.answerGroupWork?.evidencePages?.some(p=>p.format===11)))
+    throw new Error("Guarded joint input capacity requires portable state format 29. Saved work was not overwritten.");
+  if(state.formatVersion<30&&continuation.jobs.some(j=>j.answerGroupWork?.blockerReview||j.answerGroupWork?.receipts.some(r=>"answerGroupBlockerReview"in r.response)))
+    throw new Error("Omitted human-resolution review requires portable state format 30. Saved work was not overwritten.");
+  if(state.formatVersion<31&&continuation.jobs.some(j=>j.answerGroupWork?.blockerReviews))
+    throw new Error("Distinct human-resolution reviews require portable state format 31. Saved work was not overwritten.");
+  for (const job of continuation.jobs) if (job.answerGroupWork?.responseRecovery) {
+    const r = job.answerGroupWork.responseRecovery, parent = continuation.jobs.find(j => j.id === r.sourceJobID), w = parent?.answerGroupWork;
+    if (!parent || parent.status !== "failed" || !w || parent.projectID !== job.projectID || parent.expectedRevision !== job.expectedRevision
+      || w.planKey !== job.answerGroupWork.planKey || w.receipts.length !== r.fromReceipt || w.attempts !== r.attempt || w.automation?.requests !== r.requests
+      || JSON.stringify(w.receipts) !== JSON.stringify(job.answerGroupWork.receipts.slice(0, r.fromReceipt)))
+      throw new Error("Completed response recovery requires its original paid parent checkpoint.");
+  }
   for (const job of continuation.jobs) if (job.answerGroupWork?.automation) {
     const a = job.answerGroupWork.automation, parent = continuation.jobs.find(j => j.id === a.sourceJobID);
     if (a.sourceJobID === job.id && a.fromReceipt === 0 && a.priorAttempts === 0) continue;

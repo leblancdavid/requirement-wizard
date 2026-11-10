@@ -2,6 +2,39 @@
 
 ## Confirmed product direction
 
+**Guarded joint-input exception (2026-11-09).** After read-only selected-model capacity
+investigation, the user approved **200,000 characters** as an exception ceiling for
+indivisible joint evidence, with **96,000 as the ordinary packing target**. A larger
+packet needs separate whole-prompt/model-capacity admission with full output and runtime
+headroom. Preserve all 14 paid replies and joint flags; do not repeat inspection to
+shrink the group, truncate evidence, silently change models or raise the ceiling again.
+See [compatibility and verification](migrations.md#guarded-200k-joint-evidence-exception-2026-11-09).
+
+**Evidence-first lookup recovery (2026-11-09).** After the v2 model correctly refused
+to certify separation without seeing the missing bodies, the user approved a bounded
+evidence-acquisition pass with the draft frozen, followed by conservative exact joint
+comparison groups. Inspection is not approval, original-step coverage or independence.
+Retain all paid work and all flagged joint constraints; oversized indispensable groups
+must still stop. See [compatibility and verification](migrations.md#evidence-first-blocked-lookup-inspection-2026-11-09).
+
+**Counterpart-preserving lookup clarification (2026-11-09).** The user approved
+extending Play's model clarification to oversized lookups with non-pinned counterparts.
+Only an explicit model confirmation may separate the requested originals; every
+comparison must retain ALL counterparts, complete support, the full draft and pinned
+answers. Genuine all-requested-bodies comparisons or uncertainty still stop. Preserve
+paid work/attempts and every mandatory verification; never infer semantic independence
+from geometry. See [compatibility and verification](migrations.md#counterpart-preserving-lookup-clarification-2026-11-09).
+
+**Progress-based technical corrections (2026-11-08).** After the two-repair cap
+blocked preservation of another already-settled exception, the user approved replacing
+that flat cap with bounded progress-based recovery. Play may continue a distinct,
+source-backed correction without another gameplay answer or technical allowance button.
+Preserve original answers, all paid work/usage and complete post-repair verification.
+Stop repeated failures, unchanged/cycling drafts, unknown evidence and genuine human
+conflicts. The implementation retains a finite eight-total-repair backstop within
+the existing request/page/storage ceilings; legacy work changes only at an explicit
+Play boundary. See [compatibility and checks](migrations.md#progress-based-shared-answer-corrections-2026-11-08).
+
 **Simple Play / Pause / Stop processing (2026-11-08).** The user approved replacing
 routine technical authorizations with one processing action. Play should own evidence
 loading, technical continuation and faithful reconciliation across feature boundaries;

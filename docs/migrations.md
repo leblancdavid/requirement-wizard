@@ -1,5 +1,786 @@
 # Data migrations and upgrade compatibility
 
+## Distinct omitted-resolution reviews (2026-11-09)
+
+**Source → target: SQLite 56 → 57; conditional portable format 31.** The first live
+resolution review succeeded: its saved model receipt cites the explicit human
+departure-resolution answer, and processing then completed all **21 original read
+steps**. The first verification step subsequently stopped on a different historical
+materials conflict. Read-only inspection found another already-answered explicit
+precedence question selecting full material retention and replacing the 50% penalty;
+its original answer/question were omitted from the blocked verification packet.
+This is source-backed evidence, not a new product choice inferred from accepted text.
+
+The v1 one-review-per-cohort bound was too coarse. Explicit Play may now append
+**v2 `blockerReviews`** for distinct **disjoint cited-human-answer conflicts**, up to
+**eight total reviews** (the original singleton plus at most seven appended reviews).
+Keep the old `blockerReview` singleton and all earlier bodies/hashes exactly as saved;
+never convert, replace or re-run its paid review. Rewording, adding/removing cited
+sources or any overlap with a reviewed conflict's cited answers cannot renew review.
+This conservative structural rule can still stop a genuinely different but overlapping
+conflict; it does not claim to recognize every semantic conflict. Omitted reverse-linked
+answered questions remain candidates only, not authority. All v1 constraints remain:
+full exact questions/answers and draft, no original-step/page credit or edits during
+review, explicit human-resolution citations, unchanged 96k review bound, shared
+256-request/three-failure backstops, no resets and mandatory original verification.
+
+All successful review evidence remains detailed beside its conflicting originals in
+later packets, including transitive dependencies when one review's candidates include
+an older conflict's original answer. Adding a second review must not hide the first resolution or alter its
+historical prompt/context hashes. New layouts may repack only unfinished verification.
+Previously paid reads/checks/repairs and request/failure counters remain retained. An
+unresolved, repeated, oversized, unsupported or exhausted review still stops; this is
+not automatic conflict clearance or an unlimited review loop.
+
+Startup is a transactional reader-boundary migration only. No original evidence,
+completed v1 review, accepted requirements, assessments, history, leases or usage is
+rewritten. Portable 31 is conditional on appended v2 boundaries; v1-only work still
+uses 30 (or its otherwise-required format). Downgrade/future-format data rejects
+without overwrite, with repeated reopen/rollback/retry supported. SQLite checkpoints
+enforce append-only v2 prefixes and retain the immutable v1 singleton. The existing
+metadata-only review reply category still grants no progress or exported prose.
+
+Read-only actual-checkpoint preflight passed: **45 paid replies/requests**, current
+attempt **1**, failure count **1**, all **21 read steps** and the completed departure
+review remained unchanged. The complete new review packet is **69,820 / 96,000
+characters**, containing seven exact linked candidate answers/questions including the
+explicit materials-resolution answer. A local fixture-only positive reply (not
+inference or a semantic verdict) repacked only the unfinished first original check
+into **six exact pages**, each within 96k (maximum **95,043 characters**). The first
+page is 75,105 characters and contains no cited materials-conflict source; every page
+that does contain one also retains the entire materials review evidence and the
+earlier departure resolution needed by a cross-linked candidate. No paid original
+step was reset or credited by review. Retained-prefix replay, every new-layout page
+and fixture-only completion of that one original check passed. No real-project writes or live model calls
+were performed.
+
+Verification: type check, diff check and **14 focused review tests** passed. New tests cover
+the second distinct verification conflict, unchanged successful v1 review and all read
+progress, exact original-body/draft expansion, both resolutions staying alongside their
+own originals (including transitive candidate support), full verification with no repeated reads, second unresolved/malformed/
+cancelled review, repeated/reworded/overlapping conflict rejection and the review cap.
+Upgrade tests cover 56→57 repeated startup, pending v2 reopen and actual portable clone
+adoption, append-prefix/hash/order/overlap tampering, downgrade rejection and transactional
+future-format failure followed by recovery. Full `npm test` passed, including **239
+posttests**. The browser regression suite (UI build and all postchecks) passed, with
+only the existing Vite chunk-size warning. A final **99-test** focused recovery/
+diagnostics run passed after the transitive-dependency refinement, including its new
+exact-body regression. Live materials review quality, final specification completion and installed
+desktop packaging remain unqualified.
+
+## Omitted human-resolution evidence review (2026-11-09)
+
+The original one-review-per-cohort limit described here is historical; the bounded
+distinct-conflict extension above preserves all of this v1 work without re-running it.
+
+**Source → target: SQLite 55 → 56; conditional portable format 30.** Startup adds a
+transactional reader boundary only, without changing original answers, accepted
+requirements, drafts, assessments, paid receipts/context hashes, request/failure
+counters, history or leases. Explicit **Play** can prepare one `blockerReview` per
+retained shared-answer cohort when an authenticated conflict names at least two
+original human answer IDs and an omitted answered question in the existing evidence
+catalogue structurally references a cited answer. Its current source must be an exact
+linked human answer. Reverse links locate candidates only; they do not establish
+precedence. No semantic resolution is inferred from text matching or chronology.
+
+The boundary binds the exact paid prefix, complete frozen draft, candidate/conflict
+IDs, exact record hashes and spent activation counters. The review packet contains
+every cited conflict answer and its complete question, the candidate answers and their
+complete questions/options, all current pinned answers and the full draft. It must
+fit **96k** whole, without truncation or using the 200k exception. No additional
+candidate/review cycle can be manufactured after this cohort's boundary is recorded.
+Retries after interruption remain charged to the same overall request/failure limits;
+Play never replenishes them. Candidates already detailed in the blocked packet do
+not qualify as an omission. Missing/unlinked/oversized evidence or safety exhaustion
+leaves work stopped rather than selecting a preference.
+
+The exclusive `answerGroupBlockerReview` response cannot edit the draft, approve
+requirements, or count as an original read/check/page. A positive review must cite
+distinct supplied candidate human answer IDs and explain the explicit human decision
+resolving this exact situation; links, model notes, accepted wording, chronology and
+question-rationale assertions alone are not authority. A negative review retains a
+human blocker and cannot rearm review. Model semantic correctness remains a live
+qualification limit, not a deterministic guarantee. A positive receipt resumes only
+the unfinished original stage; when cited conflicting originals appear in later
+packets, their complete reviewed resolution evidence is served alongside them. Every
+original read and verification remains mandatory. No completed step is repeated merely
+to adopt this capability; the previously blocked unfinished request is reconsidered
+with genuinely different evidence.
+
+Portable 30 is conditional on the new boundary/receipt. Downgrade envelopes and future
+review formats reject without overwriting saved work. Reopen/clone preserves pending
+and completed review evidence, with portable adoption still paused. SQLite checkpoints
+cannot replace the original boundary. Diagnostics project its reply to a boolean
+marker only, retaining position without exporting content or crediting progress.
+
+Read-only revision-3354 preflight preserved **23 paid replies/requests**, the current
+spent attempt/failure counters, full draft replay and **four completed original steps**.
+The exact candidate review is **51,237 / 96,000 characters** and contains the existing
+human precedence answer. A local fixture-only positive response (not inference or a
+semantic finding) produced a **90,765 / 96,000** unfinished original packet with that
+resolution beside the old answers and no original progress credited by review. No
+real project writes or live model calls were made. This implements evidence-backed
+recovery of the departure blocker below, not automatic clearance of human ambiguity.
+
+Verification so far: type checking, diff checking and **25 focused tests** passed, including review
+completion followed by all original checks, unresolved/malformed/cancelled review,
+spent counters and no rearming, bad citations/draft edits, tampered boundaries,
+missing draft/exhausted limits/oversized complete evidence failing before inference,
+55→56 repeated reopen, actual portable clone adoption, downgrade/future-format rollback
+and authenticated private diagnostics export. The full `npm test` passed, including
+**233 posttests**, and the full browser suite (UI build and postchecks) passed with
+only the existing Vite chunk-size warning. A final **74-test** focused recovery run
+also passed, including exact expansion of the review's full draft and original bodies.
+Live review quality, final specification completion and installed desktop
+packaging remain unqualified.
+
+## Diagnostics projection compatibility (2026-11-09)
+
+**No persisted-format change for this earlier fix; SQLite 55 / conditional portable
+29 were current at the time.** The subsequent resolution review above uses 56 / 30.
+The metadata-only diagnostics SQL projection and its validation now recognize retained
+`answerGroupLoadPlan`, `answerGroupInspection` and `answerGroupComparisons` receipts.
+Previously these became null responses and caused export validation to fail. Each is
+projected to an allowlisted boolean marker, retaining its ledger position but exporting
+no body, identifiers or prose. None counts as a completed original step/page or approval.
+Unknown future categories still reject rather than fabricate progress. No jobs,
+evidence, paid-prefix hashes, counters, assessments or portable files are rewritten;
+there is no data migration or need to repeat calls.
+
+Verification: reproduced the user's failure through the production export method on
+a read-only SQLite connection without constructing a store (startup may write). After
+the fix the same saved run exported successfully with four completed original steps
+and eleven successful page replies distinguished. Type check and all **18 diagnostics
+tests** passed, including the authenticated API, auxiliary-reply/page accounting,
+privacy, unchanged saved payload/project, unknown-category rejection and existing
+reopen/future-envelope tests. No live model calls or real-project writes were made.
+
+The separate departure blocker is **not cleared by this export fix**. Read-only source
+inspection found an already-answered explicit precedence question and an accepted
+requirement preserving departure until safe appearance. Those resolving records were
+omitted from the blocked request. The old contradictory answers remain original
+evidence, not authority to ask the same settled decision again. Safe evidence-backed
+blocker recovery was still needed at this point; see the implementation and remaining
+qualification limits above. Do not reset saved work or
+silently override genuine human conflicts.
+
+## Guarded 200k joint-evidence exception (2026-11-09)
+
+**Source → target: SQLite 54 → 55; conditional portable format 29.** Startup is a
+transactional reader-boundary upgrade only: no originals, paid replies, inspection
+notes/group plans, drafts, completed reads/checks, assessments, history, usage or live
+leases are rewritten. Explicit **Play** adds immutable `inputCapacity` metadata at
+the exact paid prefix, bound to the original OpenCode `openai` model, authorizing a
+**200,000-character ceiling only for indivisible read/check units**. Normal packing
+still targets 96,000 characters. Direct selections do not adopt this policy; no model,
+connection, credential or output-format fallback is introduced.
+
+The user approved 200k as a guarded exception after capacity investigation. The live
+inspection pass retained 14 paid replies/requests at revision 3354 and current attempt
+11, but every inspection conservatively flagged all seven peers. The accepted plan
+therefore legitimately retained the same eight-original joint set. This did not prove
+all originals semantically interdependent, but the app must honor the retained flags;
+it cannot discard them or repeat paid inspection/planning to manufacture smaller groups.
+
+New evidence-page **format 11** uses v10's exact lossless encoding. Only after ordinary
+96k packing and v10 fail can it place a single indivisible original/support or joint
+comparison unit alone on an exception page. It never fills a large page with unrelated
+background. The original full draft-growth reserve (up to 24,000 characters) and page
+metadata reserve remain required. A unit that exceeds 200k including those reserves
+still stops. Every actual page is measured again; ordinary pages in a v11 layout keep
+their 96k dispatch budget. Repair/inspection/clarification profiles retain their existing
+bounds; this change does not broadly enlarge other workflows.
+
+Every actual >96k dispatch additionally performs a **fresh native model catalog GET**
+for the explicitly selected model before session creation or inference. The complete
+generated app prompt must contain the exact evidence packet and fit an independent
+admission check: UTF-8 byte length is used as a deliberately conservative text proxy
+for this OpenAI route, **not an exact tokenizer count**. Reserve the model's entire
+advertised output allowance (including reasoning), 32,768 tokens for runtime/system/
+framing overhead, and leave 20% of both input and total context capacity unused.
+Unknown/disabled/mismatched/inconsistent or insufficient limits reject without model
+fallback, truncation or another inference attempt. No catalog/provider settings or
+credentials are persisted. Advertised limits and this proxy do not qualify account-
+specific acceptance, arbitrary hidden overhead or model review quality.
+
+Portable 29 is required only for `inputCapacity` or v11 pages. Older envelopes carrying
+them reject without overwriting work; future capacity/page formats roll back startup
+and can reopen/retry after correction. SQLite checkpoints cannot replace a saved
+capacity boundary. Replay preserves all earlier page formats, receipt/context hashes
+and semantic assessment fingerprints; legacy future-page fixtures now use unsupported
+format 12. No original step, completed page receipt, spent attempt, request/failure
+allowance or mandatory verification is reset. Repeated preparation reuses a valid v11
+layout rather than appending duplicate layouts. Full original verification remains
+mandatory before publication.
+
+Read-only actual-checkpoint preflight passed at revision **3354**: **14 paid replies**,
+**14 requests**, current **attempt 11**, complete draft replay and completed original
+steps/page receipts were preserved. The new three-page layout details the entire
+flagged joint set together on its first page at **119,127 / 200,000 characters**;
+independent expansion matched every detailed original exactly and retained all pinned
+answers. No inspection/planning reply was repeated. The full prompt measures 152,078
+characters / **152,168 UTF-8 bytes**. Fresh selected-model metadata again advertised
+628,000 context / 500,000 input / 128,000 output tokens; admission passed with a 400,000
+input budget and 502,400 combined budget before subtracting output/runtime reserves.
+No real project data was written and no live inference was performed.
+
+Verification in progress: type checking, diff checking and **75 focused tests** passed, covering
+atomic joint completion/full verification, unchanged paid prefixes/counters, 96k normal
+packing, the 200k hard stop, Unicode/whole-prompt overhead, unknown/smaller metadata,
+exact route/model checks, cancellation during metadata loading, pre-session
+rejection/owned cleanup, and 54→55 repeated
+reopen, portable adoption, downgrade/tampering rejection and future-format rollback.
+The full browser suite passed, including UI build and postchecks (only the existing
+Vite chunk-size warning). The first full test run found two historical export
+assertions expecting portable 24 after explicit Play; current adoption correctly
+exports 29. Those expectations now assert 29 and the new policy while preserving
+all paid-work/upgrade checks. The full `npm test` rerun passed, including the
+pretest/main suites and all **226 posttests** with zero failures. Live larger-input acceptance,
+semantic completion and installed desktop packaging remain unqualified.
+
+## Proposed selected-model input capacity (2026-11-09)
+
+**Historical investigation/proposal; superseded by the approved guarded 200k policy above.**
+At investigation time SQLite was 54 and conditional portable format 28 was current.
+The user initially authorized read-only
+capacity investigation, not an automatic budget increase. Native selected-model
+metadata and exact prompt measurements support proposing a 160,000-character shared
+evidence ceiling with separate whole-prompt/model-capacity admission. See
+[measurements and limitations](runtime-spike.md#selected-model-capacity-investigation-2026-11-09-metadata-only).
+
+If approved, implement a new explicit reader boundary and paid-prefix capacity policy;
+do not globally mutate old context construction, receipt hashes, layout validation or
+fingerprints. Preserve all 14 accepted replies (including eight inspections and their
+joint-group plan), current attempt 11 and spent request count 14. Repack only after
+the retained prefix; never reread/re-plan paid units just to adopt capacity. The
+all-original group remains atomic, and full verification remains mandatory. Old
+assessment identities/evidence must stay valid. Unsupported older/future envelopes
+must reject without overwriting work. Reopen/portable/downgrade/failure tests will be
+required alongside any implementation. The subsequent implementation allocates SQLite
+55 / portable 29 as recorded above; the original 160k proposal was not implemented.
+
+## Evidence-first blocked-lookup inspection (2026-11-09)
+
+**Source → target: SQLite 53 → 54; conditional portable format 28.** This is an
+ordered transactional reader-boundary upgrade only. No original answers, paid
+replies, blockers, completed reads/checks, drafts/repairs, assessments, delivery
+evidence, usage or live leases are rewritten. Existing page formats 1–10 and lookup
+review formats 1–2 retain their exact historical contexts/hashes. New inspection
+boundaries or inspection/comparison replies require portable 28; a downgraded envelope
+rejects without overwriting saved work. Unsupported future inspection formats roll
+back startup and can reopen/retry after correction. Semantic assessment identities
+and freshness rules are unchanged. No startup/polling inference is introduced.
+
+At revision **3354**, the earlier v2 clarification returned a sound refusal: the
+original omitted bodies had not yet been read, so it could not certify that separate
+loads preserved every indispensable comparison. This was not a new human product
+question. The cohort retains **five paid replies/requests**, current **attempt 2**,
+one completed original read step and its original 42-step schedule. The user approved
+an evidence-first pass; no product choices or independence were delegated by that
+approval. Repeating the same evidence-poor clarification would not solve the blocker.
+
+Explicit Play can now prepare a single immutable `lookupInspections` boundary after
+an exclusive v2 clarification blocker. Preparation binds the original lookup, full
+frozen draft, paid receipt prefix and activation attempt/request/failure counters;
+all original-plus-ALL-counterpart packets must fit before preparation is accepted.
+The original blocked reply remains dated evidence, not presumed resolved. Only the
+new evidence-acquisition stage may proceed. Generic/product blockers outside this
+exclusive retrieval boundary are not eligible. A later inspection blocker or exhausted
+safety stop cannot renew the pass, and existing paid inspection replies never repeat
+on Pause/reload/reopen/explicit continuation.
+
+Each requested original is inspected once beside its **complete recursive support,
+ALL original counterparts/support, full unchanged draft and EVERY pinned answer**.
+The new `answerGroupInspection` response records a bounded retrieval note and distinct
+requested peer IDs requiring an exact joint comparison. It cannot edit the draft,
+grant approval or complete any original read/check/page. Unknown peers reject; uncertain
+peers must be flagged conservatively. Notes are retrieval hints, never replacement
+evidence, human preferences, semantic independence or assessments. Original evidence
+and paid responses are never shortened to make a packet fit.
+
+To avoid another evidence-poor UUID-only planning turn, inspection/planning packets
+also carry an exact peer identity index: complete original statement/text/title fields,
+never generated summaries or sliced snippets. This index is explicitly not full peer
+evidence/support or coverage. Each original's complete body and recursive support must
+still receive its own inspection; no independence or verdict can be based on an index.
+
+After all inspections, one `answerGroupComparisons` turn proposes conservative groups.
+Every requested original must be covered; every inspection's original **plus ALL of
+its flagged peers** must occur together in at least one group. Separate pairwise
+checks do not discharge a larger flagged set. Groups may overlap or grow, but may not
+discard flags to fit. Each group subsequently receives an exact original-body
+read/check with all original counterparts and support. A valid paid grouping reply is
+saved even when it honestly requires an oversized joint group; packing then stops
+before another model call instead of discarding that reply or repeating planning.
+All original verification steps and complete post-repair checks remain mandatory.
+
+This is one acquisition pass, not a retry reset: at most eight inspections plus one
+planning turn per eligible lookup, at most eight distinct inspection boundaries, all
+within the inherited **256 total requests**, three-failure stop and existing
+page/layout/receipt/storage bounds. Attempts and failed/cancelled requests remain
+charged. Saved boundaries are append-only in SQLite; replay authenticates every
+inspection packet and cannot adopt another draft or paid prefix. Dispatch remains
+JSON-only/no-tools under the selected model. Progress messages explicitly distinguish
+inspection/planning from completed verification.
+
+Read-only actual-checkpoint preflight passed: all five paid replies, attempt 2 and
+five requests were unchanged during preparation. Using explicitly hypothetical,
+unpersisted inspection replies solely to measure geometry, all eight full-original
+inspection packets, including the exact peer identity index, fit
+**41,506–70,196 / 96,000 characters**. Independent expansion
+matched every detailed original exactly, retained the complete draft and all pinned
+answers, and left original coverage unchanged throughout. The planning packet with
+these geometry placeholders measures 40,508 characters; real notes are separately
+bounded/measured. No model grouping decision or live completion is established by
+this preflight. No real project data was written and no inference was performed.
+
+Verification: the full `npm test` run passed, including all **215 posttests** and
+the pretest/main suites. After the final exact-peer-index addition, the focused lookup
+suite passed **23 tests**, including
+evidence-first grouped completion/full verification, rejected premature verdicts or
+weakened groups, preserved oversized joint plans, cancellation/retry without repeated
+accepted inspection, malformed/genuine-conflict stops, and 53→54 repeated reopen,
+partial-inspection and accepted-group-plan portable adoption, downgrade/tampering
+rejection and future-format rollback.
+Type checking and diff checking passed. Two browser runs passed their first checks but
+then stopped on Windows `EBUSY` while removing a generated assessment-recovery
+fixture directory; these are cleanup failures, not passing full suites. That runner
+now retries only its own generated fixture removal five times with a 100-ms linear
+backoff, after browser/app/store close. A persistent cleanup error still fails; no
+application assertions were removed. The affected assessment-history browser check
+then passed independently, including cleanup. The full browser rerun subsequently
+passed, including UI build and all postchecks (only the existing Vite chunk-size
+warning). Live model
+correctness/completion and installed desktop packaging remain unqualified.
+
+## Counterpart-preserving lookup clarification (2026-11-09)
+
+**Source → target: SQLite 52 → 53; conditional portable format 27.** This is a
+transactional reader-boundary upgrade only. No original answers, paid replies,
+completed reads, drafts, repairs, assessments, spent attempts/requests, history or
+live leases are rewritten. No startup/model calls are introduced. Pending or resolved
+lookup-review **format 2** requires portable 27; older envelopes carrying it reject
+without overwriting work. Future review formats reject transactionally and allow
+reopen/retry after correction. Existing review v1 prompts, context hashes and receipts
+remain unchanged, as do evidence-page formats 1–10 and semantic assessment identities.
+
+The revision-3354 report is a **new five-answer cohort**, retaining four paid
+replies/requests, one completed original read step, three completed page replies and
+current attempt 1. Its lookup asks for eight requirements with two counterparts:
+one pinned current answer and one non-pinned original confirmation. The exact joint
+input measured **119,668 + 128 = 119,796 / 96,000 characters**; even v10 lossless
+pooling measured **119,127 + 128 = 119,255**. Existing pin-only clarification correctly
+did not apply. The user explicitly approved a broader, model-confirmed clarification
+on 2026-11-09; this is not permission to split indispensable comparisons silently.
+
+Play now offers one bounded, charged v2 clarification for an eligible oversized
+multi-original lookup with non-pinned counterparts. The model receives its exact
+authenticated prior working packet and unchanged lookup, not substituted evidence.
+It must explicitly confirm that **each requested original can be compared separately
+with ALL original `withRecordIDs` counterparts**, their full recursive support, the
+complete draft and every pinned answer. If the requested bodies really must be
+together, or the prior evidence is insufficient to decide, it must block. Clarification
+earns no read/check verdict, product decision or draft edit and preserves the paid
+lookup. Invalid/cancelled responses remain charged; attempts and original coverage
+are not reset. There is no inference during preparation or preflight.
+
+Only after the valid reply, the planner schedules indivisible original-plus-ALL-
+counterparts units. Shared counterparts do not force those independently confirmed
+units into one union, and they are never dropped as already-read evidence. Unit
+constraints survive partial page completion, relayout, restart and portable adoption
+through the original step. Later specific joint requests remain atomic. V2 refuses
+repeated comparisons (including reordered ID lists), other unresolved joint requests,
+or any original-plus-counterparts unit that cannot fit. Eight total lookup reviews,
+the existing request/page/storage ceilings and full post-repair verification remain
+mandatory; no budget or repair allowance was increased.
+
+Read-only actual-checkpoint preflight preserved all four original replies, spent
+attempt 1, four requests and complete draft replay. The exact clarification packet
+fits **36,198 / 96,000**. A **hypothetical, unpersisted** confirmation produces five
+remaining pages: the eight requested originals occur on three comparison pages,
+each retaining both counterparts and all pinned answers; the other two pages are
+remaining background. Independent expansion matched every detailed original exactly
+on every page. All pages fit below 74,000 characters in this geometry check; the
+actual first post-confirmation dispatch packet measures **71,460 / 96,000**. These
+measurements do not establish a model's clarification decision or live completion.
+
+Type checking and `git diff --check` passed (Git emitted only Windows line-ending
+conversion warnings). The combined bounded-repair/lookup regression run passed all
+42 tests; the final expanded lookup suite passed all 16 tests, including check-phase
+counterpart comparisons. The full browser suite, including UI build and postchecks,
+passed (only the existing Vite chunk-size warning). Full `npm test` passed, including
+the pretest/main suites and all 208 posttests with zero failures.
+Focused deterministic tests cover confirmed comparison
+completion/full verification, exact non-pinned support, no split/read/refund on genuine
+joint blockers/malformed output/cancellation, partial-page relayout, repeated-lookup
+rejection, oversized single comparisons, and 52→53 preservation across repeated reopen,
+pending/resolved portable adoption, downgrade rejection and future-format rollback.
+No real project data was written or live inference performed. Installed desktop
+packaging and live specification completion remain unqualified.
+
+## Lossless joint-evidence phrase pooling (2026-11-08)
+
+**Source → target: SQLite 51 → 52; conditional portable format 26.** This is a
+transactional reader-boundary upgrade only. Startup changes no original evidence,
+paid replies, read coverage, attempts, assessments, leases or usage and never starts
+inference. Only continuations carrying new evidence-page format **10** require portable
+26. Older envelopes carrying v10 reject without overwriting work. Unsupported future
+page formats roll back startup and can reopen/retry after the payload is corrected.
+Material, plan, original-source and assessment identities are unchanged.
+
+The reported revision-3337 stop involves a **real non-pinned joint comparison**, unlike
+the earlier pin-relative lookup. Two consecutive lookups on the unfinished page require
+existing requirements and their complete original support together. The exact packet
+measured **99,720 + 128 metadata reserve = 99,848 / 96,000 characters**. The run made no
+new call, but the retained cohort already contains ten paid replies/requests, a complete
+6,511-character draft and two spent attempts on the current page. It is not safe to
+drop a counterpart, split this joint set, clear coverage or reuse the pin-only waiver.
+
+Play-owned work now tries a **new versioned lossless layout** before asking for any
+lookup clarification or reporting another packing stop. V10 uses the existing
+`sharedTextID` / ordered `textParts` decoding grammar to pool literal repeated phrases,
+then applies the existing identifier/record-table encodings. No wording is summarized,
+trimmed, paraphrased or removed. Every joint body and full recursive support remains
+detailed together; the complete carried draft and all original human answers remain
+present. The actual resulting JSON must fit the unchanged 96,000-character cap.
+Incompressible or genuinely oversized joint inputs still stop before inference.
+
+The opt-in `joint-v1` text policy scans at most 250,000 characters, considers exact
+8/16/32-word substrings of 80–1,024 characters, bounds its candidate map at 16,384 and
+selects at most 256 profitable repeated phrases (two or more occurrences). Ties use
+deterministic binary ordering, not machine locale. Replacement preserves exact literal
+slice offsets, punctuation, whitespace and Unicode. Only used strings enter the wire
+table; an encoding is kept only when its full serialized envelope is smaller. These
+bounds limit local work, not evidence: unpooled original text remains literal in full.
+All earlier text policies and page formats retain their original behavior/hashes.
+
+V10 activates at a new exact paid-prefix page boundary; no old receipt or layout is
+rewritten. Active v10 pages keep that format on retry/reopen instead of downgrading to
+v9. The original step schedule, source authorization, explicit joint constraint,
+current spent attempts, total requests, read coverage and required verification are
+unchanged. There is no new model planning turn, semantic independence claim, repair
+allowance or budget increase. Diagnostics now recognize page format 10 without changing
+the historical metrics format. Repairs/checks and all request/page/storage ceilings
+remain mandatory.
+
+Read-only actual-checkpoint preflight passed at revision **3337**, with **ten paid
+replies**, **ten total requests** and current **attempt 2** unchanged. The new two-page
+layout's joint first packet fits **95,693 / 96,000 characters**. Independent wire
+expansion matched every detailed original source/question/requirement/research record
+exactly; all requested joint IDs were together, all original answers were present,
+the original paid prefix was unchanged and complete draft replay matched. No real
+project data was written and no model inference was used. This qualifies exact
+representation/geometry, not live model quality or final specification completion.
+
+Verification: type checking and the full browser suite (including UI build and
+postchecks) passed; 47 focused working-set/lookup tests passed, including exact
+Unicode/whitespace round-trip, atomic joint completion and 51→52 repeated reopen,
+portable adoption, downgrade rejection and future-format rollback/recovery. The first
+full test run exposed seven obsolete future-format assertions in historical tests:
+they used newly supported page format 10 as an invalid sentinel. Those fixtures now
+use unsupported format 11, retaining the same rejection/preservation assertions.
+The full `npm test` rerun passed, including all 200 posttests and the preceding
+pretest/main suites. Type checking and `git diff --check` also passed (Git reports
+only existing Windows line-ending conversion warnings). Installed desktop packaging and live completion remain
+unqualified. No inference or real-project writes were performed during these checks.
+
+## Oversized pin-relative lookup clarification (2026-11-08)
+
+**Source → target: SQLite 50 → 51; conditional portable format 25.** Startup is a
+transactional reader-boundary upgrade only; no original inputs, paid lookups, completed
+reads, drafts, repairs, assessments, usage or live leases are rewritten or reset. Future
+lookup-review formats reject transactionally and can reopen/retry after correction.
+Portable 25 is required only for `lookupReviews` or their `answerGroupLoadPlan` replies;
+older envelopes carrying this new state reject without overwriting evidence.
+
+The reported failure was a **new three-answer group at revision 3320**, not lost
+progress from the earlier repaired cohort. Two read pages and a lookup were accepted.
+The model then requested eight original requirements with three human-answer source
+IDs as `withRecordIDs`. Those counterparts were already pinned on every page. The
+existing contract treated the entire request as one explicit joint set, measuring
+**130,533 + 128 metadata reserve = 130,661 / 96,000 characters**. Each original unit
+could fit separately, but that fact alone does not authorize silently splitting a
+declared joint comparison or asserting semantic independence.
+
+Play-owned progress-policy work now has a narrow **model clarification turn** for this
+case. It is eligible only when a saved last lookup has multiple requested originals,
+every explicit counterpart is an always-pinned original, the combined packet exceeds
+the input cap, and each complete original unit/support can fit with the full draft,
+all pinned answers and metadata. Non-pinned joint counterparts, a genuinely unfit single
+unit, legacy work without explicit policy adoption and unrelated failures retain their
+existing stop. There are at most eight such review boundaries within the unchanged
+request, consecutive-failure, page, receipt and storage ceilings.
+
+The review is bound to the exact normalized paid prefix and original lookup receipt.
+It supplies the exact original pre-lookup working packet, including the full draft and
+every human answer, plus the retained lookup and explicit retrieval-scope instructions.
+No omitted requested body is presented as read. The only successful response is a
+charged `answerGroupLoadPlan` explicitly confirming separate original-unit retrieval
+beside **all** original pins; otherwise the model must block an indispensable joint
+comparison. It cannot edit the draft, repeat the lookup, grant a read/check verdict or
+choose a product preference. Malformed replies keep the same charged attempts and
+three-failure guard. The app never fabricates confirmation or makes this choice from
+IDs/size alone.
+
+Only after actual model confirmation is that specific old all-at-once retrieval
+constraint replaced by separate loads. Every requested original and its full recursive
+support stays scheduled, including explicitly requested originals already read on
+another page. The old lookup remains byte-for-byte evidence. The clarification is not
+a completed read, repair, verification pass or assertion of semantic independence.
+The complete draft and all answers remain present; every original check still runs.
+Any later specific joint request retains its own atomic constraint and must fit.
+Model refusal remains a saved blocker, not permission to relax the comparison.
+
+Pending/resolved reviews replay at their exact receipt boundaries; historical contexts
+and assessment identities are unchanged. Cancellation/reopen retains the original
+lookup and charged attempt. Explicit retry resumes clarification, not another original
+lookup request. Portable clones retain the review and required existing parents, start
+paused, and need no native runtime session to continue this protocol.
+
+Read-only actual-checkpoint preflight passed with **three paid replies**, **two saved
+read pages**, current **attempt 1**, **three total requests** and the unchanged draft.
+The clarification packet fits **43,692 / 96,000 characters** and replays unchanged.
+A clearly hypothetical, in-memory confirmation (never persisted or represented as
+model evidence) produced five bounded pages, with the first at **59,968 characters**;
+its draft replay also matched. No real project data was written and no live inference
+was used. This qualifies packet geometry, not the future model's confirmation or
+semantic correctness; an actually indispensable oversized comparison still stops.
+
+Verification: `npm test` pretests (**930**) and main tests (**776**) passed. Its first
+posttest pass exposed an incorrect test expectation that a fully published job's
+activity ledger must be exported; portable projections intentionally omit unnecessary
+completed archives. The test was corrected to verify both pending clarification and
+accepted-but-unfinished clarification, including actual clone adoption. The final
+`npm run posttest` passed **198 / 198**, and the focused six-test lookup suite passed.
+The full browser suite/postchecks, UI build, type check and diff check passed. New
+regressions cover explicit scope confirmation followed by all reads/checks, forbidden
+draft/verdict envelopes, refusal, malformed output, cancellation/charged explicit retry,
+non-pinned atomic counterparts, repeated reopen, pending/resolved portable continuation,
+downgrade/tamper rejection and unsupported-format rollback/retry. Installed desktop
+packaging and live model clarification remain unqualified. Relaunch the development
+app and press **Play**; no reset, re-entered answers or separate allowance is needed.
+
+## Progress-based shared-answer corrections (2026-11-08)
+
+**Source → target: SQLite 49 → 50; conditional portable format 24.** The user
+explicitly approved replacing the flat two-repair cap with bounded progress-based
+technical recovery. Startup only upgrades the transactional reader boundary. It
+rewrites no original answers, receipts, attempts, repairs, assessments, leases or
+usage, and never starts work. Explicit **Play** activates `repairPolicy` at the exact
+normalized paid-prefix boundary, retaining the number of pre-existing repair layouts.
+Old receipts still render under their original policy; legacy work without activation
+keeps the two-repair behavior. No historical assessment or semantic identity changes.
+
+The reported saved output was successfully recovered as repair two. Six verification
+pages passed, then a different supplied decision exposed an omitted exception: a
+returning partner who is connected but waiting to appear must not prevent departure.
+The previous repair had preserved the survivor and disconnected-partner exceptions,
+but its general restriction for two living connected players omitted this already
+settled waiting-partner exception. This was another faithful-reconciliation task,
+not a missing gameplay answer. The flat two-repair cap prevented correction even
+though there were no consecutive failures and original human evidence was available.
+
+Under the new policy, **additional** corrections beyond the first two require:
+
+- An authenticated negative verification naming an existing target already revised
+  by the full carried draft, and concrete current human answer/note evidence.
+- The cited human evidence must have been detailed in that exact rejected packet,
+  not invented, superseded, delegated, unavailable or merely listed in a catalogue.
+- Every named target must have at least one new target/evidence comparison not already
+  followed by an accepted repair. Rephrasing the same failure does not renew it.
+- The repair packet contains all pinned original answers, the whole saved draft,
+  named originals and their full recursive support. Unrelated actions and other
+  non-summary draft fields must remain unchanged. Only the named existing target
+  actions may be corrected; equivalent absent/empty optional collections do not count
+  as unrelated changes. The normal current-batch authorization rules still apply.
+- Each target must actually change its statement/acceptance behavior. Unchanged
+  corrections and exact earlier target versions stop immediately, without three
+  identical validation retries. Hash/string checks are conservative loop guards,
+  not proof that two differently worded drafts have different semantics.
+
+The first two repairs retain compatible existing behavior. There is a hard backstop
+of **eight total accepted repairs**, including the earlier two, inside the unchanged
+**256 total request** ceiling, three consecutive-failure guard, input/output/storage
+and page bounds. No spent request or failed attempt is refunded. Repeated Play, Pause,
+Stop, reopen and portable adoption cannot replace the activation boundary or reset
+those counters. Actual human blockers remain explicit stops; IDs in model feedback
+are selection hints, not authority to resolve conflicting human intent.
+
+Every accepted correction still restarts **all** original verification batches/pages.
+Paid reads remain reusable; old verdicts and drafts remain dated history, not proof
+that the new draft is consistent. Dispatch-only guidance asks the model to preserve
+every supplied exception and prior explicit conflict resolution, rather than fixing
+the latest exception by broadening a restriction over another. Native saved-response
+recovery is not broken by activation: a pending paid reply retains its exact original
+prompt/policy until accepted; the new policy can activate afterward.
+
+Portable 24 is required only for the new policy. Downgraded envelopes carrying it
+reject without overwriting data. Unsupported future policy formats roll back the
+49→50 startup upgrade transactionally; restoring the supported payload permits retry.
+Repeated startup preserves the old stopped job byte-for-byte. Pending policy/layouts,
+original provenance, counters and required existing parents survive actual portable
+clone adoption. Native sessions remain machine-local under the earlier export rules.
+
+Read-only actual-checkpoint preflight at revision **3304** passed with **113 replies**,
+**two accepted repairs**, current **attempt 1**, **13 total Play requests**, zero
+consecutive failures, two affected draft targets and two current human witnesses.
+The correction packet fits **82,806 / 96,000 characters**. The full draft, all original
+answers, paid receipt prefix and source work object were unchanged; adoption and layout
+replay matched. No real project data was written and no model request was made.
+This verifies eligibility/geometry/replay, not the next model's semantic quality or
+final specification completion. Installed desktop packaging remains unqualified.
+
+Verification passed: full `npm test` (930 pretests, 776 main tests, 189 posttests),
+followed by the final expanded posttest rerun (**192 passed**) and a final 27-test
+bounded-repair/recovery run after dispatch-guidance updates. The full browser suite
+and postchecks, UI build, type checking and diff checking also passed. New regressions
+cover third-repair/full-check completion, repeated comparisons, no-op/cycling/unrelated
+drafts, genuine blockers, unidentified/invented/unloaded evidence, malformed output,
+eight-repair backstop, cancellation/charged retry, empty optional collection equivalence,
+49→50 preservation/repeated reopen, actual portable clone adoption, downgrade/tamper
+rejection and future-format rollback/retry. No live inference was used. Relaunch the
+development app and press **Play**; do not reset the project or re-enter settled answers.
+
+## Shared-answer output capacity and completed-reply recovery (2026-11-08)
+
+**Source → target: SQLite 48 → 49; conditional portable format 23.** Startup is a
+transactional reader-boundary upgrade only. No existing payload, answer, receipt,
+attempt, lease, assessment identity or usage is rewritten; startup never rearms work
+or calls a model. Unsupported future capacity/recovery formats roll back and can be
+reopened after correction. No reset or repeat assessment is required. Portable 23 is
+required only when the new capacity, pending recovery or recovered receipt is present;
+older envelopes carrying those fields reject without overwriting work.
+
+The reported complete repair was **26,733 serialized response characters**, including
+a **26,711-character full draft**. The old 24,000-character aggregate output limit—not
+the response wrapper or 96,000-character input limit—rejected it three times. Play
+therefore retained 105 accepted replies, one accepted repair, attempt 4, six total
+automation requests and three consecutive failures. Raising a limit must not refund
+those requests or silently renew a no-progress stop.
+
+Explicit Play now appends a versioned **48,000-character aggregate output capacity**
+at the exact normalized receipt-prefix boundary. Earlier receipts keep their original
+24,000-character validation and rendering. Dispatch-only output advice changes no
+working-evidence hashes. The original input packing reserve remains separate from
+output capacity: every actual subsequent working-evidence packet, with the full carried
+draft and human answers, still must fit **96,000 characters**; otherwise it is repacked or stops before
+inference. Saved-work byte/page/request/repair ceilings remain enforced. A returned
+capacity error stops immediately, rather than automatically repeating unchanged advice.
+
+For this specific completed-output failure, explicit Play prepares a **read-only
+completed-reply recovery**, even at the consecutive-failure stop. This is not permission
+for another model request. The adapter reads the original OpenCode session without
+prompting, changing models, waiting/resuming a session or calling tools. It requires
+exactly one matching original text-only user prompt (all bytes, including the old output
+instruction and exact working evidence), the selected model throughout, completed
+error-free assistants, one successful terminal idle record, no intervening prompts,
+attachments, synthetic context or tools. Missing/unavailable/incompatible sessions
+stop without falling back to inference. Direct-provider selections never fall back
+to OpenCode. This hook is explicitly forwarded through both adapter wrappers.
+
+Pending recovery binds the paid prefix, original source job, spent attempt and total
+requests. A recovered receipt adds hashed prompt/message provenance and the source job
+but no native session ID. Acceptance retains attempt 4 and the six original requests;
+only genuinely accepted progress clears consecutive failures. An actual repair still
+invalidates every earlier check and requires every original verification batch/page
+again. Cancellation, mismatch or stale inputs preserve the pending boundary and original
+work. No receipt or correction is published on a failed read. Parent checks prevent
+orphaned recovery, and portable exports retain only necessary parent evidence. Native
+session IDs stay machine-local: a pending recovery on a clone without that session
+stops honestly; an already recovered reply can continue from its portable receipt.
+
+Read-only inspection of the reported saved session verified the exact original prompt,
+completion/model/no-tools contract and all five prior actions unchanged verbatim.
+All five answer outcomes remain the same; four draft receipt explanations are identical
+and one explanation changes with the correction (the original human answers remain
+pinned unchanged). In-memory acceptance/replay of the complete reply passed under the
+compatible capacity. No real project-data writes or live model calls were made.
+The in-memory recovered receipt remains **attempt 4**, total requests remain **6**,
+and the first mandatory recheck packet fits **95,460 / 96,000 characters**. No synthetic
+check was recorded as semantic verification of the real specification.
+This is local recovery qualification, not proof of semantic correctness or final
+specification completion. Full verification remains required after the user presses Play.
+
+Verification passed: full `npm test` (930 pretests, 776 main tests and 176 posttests),
+the full browser suite/postchecks and UI build, followed by 28 focused tests after
+adding cancellation/resume, stale-edit, no-identical-retry and adapter-class forwarding
+coverage. The final posttest rerun passed all **179** tests, and the 14-test bounded
+repair/recovery file passed again after tightening parent/history validation.
+Type checking and diff checking passed. Upgrade regressions cover 48→49
+unchanged failures, repeated reopen, pending portable export without session IDs,
+future-format transactional rollback/retry and downgrade/tamper rejection. Tests also
+cover exact prompt/model/completion, intervening activity/tools/attachments, no paid
+fallback, full post-repair verification and durable usage/provenance. Installed desktop
+packaging and final live semantic completion remain unqualified.
+
+## Bounded rejected-comparison repair contexts (2026-11-08)
+
+**Source → target: SQLite 47 → 48; conditional portable format 22.** This is a
+transactional reader-boundary migration only. Startup rewrites no project, answers,
+paid replies, attempts, completed reads/checks, assessments, grants or leases and
+never starts work. Existing material/plan/assessment identities and old receipt
+rendering remain unchanged. Only jobs carrying new `repairContexts` require portable
+22; downgraded envelopes reject without overwriting saved state. Unsupported future
+repair-context formats reject transactionally, retain database version 47, and can
+retry after the unsupported payload is corrected. No repeat assessment is required.
+
+The reported Play run accepted its first repair, restarted verification, passed one
+page and found another overlapping departure rule needing the same settled survivor
+exception. Constructing the next repair mistakenly restored the entire broad original
+background batch beside the now-larger draft, instead of the affected comparison.
+That packet measured **103,502 / 96,000** characters. This was a repair-packing stop,
+not proof that the original human constraints alone could not fit, and not a request
+to reconfirm settled gameplay choices.
+
+An oversized repair can now append a deterministic bounded context at its exact
+receipt boundary. It binds the normalized paid prefix, original negative check,
+whole saved draft fingerprint, original step and ordered exact record IDs. It supplies
+the existing original rules/evidence named by that authenticated feedback and their
+complete source/question/current-answer closure, beside **every pinned human answer
+and the full carried draft**. A named rule can be retrieved from the group's original
+catalogue even if only its confirmation/quotation was on the rejected page. IDs in
+model prose are retrieval hints, not product authority or permission to fetch invented
+records. If no existing rule is named, the complete rejected packet is retained rather
+than guessing a smaller target. Named joint counterparts remain atomic; genuinely
+unfit complete repair evidence still stops before inference with a repair-specific
+size diagnostic.
+
+Unrelated draft actions must remain unchanged unless their full originals are loaded;
+validation covers removals as well as additions/edits. Indispensable new counterparts
+remain explicitly loadable and their full closures are measured again. No earlier
+read, reply, successful repair, attempt or check is discarded/refunded. No new user
+authorization, extra repair allowance, automatic conflict precedence or verification
+skip is introduced. An actual repair still restarts **all** original verification
+batches/pages. Subsequent repair cycles retain separate ordered layouts (at most the
+existing two accepted repairs); old contexts and paid hashes replay unchanged.
+
+Pre-dispatch overflow now checkpoints the retained shared work together with its
+exclusive stage manifest. This also prevents saving an unreadable stage-only failed
+job when the first packet of a resumed run genuinely cannot fit. The size stop remains
+readable and charged counters remain unchanged; recording its diagnostic grants no call.
+
+Read-only actual-checkpoint preflight passed at revision **3304**, **105 replies**,
+**1 accepted repair**, **attempt 1** of the current stage. The new repair context
+measured **55,682 / 96,000** characters with 17 complete original records, all pinned
+answers, the named overlapping rule and the unchanged full draft. The original work
+object was unchanged, the real SQLite connection was read-only, no layout/grant was
+persisted and no model request was made. This qualifies packing/replay geometry, not
+the next model's semantic repair quality or final specification completion.
+
+Six focused deterministic tests passed: retained second-repair/full-check completion,
+retrieval of a named original outside the rejected page, preservation of unloaded
+draft actions, cancellation/malformed charged recovery, genuine atomic overflow with
+zero inference and readable failure state, unknown-ID conservative fallback, 47→48 repeated reopen, saved-layout portable
+roundtrip/downgrade rejection, tamper rejection and unsupported-format rollback/retry.
+Full `npm test` passed (930 pretests, 776 main tests, 171 posttests), as did the
+full browser suite/postchecks, UI build, type checking and diff checking. The first
+regression run exposed the stage-only pre-dispatch failure bug described above;
+after its fix both the focused tests and full rerun passed. No live inference or
+real project writes were used during implementation or verification.
+Live repair and installed desktop packaging remain unqualified. Close/relaunch the
+development app (`npm run desktop` or `npm run app`) and press **Play**; do not reset
+the project, re-enter answers or grant another repair permission.
+
 ## Play-owned specification processing (2026-11-08)
 
 **Source → target: SQLite 46 → 47; conditional portable format 21.** Startup is a

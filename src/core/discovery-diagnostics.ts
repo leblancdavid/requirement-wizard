@@ -18,13 +18,16 @@ export const diagnosticContextSchema = z.object({ characters: count, budget: cou
   omittedRecords: count, areas: count.nullable(), sections: sectionsSchema,
   traversal: z.object({ visitedRecords: count, examinedEdges: count, missingRecords: count }).strict().nullable(),
   sharedAnswer: z.object({ originalStep: count, phase: z.enum(["read", "check", "repair"]),
-    pageFormat: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9)]).nullable(), page: count.nullable(), pages: count.nullable() }).strict().optional(),
+    pageFormat: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11)]).nullable(), page: count.nullable(), pages: count.nullable() }).strict().optional(),
 }).strict();
 const groupProgressSchema = z.object({ batches: z.object({ length: count }).strict(),
   receipts: z.array(z.object({ step: count, response: z.union([
     z.object({ answerGroupDraft: z.literal(true) }).strict(), z.object({ answerGroupKeep: z.literal(true) }).strict(),
     z.object({ answerGroupRepair: z.literal(true) }).strict(), z.object({ answerGroupCheck: z.object({ valid: z.boolean() }).strict() }).strict(),
     z.object({ answerGroupEvidence: z.literal(true) }).strict(), z.object({ answerGroupBlocked: z.literal(true) }).strict(),
+    z.object({ answerGroupLoadPlan: z.literal(true) }).strict(), z.object({ answerGroupInspection: z.literal(true) }).strict(),
+    z.object({ answerGroupComparisons: z.literal(true) }).strict(),
+    z.object({ answerGroupBlockerReview: z.literal(true) }).strict(),
   ]) }).strict()).max(answerGroupLimits.receipts),
   evidencePages: z.array(z.object({ fromReceipt: count, step: count, phase: z.enum(["read", "check"]),
     pages: z.object({ length: count }).strict() }).strict()).max(answerGroupLimits.pagePlans),

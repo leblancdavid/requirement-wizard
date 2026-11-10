@@ -41,6 +41,10 @@ import { stagedRunRequestLimit, stagedRunDurationMs, stagedRunLeaseMs } from "..
 import { definitionJointReviewLimits } from "../core/definition-joint-review.js";
 
 export interface DiscoveryAdapter {
+  /** Read completed text only. Must never prompt, retry or change providers. */
+  recoverAnswerGroup?(project: Project, options: { sessionID: string; context: ContextPack; signal: AbortSignal }): Promise<{
+    response: unknown; promptKey: string; messageKey: string;
+  }>;
   clarify?(project: Project, request: QuestionHelpRequest, options: DiscoveryOptions): Promise<unknown>;
   analyze(project: Project, options: {
     signal: AbortSignal;
@@ -461,7 +465,9 @@ export class DiscoveryService {
       throw new Error("Continue exploration retains its saved task, model, research permission and search policy; other discovery options are not accepted.");
     }
     const { job, project } = this.store.beginJob(projectID, expectedRevision, options.helpRequest, false, this.navigation.workflow?.owner, options.automatic);
-    const inferenceAdapter: DiscoveryAdapter = { ...this.adapter, analyze: async (snapshot, request) => {
+    const inferenceAdapter: DiscoveryAdapter = { ...this.adapter,
+      ...(this.adapter.recoverAnswerGroup ? { recoverAnswerGroup: this.adapter.recoverAnswerGroup.bind(this.adapter) } : {}),
+      analyze: async (snapshot, request) => {
       this.navigation.workflow?.beforeRequest(job.id);
       const witness = options.definitionEpicID ? this.store.beginDefinitionRequest(job.id, snapshot, request.context) : undefined;
       const response = await this.adapter.analyze(snapshot, request);

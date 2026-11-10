@@ -60,6 +60,15 @@ function decodeContext<T>(input: unknown): T {
   return decoded as T;
 }
 
+test("joint-v1 phrase pooling round-trips exact Unicode, punctuation, whitespace and source identities deterministically",()=>{
+  const phrase="Preserve café, cafe\u0301, 🙂, ‘quoted words’, \\literal\\ paths and every original human condition without choosing precedence between genuinely conflicting decisions.";
+  const input={sources:Array.from({length:12},(_,i)=>({id:`source-${i}`,kind:"answer",questionID:`question-${i}`,text:`Original ${i}\r\n${phrase}  ${phrase}\t${i}: ${phrase}\nEnd ${i}.`}))};
+  const packed=shareRepeatedText(input,true,true,[],"joint-v1"),decoded=decodeContext<typeof input>(packed.data);
+  assert.deepEqual(decoded.sources,input.sources);assert.ok(JSON.stringify(packed.data).length<JSON.stringify(input).length);
+  assert.deepEqual(shareRepeatedText(input,true,true,[],"joint-v1"),packed);
+  assert.deepEqual(shareRepeatedText(input,true,true),shareRepeatedText(input,true,true,[],undefined),"Existing phrase policy stays byte-for-byte unchanged");
+});
+
 function snapshotHeavyProject(store: ProjectStore, count: number) {
   const p = store.create("Project-wide approval context", "Preserve exact project-wide constraints", { providerID: "openai", modelID: "fixture" });
   for (let i = 0; i < count; i++) {

@@ -32,6 +32,15 @@ work. Product decisions still require review. Technical details and legacy contr
 are collapsed under **Processing details and advanced actions**. See
 [implemented scope and remaining legacy limits](docs/coordinated-workflow.md#simple-processing-2026-11-08).
 
+Shared evidence normally packs within 96k characters. An indivisible joint read/check
+can use a guarded 200k exception after Play adoption, with a separate selected-model
+whole-prompt capacity check. Paid work and full verification remain intact; this is
+not live qualification of larger requests. See [capacity and preservation](docs/migrations.md#guarded-200k-joint-evidence-exception-2026-11-09).
+
+Play can review an omitted saved human resolution before repeating a supposedly
+unsettled decision. The bounded review freezes the draft, preserves paid progress
+and cannot override genuine conflicts. See [resolution evidence recovery](docs/migrations.md#omitted-human-resolution-evidence-review-2026-11-09).
+
 The following dated capability notes refer to retained advanced workflows:
 
 **Specification workflow (preview)** offers **Continue specification** to sequence saved input,

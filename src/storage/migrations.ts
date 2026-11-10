@@ -27,7 +27,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 47;
+export const databaseSchemaVersion = 57;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -281,6 +281,35 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 47, name: "play-owned-specification-processing-v1", apply() {
   // Reader boundary only. Play adopts old work explicitly at an authenticated
   // receipt boundary; startup never arms work, refunds usage or rewrites evidence.
+} }, { version: 48, name: "rejected-comparison-bounded-repair-contexts-v1", apply() {
+  // Reader boundary only. Preserve all paid replies and original protocol hashes;
+  // new bounded repair layouts activate at an exact saved receipt boundary.
+} }, { version: 49, name: "shared-answer-output-capacity-and-completed-recovery-v1", apply() {
+  // Reader boundary only; no payload rewrites, refunds, inference or rearming.
+} }, { version: 50, name: "progress-based-shared-answer-repair-v1", apply() {
+  // Explicit Play activates a prefix-bound policy. Preserve all historical
+  // repairs, paid receipts, attempts, assessments and current worker leases.
+} }, { version: 51, name: "oversized-pinned-counterpart-lookup-clarification-v1", apply() {
+  // Reader boundary only. No lookup, joint constraint, paid progress or usage
+  // is rewritten; a new model reply must explicitly clarify retrieval intent.
+} }, { version: 52, name: "exact-joint-evidence-phrase-pooling-v10", apply() {
+  // Reader boundary only. V10 layouts activate after preserved paid prefixes;
+  // historical contexts, joint constraints and all usage remain unchanged.
+} }, { version: 53, name: "counterpart-preserving-lookup-clarification-v2", apply() {
+  // Reader boundary only. Existing v1 lookup reviews/paid hashes are unchanged;
+  // v2 requires an explicit paid scope clarification before separate comparisons.
+} }, { version: 54, name: "evidence-first-blocked-lookup-inspection-v1", apply() {
+  // Reader boundary only. Preserve original blockers/paid contexts and usage;
+  // evidence-only reads and comparison plans cannot certify original steps.
+} }, { version: 55, name: "guarded-joint-input-capacity-v11", apply() {
+  // Reader boundary only. Explicit Play records capacity after the paid prefix;
+  // historical wire packets, assessments and spent usage are never rewritten.
+} }, { version: 56, name: "omitted-human-resolution-review-v1", apply() {
+  // Reader boundary only; explicit Play may review structurally linked omitted
+  // human evidence without rewriting originals, old receipts or spent counters.
+} }, { version: 57, name: "distinct-human-resolution-reviews-v2", apply() {
+  // Reader boundary only: retain the v1 singleton verbatim and append bounded
+  // v2 reviews for disjoint cited conflicts. No renewed requests or verdicts.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

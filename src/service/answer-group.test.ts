@@ -314,7 +314,7 @@ test("41 to 42 retains paid v5 packets across reopen and rollback; compact v6 ch
     store.checkpointAnswerGroup(job.id, w, oldContext.manifest); store.failJob(job.id, "failed", "Retained original packet");
     const original = store.getJob(job.id); store.close();
     let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 42; PRAGMA user_version=41");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); db.close();
     assert.throws(() => new ProjectStore(path));
     db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 41);
@@ -592,7 +592,7 @@ test("44 to 45 retains a reserve-only read stop and fits its atomic joint unit w
     store.checkpointAnswerGroup(job.id, f.w, overflow.manifest); store.failJob(job.id, "failed", overflow.message);
     const original = store.getJob(job.id), paid = structuredClone(f.w.receipts), progress = answerGroupProgress(f.w);
     store.close(); let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 45; PRAGMA user_version=44");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 44);
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(original), job.id); db.close();
@@ -717,7 +717,7 @@ test("v8 read relayout retains paid coverage and requires explicit counterparts 
     const f = legacyPageLoop(store, 2), paid = structuredClone(f.w.receipts);
     const original = store.getJob(f.job.id); store.close();
     let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 44; PRAGMA user_version=43");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), f.job.id); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
     assert.equal(db.pragma("user_version", { simple: true }), 43);
@@ -824,7 +824,7 @@ test("37 to 38 preserves mixed-job v1 page hashes, rejects future data transacti
     const tampered = structuredClone(reordered); tampered.receipts[0]!.jobID = randomUUID();
     assert.throws(() => replayAnswerGroup(f.m, tampered), /evidence pages/);
     store.close(); let db = new Database(path);
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), f.job.id);
     db.exec("DELETE FROM migration_history WHERE version >= 38; PRAGMA user_version=37"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 37);
@@ -941,7 +941,7 @@ for (const phase of ["read", "check"] as const) test(`oversized shared ${phase} 
     assert.deepEqual(work.receipts.slice(0, originalReceipts.length), originalReceipts);
     const tampered = structuredClone(work); tampered.evidencePages![0]!.pages[0]!.pop();
     assert.throws(() => replayAnswerGroup(m, tampered), /evidence pages/);
-    const future = structuredClone(work); (future.evidencePages![0] as { format: number }).format = 10;
+    const future = structuredClone(work); (future.evidencePages![0] as { format: number }).format = 12;
     assert.equal(answerGroupWorkSchema.safeParse(future).success, false);
   } finally { store.close(); }
 });
@@ -990,7 +990,7 @@ test("36 to 37 retains an overflowing paid lookup; explicit paged continuation s
     assert.deepEqual(decodePortable(files, p.model).continuation.jobs.find(j => j.id === paused.id)!.answerGroupWork, paused.answerGroupWork);
     assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 18 }) }, p.model), /format 19/);
     store.close(); db = new Database(path);
-    const future = structuredClone(paused); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 10;
+    const future = structuredClone(paused); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), paused.id);
     db.exec("DELETE FROM migration_history WHERE version >= 37; PRAGMA user_version=36"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);

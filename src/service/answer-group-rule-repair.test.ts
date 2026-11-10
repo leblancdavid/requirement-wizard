@@ -298,7 +298,8 @@ test("46 to 47 preserves exhausted paid work; Play adoption survives reopen and 
     assert.deepEqual(adopted.answerGroupWork!.receipts, original.answerGroupWork!.receipts);
     store.close(); store = new ProjectStore(path); assert.deepEqual(store.getJob(loaded.id), adopted);
     const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id), store.submissions(f.p.id), rev => store.get(f.p.id, rev)));
-    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 21);
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 29);
+    assert.equal(adopted.answerGroupWork!.inputCapacity!.characters,200000,"Explicit Play adopts current guarded capacity without changing old paid work");
     assert.deepEqual(decodePortable(files, f.p.model).continuation.jobs.find(j => j.id === loaded.id)!.answerGroupWork, adopted.answerGroupWork);
     assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 20 }) }, f.p.model), /format 21/);
     let calls = 0;

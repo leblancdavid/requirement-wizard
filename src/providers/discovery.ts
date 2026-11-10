@@ -6,9 +6,14 @@ import { ConnectionManager, connectionError } from "./connections.js";
 import { generate, ProviderError } from "./chatgpt.js";
 import { verifyDefinitionReviewScopeContext } from "../core/definition-review-scope.js";
 import { verifyDefinitionMixedReviewContext } from "../core/definition-mixed-review.js";
+import {needsJointInputAdmission,JointInputCapacityError} from "../runtime/input-capacity.js";
 
 /** Explicit selection dispatch: a disconnected direct account never falls back to OpenCode. */
 export class ConnectedDiscovery implements DiscoveryAdapter {
+  async recoverAnswerGroup(project: Project, options: Parameters<NonNullable<DiscoveryAdapter["recoverAnswerGroup"]>>[1]) {
+    if (project.model.connectionID || !this.legacy.recoverAnswerGroup) throw new Error("Completed-reply recovery is unavailable for this selection. No model request was made.");
+    return this.legacy.recoverAnswerGroup(project, options);
+  }
   constructor(private readonly connections: ConnectionManager, private readonly legacy: DiscoveryAdapter, private readonly request: typeof fetch = fetch) {}
   analyze(project: Project, options: DiscoveryOptions) {
     if (options.context.manifest.answerGroupStage && (options.scan || options.research)) throw new ProviderError("Shared answers cannot use scan or research profiles.");
@@ -22,6 +27,7 @@ export class ConnectedDiscovery implements DiscoveryAdapter {
       verifyDefinitionReviewScopeContext(project, options.context);
     }
     if (!project.model.connectionID) return this.legacy.analyze(project, options);
+    if(needsJointInputAdmission(options.context))throw new JointInputCapacityError("larger joint packets are not qualified for the selected direct-provider route.");
     if (options.research) throw new ProviderError("Direct ChatGPT research is not available yet. Turn off targeted research in Settings before exploring.");
     return this.direct(project, options, options.scan ? scanPrompt(project, options.context) : discoveryPrompt(project, options.context, false));
   }

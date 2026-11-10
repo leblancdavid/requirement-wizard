@@ -96,7 +96,8 @@ import { reconcileCompletedReview, type AppliedInputChange } from "../core/revie
 import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLimit } from "../core/review-attempts.js";
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
 import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
-import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, authorizeAnswerGroupRuleRepair, adoptAnswerGroupPlay, replayAnswerGroup, answerGroupPlayLimits, type AnswerGroupRuleRepairConsent, type AnswerGroupWork } from "../core/answer-group.js";
+import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, authorizeAnswerGroupRuleRepair, adoptAnswerGroupPlay, replayAnswerGroup, answerGroupPlayLimits, adoptAnswerGroupResponseCapacity, answerGroupCompletedRecoveryCandidate, prepareAnswerGroupResponseRecovery, type AnswerGroupRuleRepairConsent, type AnswerGroupWork } from "../core/answer-group.js";
+import { adoptAnswerGroupRepairPolicy,prepareAnswerGroupLookupInspection,adoptAnswerGroupInputCapacity,prepareAnswerGroupBlockerReview } from "../core/answer-group.js";
 import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -1645,7 +1646,11 @@ export class ProjectStore {
             WHEN json_type(r.value, '$.response.answerGroupRepair') IS NOT NULL THEN '{"answerGroupRepair":true}'
             WHEN json_extract(r.value, '$.response.answerGroupKeep') = 1 THEN '{"answerGroupKeep":true}'
             WHEN json_type(r.value, '$.response.answerGroupCheck') IS NOT NULL THEN CASE WHEN json_extract(r.value, '$.response.answerGroupCheck.valid') = 1 THEN '{"answerGroupCheck":{"valid":true}}' ELSE '{"answerGroupCheck":{"valid":false}}' END
-            WHEN json_type(r.value, '$.response.answerGroupEvidence') IS NOT NULL THEN '{"answerGroupEvidence":true}'
+             WHEN json_type(r.value, '$.response.answerGroupEvidence') IS NOT NULL THEN '{"answerGroupEvidence":true}'
+             WHEN json_type(r.value, '$.response.answerGroupLoadPlan') IS NOT NULL THEN '{"answerGroupLoadPlan":true}'
+             WHEN json_type(r.value, '$.response.answerGroupInspection') IS NOT NULL THEN '{"answerGroupInspection":true}'
+             WHEN json_type(r.value, '$.response.answerGroupComparisons') IS NOT NULL THEN '{"answerGroupComparisons":true}'
+             WHEN json_type(r.value, '$.response.answerGroupBlockerReview') IS NOT NULL THEN '{"answerGroupBlockerReview":true}'
             WHEN json_type(r.value, '$.response.answerGroupBlocked') IS NOT NULL THEN '{"answerGroupBlocked":true}' ELSE 'null' END)))
             FROM json_each(jobs.payload, '$.answerGroupWork.receipts') r)),
           'evidencePages', json((SELECT json_group_array(json_object('fromReceipt', json_extract(p.value, '$.fromReceipt'),
@@ -2394,6 +2399,17 @@ export class ProjectStore {
         throw new Error("Shared answer checkpoint cannot replace its original material or plan.");
       this.assertAnswerGroupRulePermission(job, work);
       const previous = job.answerGroupWork ?? this.latestAnswerGroupWorkJob(job.projectID, work.submissionIDs[0]!, job.id)?.answerGroupWork;
+      if (previous?.lookupReviews && JSON.stringify(work.lookupReviews?.slice(0,previous.lookupReviews.length)) !== JSON.stringify(previous.lookupReviews))
+        throw new Error("Saved lookup clarification boundaries cannot be discarded or replaced.");
+      if(previous?.lookupInspections&&JSON.stringify(work.lookupInspections?.slice(0,previous.lookupInspections.length))!==JSON.stringify(previous.lookupInspections))
+        throw new Error("Saved evidence inspection boundaries cannot be discarded or replaced.");
+      if(previous?.inputCapacity&&JSON.stringify(previous.inputCapacity)!==JSON.stringify(work.inputCapacity))throw new Error("Joint input capacity cannot replace its retained adoption boundary.");
+      if(previous?.blockerReview&&JSON.stringify(previous.blockerReview)!==JSON.stringify(work.blockerReview))throw new Error("Blocker evidence review cannot replace its retained boundary.");
+      if(previous?.blockerReviews&&JSON.stringify(previous.blockerReviews)!==JSON.stringify(work.blockerReviews?.slice(0,previous.blockerReviews.length)))throw new Error("Distinct blocker reviews cannot discard or replace their retained boundaries.");
+      if (previous?.responseCapacity && JSON.stringify(previous.responseCapacity) !== JSON.stringify(work.responseCapacity)
+        || previous?.responseRecovery && JSON.stringify(previous.responseRecovery) !== JSON.stringify(work.responseRecovery)
+        || previous?.repairPolicy && JSON.stringify(previous.repairPolicy) !== JSON.stringify(work.repairPolicy))
+        throw new Error("Shared response compatibility/recovery boundaries cannot be replaced.");
       if (previous?.automation) {
         if (!work.automation || work.automation.requests < previous.automation.requests
           || JSON.stringify(work.receipts.slice(0, previous.receipts.length)) !== JSON.stringify(previous.receipts)
@@ -2417,6 +2433,15 @@ export class ProjectStore {
   }
 
   private assertAnswerGroupRulePermission(job: Job, work: AnswerGroupWork) {
+    if (work.responseRecovery) {
+      const r = work.responseRecovery, source = this.getJob(r.sourceJobID), original = source.answerGroupWork;
+      if (source.status !== "failed" || source.projectID !== job.projectID || source.expectedRevision !== job.expectedRevision || !original
+        || original.planKey !== work.planKey || original.attempts !== r.attempt || original.automation?.requests !== r.requests
+        || original.receipts.length !== r.fromReceipt
+        || JSON.stringify(original.receipts) !== JSON.stringify(work.receipts.slice(0, r.fromReceipt))
+        || !source.diagnostic?.startsWith("Shared answer response exceeds its bounded reserve") && original.responseRecovery?.sourceJobID !== source.id)
+        throw new Error("Completed reply recovery requires its retained original failure and charged request.");
+    }
     if (work.automation) {
       const a = work.automation;
       if (a.sourceJobID === job.id && a.fromReceipt === 0 && a.priorAttempts === 0) {
@@ -2461,8 +2486,15 @@ export class ProjectStore {
         let next: AnswerGroupWork;
         try {
           next = adoptAnswerGroupPlay(m, w, job);
+          adoptAnswerGroupResponseCapacity(next);
+          prepareAnswerGroupResponseRecovery(next, job);
+          if (!answerGroupCompletedRecoveryCandidate(job)) adoptAnswerGroupRepairPolicy(next);
+          const retained=replayAnswerGroup(m,next);
+          if(!retained.blocked&&!answerGroupCompletedRecoveryCandidate(job))adoptAnswerGroupInputCapacity(m,next);
+          if(retained.blocked)prepareAnswerGroupLookupInspection(m,next,retained.draft);
+          if(replayAnswerGroup(m,next).blocked)prepareAnswerGroupBlockerReview(m,next,retained.draft);
           if (replayAnswerGroup(m, next).blocked || next.automation!.requests >= answerGroupPlayLimits.requests
-            || next.automation!.failures >= answerGroupPlayLimits.failures) continue;
+            || next.automation!.failures >= answerGroupPlayLimits.failures && !answerGroupCompletedRecoveryCandidate(job)) continue;
         } catch { continue; } // Preserve genuine/unclassified blockers for review.
         job.answerGroupWork = next; this.saveJob(job);
         for (const item of items as Submission[]) { item.status = "saved"; this.saveSubmission(item); }

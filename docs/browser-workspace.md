@@ -1,5 +1,66 @@
 # Browser workspace, epics, and estimated completeness
 
+**Play** can review an omitted saved human resolution before asking the same
+decision again. It supports bounded reviews for distinct disjoint cited-answer
+conflicts (up to eight total), without repeating a completed review or allowing a
+reworded/overlapping conflict to renew it. This is not permission to pick between
+conflicting answers. The draft stays frozen; unresolved conflicts
+still stop. A positive review resumes the unfinished page with the exact resolution
+alongside its conflicting originals, preserving paid progress and full verification.
+See [compatibility and limits](migrations.md#distinct-omitted-resolution-reviews-2026-11-09).
+
+Diagnostics exports recognize saved shared-answer clarification, inspection and
+comparison-plan replies without including their contents or counting them as completed
+original reads. This is a read-only compatibility fix; relaunch the app to load it.
+It does not itself resume a blocked specification job. See
+[compatibility and verification](migrations.md#diagnostics-projection-compatibility-2026-11-09).
+
+**Play** now preserves an indivisible joint comparison above the ordinary 96k packing
+target using a guarded **200k exception ceiling**, rather than repeating paid inspection
+or splitting its evidence. The selected OpenCode model must pass a separate complete-
+prompt capacity check before inference. Unknown/insufficient capacity and >200k units
+still stop with progress saved. See [guarded capacity and upgrade](migrations.md#guarded-200k-joint-evidence-exception-2026-11-09).
+
+If lookup clarification cannot decide because originals are unseen, **Play** can make
+one bounded evidence-only inspection pass with the draft frozen, then plan exact joint
+comparison groups. Saved observations survive Pause/reload; they do not count as
+approval or completed verification. All flagged joint comparisons and original checks
+remain mandatory. See [evidence-first recovery](migrations.md#evidence-first-blocked-lookup-inspection-2026-11-09).
+
+**Play** can request a bounded model clarification when a saved lookup is too large
+even after lossless packing. Only explicit confirmation permits separate requested
+originals; each comparison keeps **all** original counterparts and complete support.
+If the whole comparison is indispensable, processing still stops with saved work intact.
+See [counterpart-preserving recovery](migrations.md#counterpart-preserving-lookup-clarification-2026-11-09).
+
+For a shared comparison just over the input bound, **Play** can now share repeated
+literal text losslessly rather than splitting the comparison or removing evidence.
+Saved answers, paid replies and usage remain unchanged, and all verification remains
+mandatory. See [exact joint packing and upgrade](migrations.md#lossless-joint-evidence-phrase-pooling-2026-11-08).
+
+For an oversized shared lookup that names only always-pinned answers as counterparts,
+**Play** can ask the model to clarify its retrieval scope in a bounded packet. Only
+explicit confirmation permits separate complete-unit loads; a genuinely indispensable
+oversized joint comparison remains blocked. Paid lookups, completed reads, original
+answers and usage are retained. See [safe lookup clarification](migrations.md#oversized-pin-relative-lookup-clarification-2026-11-08).
+
+If verification finds another already-settled exception after two shared-answer
+repairs, **Play** can now continue a distinct source-backed correction. It preserves
+the earlier repairs and spent usage, stops repeated/no-change corrections, and requires
+all verification again. No gameplay answer or separate allowance button is needed.
+See [progress-based corrections](migrations.md#progress-based-shared-answer-corrections-2026-11-08).
+
+For a complete shared-answer repair rejected by the old output-size limit, **Play**
+first tries to read and validate that already-paid OpenCode reply, without generating
+the repair again or resetting spent usage. Missing or mismatched saved output stops
+without an automatic paid retry. Larger output capacity does not relax input limits
+or mandatory verification. See [output recovery compatibility](migrations.md#shared-answer-output-capacity-and-completed-reply-recovery-2026-11-08).
+
+For a saved repair that exceeded its input limit after an earlier correction,
+**Play** now prepares bounded affected-rule evidence automatically. The full draft,
+original answers, previous repair and spent usage stay saved; all verification remains
+mandatory. No reset or extra permission is needed. See [repair-packing bounds](migrations.md#bounded-rejected-comparison-repair-contexts-2026-11-08).
+
 The main processing controls are now **Play / Pause / Stop**. Play handles routine
 specification sequencing and adopts compatible saved shared-answer recovery without
 rule checkboxes or extra-allowance buttons. Pause saves the current reply before

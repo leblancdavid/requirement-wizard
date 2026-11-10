@@ -16,9 +16,49 @@ import { DiscoveryMeasurement } from "./discovery-metrics.js";
 import { definitionInputKey } from "../core/definition-identity.js";
 import { definitionCellExecutionStageLimit } from "../core/definition-continuation.js";
 import { definitionRequestLimit } from "../core/definition-budget.js";
+import { answerGroupProgress, answerGroupPageCounts, type AnswerGroupProgressInput } from "../core/answer-group.js";
 
 const empty = (): Analysis => ({ summary: "PRIVATE model output", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 const create = (store: ProjectStore) => store.create("PRIVATE project name", "PRIVATE initial human input", { providerID: "openai", modelID: "PRIVATE-model" });
+
+test("diagnostics export retains clarification/inspection/comparison receipt positions without exposing bodies or granting progress", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "inspection-diagnostics-")), path = join(directory, "projects.sqlite");
+  const store = new ProjectStore(path), db = new Database(path); let calls = 0;
+  const p = create(store), job = store.beginJob(p.id, p.revision).job;
+  store.failJob(job.id, "failed", "PRIVATE conflict");
+  const group = { format: 1, policy: "exact-answer-group-v1", planKey: "PRIVATE-plan", attempts: 23,
+    batches: [["PRIVATE-record"], ["PRIVATE-other"]],
+    receipts: [
+      { step: 0, response: { answerGroupDraft: "PRIVATE draft" } },
+      { step: 1, response: { answerGroupEvidence: { recordIDs: ["PRIVATE-record"] } } },
+      { step: 1, response: { answerGroupLoadPlan: { reason: "PRIVATE clarification", groups: [["PRIVATE-record"]] } } },
+      { step: 1, response: { answerGroupInspection: { recordID: "PRIVATE-record", note: "PRIVATE inspection", compareWithRecordIDs: ["PRIVATE-other"] } } },
+      { step: 1, response: { answerGroupComparisons: { reason: "PRIVATE plan", groups: [["PRIVATE-record", "PRIVATE-other"]] } } },
+      { step: 1, response: { answerGroupBlockerReview: { resolved: true, reason: "PRIVATE human resolution review", resolutionSourceIDs: ["PRIVATE-resolution"] } } },
+      { step: 1, response: { answerGroupKeep: true } },
+      { step: 1, response: { answerGroupBlocked: "PRIVATE blocked" } },
+    ], evidencePages: [{ fromReceipt: 6, step: 1, phase: "read", pages: [["PRIVATE-record"], ["PRIVATE-other"]] }] };
+  db.prepare("UPDATE jobs SET payload=json_set(payload, '$.answerGroupWork', json(?)) WHERE id=?").run(JSON.stringify(group), job.id);
+  const before = db.prepare("SELECT payload FROM jobs WHERE id=?").get(job.id);
+  const expected = group as unknown as AnswerGroupProgressInput;
+  const report = store.discoveryDiagnostics(p.id, [job.id]), work = report.runs[0]!.savedWork;
+  assert.equal(work.completedBatches, answerGroupProgress(expected).completed);
+  assert.equal(work.completedBatches, 1, "Auxiliary replies and only one of two pages cannot complete the second original step");
+  assert.equal(work.remainingSteps, 3); assert.equal(work.pageAccounting!.currentPage, 2);
+  for (const [key, value] of Object.entries(answerGroupPageCounts(expected))) assert.equal(work.pageAccounting![key as keyof ReturnType<typeof answerGroupPageCounts>], value);
+  assert.ok(!JSON.stringify(report).includes("PRIVATE")); assert.ok(!JSON.stringify(report).includes(job.id));
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; return empty(); } } });
+  try {
+    const response = await fetch(`${app.origin}/api/projects/${p.id}/discovery-diagnostics`, { method: "POST",
+      headers: { "Content-Type": "application/json", "X-Reqwizit-Token": app.token, Origin: app.origin }, body: JSON.stringify({ jobIDs: [job.id] }) });
+    assert.equal(response.status, 200); assert.deepEqual(await response.json(), report); assert.equal(calls, 0);
+    assert.deepEqual(db.prepare("SELECT payload FROM jobs WHERE id=?").get(job.id), before);
+    assert.deepEqual(store.get(p.id), p);
+    db.prepare("UPDATE jobs SET payload=json_set(payload, '$.answerGroupWork.receipts[2].response', json(?)) WHERE id=?").run('{"futurePrivateReply":"PRIVATE"}', job.id);
+    assert.throws(() => store.discoveryDiagnostics(p.id, [job.id]), "Unknown future replies still fail closed rather than inventing progress");
+  } finally { await app.close(); db.close(); store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("slow metric writes and uninstrumented intervals are separately visible without changing adapter timings or recursively persisting", async () => {
   let time = 0, writes = 0; let persisted: unknown;

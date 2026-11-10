@@ -1,5 +1,11 @@
 # Milestone backlog
 
+Shared-answer Play now has progress-based correction beyond the legacy two-repair cap,
+with distinct current human-evidence comparisons, no-op/cycle guards and finite overall
+bounds. A read-only 113-reply checkpoint preflight passed without resetting either
+earlier repair or paid usage. This does not qualify the next live correction or final
+completion. See [migration and qualification](migrations.md#progress-based-shared-answer-corrections-2026-11-08).
+
 Shared editing now preserves exact original supporting sources omitted by background
 decision projection. A separate one-time source-recovery action grants at most four
 additional correction requests for an eligible exhausted group, preserving original
@@ -9,7 +15,8 @@ check passed; no live correction or latency qualification is claimed. See
 
 Shared-answer correction now repairs an AI draft after negative verification without
 repeating original evidence reads, then verifies all batches again. Two repairs and
-existing charged step attempts bound the work; real human conflicts remain explicit
+existing charged step attempts bound legacy work; explicit Play can adopt the later
+progress-based policy above. Real human conflicts remain explicit
 stops. Old rejected jobs and interrupted coordinator passes have explicit recovery.
 This does not qualify live repair quality or fix the observed post-request delay.
 See [repair and migration](migrations.md#bounded-shared-answer-draft-repair-2026-11-06).

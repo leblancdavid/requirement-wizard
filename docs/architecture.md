@@ -1,5 +1,69 @@
 # Architecture outline
 
+SQLite 57 / conditional portable 31 preserves the v1 singleton resolution review and
+adds append-only v2 reviews for disjoint cited-answer conflicts, with eight total
+reviews maximum and unchanged shared usage/failure limits. Historical context hashes,
+completed reads/checks, assessments and the original review are not rewritten. See
+[distinct resolution reviews](migrations.md#distinct-omitted-resolution-reviews-2026-11-09).
+
+SQLite 56 / conditional portable 30 adds an immutable paid-prefix boundary for one
+evidence-only review of omitted reverse-linked human resolution answers. It grants
+no original-step credit or draft edits; review must cite exact supplied human answers
+before resuming the unfinished stage. All historical packets remain unchanged. See
+[recovery and compatibility](migrations.md#omitted-human-resolution-evidence-review-2026-11-09).
+
+SQLite 55 / conditional portable 29 adds paid-prefix `inputCapacity` and evidence-page
+v11 for a guarded 200k indivisible-unit exception, retaining 96k normal packing.
+The runtime independently admits the complete prompt against fresh selected-model
+limits before session creation; evidence characters are never treated as tokens.
+Old wire hashes/assessments remain unchanged. See [capacity boundary](migrations.md#guarded-200k-joint-evidence-exception-2026-11-09).
+
+SQLite 54 / conditional portable 28 adds immutable evidence-first lookup inspection
+boundaries and replies. Exact prior receipt prefixes/drafts and activation counters
+are authenticated; acquisition/planning never advance original coverage. Grouping
+preserves every flagged joint set and all counterparts, and all actual comparisons
+still use complete bodies/support. Earlier wire formats remain frozen. See
+[inspection compatibility](migrations.md#evidence-first-blocked-lookup-inspection-2026-11-09).
+
+SQLite 53 / conditional portable 27 supports lookup-review v2. Exact paid prior
+contexts are authenticated before scope clarification; confirmed original-plus-all-
+counterparts units remain atomic across relayout/reopen. Prior review v1 and page
+formats/hashes are unchanged. See [lookup compatibility](migrations.md#counterpart-preserving-lookup-clarification-2026-11-09).
+
+SQLite 52 / conditional portable 26 adds evidence-page v10. On oversized Play-owned
+read/check packets only, opt-in bounded literal phrase pooling can preserve a complete
+non-pinned joint set within the unchanged input cap. Old encodings/hashes stay frozen;
+no bodies, authority, paid progress or semantic comparisons are removed. See
+[joint evidence wire compatibility](migrations.md#lossless-joint-evidence-phrase-pooling-2026-11-08).
+
+SQLite 51 / conditional portable 25 adds prefix-bound lookup-scope clarification for
+oversized joint requests whose counterparts are all original pins. A dedicated
+JSON-text model turn can confirm separate original-unit retrieval or block; it cannot
+edit, approve, claim omitted evidence was read or establish independence. Only actual
+confirmation changes that lookup's atomic retrieval constraint. Existing exact evidence
+and verification gates remain. See [migration and qualification](migrations.md#oversized-pin-relative-lookup-clarification-2026-11-08).
+
+SQLite 50 / conditional portable 24 adds prefix-bound, Play-owned progress-based
+shared-answer correction. Beyond the legacy first two repairs, authenticated feedback
+must identify a distinct existing draft target/current human-evidence comparison.
+Scoped complete originals, preserved unrelated actions, no-op/version-loop guards,
+eight total repairs and unchanged request/page/storage bounds limit recovery. All
+verification restarts after correction. See [upgrade and qualification](migrations.md#progress-based-shared-answer-corrections-2026-11-08).
+
+Shared-answer output capacity is now activated at a preserved receipt-prefix boundary
+(SQLite 49 / conditional portable 23), independently of exact 96,000-character input
+packing. Explicit Play can recover a completed oversized OpenCode reply using a strict
+read-only adapter contract, keeping its paid attempt/usage and requiring all checks
+again. Pending recovery and hashed receipt provenance retain the original parent, not
+native session IDs in portable state. See [output recovery](migrations.md#shared-answer-output-capacity-and-completed-reply-recovery-2026-11-08).
+
+Oversized shared repairs now use versioned contexts derived from their exact rejected
+comparison, not an unrelated original background batch. A context pins the complete
+draft, every human answer, named catalogue originals and recursive support. Unloaded
+draft actions must stay unchanged and all original verification restarts after repair.
+SQLite 48 / conditional portable 22 preserve this activation boundary without changing
+earlier hashes, attempts or assessment identity. See [repair packing and upgrade](migrations.md#bounded-rejected-comparison-repair-contexts-2026-11-08).
+
 Play processing appends a versioned automation policy at an authenticated shared
 receipt boundary; it does not reinterpret historical hashes or reset spent attempts.
 The workflow owns technical adoption, cross-feature existing-rule reconciliation

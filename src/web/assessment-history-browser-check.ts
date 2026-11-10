@@ -92,4 +92,9 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   assert.equal(calls, 0);
   console.log("Historical assessment recovery browser passed: explicit preview/restore, workflow blocker, original findings, approved-plan and legacy-code reuse across recovery/reload, mobile and zero inference.");
-} finally { await browser.close(); await app.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
+} finally {
+  await browser.close(); await app.close(); store.close();
+  // Windows can briefly retain a directory handle after workspace/browser close.
+  // Retry only this generated fixture; a persistent cleanup failure still fails.
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}

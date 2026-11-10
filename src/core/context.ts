@@ -3,8 +3,16 @@ import { organizationRecords } from "./epics.js";
 import type { GapReport } from "./gap-types.js";
 
 export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]>; gapReport?: GapReport;
+  answerGroupResponseCharacters?: number;
+  answerGroupRepairAdvice?: { targetIDs: string[]; witnessIDs: string[] };
+  answerGroupProgressPolicy?: boolean;
+  answerGroupLookupReview?: boolean;
+  answerGroupLookupReviewFormat?: 2;
+  answerGroupLookupInspection?: {phase:"inspect"|"plan";recordID:string|null;recordIDs:string[]};
+  answerGroupBlockerReview?: true;
+  answerGroupInputCapacity?:{format:1;characters:200000;normalCharacters:96000;model:{providerID:"openai";modelID:string}};
   /** Reconstructed page inventory, not persisted authority or freshness metadata. */
-  answerGroupPagingAdvice?: { scheduledIDs: string[]; format: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9; number: number; total: number };
+  answerGroupPagingAdvice?: { scheduledIDs: string[]; format: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11; number: number; total: number };
   /** Reconstructed request advice only, never persisted or used as new freshness
    * authority. It exposes the existing v3 validator's historical-source exclusions. */
   definitionChangeCitationAuthority?: { format: 1; historicalEvidenceIDs: string[];

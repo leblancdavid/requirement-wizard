@@ -1,6 +1,30 @@
 import { OpenCode, type OpenCodeClient, type SessionMessageInfo, type SessionMessageAssistant, type PermissionRule, type OpenCodeEvent } from "@opencode/client";
 import { safeMessage } from "./contract.js";
 import { runtimeFetch } from "./http.js";
+import { createHash } from "node:crypto";
+
+/** Strict read-only, no-tools completed-session contract. Never prompts. */
+export function completedAnswerGroupResponse(history: SessionMessageInfo[], prompt: string, model: { providerID: string; modelID: string }) {
+  const users = history.filter(m => m.type === "user"), user = users[0];
+  if (users.length !== 1 || !user || user.type !== "user" || user.text !== prompt)
+    throw new Error("Saved reply does not match the exact original shared-answer prompt. No model request was made.");
+  runtimeMessage(user);
+  const index = history.indexOf(user), tail = history.slice(index + 1);
+  if (history.some(m => !["user", "assistant", "idle", "model-switched", "agent-switched"].includes(m.type))
+    || history.slice(0, index).some(m => m.type === "assistant" || m.type === "idle")
+    || tail.some(m => m.type !== "assistant" && m.type !== "idle"))
+    throw new Error("Saved reply contains intervening or unsupported activity. No model request was made.");
+  const idle = tail.at(-1), assistants = tail.filter(m => m.type === "assistant");
+  if (!idle || idle.type !== "idle" || idle.outcome !== "succeeded" || !assistants.length
+    || tail.filter(m => m.type === "idle").length !== 1)
+    throw new Error("Saved reply is not a successfully completed request. No model request was made.");
+  for (const message of assistants) if (message.model.providerID !== model.providerID || message.model.id !== model.modelID
+    || message.error || !message.time.completed || message.content.some(p => p.type !== "text" && p.type !== "reasoning"))
+    throw new Error("Saved reply model, completion or no-tools contract does not match. No model request was made.");
+  const message = assistants.at(-1)!, text = message.content.filter(p => p.type === "text").map(p => p.text).join("");
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+  return { text, promptKey: digest(prompt), messageKey: digest(JSON.stringify([message.id, text])) };
+}
 
 /** App-owned projection; never expose V2 provider settings or credential payloads. */
 export type RuntimePermission = { permission: string; pattern: string; action: "allow" | "deny" | "ask" };
@@ -71,6 +95,8 @@ export function runtimeClient(native: OpenCodeClient, directory: string) {
       skills: async (_input = {}, options: Options = {}) => ({ data: (await native.skill.list({ location }, options)).data.map((s) => ({ name: s.id, location: s.path, content: s.content })) }),
     },
     session: {
+      recoverAnswerGroup: async (input: { sessionID: string; prompt: string; model: { providerID: string; modelID: string } }, options: Options = {}) =>
+        completedAnswerGroupResponse(await messages({ sessionID: input.sessionID }, options), input.prompt, input.model),
       get: async ({ sessionID }: { sessionID: string }, options: Options = {}) => {
         const info = await native.session.get({ sessionID }, options);
         return { data: { id: info.id, permission: projectedPermissions(info.permissions) } };

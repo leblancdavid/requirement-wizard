@@ -1,5 +1,75 @@
 # OpenCode runtime spike
 
+## Guarded larger joint input (2026-11-09)
+
+The user subsequently approved a **200k-character exception ceiling**, keeping 96k as
+the normal packing target. It is implemented for indivisible shared read/check units,
+not a new default packet size or a global expansion of every workflow. OpenCode performs
+a fresh native `model.list` GET before creating a session for an actual >96k packet;
+the full generated prompt, output reservation, runtime allowance and 20% input/context
+headroom must pass independent admission. Direct routes currently reject larger packets.
+The text-size admission proxy is UTF-8 bytes, not an exact tokenizer or live account
+qualification. See [migration and qualification limits](migrations.md#guarded-200k-joint-evidence-exception-2026-11-09).
+
+The actual retained 14-reply cohort passes read-only geometry and fresh metadata admission
+with its entire joint set unchanged at 119,127 evidence characters and 152,168 full-prompt
+UTF-8 bytes. No new model call, real-project write, paid reinspection or plan replacement
+was used. Larger-input acceptance and semantic completion still require live observation.
+
+## Selected-model capacity investigation (2026-11-09; metadata only)
+
+Read-only project/job selection inspection confirmed the retained shared-answer cohort
+uses **`openai/gpt-6.1-sol`**, with no direct connection or model mismatch. An owned,
+short-lived runtime in the application's existing runtime location returned native
+`model.list` metadata: active/enabled, **628,000 context tokens**, **500,000 input
+tokens**, **128,000 output tokens**. Only model identity/status/limits were projected;
+provider configuration, headers and credentials were not inspected or exported.
+No session, prompt, inference, real project-data write or budget change occurred.
+The owned runtime was closed; the user's shared/desktop server was not restarted.
+
+The installed V2 protocol exposes `limit.context`, optional `limit.input` and
+`limit.output`. The app's current `src/runtime/client.ts` provider projection retains
+model names only, and `src/runtime/catalog.ts` also drops capacity metadata. Therefore
+the **96,000-character** shared-answer cap at investigation time was an app-owned fixed limit, not
+the native selected model's advertised capacity. Limits in tokens must not be treated
+as character counts or evidence of account acceptance.
+
+Read-only measurement reconstructed the retained exact atomic joint packet and the
+actual `discoveryPrompt` text without dispatch. All **14 paid replies**, **14 requests**
+and current **attempt 11** remain unchanged. Ordinary v9 input is **119,668 JSON
+characters / 119,758 UTF-8 bytes**; the full app prompt is **152,619 characters /
+152,709 bytes**, including **32,951 characters of app instructions/schema/inventory
+overhead**. V10 input is 119,127 characters; its full prompt is 152,078 characters /
+152,168 bytes. These are exact text sizes, **not measured token counts**, and exclude
+OpenCode/provider-added framing or system text. No evidence or response was truncated.
+
+The carried draft is 2,274 characters. Preserving the original 24,000-character draft
+growth reserve and 128-character page reserve requires **141,522 characters** for the
+v9 joint unit, or 140,981 for v10. A proposed **160,000-character** evidence ceiling
+would fit this indivisible unit with the original full-growth reserve, rather than
+splitting flags or repeating paid inspection/planning. The initial 160k ceiling was
+**not applied**; the user subsequently approved the guarded 200k exception above.
+
+The initial implementation recommendation was a versioned paid-prefix capacity
+policy for the explicitly selected route/model, plus an independent pre-dispatch
+whole-prompt capacity check using current native input/context/output limits, a
+compatible tokenizer or clearly conservative text-byte proxy, full model output
+reservation and explicit runtime/framing headroom. Unknown/stale/insufficient metadata
+must retain the old bound or stop, not silently switch model/route or increase a
+global allowance. A character ceiling alone is not sufficient for arbitrary Unicode
+or hidden overhead. No larger live request, account-specific context limit, output
+token override or model quality at this size has been qualified. The app's 48,000-
+character response validation limit is **not** a provider output-token setting.
+See [proposed compatibility boundary](migrations.md#proposed-selected-model-input-capacity-2026-11-09).
+
+Shared-answer completed-response recovery now has a read-only adapter hook. It uses
+the owned runtime's message GET only: no prompt, session wait/update/resume or tool
+activity. It authenticates the full original prompt, selected model, successful idle
+completion and text-only/no-tools history. The reported 26,733-character repair passed
+this contract using a saved-message GET and in-memory app validation; no live inference
+or real project writes were used. Direct selections cannot fall back to OpenCode.
+See [capacity/recovery migration](migrations.md#shared-answer-output-capacity-and-completed-reply-recovery-2026-11-08).
+
 ## Explicit mixed provider bridge (2026-10-31)
 
 The [durable mixed pilot](definition-mixed-execution.md) now has an

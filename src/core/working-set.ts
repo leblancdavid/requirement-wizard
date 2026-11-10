@@ -36,7 +36,7 @@ export type ContextTask = {
 };
 
 /** Lossless wire representation only; stored records and evidence IDs stay intact. */
-export function shareRepeatedText(data: unknown, compactInstructions = false, sharePhrases = false, additionalFields: readonly string[] = []) {
+export function shareRepeatedText(data: unknown, compactInstructions = false, sharePhrases = false, additionalFields: readonly string[] = [], phrasePolicy?: "joint-v1") {
   const textFields = new Set(["text", "statement", "rationale", "acceptance", "reviewNote", "whyItMatters", "label", "consequence", ...additionalFields]);
   if (sharePhrases) { textFields.add("addendum"); textFields.add("reason"); }
   // Ordinary review statements are often shorter than 160 characters. They
@@ -63,17 +63,17 @@ export function shareRepeatedText(data: unknown, compactInstructions = false, sh
       if (scanned >= 250000) break;
       const available = text.slice(0, 250000 - scanned); scanned += available.length;
       const words = [...available.matchAll(/\S+/g)];
-      for (let at = 0; at < words.length; at++) for (const width of [8, 16]) {
+      for (let at = 0; at < words.length; at++) for (const width of phrasePolicy ? [8,16,32] : [8, 16]) {
         const last = words[at + width - 1]; if (!last) continue;
         const start = words[at]!.index!, end = last.index! + last[0].length, length = end - start;
-        if (length < 80 || length > 512) continue;
+        if (length < 80 || length > (phrasePolicy ? 1024 : 512)) continue;
         const phrase = available.slice(start, end), count = phrases.get(phrase);
-        if (count !== undefined || phrases.size < 4096) phrases.set(phrase, (count ?? 0) + 1);
+        if (count !== undefined || phrases.size < (phrasePolicy ? 16384 : 4096)) phrases.set(phrase, (count ?? 0) + 1);
       }
     }
     const saving = ([text, count]: [string, number]) => count * (text.length - 32) - text.length - 40;
-    for (const [text] of [...phrases].filter((entry) => entry[1] >= 3 && saving(entry) > 0)
-      .sort((a, b) => saving(b) - saving(a) || a[0].localeCompare(b[0])).slice(0, 64)) candidates.add(text);
+    for (const [text] of [...phrases].filter((entry) => entry[1] >= (phrasePolicy ? 2 : 3) && saving(entry) > 0)
+      .sort((a, b) => saving(b) - saving(a) || (phrasePolicy ? a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0 : a[0].localeCompare(b[0]))).slice(0, phrasePolicy ? 256 : 64)) candidates.add(text);
   }
   const repeated = [...candidates].filter((text) => {
     let occurrences = 0;
