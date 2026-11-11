@@ -1,5 +1,552 @@
 # Data migrations and upgrade compatibility
 
+## Workspace entry point for saved-answer conflicts (2026-11-11)
+
+UI-only discoverability fix; SQLite 65 / conditional portable 39 are unchanged.
+No persisted data, fingerprints, budgets or saved evidence change, so no forward
+migration is required. A workspace-level **Resolve saved-answer conflict** notice
+opens the existing decision dialog directly from Design or any workspace tab.
+It selects current revision/project jobs with annotated clarification and complete
+current submission ownership; archived, superseded, completed, running and stale
+cohorts do not surface. Multiple inputs in one cohort produce one action. Opening
+or reloading starts no inference and establishes no product preference.
+
+Read-only inspection of the actual revision-3401 snapshot produced exactly one
+workspace action, retaining 121 paid replies and no saved repair decision. No real
+project writes or model calls were made. Selector/render tests cover exclusion and
+cohort grouping; the browser regression now enters from Design without locating a
+requirement and exercises reload, explicit selection, save/continue and retained
+paid work through the existing dialog.
+
+Checks run for this UI fix: type check, all 31 review tests, focused shared-answer
+browser regression, UI/desktop build and diff check passed. The desktop build first
+hit a locked native module while Electron remained running; it passed after the
+user fully quit the app, without terminating processes. The full browser suite and
+postchecks also passed; live post-decision inference remains unverified.
+
+## Human decisions during carried-draft repair conflicts (2026-11-10)
+
+**Source → target: SQLite 64 → 65; conditional portable format 39.** This ordered,
+transactional reader-boundary migration rewrites no snapshots, original answers,
+drafts, paid receipts/contexts, usage, leases, material/plan identities or semantic
+assessment fingerprints. Startup never invents a decision or resumes inference.
+Old initial-read clarification formats and completed work remain compatible. Only
+new `repairClarifications` require portable 39; downgraded envelopes reject without
+replacement. Unsupported future note formats roll back startup and retain the
+original payload; restoring supported evidence permits reopening/retry.
+
+The actual revision-3401 task reached a genuine overlap between immediate summary
+display for a connected partner waiting to appear and withholding a returning
+player's summary until the outcome is confirmed. Neither original answer explicitly
+settled precedence. The app correctly blocked rather than choosing, but its decision
+form only handled initial reads. Pressing Play could not provide missing human intent.
+
+The existing inline **Two earlier answers disagree** form now also supports a failed
+**repair-stage** blocker with a carried draft and exact named original answers. It
+shows the overlap reason, both saved questions/answers, unselected priority choices
+and a custom exception field. **Save decision & continue** saves the explicit choice
+then continues specification review; no extra Play click or coding starts. Reload
+starts nothing, and durable-save/continuation failure still offers **Continue review**.
+Generic check-stage blockers, exhausted safety limits and unidentifiable conflicts
+are not silently admitted under this repair-only protocol.
+
+Each append-only v2 repair note binds the exact blocked receipt prefix, source job,
+conflicting-answer IDs and whole carried-draft hash. It opens that rejected repair
+only, supplies no verification verdict, and preserves all paid reads, prior checks,
+attempts and request/repair budgets. The complete note, original conflicting answers
+and their support are detailed together. After two earlier repairs, a fresh saved
+human decision is a distinct evidence witness for its supplied affected rules; it
+is not another attempt allowance or permission to alter unrelated carried actions.
+The repair must concretely change an affected statement/scenario or withdraw a wrong
+affected draft edit. It need not cosmetically change an already-correct counterpart.
+All original verification restarts after an actual repair, never from the new note alone.
+
+Earlier model rejections are feedback, not human precedence. A new follow-up supersedes
+only a prior note for the **same exact conflict**; disjoint decisions retain separate
+scope/authority. Notes and both original answers remain evidence, with only current
+unsuperseded decisions eligible to authorize updates. At most eight human notes total
+are retained by this flow; all existing request, repair, page, input and ledger caps
+remain in force. Workers cannot discard notes, change their prefix/draft or substitute
+a decision. The existing authenticated/revision-checked save API and exact human-saved
+parent/prefix checks also protect carried-draft notes and portable adoption.
+
+A read-only real-checkpoint check admitted the decision form and a clearly marked
+**non-product test note in memory only**. It preserved **all 121 paid replies, 121
+requests, current attempt 2 and the carried draft**. Both conflicting answers and
+the new test note fit in the complete repair at **124,427 / 200,000 characters**, and
+the new human witness identified two detailed affected rules. No product choice,
+real database/folder write, model request or semantic repair verdict was made.
+The first redundant multi-replay measurement exceeded its 120-second shell timeout;
+a smaller read-only check completed. Large-ledger validation can still be slow.
+
+Verification passed: full `npm test` rerun (**932 pretests + 781 main tests + 272
+posttests = 1,985 tests**, zero failures/skips), full browser suite/postchecks,
+type checking, desktop/UI build and diff checking. Coverage includes initial and repair-stage decisions,
+unselected choices, exact parent/draft/prefix preservation, one-target corrections,
+withdrawal/no-op checks, full re-verification, cancellation, scoped follow-ups,
+separate conflict authority, repeated reopening, actual empty-store cloning,
+future-format rollback/retry and downgrade/tampering rejection. The first full run
+found three older diagnostic-wording assertions and one unrelated timing-sensitive
+timeout failure. Original initial-conflict wording was preserved; those tests and
+the isolated timeout test passed, followed by the full passing rerun without browser
+contention. The desktop was rebuilt after the user closed the app; no processes
+were terminated. Live repair quality and installed packaging remain unqualified.
+
+## Union verification shares the existing group page budget (2026-11-10)
+
+**Source → target: SQLite 63 → 64; conditional portable format 38.** This is an
+ordered transactional reader-boundary migration. Startup changes no snapshots,
+assessment/material/plan identities, human evidence, paid packets, usage, grants or
+leases, and does not adopt the policy or start inference. Existing selections and
+completed valid work remain intact. Unsupported future policy formats roll back
+startup without overwriting the original payload; restoring supported data allows
+reopening/retry. Only work carrying `unionPageCapacity` requires portable 38; older
+supported envelopes remain readable and downgrade rejects without replacement.
+
+**Confirmed policy change, explicitly approved by the user.** After the next negative
+verification and second successful repair, the revision-3401 group required 36 new
+checks. Its 29 earlier paid checks plus 36 pending checks exceeded the cumulative
+64-page *original-step* cap by one. Unlike the prior per-layout mismatch, this was a
+real cumulative-budget stop: old checks still consume spend but cannot verify the
+changed draft. A union combines 24 original read batches into one verification
+cursor, making that cap tighter than the already-existing whole-group safeguards.
+
+Explicit Play may now append `unionPageCapacity: { format: 1, fromReceipt, prefixKey }`
+at the exact authenticated paid prefix of a Play-owned `union-v1` group. **Only its
+combined verification cursor shares the existing 256-successful/pending-pages group
+budget.** This is not a separate extra 256 pages: all earlier read and verification
+pages remain counted against the same group ceiling. Read steps and legacy/unadopted
+groups retain their 64-page cap. Repeated Play/continuation retains the first boundary;
+workers cannot replace or discard it. Historical replay applies the old capacity
+until that boundary, preserving every old layout and context hash byte-for-byte.
+
+No request/attempt/work-window/repair allowance is increased or refunded. The 256-page
+group ceiling, 256 Play-request cap, 64-page v12 layout ceiling, 128 layouts, 1,024
+receipts, 2-MiB ledger, input bounds and fresh selected-model admission stay intact.
+The normal 32-request bounded action still pauses for explicit continuation; owned
+continuous Play keeps its existing window behavior. Full verification restarts after
+each repair. No old-draft verdict is reused as approval of changed actions, and paid
+original reading is not replayed. This remains potentially many model requests; it
+does not establish semantic convergence or promise completion before global stops.
+
+Diagnostics include the metadata-only activation receipt and report the current
+page-budget scope as `shared-group` or `original-step`, with the effective step limit.
+No prefix hash, source/job IDs or model/human prose enter the diagnostic projection.
+The policy itself is local/portable continuation evidence, not a completeness score
+or a new semantic assessment fingerprint.
+
+Read-only actual-checkpoint replay preserved **80 paid replies / 80 requests** and
+the complete twice-repaired draft. After in-memory adoption, all **36 current packets**
+passed exact wire expansion for their detailed originals, full draft and every pin,
+with all original read-batch records covered. Sizes were **75,002–106,768 characters**.
+The simulated totals were **65 checks for the union step**, **103 / 256 group pages**
+and **116 / 256 Play requests**; all old spend remained counted. Positive replies
+were cursor simulations only: no real verdict was saved, user database/folder written
+or model request made. Future model lookups/rejections may still change the work needed.
+
+Verification passed: full `npm test` (**932 pretests + 781 main tests + 268 posttests
+= 1,981 tests**, zero failures/skips), full browser suite/postchecks, type checking,
+desktop/UI build and diff checking. Targeted coverage includes explicit Play
+adoption, unchanged counters, no old-check reuse,
+full checks across an unchanged 32-request work window, read/group caps, repeated
+reopen, actual empty-database clone adoption, future-format rollback/retry and
+downgrade/tampering rejection. Cancellation retains its charged request, exact
+policy boundary and full draft; repeated adoption cannot renew it. Diagnostic
+scope/redaction also passed. The desktop was rebuilt after the user closed the app;
+no processes were terminated. Installed packaging and live model completion remain
+unqualified.
+
+## Joint layouts within the existing paid/pending step budget (2026-11-10)
+
+**Source → target: SQLite 62 → 63; conditional portable format 37.** This ordered,
+transactional reader-boundary migration rewrites no project, assessment, material/plan
+identity, human answer, saved draft, paid reply, attempt, grant or lease. Existing
+page formats 1–11 retain their exact rendering, packet hashes and 32-page layout cap.
+New page format 12 requires portable 37; older supported envelopes remain readable.
+Downgraded v12 envelopes reject; unsupported future page formats roll back startup
+without overwriting payloads and permit reopening/retry after correction. Semantic
+assessment freshness and evidence identities are unchanged. No reset or inference
+is needed on upgrade; continuation is still explicit.
+
+The revision-3401 repair succeeded and retained its paid reply. The restarted union
+verification then required **36 complete pages**. Format 11 hit its independent
+32-pages-per-layout cap, although the **10 earlier paid verification pages + 36
+pending pages = 46** remain within the existing 64-paid/pending-pages-per-original-step
+budget. Earlier checks still count as paid usage but do not verify a repaired draft.
+
+V12 keeps v11's exact unit construction, lossless encoding, ordinary **96k packing
+target**, complete-draft/pinned-answer rules and guarded **200k indivisible-unit ceiling**.
+Only its per-layout capacity may reach the remaining existing step budget (at most
+64). The cumulative **64 pages per step**, **256 successful/pending group pages**,
+**128 layouts**, **1,024 receipts**, **2-MiB ledger**, attempt/request/repair limits and
+model-capacity admission are unchanged. It does not fill background pages to 200k,
+split indispensable comparisons, refund earlier pages, repeat reads or mark partial
+verification complete. All mandatory pages must check the same frozen full draft.
+
+Preparation retries v12 only for an otherwise eligible layout-cap stop with the
+existing input-capacity policy active. Other work-capacity stops and genuinely unfit
+units are not caught as layout recovery. The new plan is appended at the exact paid
+prefix; historical layouts are not relabelled. Diagnostics recognize page format 12,
+and oversized v12 requests pass the same fresh exact-model/whole-prompt admission as
+v11 before session creation. Missing/small capacity still rejects without fallback.
+
+A read-only traversal of **all 36 actual-checkpoint packets** completed an in-memory
+cursor simulation, not a semantic/model verification. Independent wire expansion
+matched every detailed original, the complete saved draft and every pinned answer in
+every packet; all original read-batch records were covered. Packets measured **70,222–
+105,371 characters**; three used the guarded ceiling. Exactly one new layout was
+needed, preserving all **57 paid replies**, attempts and usage before simulation.
+The simulated page total was 46 for this original step. No user database/folder was
+written, no real verdict was recorded and no model call was made. This qualifies the
+entire current layout, not future model verdicts or final specification completion.
+
+Verification passed: full `npm test` rerun (**932 pretests + 781 main tests + 264
+posttests = 1,977 tests**, zero failures/skips), full browser suite/postchecks,
+type checking, desktop/UI build and diff checking. The initial full run had one
+unrelated timeout assertion fail under concurrent browser load; it passed alone
+and in the full rerun without browser contention. No unrelated test was weakened.
+Tests cover exact full-packet expansion, no early completion, full original coverage,
+the unchanged cumulative ceiling, old-layout rejection above 32, paid-page preservation,
+future-format rollback/retry, repeated reopening, actual empty-database clone adoption,
+downgrade/tampering rejection and v12 pre-session capacity admission. The desktop
+was rebuilt after the user closed the app; no processes were terminated. Live model
+verification/completion and installed packaging remain unqualified.
+
+## Guarded capacity for complete rejected-comparison repairs (2026-11-10)
+
+**Source → target: SQLite 61 → 62; conditional portable format 36.** This ordered,
+transactional reader-boundary migration rewrites no project/assessment identities,
+original answers, saved drafts, paid receipts, counters, leases or completed work.
+Existing v1 repair contexts and their authenticated packet hashes stay unchanged.
+New v2 repair contexts require portable 36; older formats remain readable, downgrade
+rejects, and unsupported future repair formats roll back startup without overwriting
+the original payload. Correcting that unsupported payload allows reopening/retry.
+Startup performs no inference, publication or automatic continuation.
+
+The revision-3401 five-answer group completed its original reading and rejected its
+first frozen-draft verification. Its complete bounded repair measured **103,286 /
+96,000 characters**. Unlike the earlier broad-background repair bug (SQLite 48),
+this packet already contains only the selected rejected comparison, full pinned
+answers/support and complete carried draft, using lossless encoding. The existing
+200k policy covered indivisible read/check pages but not this indivisible repair.
+The latest retry made zero model calls; its retained run has 56 paid replies.
+
+New preparation first tries the unchanged v1 bounded repair. Only if that complete
+packet overflows, and the exact Play/OpenCode model's existing input-capacity boundary
+is active, may it append v2 at the current authenticated receipt prefix. The same
+named originals and complete recursive support stay together with every pinned answer
+and the entire draft. V2 uses the existing compact lossless grammar and **200,000 hard
+ceiling**, not a larger ordinary packing target. It does not split comparisons,
+discard draft actions, pick human precedence, renew attempts or repeat paid reads.
+Without the capacity boundary, the existing 96k stop remains. A paid v1 context is
+never silently relabelled or widened. All verification must restart after a repair.
+
+Large repair dispatch carries an explicit v2 repair profile, separate from v11
+read/check paging. The existing fresh selected-model/whole-prompt admission still runs
+before creating any session or sending a prompt. Missing/insufficient metadata,
+direct routes, mixed/wrong profiles and >200k inputs fail closed; no provider/model
+fallback or truncation is introduced. The full advertised output reserve, runtime
+headroom and conservative UTF-8 admission proxy remain unchanged. Bytes are not tokens
+and advertised metadata does not qualify live account acceptance or model quality.
+
+A read-only actual-checkpoint preflight now fits the same **103,286-character** packet
+under that existing guarded ceiling. Independent wire expansion matched **all 46
+detailed original records and the full saved draft**, with all pins present. All 56
+paid replies, request count 56 and current attempt 1 remain unchanged. The complete
+app prompt measured **132,828 characters / 132,920 UTF-8 bytes**; missing capacity
+metadata correctly rejected it. No real database/folder writes or model calls were
+made. This is layout/replay qualification, not a semantic repair/completion verdict.
+
+Verification passed: `npm test` (**932 pretests + 781 main tests + 260 posttests =
+1,973 tests**, zero failures/skips), full `npm run test:browser` including postchecks,
+type checking, UI/desktop build and diff checking. Focused checks also covered exact
+packet expansion, sufficient/missing/smaller capacity, pre-session rejection,
+old-context compatibility, full re-verification, cancellation/malformed responses,
+retained usage, future-format rollback/retry, repeated reopen, actual empty-database
+clone adoption and downgrade/tampering. The first desktop build hit Windows `EPERM`
+on the app-local SQLite native module; retry passed after the user closed Reqwizit.
+No process was terminated. Installed packaging and live model completion remain
+unqualified.
+
+## Exact portable selection and initial lossless shared packing (2026-11-10)
+
+**Source → target: SQLite 60 → 61; conditional portable format 35.** The transactional
+reader-boundary migration rewrites no project snapshots, answers, human clarification
+chains, assessments, paid ledgers, plan keys or usage. Existing schedules retain their
+encoders and hashes. New service-created shared groups bind `packingPolicy: lossless-v1`
+into the original plan key. Unknown future packing rolls back startup; restoring the
+original supported payload permits retry. Earlier portable formats remain readable;
+new packing requires 35 and rejects downgraded envelopes. No reset, reassessment or
+automatic model request is needed for upgrade.
+
+Queue grouping preflight now uses the same new union/lossless planner as dispatch,
+rather than rejecting a group under the legacy encoder first. It uses the existing
+compact exact-text/identifier/record-table grammar (including bounded literal phrase
+pooling) from the first packet. The 96k ordinary limit, complete evidence, full 24k
+draft-growth reserve and every verification/attempt limit remain unchanged. Packing
+cannot split an indispensable joint comparison or omit a human answer. Old paid
+groups are never relabelled to the new policy. Read-only revision-3384 preflight of the
+reported five-answer set reproduces the old **97,358 / 96,000** failure; the new planner
+fits all originals in **22 read batches**, with all 11 pins and 293 non-pinned records.
+The first Play-owned packet also fits at **70,456 characters**, retaining the full
+24,000-character draft reserve inside 96,000. Both checks ran in memory/read-only.
+This is a layout check, not live model quality/completion or a promised call count.
+
+Portable selection now uses the **existing engine refinement-currentness predicate**
+for completed, unreferenced individual cleanup checks. Matching current outcomes stay;
+known v2 mismatches and legacy mismatches authenticated against their original evidence
+are omitted only from the derived export. Unknown identities/unavailable legacy proof
+are retained conservatively. Previously retained unfinished work and explicitly linked
+completed outcomes remain. Original SQLite history, stable IDs and dated evidence are untouched.
+The identity code moved to `src/core/refinement-identity.ts`; service compatibility
+exports and key bytes are unchanged. Legacy checks read all required source/question/
+requirement/feature arrays in original order via a validated SQLite projection, not
+unrelated large assessment payloads. This projection grants no authority to another task.
+
+Required retrieval ancestors are now sanitized through one local graph walk instead
+of recursively constructing full exports/snapshots and discarding everything but one
+job. Ancestors remain even if not current standalone tasks; shared ancestors and cycles
+do not repeat traversal. Retained job/snapshot formats and semantic fingerprints are
+unchanged, so selection itself needs no new portable representation or history migration.
+
+The real current checkpoint's read-only projection selected **396 jobs / 282 snapshots**
+instead of its saved **1,501 jobs / 605 snapshots**, omitting 1,105 proven-stale completed
+individual checks. Preparation/rendering took about **52.5 seconds** using existing
+verified cache entries (zero full snapshot normalizations). The recorded application
+publication was 184.7 seconds, but these are not controlled identical end-to-end runs.
+The projected artifacts still total about **55.5 MB**; remaining cost is not claimed
+fixed, and old cache rows are not deleted. No project database/folder was changed and
+no inference was used by these measurements.
+
+Workspace publication adds numeric selected-job/snapshot counts. Discovery diagnostic
+exports can now include the **latest recorded workspace publication attempt** with
+explicit scope, revision and current workspace status, independently of selected runs.
+It is not necessarily a successful save or a measurement of the selected run.
+Durations overlap phases and are not
+automatically additive to job wall time. Old/missing/invalid measurements remain absent;
+paths, errors, prompts, timestamps and other arbitrary fields are excluded.
+
+Verification: type checking, desktop build, full `npm run test:browser` (including
+postchecks), both CLI help commands, targeted packing/upgrade/portable checks and
+full `npm test` passed (**932 pretests + 781 tests + 253 posttests = 1,966 tests**,
+zero failures/skips). `git diff --check` also passed. Coverage includes exact
+Unicode/whitespace expansion, unchanged input/reserve bounds, future-policy rollback,
+old/new paid work reopening, downgrade rejection, current/unknown/linked outcomes,
+legacy proof, missing required evidence and ancestor cycles. Shared question discovery
+remains a documented proposal, not a
+new live protocol. No installed-app or live-model qualification is claimed.
+
+## Follow-up decisions after a rejected clarification (2026-11-10)
+
+**Source → target: SQLite 59 → 60; conditional portable format 34.** The transactional
+reader boundary retains the original singleton `humanClarification` verbatim. Only
+an explicit new human action appends `humanClarificationFollowups`; startup never
+rewrites notes, paid replies, original context hashes, input/plan identities, attempts,
+assessments or completed work. Existing portable formats through 33 remain readable.
+Follow-up ledgers require 34; downgrade/future formats fail without overwriting data.
+
+This closes a real UI trap: after a model rejected the first clarification as unclear,
+the earlier card offered only continuation of the same blocked note. If the unfinished
+initial read still has no completed draft/read/check and allowance remains, another
+blocked reply now exposes **Your decision needs clarification**, the earlier note,
+current feedback and fresh unselected priority/exception choices. A follow-up explicitly
+replaces the previous clarification for that conflict, not either original answer or
+unrelated decisions. The earlier note and blocked replies remain dated evidence.
+
+Each appended note has a new stable source ID, `supersedes` pointing to the prior human
+note, and its own exact blocked-reply/prefix boundary and human-saved parent. Only one
+note can be saved per blocked reply; ordering, unique IDs, ancestry and retained
+prefixes are validated across checkpoint, replay, reopening and portable adoption.
+At most eight human notes can be retained; existing request/failure limits still apply
+and no allowance is renewed. Later conflicts with completed drafts/checks remain out
+of scope. If follow-up feedback omits UUIDs, the card retains the already named conflict's
+scope rather than inventing another unnamed conflict or interpreting prose as priority.
+
+Every resumed packet contains the full original conflict evidence and saved notes,
+with explicit current replacement authority. Dispatch authorization now includes the
+current human note as concrete input; historical notes remain non-authorizing. This
+corrects request advice only, not historical paid packet bodies or verdicts. Publication
+adds all dated notes and the verified result atomically, preserving the supersession
+chain. No semantic resolution is inferred merely because a human note exists.
+
+**Checks:** deterministic 59→60 preservation/repeated startup, invalid future-format
+rollback/retry, exact prefix/supersession tampering, portable 34/downgrade/clone,
+retained attempts and complete post-follow-up verification passed. The targeted browser
+check reproduces a rejected first clarification with UUID-free feedback, fresh choices,
+save/continuation recovery, retained first note and checked replacement wording. Type
+check and UI build passed. All 219 relevant answer-group, specification, migration,
+portable, UI and API tests passed, as did the full `npm run test:browser` main and
+posttest suites.
+No live provider calls or private project data edits were made.
+
+## Inline shared decisions and explicit continuation (2026-11-10)
+
+**Compatibility: SQLite remains 59; portable format remains conditional 33.** This is
+an additive UI/API workflow over the existing `humanClarification` representation,
+not a new evidence format, fingerprint or assessment interpretation. Existing answers,
+paid receipts, attempt counters, checkpoints, saved decisions and completed results
+are not migrated or regenerated. Opening/reloading a project starts no model work.
+
+Blocked requirements now show the exact original questions/answers inline, with no
+preselected choice. Selecting an original answer records explicit user-selected
+precedence only for overlapping cases, retaining its exact text/question and stable
+source IDs. A custom exception/different rule remains available. No model generates
+or chooses the user's answer. Oversized or missing originals cannot become selected
+precedence through a truncated note; users can write their decision instead.
+
+**Save decision & continue** calls the existing clarification route with explicit AI
+consent, expected project revision and displayed workflow settings version. Stale or
+missing consent/version rejects before saving. After the transactional save succeeds,
+the service invokes the existing Play action. A continuation failure acknowledges
+`saved: true, continued: false`, rather than misreporting a failed save; the UI can
+explicitly continue without replacing/re-entering the durable decision. The legacy
+save-only request remains valid and makes no model calls. A repeated combined save
+cannot silently rearm work. Provider errors and genuine remaining ambiguity still
+stop; input, quota and complete-verification bounds remain unchanged.
+
+Inline progress follows the affected cohort, not an unrelated active job. A requirement
+being resolved stays visible through completion and reports changed/unchanged wording
+only after its affected responses are completed. These display selections/comparison
+snapshots are transient UI state, not persisted assessments or proof of readiness.
+The initial-conflict eligibility boundary from the migration below is unchanged;
+later carried-draft conflicts are not newly supported.
+
+**Checks:** deterministic consent/version guards, durable continuation-failure
+acknowledgement, exact original-choice serialization, custom exceptions, no default
+choice, escaping and cohort matching added. Targeted Chromium verification passed
+for one-action inline review, original history/attempt retention, progress/completion,
+mobile, reload, an explicit source choice, and save-success/continue-failure recovery
+without a second decision write. Type check, UI build and relevant UI/API tests passed.
+The full `npm run test:browser` main and posttest suites also passed, including the
+new inline path and durable continuation recovery. These fixture results do not
+establish that any particular private project's semantic conflict is resolved.
+No live model calls or private project data changes were made.
+
+## Initial shared conflict human clarification (2026-11-10)
+
+**Source → target: SQLite 58 → 59; conditional portable format 33.** This ordered,
+transactional reader boundary does not rewrite historical project JSON, existing
+shared protocols, paid receipts, context/plan hashes, attempts, assessments or completed
+work. Startup/reload makes no model calls. Older portable formats remain readable;
+ledgers carrying `humanClarification` require 33 and reject downgraded envelopes.
+Unsupported future structures fail validation without overwriting evidence.
+
+An initial shared read that names two to eight conflicting saved answers, before any
+draft/read/check completion, now offers an explicit human clarification. Saving checks
+the expected project revision, exact latest intact cohort and failed job, no active
+worker, text bounds and exact packet fit in one transaction. It appends a stable note
+ID/body and exact conflicting-source IDs at an authenticated paid-prefix boundary.
+Original answers, blocked reply, schedules, historical context bodies and spent usage
+are unchanged. The note remains durable job evidence before publication; it is not a
+new project specification revision, an approval or a claimed model verdict.
+
+The save-only API starts no inference. **Play** is still required. Resumed packets pin
+the exact note alongside both conflicting originals and their complete question/answer
+support. The model must still decide whether the human text actually settles the
+conflict; an ambiguous clarification stops honestly. All original reads and verification
+remain mandatory. Worker checkpoints cannot invent, replace or discard the human
+evidence. Atomic publication validates replay first, then adds the note source and
+result together. Failure/cancellation retains the note and charged attempts without
+publishing partial changes. Portable continuation retains the human-saved parent and
+paid prefix; clone adoption does not repeat the blocked reply.
+
+**Scope:** one clarification for an initial-read conflict only. No-draft eligibility is
+intentional: later draft/check conflicts need a separate evidence-bound correction
+design, not treating old checks as current after a new decision. Exhausted work/safety
+limits are not renewed. This change does not resolve the user's gameplay preference or
+edit their existing project data automatically. Restart the updated app to load it.
+
+**Verification:** deterministic initial-conflict upgrade/reopen, exact prefix tampering,
+portable 33/downgrade/clone publication, API authentication/origin/revision/input guards,
+and paged cancellation checks added. The targeted Chromium shared-answer browser check
+passed: save without inference, reload, Play, full original verification and retained
+paid attempts, including the requirement's **Process blocking input** route. Type
+check, UI build, `npm test` and both CLI `--help` smoke checks passed. A broader
+browser run exposed a future-clarification leak into pre-Play historical replay;
+that boundary was corrected and the focused browser check passed with an original
+Play-owned blocker. The full browser rerun passed its main suite, then a follow-up
+runner stopped at page navigation with Chromium `ERR_NO_BUFFER_SPACE` (not an
+assertion failure); the complete follow-up group passed when rerun separately with
+`npm run posttest:browser`. The final answer-group suite passed all 66 tests.
+No live provider or user's private project run
+was performed.
+
+## Union answer verification and portable snapshot cache (2026-11-10)
+
+**Source → target: SQLite 57 → 58; conditional portable format 32.** Startup creates
+only a disposable `portable_snapshot_cache` table. It does not rewrite original
+answers, historical snapshots, jobs, assessments, paid receipts, plan keys or usage,
+and does not start model work. Migration and protocol validation are transactional;
+an unsupported future shared-work policy rolls back the upgrade. Reopening/retrying
+after restoring supported evidence preserves the original ledger. Older portable
+formats remain readable; union ledgers require 32 and reject downgraded envelopes.
+
+New service-created shared-answer work records `verificationPolicy: union-v1` in
+its original plan identity. Reading retains the existing exact original batches.
+Verification is **one paged union of all original batches and every draft-referenced
+original**, with complete recursive source/question/answer support, the full frozen
+draft and all pinned human answers. Each page checks only its detailed units; every
+unit/page must pass before atomic publication. Explicit indispensable joint comparisons
+remain atomic and may block. Corrections invalidate the entire verification pass,
+not paid reads. All existing request, attempt, page, input and output ceilings remain.
+Original-step progress is read-batch count plus one union verification step; actual
+page replies/requests remain separately counted. This is not semantic independence
+or permission to approve unseen interactions.
+
+Already-started work **keeps its old verification schedule**, context hashes and
+spent attempts. It is not relabelled or repacked to obtain fresh allowances. Valid
+completed work remains complete. The union marker is bound into the plan key;
+adding/removing it on a saved ledger fails replay. No user reset or reassessment is
+required. New service work uses union verification; the low-level legacy planner
+remains available for historical protocol fixtures/reconstruction.
+
+Portable snapshot cache generation **1** is separate from database schema and
+optimistic-concurrency revisions. Each compressed entry binds exact original SQLite
+snapshot bytes by SHA-256 and checks the normalized payload digest before reuse.
+Revision update/delete triggers invalidate the project's cache, including potential
+lazy assessment-origin dependencies. Inserting an older/restored snapshot invalidates
+cached revisions at or above it; ordinary append-only revisions retain older entries.
+Only successfully normalized, account-redacted snapshots of at most 64 MiB are cached.
+Missing, corrupt, incompatible-generation or same-revision-replaced entries rebuild
+from original evidence; absent originals still reject. The cache is local/disposable,
+not exported provenance, and must change generation if normalization semantics change.
+The first publication still pays cold normalization/compression; later publications
+reuse it across process reopen. No historical job or required snapshot is dropped.
+Cache storage is additive: large histories can consume hundreds of MiB of local
+disk. There is a per-entry size bound, not a claimed small total-cache footprint.
+
+Coordinator-owned workflow windows now defer folder publication until their final
+release, including Pause/failure, while SQLite checkpoints remain immediate. This
+uses the existing nested per-project deferral boundary. Publication still runs
+synchronously at that boundary; this is **not** off-thread I/O or a guarantee of an
+instant first export. Workspace binding metadata adds optional numeric
+`publicationMetrics` (format 1, revision, total/history/continuation/render/file-stage
+durations). Missing old measurements remain absent. Totals include overlapping work;
+the final binding write is excluded. Artifacts and assessment fingerprints do not change.
+
+Verification: `npm test` passed all **1,953 tests** (931 pretests, 777 main tests,
+245 posttests). Type checking, the desktop build (including UI build), the full browser
+suite/postchecks, seven focused union/upgrade/recovery tests and 17 cache/workspace
+checks passed. After final dependency-invalidation trigger hardening, all 57 storage/
+migration/portable/workspace checks and four focused union tests passed again; the
+desktop build was rerun. Browser checks use deterministic adapters, not live inference.
+New coverage exercises complete mandatory evidence, page omission/tampering, correction
+restart, legacy marker refusal, 57→58 rollback/repeated reopen, portable 32 downgrade
+rejection and paid-read clone continuation. Cache tests cover warm reuse across reopen,
+caller mutation, corruption, generation changes, >8 MiB snapshots, source-byte replacement
+and byte-identical cached/uncached artifacts.
+
+Real-checkpoint read-only reconstruction retained 1,032 jobs, 219 original snapshots
+and all 1,045 artifacts (55,538,073 bytes). With a separate **memory-only** compressed
+cache, cold preparation/rendering took about **88.1 s**, warm **42.3 s**, and warm
+snapshot normalization calls fell to **zero**. Whole-output hashes matched exactly.
+Compressed cache content was **432,531,027 bytes** (~413 MiB). This did not publish
+files, upgrade/write the original database, call a model or measure end-to-end desktop
+latency. An earlier 8 MiB cache threshold missed most real snapshots; the shipped
+64 MiB bound and a regression for larger originals address that measured limitation.
+Remaining export/delta/I/O cost and first-export delay are **not** claimed fixed.
+No live inference or installed desktop qualification is claimed.
+
 ## Distinct omitted-resolution reviews (2026-11-09)
 
 **Source → target: SQLite 56 → 57; conditional portable format 31.** The first live

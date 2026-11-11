@@ -22,6 +22,9 @@ export type Workspace = {
   pendingRemovals?: string[];
   /** Last explicitly opened shared checkpoint; publication does not acknowledge it. */
   portableBase?: string;
+  /** Local diagnostic durations; nested phases are not additive wall time. */
+  publicationMetrics?: { format: 1; revision: number; elapsedMs?: number; historyMs?: number;
+    continuationMs?: number; renderMs?: number; filesMs?: number; selectedJobs?: number; snapshots?: number };
 };
 export function hash(content: string) { return createHash("sha256").update(content).digest("hex"); }
 export function canonicalDirectory(path: string, create = false) {

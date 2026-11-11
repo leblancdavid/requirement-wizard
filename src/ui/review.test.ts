@@ -21,6 +21,54 @@ import { definitionDecisionPrefix, definitionDecisions } from "../core/definitio
 import { definitionInputKey } from "../core/definition-identity.js";
 import { DefinitionDecisionCard } from "./definition-decisions.js";
 import { dimensions } from "../core/epics.js";
+import { currentSharedConflicts, sharedAnswerDecision, sharedConflictJob } from "./shared-answer-decision.js";
+import { SharedConflictNotice } from "./shared-conflict-notice.js";
+import { SharedAnswerClarification } from "./shared-answer-clarification.js";
+
+test("shared conflict choices preserve exact originals, require an explicit selection and allow a custom exception without guessed precedence", () => {
+  const p = fixture();
+  for (let i = 0; i < 2; i++) {
+    p.questions.push({ id: `question-${i}`, epicID: "inbox", status: "answered", sourceID: `answer-${i}`, text: `Original situation ${i}?`, whyItMatters: "Choose the outcome", options: [{ label: "Yes", consequence: "Keep" }, { label: "No", consequence: "Change" }] });
+    p.sources.push({ id: `answer-${i}`, kind: "answer", text: i ? "Keep pending <script>" : "Cancel at mission end", questionID: `question-${i}`, epicID: "inbox" });
+  }
+  const conflict = { jobID: "saved-job", reason: "Exact technical conflict", conflictIDs: ["answer-0", "answer-1"] }, original = structuredClone(p);
+  assert.equal(sharedAnswerDecision(p, conflict, "", ""), "");
+  assert.equal(sharedAnswerDecision(p, conflict, "foreign", ""), "");
+  const chosen = sharedAnswerDecision(p, conflict, "answer-1", "");
+  assert.match(chosen, /explicitly establishes priority for that conflict only/);
+  assert.ok(chosen.includes("Original situation 1?")); assert.ok(chosen.includes("Keep pending <script>"));
+  assert.equal(sharedAnswerDecision(p, conflict, "custom", "  Disconnection is the exception.  "), "Disconnection is the exception.");
+  assert.equal(sharedAnswerDecision(p, conflict, "custom", "x".repeat(12001)), "");
+  const oversized = structuredClone(p); oversized.sources.find(s => s.id === "answer-0")!.text = "x".repeat(12000);
+  assert.equal(sharedAnswerDecision(oversized, conflict, "answer-0", ""), "", "Never truncate an original to create a selectable decision");
+  const html = renderToStaticMarkup(createElement(SharedAnswerClarification, { project: p, conflict, disabled: false, save: async () => ({ saved: true as const, continued: true }), resume: async () => {} }));
+  assert.match(html, /Two earlier answers disagree/); assert.match(html, /Save decision &amp; continue/);
+  assert.doesNotMatch(html, /checked=""|<script>/); assert.match(html, /Keep pending &lt;script&gt;/);
+  assert.match(html, /<button class="primary" disabled=""/);
+  const jobs = [{ id: "old", context: { submissionIDs: ["old-input"] }, answerGroupClarification: conflict }, { id: "current", context: { submissionIDs: ["current-input"] }, answerGroupClarification: conflict }] as Job[];
+  assert.equal(sharedConflictJob(jobs, ["current-input"])?.id, "current");
+  assert.equal(sharedConflictJob(jobs, ["unrelated-input"]), undefined);
+  assert.deepEqual(p, original);
+});
+
+test("workspace conflict action selects only current owned cohorts, collapsing shared inputs and excluding historical failures", () => {
+  const project = fixture();
+  const job = { id: "current", projectID: project.id, expectedRevision: project.revision, status: "failed",
+    context: { submissionIDs: ["one", "two"] }, answerGroupClarification: { jobID: "current", conflictIDs: ["a", "b"], reason: "Overlap" } } as Job;
+  const submissions = ["one", "two"].map(id => ({ id, projectID: project.id, jobID: job.id, applied: true, status: "needs-attention" })) as Submission[];
+  const selected = currentSharedConflicts(project, [job], submissions);
+  assert.deepEqual(selected, [{ jobID: job.id, submissionID: "one" }]);
+  for (const change of [{ expectedRevision: project.revision - 1 }, { projectID: "other" }, { status: "completed" }, { status: "running" },
+    { answerGroupClarification: undefined }, { answerGroupClarification: { ...job.answerGroupClarification!, jobID: "old" } }])
+    assert.deepEqual(currentSharedConflicts(project, [{ ...job, ...change } as Job], submissions), []);
+  for (const change of [{ jobID: "new" }, { archivedAt: 123 }, { conflict: true }, { applied: false }, { status: "completed" }, { status: "processing" }, { projectID: "other" }])
+    assert.deepEqual(currentSharedConflicts(project, [job], [submissions[0]!, { ...submissions[1]!, ...change } as Submission]), []);
+  assert.deepEqual(currentSharedConflicts(project, [job], submissions.slice(0, 1)), []);
+  const html = renderToStaticMarkup(createElement(SharedConflictNotice, { conflicts: selected, open: () => {} }));
+  assert.match(html, /Resolve saved-answer conflict/); assert.match(html, /Play cannot make this choice/);
+  assert.equal((html.match(/<button/g) ?? []).length, 1);
+  assert.equal(renderToStaticMarkup(createElement(SharedConflictNotice, { conflicts: [], open: () => {} })), "");
+});
 
 test("saved blocked assessments appear in Specification without manufacturing a question, approval or product gap", () => {
   const p = fixture();

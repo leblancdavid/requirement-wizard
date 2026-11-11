@@ -9,6 +9,7 @@ import type { DiscoveryAdapter } from "./discovery.js";
 import type { DiscoveryMeasurement } from "./discovery-metrics.js";
 import type { ProjectStore } from "../storage/store.js";
 import { prepareAnswerGroupBlockerReview } from "../core/answer-group.js";
+import { adoptAnswerGroupUnionPageCapacity } from "../core/answer-group.js";
 
 export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdapter, project: Project, job: Job, items: Submission[], options: {
   signal: AbortSignal; continuous?: boolean; play?: boolean; shouldPause?: () => boolean; limits?: { requests: number; durationMs: number };
@@ -19,12 +20,13 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
   if (!previous && items.some(s => store.submissionHasJob(project.id, s.id, job.id)))
     throw new Error("Already-started answer work cannot be regrouped. Its original work and attempts are retained.");
   const material = local("preparation", () => answerGroupMaterials(project, items));
-  let work = local("preparation", () => previous?.answerGroupWork ? structuredClone(previous.answerGroupWork) : planAnswerGroup(material));
+  let work = local("preparation", () => previous?.answerGroupWork ? structuredClone(previous.answerGroupWork) : planAnswerGroup(material, true));
   if (options.play && !previous) work = adoptAnswerGroupPlay(material, work, job);
   if (options.play) adoptAnswerGroupResponseCapacity(work);
   if (options.play && previous) prepareAnswerGroupResponseRecovery(work, previous);
   if (options.play && (!previous || !answerGroupCompletedRecoveryCandidate(previous))) adoptAnswerGroupRepairPolicy(work);
   let { draft, blocked } = local("replay", () => replayAnswerGroup(material, work));
+  if (options.play && !blocked && (!previous || !answerGroupCompletedRecoveryCandidate(previous))) adoptAnswerGroupUnionPageCapacity(work);
   if(options.play&&!blocked&&(!previous||!answerGroupCompletedRecoveryCandidate(previous)))adoptAnswerGroupInputCapacity(material,work);
   if(options.play&&blocked&&prepareAnswerGroupLookupInspection(material,work,draft))blocked=undefined;
   if(options.play&&blocked&&prepareAnswerGroupBlockerReview(material,work,draft))blocked=undefined;
@@ -96,7 +98,7 @@ export async function runAnswerGroup(store: ProjectStore, adapter: DiscoveryAdap
       : context.answerGroupBlockerReview ? "Reviewing omitted linked human decisions against the saved conflict. Draft frozen; no original step or approval granted."
       : progress.phase === "repair"
       ? `${answerGroupRequestLimit(work) === 8 ? `Original-source recovery · ${work.attempts} / 8 cumulative requests (4 original + up to 4 additional). ` : ""}Repairing the shared draft · repair ${answerGroupProgress(work).repairs + 1} / ${answerGroupRepairLimit(work)}. Original answers and evidence reads are saved. Every evidence batch will be checked again before publication.`
-      : `Integrating ${items.length} saved answers together · ${progress.completed} / ${work.batches.length * 2} evidence steps saved.${progress.evidencePage ? ` Evidence page ${progress.evidencePage.completed + 1} / ${progress.evidencePage.total} of this step; original lookup retained.` : ""}${answerGroupRequestLimit(work) === 8 && work.pageRecovery ? ` Page-loop recovery · ${work.attempts} / 8 cumulative requests (4 original + up to 4 additional).` : ""} No partial changes published.`);
+      : `Integrating ${items.length} saved answers together · ${progress.completed} / ${progress.total} evidence steps saved.${progress.evidencePage ? ` Evidence page ${progress.evidencePage.completed + 1} / ${progress.evidencePage.total} of this step; original lookup retained.` : ""}${answerGroupRequestLimit(work) === 8 && work.pageRecovery ? ` Page-loop recovery · ${work.attempts} / 8 cumulative requests (4 original + up to 4 additional).` : ""} No partial changes published.`);
     const timeout = AbortSignal.timeout(options.continuous ? 300000 : Math.max(1, Math.min(300000, deadline - Date.now())));
     const signal = AbortSignal.any([options.signal, timeout]);
     let abort: () => void = () => {}, violation: Error | undefined;

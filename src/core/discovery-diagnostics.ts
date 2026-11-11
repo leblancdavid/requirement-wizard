@@ -5,7 +5,7 @@ import { definitionCellExecutionStageLimit } from "./definition-continuation.js"
 import { definitionRequestLimit } from "./definition-budget.js";
 import { answerIntegrationSchema } from "./answer-integration-diagnostics.js";
 import { workflowStopSchema } from "./workflow-stop.js";
-import { answerGroupProgress, answerGroupPageCounts, answerGroupLimits } from "./answer-group.js";
+import { answerGroupProgress, answerGroupPageCounts, answerGroupLimits, answerGroupPageStepLimit } from "./answer-group.js";
 
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const duration = z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -18,9 +18,11 @@ export const diagnosticContextSchema = z.object({ characters: count, budget: cou
   omittedRecords: count, areas: count.nullable(), sections: sectionsSchema,
   traversal: z.object({ visitedRecords: count, examinedEdges: count, missingRecords: count }).strict().nullable(),
   sharedAnswer: z.object({ originalStep: count, phase: z.enum(["read", "check", "repair"]),
-    pageFormat: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11)]).nullable(), page: count.nullable(), pages: count.nullable() }).strict().optional(),
+    pageFormat: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12)]).nullable(), page: count.nullable(), pages: count.nullable() }).strict().optional(),
 }).strict();
 const groupProgressSchema = z.object({ batches: z.object({ length: count }).strict(),
+  verificationPolicy: z.literal("union-v1").nullable().optional().transform(value => value ?? undefined),
+  unionPageCapacity: z.object({ fromReceipt: count }).strict().nullable().optional().transform(value => value ?? undefined),
   receipts: z.array(z.object({ step: count, response: z.union([
     z.object({ answerGroupDraft: z.literal(true) }).strict(), z.object({ answerGroupKeep: z.literal(true) }).strict(),
     z.object({ answerGroupRepair: z.literal(true) }).strict(), z.object({ answerGroupCheck: z.object({ valid: z.boolean() }).strict() }).strict(),
@@ -103,10 +105,16 @@ export type DiagnosticSource = {
   workflowStop?: string | null;
 };
 const nullableCount = (value: number | null) => value === null ? null : count.parse(value);
-export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
+const workspacePublicationSchema = z.object({ format: z.literal(1), revision: count,
+  status: z.enum(["saved", "pending", "conflict", "unavailable"]).optional(),
+  elapsedMs: duration.optional(), historyMs: duration.optional(), continuationMs: duration.optional(),
+  renderMs: duration.optional(), filesMs: duration.optional(), selectedJobs: count.optional(), snapshots: count.optional() });
+export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePublication?: unknown) {
   if (!rows.length || rows.length > 20) throw new Error("Select between one and twenty discovery runs.");
   const packages = new Map<string, string>();
+  const publication = workspacePublicationSchema.safeParse(workspacePublication);
   return { format: 1 as const, kind: "reqwizit-discovery-diagnostics" as const,
+    ...(publication.success ? { workspacePublication: { scope: "latest-workspace-publication" as const, ...publication.data } } : {}),
     privacy: "Metadata only. No project/record/job IDs, names, paths, prompts, answers, responses, credentials or diagnostic prose. Counts and durations can still reveal project scale; review before sharing.",
     limitations: "Missing measurements are null or absent, never zero. Recording-state measurements are partial, not a complete run total. Requests are adapter attempts checkpointed before dispatch, not proof of provider acceptance. Request time includes startup/tools/provider work, not pure inference. gapBeforeMs and afterLastRequestMs locate wall time outside adapter requests, not CPU attribution. Bookkeeping and phase timings overlap initial planning/intervals; do not add them together. metricsPersistence includes completed earlier metric writes; the final metrics write and its duration are excluded to avoid recursive measurement. Workflow stop reasons belong to the recorded worker receipt, not button-click history; older reasons remain unknown. Selection reasons describe structural compatibility, not semantic independence. Context characters exclude runtime prompt/schema overhead and are not tokens. Saved context may be a staged publication union; request contexts describe actual app inputs. Saved attempts may span earlier runs; measured requests belong only to this run. For shared answers, completedBatches and remainingSteps count original read/check steps, while pageAccounting.completedReplies counts successful page replies, not original steps. Historical planned extras include superseded layouts and are not spent requests or a remaining allowance. Other completedBatches count stage receipts, not distinct evidence batches. Freshness reasons describe local matching, not semantic proof. Response categories precede validation. No timestamps or model/account identifiers are exported.",
     runs: rows.map((row, index) => {
@@ -122,9 +130,10 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
       const stored = row.sections === null ? {} : JSON.parse(row.sections) as Record<string, unknown>;
       for (const key of diagnosticSections) if (typeof stored[key] === "number") sections[key] = count.parse(stored[key]);
       const exactStages = ["exact-readiness-batches-v1", "exact-submission-batches-v1", "exact-answer-group-v1"].includes(row.policy ?? "");
-      const totalSteps = exactStages && row.stagedBatches !== null ? count.parse(row.stagedBatches) * 2 + Number(row.savedDraftRepairFormat === 1) : null;
+       const legacyTotalSteps = exactStages && row.stagedBatches !== null ? count.parse(row.stagedBatches) * 2 + Number(row.savedDraftRepairFormat === 1) : null;
       const group = row.groupProgress ? groupProgressSchema.parse(JSON.parse(row.groupProgress)) : null;
-      const groupProgress = group ? answerGroupProgress(group) : null;
+       const groupProgress = group ? answerGroupProgress(group) : null;
+       const totalSteps = groupProgress?.total ?? legacyTotalSteps;
       const completedSteps = groupProgress?.completed ?? nullableCount(row.stagedCompleted);
       return { id: `run-${index + 1}`, revision: count.parse(row.revision),
         status: z.enum(["pending", "running", "completed", "failed", "cancelled", "interrupted", "stale"]).parse(row.status),
@@ -144,8 +153,9 @@ export function discoveryDiagnosticReport(rows: DiagnosticSource[]) {
           reusedFinal: row.reusedFinal === null ? null : !!row.reusedFinal, stagedBatches: nullableCount(row.stagedBatches), completedBatches: completedSteps,
            totalSteps, remainingSteps: totalSteps !== null && completedSteps !== null ? Math.max(0, totalSteps - completedSteps) : null,
            phase: groupProgress?.phase ?? (totalSteps !== null && completedSteps !== null ? completedSteps >= totalSteps ? "complete" : row.answerGroupPhase === "repair" ? "repair" : completedSteps < row.stagedBatches! || row.savedDraftRepairFormat === 1 && completedSteps === row.stagedBatches ? "read" : "check" : null),
-           ...(group && groupProgress ? { pageAccounting: { ...answerGroupPageCounts(group), currentPage: groupProgress.evidencePage ? groupProgress.evidencePage.completed + 1 : null,
-             currentPages: groupProgress.evidencePage?.total ?? null, limits: { pagesPerStep: answerGroupLimits.pagesPerStep,
+            ...(group && groupProgress ? { pageAccounting: { ...answerGroupPageCounts(group), budgetScope: answerGroupPageStepLimit(group) === answerGroupLimits.completedPages ? "shared-group" as const : "original-step" as const,
+              currentPage: groupProgress.evidencePage ? groupProgress.evidencePage.completed + 1 : null,
+              currentPages: groupProgress.evidencePage?.total ?? null, limits: { pagesPerStep: answerGroupPageStepLimit(group),
                completedPages: answerGroupLimits.completedPages, layouts: answerGroupLimits.pagePlans, receipts: answerGroupLimits.receipts, storedBytes: answerGroupLimits.storedBytes } } } : {}),
           continuationAction: exactStages && ["interrupted", "cancelled", "failed"].includes(row.status)
             ? row.policy === "exact-readiness-batches-v1" ? "continue-clarification" : "process-saved-responses" : null },

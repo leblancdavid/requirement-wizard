@@ -1015,7 +1015,7 @@ export class DiscoveryQueue {
           }
           const group = [...groups.values()].find(items => items.length >= 2) ?? [];
           if (group.length >= 2) {
-            try { planAnswerGroup(answerGroupMaterials(project, group)); batch.push(...group); sharedAnswers = true; }
+            try { planAnswerGroup(answerGroupMaterials(project, group), true); batch.push(...group); sharedAnswers = true; }
             catch (error) {
               // Fit is measured before dispatch. Failed/started groups never use
               // this fallback and can never acquire fresh individual allowances.

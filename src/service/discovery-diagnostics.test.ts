@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "./discovery.js";
-import { discoveryMetricsSchema } from "../core/discovery-diagnostics.js";
+import { discoveryMetricsSchema, discoveryDiagnosticReport, type DiagnosticSource } from "../core/discovery-diagnostics.js";
 import { continuationState } from "../storage/portable.js";
 import { startApp } from "../web/server.js";
 import type { Analysis } from "../core/model.js";
@@ -20,6 +20,21 @@ import { answerGroupProgress, answerGroupPageCounts, type AnswerGroupProgressInp
 
 const empty = (): Analysis => ({ summary: "PRIVATE model output", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [], organization: [], assessments: [] });
 const create = (store: ProjectStore) => store.create("PRIVATE project name", "PRIVATE initial human input", { providerID: "openai", modelID: "PRIVATE-model" });
+
+test("latest workspace publication diagnostics are numeric, separately scoped, redacted and absent when unavailable", () => {
+  const row: DiagnosticSource = { id: "PRIVATE-job", revision: 1, status: "completed", packageID: null, policy: null,
+    metrics: null, characters: null, budget: null, included: null, omitted: null, areas: null, sections: null, stages: null,
+    savedAttempts: null, reusedStages: null, reusedFinal: null, stagedBatches: null, stagedCompleted: null,
+    reviewed: null, pending: null, waiting: null, blocked: null, planningPartial: null };
+  const report = discoveryDiagnosticReport([row], { format: 1, revision: 99, status: "unavailable", elapsedMs: 185000, continuationMs: 180000,
+    selectedJobs: 396, snapshots: 282, path: "PRIVATE folder", diagnostic: "PRIVATE error", prompt: "PRIVATE input" });
+  assert.deepEqual(report.workspacePublication, { scope: "latest-workspace-publication", format: 1, revision: 99, status: "unavailable",
+    elapsedMs: 185000, continuationMs: 180000, selectedJobs: 396, snapshots: 282 });
+  assert.ok(!JSON.stringify(report).includes("PRIVATE"));
+  assert.equal(discoveryDiagnosticReport([row]).workspacePublication, undefined);
+  assert.equal(discoveryDiagnosticReport([row], { format: 999, revision: 99 }).workspacePublication, undefined);
+  assert.equal(discoveryDiagnosticReport([row], { format: 1, revision: 99, elapsedMs: -1 }).workspacePublication, undefined);
+});
 
 test("diagnostics export retains clarification/inspection/comparison receipt positions without exposing bodies or granting progress", async () => {
   const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });

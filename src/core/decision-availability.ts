@@ -3,6 +3,9 @@ import { discoveryBlockReason } from "./operations.js";
 import { z } from "zod";
 import { effectiveAnswerScope } from "./input-scope.js";
 
+/** Complete inputs to identity calculation; assessments/activity are not evidence here. */
+export type DecisionEvidenceProject = Pick<Project, "sources" | "questions" | "requirements" | "epics">;
+
 export type DecisionAvailability = {
   state: "ready" | "waiting" | "needs-review";
   reason?: string;
@@ -11,7 +14,7 @@ export type DecisionAvailability = {
   questionIDs?: string[];
 };
 
-function decisionScope(project: Project, requirementIDs: readonly string[]) {
+function decisionScope(project: DecisionEvidenceProject, requirementIDs: readonly string[]) {
   const targets = project.requirements.filter((r) => requirementIDs.includes(r.id));
   const areas = new Set(["project", ...targets.map((r) => r.epicID)]);
   const visit = (id: string) => {
@@ -40,7 +43,7 @@ export function decisionClarifications(project: Project, requirementIDs: readonl
 
 /** Relevant immutable evidence, not a project-wide revision. Independent reviews
  * must not invalidate one another solely because they share a feature. */
-export function legacyDecisionContextKey(project: Project, requirementIDs: readonly string[]): string {
+export function legacyDecisionContextKey(project: DecisionEvidenceProject, requirementIDs: readonly string[]): string {
   const { targets, areas, questions, guardrails } = decisionScope(project, requirementIDs);
   return JSON.stringify(["human-review-basis-v1",
     targets.map((r) => [r.id, reviewFingerprint(r)]).sort((a, b) => a[0]!.localeCompare(b[0]!)),
@@ -52,7 +55,7 @@ export function legacyDecisionContextKey(project: Project, requirementIDs: reado
 }
 
 /** Exact human/source evidence used in the existing version-1 decision basis. */
-function legacyDecisionEvidenceSources(project: Project, requirementIDs: readonly string[]) {
+function legacyDecisionEvidenceSources(project: DecisionEvidenceProject, requirementIDs: readonly string[]) {
   const { areas, sources, questions, targetAreas, guardrails } = decisionScope(project, requirementIDs);
   const questionAreas = new Map(project.questions.map((q) => [q.id, q.epicID]));
   const superseded = new Set(project.sources.flatMap((s) => s.supersedes ? [s.supersedes] : []));
@@ -67,7 +70,7 @@ const fingerprintRows = z.array(z.tuple([z.string(), z.string()]));
 const legacyKeySchema = z.tuple([z.literal("human-review-basis-v1"), fingerprintRows, z.array(z.string()),
   z.array(z.tuple([z.string(), z.boolean(), z.array(z.string())])), z.array(z.tuple([z.string(), z.string(), z.string(), z.string().nullable()])), fingerprintRows]);
 
-function linkedRequirements(project: Project, ids: readonly string[], questionIDs: readonly string[]): Set<string> {
+function linkedRequirements(project: DecisionEvidenceProject, ids: readonly string[], questionIDs: readonly string[]): Set<string> {
   const linked = new Set(ids);
   for (const r of project.requirements) if (ids.includes(r.id)) for (const s of project.sources) if (r.sourceIDs.includes(s.id)) {
     if (s.requirementID) linked.add(s.requirementID);
@@ -79,7 +82,7 @@ function linkedRequirements(project: Project, ids: readonly string[], questionID
 
 /** Project only evidence whose scope is structurally known. Missing metadata is
  * retained conservatively. This also compares older keys without rewriting them. */
-export function narrowDecisionEvidence(project: Project, targets: [string, string][], sourceIDs: string[], areas: string[], questionIDs: string[], guardrails: [string, string][] = [], pinned: readonly string[] = []) {
+export function narrowDecisionEvidence(project: DecisionEvidenceProject, targets: [string, string][], sourceIDs: string[], areas: string[], questionIDs: string[], guardrails: [string, string][] = [], pinned: readonly string[] = []) {
   const fingerprints = targets.map(([, value]) => JSON.parse(value) as unknown[]);
   const targetAreas = new Set(fingerprints.map((f) => f[3]));
   const related = linkedRequirements(project, targets.map(([id]) => id), questionIDs);
@@ -108,13 +111,13 @@ export function narrowDecisionEvidence(project: Project, targets: [string, strin
   }) };
 }
 
-function narrowLegacyKey(project: Project, raw: string): string {
+function narrowLegacyKey(project: DecisionEvidenceProject, raw: string): string {
   const key = legacyKeySchema.parse(JSON.parse(raw));
   const evidence = narrowDecisionEvidence(project, key[1], key[2], key[3].map(([id]) => id), key[4].map(([id]) => id), key[5]);
   return JSON.stringify(["human-review-basis-v2", key[1], evidence.sourceIDs, key[3], key[4], evidence.guardrails]);
 }
 
-export function decisionContextKey(project: Project, requirementIDs: readonly string[]): string {
+export function decisionContextKey(project: DecisionEvidenceProject, requirementIDs: readonly string[]): string {
   const key = JSON.parse(narrowLegacyKey(project, legacyDecisionContextKey(project, requirementIDs))) as unknown[];
   // New bases also capture exact relationship routing. Do not invent these fields for v1 evidence.
   key[4] = decisionScope(project, requirementIDs).questions.map((q) => [q.id, q.text, q.status, q.sourceID ?? null, q.epicID, [...(q.evidenceIDs ?? [])].sort()]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
@@ -127,7 +130,7 @@ export function decisionContextMatches(project: Project, requirementIDs: readonl
   catch { return false; } // Unknown/future bases fail closed; never replace stored provenance.
 }
 
-export function decisionEvidenceSources(project: Project, requirementIDs: readonly string[]) {
+export function decisionEvidenceSources(project: DecisionEvidenceProject, requirementIDs: readonly string[]) {
   const ids = new Set((JSON.parse(decisionContextKey(project, requirementIDs)) as [string, unknown, string[]])[2]);
   return project.sources.filter((s) => ids.has(s.id));
 }

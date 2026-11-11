@@ -1,5 +1,72 @@
 # Browser workspace, epics, and estimated completeness
 
+When Play stops on two conflicting saved answers, select **Resolve saved-answer
+conflict** in the notice at the top of the workspace (including **Design**). You do
+not need to locate a requirement or open the processing queue. The existing
+**View & resolve** dialog opens. **Two earlier answers disagree**
+shows both original questions/answers and the overlap. Choose a governing answer or
+describe an exception, then select **Save decision & continue**. Nothing is preselected.
+The app saves that human decision and resumes repair without discarding the draft or
+paid work. Every original check follows repair again. If continuation fails after
+saving, use **Continue review** without saving a duplicate. Restart the backend to
+load this repair-stage extension. See [preservation and limits](migrations.md#human-decisions-during-carried-draft-repair-conflicts-2026-11-10).
+
+Explicit Play can now let a combined union-verification step use the existing
+whole-group page budget, rather than stopping at 64 checks across all repairs.
+All earlier reads/checks still count toward the same 256-page group ceiling; no
+request allowance is reset. Every page must check the current full repaired draft.
+Restart the backend and use Play to adopt; reload alone starts nothing. See
+[approved policy and preservation](migrations.md#union-verification-shares-the-existing-group-page-budget-2026-11-10).
+
+Restarted shared-answer verification may now use more than 32 pages in one new joint
+layout if the complete layout fits the existing 64-page paid/pending step budget.
+Earlier paid pages still count, all pages check the same full repaired draft, and no
+partial verification publishes. Input/attempt/request limits remain unchanged. See
+[compatibility and checks](migrations.md#joint-layouts-within-the-existing-paidpending-step-budget-2026-11-10).
+
+An oversized complete shared-answer repair can now use the existing guarded 200k
+joint-input policy when its Play/OpenCode capacity boundary is active. This keeps the
+full rejected comparison, every pinned answer and the entire draft together; it does
+not reread completed evidence or refund attempts. Fresh selected-model capacity must
+still pass before dispatch, and all checks restart after repair. Restart the backend
+and use Play explicitly; reload alone starts nothing. See
+[compatibility and checks](migrations.md#guarded-capacity-for-complete-rejected-comparison-repairs-2026-11-10).
+
+New shared groups now try lossless packing during grouping preflight, retaining all
+original answers, the full draft reserve and ordinary input bound. Already-started
+groups keep their original schedule. Folder continuation omits only completed cleanup
+checks rejected by the existing freshness rule, preserving unfinished work and required
+ancestors; local SQLite history is retained. Diagnostics now include latest folder
+publication timing separately from selected job runs. See [compatibility and checks](migrations.md#exact-portable-selection-and-initial-lossless-shared-packing-2026-11-10).
+
+For a shared-answer conflict before the first draft, the blocked requirement now shows
+**Two earlier answers disagree**, both original questions/answers, and unselected
+choices. Choose which answer governs overlapping situations, or describe an exception
+or different rule. **Save decision & continue** saves the exact human decision and
+explicitly authorizes specification review through the selected AI connection. It
+does not start coding. Progress stays inline; the requirement remains visible with
+changed/unchanged wording feedback after its saved responses complete.
+
+If saving succeeds but continuation cannot start, the card offers **Continue review**;
+the answer does not need to be entered or saved again. Reload alone starts nothing.
+If the next review says the clarification is still unclear, **Your decision needs
+clarification** now opens fresh choices and shows the earlier note. Choose an explicit
+priority, or describe the exception. The new note replaces that clarification only;
+earlier notes and paid reviews remain saved, with no fresh allowance. See
+[follow-up compatibility and limits](migrations.md#follow-up-decisions-after-a-rejected-clarification-2026-11-10).
+Processing & queue still provides an entry point, but is not required from the
+requirement. Source IDs and the earlier technical diagnostic are collapsed by default.
+Original answers, paid work and every original verification check remain intact.
+Later carried-draft conflicts remain outside this initial recovery path. See
+[compatibility and verification](migrations.md#inline-shared-decisions-and-explicit-continuation-2026-11-10).
+
+Newly started shared-answer processing uses a full paged verification union. Progress
+counts read batches plus one verification step; that step can contain several mandatory
+pages. Saved older runs retain their original schedules and paid work. Workspace folder
+publication is deferred to the end of an owned workflow window and caches exact historical
+snapshot normalization across restarts. The first export still warms that cache and can
+be slow; no history is removed. See [compatibility and checks](migrations.md#union-answer-verification-and-portable-snapshot-cache-2026-11-10).
+
 **Play** can review an omitted saved human resolution before asking the same
 decision again. It supports bounded reviews for distinct disjoint cited-answer
 conflicts (up to eight total), without repeating a completed review or allowing a

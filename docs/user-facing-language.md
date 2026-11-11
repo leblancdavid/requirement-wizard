@@ -30,6 +30,13 @@ Plain language is the default throughout the app, not only in interview question
 
 ## Implemented presentation pass
 
+Initial shared-answer conflicts now show original answers and unselected decisions
+directly on the blocked requirement. **Save decision & continue** replaces the separate
+save/dialog/Play detour; progress and checked changed/unchanged wording feedback stay
+inline. A saved decision whose review could not start offers **Continue review**, not
+another answer form. Exact source IDs and the historical failure diagnostic are in
+collapsed details. This is not automatic precedence or support for later draft conflicts.
+
 The browser now uses simpler guidance for coordinated work, automatic checks,
 progress, saved-response recovery, connections, folders/sharing and building.
 Discovery progress and error notices separate the high-level outcome from original

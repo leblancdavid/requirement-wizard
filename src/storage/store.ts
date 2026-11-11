@@ -1,4 +1,6 @@
 import Database from "better-sqlite3";
+import { portableSnapshot } from "./portable-snapshots.js";
+import { readRefinementEvidence } from "./refinement-evidence.js";
 import { definitionChangeReceipt, definitionChangeBaseline, prepareDefinitionChangeReview, validateDefinitionChangeResponse, makeDefinitionChangeReceipt } from "../core/definition-change-review.js";
 import { canonicalJSON } from "../core/assessment-identity.js";
 import { changeGuardKey } from "../core/definition-change-guard.js";
@@ -97,7 +99,8 @@ import { dismissibleReviewAttempt, resolvedReviewAttempts, reviewAttemptBatchLim
 import { readinessWorkSchema, validateReadinessStagePublication, type ReadinessWork } from "../core/readiness-stages.js";
 import { submissionWorkSchema, submissionAllowance, submissionMaterials, replaySubmissionStages, recoverSubmissionPermissions, submissionReconciliation, submissionDraftRepair, validateSubmissionPublication, type SubmissionWork } from "../core/submission-stages.js";
 import { answerGroupWorkSchema, answerGroupStageSchema, validateAnswerGroupPublication, answerGroupMaterials, authorizeAnswerGroupRecovery, authorizeAnswerGroupPageRecovery, authorizeAnswerGroupVerification, authorizeAnswerGroupRuleRepair, adoptAnswerGroupPlay, replayAnswerGroup, answerGroupPlayLimits, adoptAnswerGroupResponseCapacity, answerGroupCompletedRecoveryCandidate, prepareAnswerGroupResponseRecovery, type AnswerGroupRuleRepairConsent, type AnswerGroupWork } from "../core/answer-group.js";
-import { adoptAnswerGroupRepairPolicy,prepareAnswerGroupLookupInspection,adoptAnswerGroupInputCapacity,prepareAnswerGroupBlockerReview } from "../core/answer-group.js";
+import { adoptAnswerGroupRepairPolicy,prepareAnswerGroupLookupInspection,adoptAnswerGroupInputCapacity,prepareAnswerGroupBlockerReview,adoptAnswerGroupUnionPageCapacity } from "../core/answer-group.js";
+import { clarifyAnswerGroup, answerGroupClarifications } from "../core/answer-group.js";
 import { refinementStageSchema, refinementWorkSchema, validateRefinementPublication, sameRefinementTask, type RefinementWork } from "../core/refinement-stages.js";
 import { prepareScanAnalysis } from "../core/scan.js";
 import { organize, type Organization } from "../core/epics.js";
@@ -456,7 +459,8 @@ export class ProjectStore {
       const movedPublishedFolder = previous && previous.hashes["manifest.json"] === hash(manifest);
       if (!movedPublishedFolder && parsed.revision !== expectedRevision) throw new Error("Workspace conflict: this folder has a different saved revision. Use Open shared checkpoint instead of reconnecting.");
       if (parsed.formatVersion === 3 && !movedPublishedFolder) {
-        const intended = renderWorkspace(this.get(id), this.execution(id), continuationState(this.get(id), this.jobs(id), this.submissions(id), (revision) => this.get(id, revision)));
+        const intended = renderWorkspace(this.get(id), this.execution(id), continuationState(this.get(id), this.jobs(id), this.submissions(id), (revision) => this.get(id, revision),
+          undefined, (revision) => readRefinementEvidence(this.db, id, revision)));
         if (intended["manifest.json"] !== manifest) throw new Error("Workspace conflict: this folder has different portable state. Use Open shared checkpoint instead of reconnecting.");
       }
       binding.hashes = { ...parsed.hashes, "manifest.json": hash(manifest) };
@@ -588,6 +592,8 @@ export class ProjectStore {
       .run(owner, Date.now() + 300_000, id, Date.now()).changes;
     if (!acquired) return this.workspace(id);
     const binding = this.workspace(id)!;
+    const publicationStarted = performance.now();
+    let publicationMetrics: Workspace["publicationMetrics"];
     try {
       if ((binding.formatVersion ?? 1) > 3) throw new Error("Workspace conflict: unsupported future workspace format. Upgrade the app; files were not overwritten.");
       checkWorkspace(binding);
@@ -596,8 +602,17 @@ export class ProjectStore {
       const storedRevision = this.db.prepare("SELECT revision FROM projects WHERE id = ?").get(id) as { revision: number };
       if (storedRevision.revision !== project.revision) throw new Error("Workspace snapshot changed before publication. Retry from the saved project revision.");
       if (binding.status === "saved" && binding.savedRevision === project.revision && binding.formatVersion === 3) return binding;
-      const continuation = continuationState(project, this.jobs(id), this.submissions(id), (revision) => this.get(id, revision));
+      const metrics: NonNullable<Workspace["publicationMetrics"]> = publicationMetrics = binding.publicationMetrics = { format: 1, revision: project.revision };
+      let started = performance.now();
+      const jobs = this.jobs(id), submissions = this.submissions(id);
+      metrics.historyMs = performance.now() - started; started = performance.now();
+      const continuation = continuationState(project, jobs, submissions, (revision) => this.get(id, revision),
+        (revision) => portableSnapshot(this.db, id, revision, () => this.get(id, revision)),
+        (revision) => readRefinementEvidence(this.db, id, revision));
+      metrics.continuationMs = performance.now() - started; started = performance.now();
+      metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;
       const files = renderWorkspace(project, this.execution(id), continuation);
+      metrics.renderMs = performance.now() - started; started = performance.now();
       checkWorkspace(binding, Object.keys(files));
       binding.pendingRemovals = [...new Set([...Object.keys(binding.hashes), ...Object.keys(binding.pendingHashes)])].filter((name) => !(name in files));
       // Retain every recognized intermediate write until the whole publication succeeds.
@@ -606,13 +621,16 @@ export class ProjectStore {
       // Commit the intended hashes before touching files: partial writes can be recovered.
       this.db.prepare("UPDATE workspaces SET payload = ? WHERE project_id = ? AND owner = ?").run(JSON.stringify(binding), id, owner);
       publishWorkspace(directory, files, binding.pendingRemovals);
+      metrics.filesMs = performance.now() - started;
       binding.hashes = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, hash(content)])); binding.pendingHashes = {};
       binding.pendingRemovals = []; binding.formatVersion = 3;
       binding.portableBase ??= portableDigest(JSON.parse(files["manifest.json"]!).hashes);
       binding.savedRevision = project.revision; binding.status = "saved";
+      metrics.elapsedMs = performance.now() - publicationStarted;
       this.db.prepare("UPDATE workspaces SET payload = ?, dirty = CASE WHEN (SELECT revision FROM projects WHERE id = ?) = ? THEN 0 ELSE 1 END WHERE project_id = ? AND owner = ?")
         .run(JSON.stringify(binding), id, project.revision, id, owner);
     } catch (error) {
+      if (publicationMetrics) publicationMetrics.elapsedMs = performance.now() - publicationStarted;
       const message = error instanceof Error ? error.message : "Workspace save failed.";
       binding.status = message.includes("Workspace conflict:") ? "conflict" : "unavailable";
       binding.diagnostic = message;
@@ -1640,6 +1658,9 @@ export class ProjectStore {
        COALESCE(json_extract(payload, '$.answerGroupWork.sourceSupport.recovery.additionalRequests'), json_extract(payload, '$.answerGroupWork.pageRecovery.additionalRequests')) AS groupRecoveryRequests,
         json_array_length(payload, '$.answerGroupWork.sourceSupport.records') AS groupSupportRecords,
         CASE WHEN json_type(payload, '$.answerGroupWork') IS NOT NULL THEN json_object(
+          'verificationPolicy', json_extract(payload, '$.answerGroupWork.verificationPolicy'),
+          'unionPageCapacity', CASE WHEN json_type(payload, '$.answerGroupWork.unionPageCapacity') IS NOT NULL THEN
+            json_object('fromReceipt', json_extract(payload, '$.answerGroupWork.unionPageCapacity.fromReceipt')) ELSE NULL END,
           'batches', json_object('length', json_array_length(payload, '$.answerGroupWork.batches')),
           'receipts', json((SELECT json_group_array(json_object('step', json_extract(r.value, '$.step'), 'response', json(CASE
             WHEN json_type(r.value, '$.response.answerGroupDraft') IS NOT NULL THEN '{"answerGroupDraft":true}'
@@ -1685,7 +1706,8 @@ export class ProjectStore {
       AND COALESCE(json_extract(payload, '$.context.refinementOnly'), 0) = 0 ORDER BY rowid DESC LIMIT 20`)
       .all(projectID, ...ids) as DiagnosticSource[];
     if (rows.length !== ids.length) throw new Error("Choose discovery runs from this project only.");
-    const report = discoveryDiagnosticReport(rows);
+    const workspace = this.workspace(projectID);
+    const report = discoveryDiagnosticReport(rows, workspace?.publicationMetrics && { ...workspace.publicationMetrics, status: workspace.status });
     if (Buffer.byteLength(JSON.stringify(report)) > 256000) throw new Error("Diagnostics exceed the export bound. Select fewer runs.");
     return report;
   }
@@ -2399,11 +2421,19 @@ export class ProjectStore {
         throw new Error("Shared answer checkpoint cannot replace its original material or plan.");
       this.assertAnswerGroupRulePermission(job, work);
       const previous = job.answerGroupWork ?? this.latestAnswerGroupWorkJob(job.projectID, work.submissionIDs[0]!, job.id)?.answerGroupWork;
+      if (previous?.humanClarification && JSON.stringify(previous.humanClarification) !== JSON.stringify(work.humanClarification))
+        throw new Error("Saved human clarification cannot be discarded or replaced by a worker.");
+      if (previous?.humanClarificationFollowups && JSON.stringify(previous.humanClarificationFollowups) !== JSON.stringify(work.humanClarificationFollowups?.slice(0, previous.humanClarificationFollowups.length)))
+        throw new Error("Saved follow-up decisions cannot be discarded or replaced by a worker.");
+      if (previous?.repairClarifications && JSON.stringify(previous.repairClarifications) !== JSON.stringify(work.repairClarifications?.slice(0, previous.repairClarifications.length)))
+        throw new Error("Saved repair-stage human decisions cannot be discarded or replaced by a worker.");
       if (previous?.lookupReviews && JSON.stringify(work.lookupReviews?.slice(0,previous.lookupReviews.length)) !== JSON.stringify(previous.lookupReviews))
         throw new Error("Saved lookup clarification boundaries cannot be discarded or replaced.");
       if(previous?.lookupInspections&&JSON.stringify(work.lookupInspections?.slice(0,previous.lookupInspections.length))!==JSON.stringify(previous.lookupInspections))
         throw new Error("Saved evidence inspection boundaries cannot be discarded or replaced.");
       if(previous?.inputCapacity&&JSON.stringify(previous.inputCapacity)!==JSON.stringify(work.inputCapacity))throw new Error("Joint input capacity cannot replace its retained adoption boundary.");
+      if (previous?.unionPageCapacity && JSON.stringify(previous.unionPageCapacity) !== JSON.stringify(work.unionPageCapacity))
+        throw new Error("Union page capacity cannot replace or discard its retained adoption boundary.");
       if(previous?.blockerReview&&JSON.stringify(previous.blockerReview)!==JSON.stringify(work.blockerReview))throw new Error("Blocker evidence review cannot replace its retained boundary.");
       if(previous?.blockerReviews&&JSON.stringify(previous.blockerReviews)!==JSON.stringify(work.blockerReviews?.slice(0,previous.blockerReviews.length)))throw new Error("Distinct blocker reviews cannot discard or replace their retained boundaries.");
       if (previous?.responseCapacity && JSON.stringify(previous.responseCapacity) !== JSON.stringify(work.responseCapacity)
@@ -2433,6 +2463,12 @@ export class ProjectStore {
   }
 
   private assertAnswerGroupRulePermission(job: Job, work: AnswerGroupWork) {
+    for (const c of answerGroupClarifications(work)) {
+      const parent = this.getJob(c.sourceJobID), saved = parent.answerGroupWork && answerGroupClarifications(parent.answerGroupWork).find(p => p.source.id === c.source.id);
+      if (parent.projectID !== job.projectID || JSON.stringify(saved) !== JSON.stringify(c)
+        || JSON.stringify(parent.answerGroupWork?.receipts.slice(0, c.fromReceipt)) !== JSON.stringify(work.receipts.slice(0, c.fromReceipt)))
+        throw new Error("Human clarification requires its retained human-saved parent and exact paid prefix.");
+    }
     if (work.responseRecovery) {
       const r = work.responseRecovery, source = this.getJob(r.sourceJobID), original = source.answerGroupWork;
       if (source.status !== "failed" || source.projectID !== job.projectID || source.expectedRevision !== job.expectedRevision || !original
@@ -2490,6 +2526,7 @@ export class ProjectStore {
           prepareAnswerGroupResponseRecovery(next, job);
           if (!answerGroupCompletedRecoveryCandidate(job)) adoptAnswerGroupRepairPolicy(next);
           const retained=replayAnswerGroup(m,next);
+          if (!retained.blocked && !answerGroupCompletedRecoveryCandidate(job)) adoptAnswerGroupUnionPageCapacity(next);
           if(!retained.blocked&&!answerGroupCompletedRecoveryCandidate(job))adoptAnswerGroupInputCapacity(m,next);
           if(retained.blocked)prepareAnswerGroupLookupInspection(m,next,retained.draft);
           if(replayAnswerGroup(m,next).blocked)prepareAnswerGroupBlockerReview(m,next,retained.draft);
@@ -2501,6 +2538,29 @@ export class ProjectStore {
         prepared.push(job.id);
       }
       return prepared;
+    }).immediate();
+  }
+
+  /** Save human evidence only. Inference still requires explicit Play. */
+  clarifySharedAnswers(projectID: string, revision: number, jobID: string, text: string) {
+    return this.db.transaction(() => {
+      this.assertNoExecution(projectID);
+      if (this.discoveryActive(projectID) || this.workflowBusy(projectID)) throw new OperationConflictError("Pause active work before clarifying saved answers.");
+      const project = this.get(projectID), job = this.getJob(jobID);
+      if (project.revision !== revision) throw new StaleRevisionError();
+      if (job.projectID !== projectID || !job.answerGroupWork) throw new OperationConflictError("Saved shared-answer task not found.");
+      const submissions = this.submissions(projectID), items = job.answerGroupWork.submissionIDs.map(id => submissions.find(s => s.id === id));
+      if (items.some(s => !s || s.conflict || s.archivedAt || s.jobID !== jobID || s.status !== "needs-attention"
+        || this.latestAnswerGroupWorkJob(projectID, s.id)?.id !== jobID)) throw new OperationConflictError("The saved answers changed. Refresh before clarifying them.");
+      job.answerGroupWork = clarifyAnswerGroup(answerGroupMaterials(project, items as Submission[]), job, text, randomUUID());
+      this.saveJob(job);
+      for (const item of items as Submission[]) { item.status = "saved"; this.saveSubmission(item); }
+      const state = this.workflow(projectID);
+      if (state.current?.kind === "input") state.current.completed = false;
+      state.paused = true;
+      state.message = "Your clarification is saved. Press Play to review the original answers together with your decision. Nothing has been approved.";
+      this.saveWorkflow(projectID, state);
+      return job;
     }).immediate();
   }
 
@@ -2771,6 +2831,7 @@ export class ProjectStore {
             if (items.some(s => !s)) throw new Error("Shared answer source submission is missing.");
             this.assertAnswerGroupRulePermission(job, job.answerGroupWork);
             timed("sharedReplay", () => validateAnswerGroupPublication(project, items as Submission[], job, result));
+            for (const c of answerGroupClarifications(job.answerGroupWork)) project.sources.push(structuredClone(c.source));
           }
           if (job.refinementWork || job.context?.refinementStage) {
             if (!job.refinementWork || !job.context?.refinementOnly || job.context.submissionIDs?.length

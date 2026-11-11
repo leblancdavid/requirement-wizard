@@ -16,6 +16,25 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+Shared-answer grouping now tries the same lossless packing used for dispatch before
+falling back to individual work. Portable exports retain unfinished work and current
+outcomes while excluding completed cleanup checks proven stale by the existing engine
+rule; SQLite history remains untouched. See [compatibility and measurements](docs/migrations.md#exact-portable-selection-and-initial-lossless-shared-packing-2026-11-10).
+
+An initial shared-answer conflict now appears directly on its blocked requirement:
+read both originals, explicitly choose a priority or write an exception, then
+**Save decision & continue**. Progress and the checked result stay on the requirement;
+no dialog/queue/Play detour is needed. Original answers and paid work remain saved.
+If the first clarification is rejected, the card now lets you clarify that decision
+again rather than repeatedly retrying the same blocked note, without resetting usage.
+See [compatibility and limits](docs/migrations.md#inline-shared-decisions-and-explicit-continuation-2026-11-10).
+
+New shared-answer runs now verify one complete paged evidence union rather than
+rechecking draft originals inside every read batch. Existing paid schedules are
+preserved. Workspace publication reuses integrity-checked historical snapshot
+normalization and flushes once per owned workflow window; first exports can still
+be slow. See [upgrade and verification limits](docs/migrations.md#union-answer-verification-and-portable-snapshot-cache-2026-11-10).
+
 The workspace now has one home for requirements (**Specification**, including
 feature organization), unfinished work (**Processing & queue**) and technical
 details (**Application menu → Logs**). See [workspace responsibilities](docs/workspace-navigation.md)

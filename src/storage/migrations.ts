@@ -27,7 +27,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 57;
+export const databaseSchemaVersion = 65;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -310,6 +310,44 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 57, name: "distinct-human-resolution-reviews-v2", apply() {
   // Reader boundary only: retain the v1 singleton verbatim and append bounded
   // v2 reviews for disjoint cited conflicts. No renewed requests or verdicts.
+} }, { version: 58, name: "union-answer-verification-and-portable-snapshot-cache", apply(db: Database.Database) {
+  // Existing ledgers retain their protocol, plan keys, paid replies and usage.
+  // Disposable, integrity-checked normalized snapshots accelerate repeated exports.
+  db.exec(`CREATE TABLE IF NOT EXISTS portable_snapshot_cache (
+    project_id TEXT NOT NULL, revision INTEGER NOT NULL, generation INTEGER NOT NULL,
+    source_digest TEXT NOT NULL, payload_digest TEXT NOT NULL, payload BLOB NOT NULL,
+    PRIMARY KEY(project_id, revision), FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+  );
+  CREATE TRIGGER IF NOT EXISTS portable_snapshot_cache_revision_update AFTER UPDATE ON revisions BEGIN
+    DELETE FROM portable_snapshot_cache WHERE project_id = OLD.project_id OR project_id = NEW.project_id;
+  END;
+  CREATE TRIGGER IF NOT EXISTS portable_snapshot_cache_revision_delete AFTER DELETE ON revisions BEGIN
+    DELETE FROM portable_snapshot_cache WHERE project_id = OLD.project_id;
+  END;
+  CREATE TRIGGER IF NOT EXISTS portable_snapshot_cache_revision_insert AFTER INSERT ON revisions BEGIN
+    DELETE FROM portable_snapshot_cache WHERE project_id = NEW.project_id AND revision >= NEW.revision;
+  END;`);
+} }, { version: 59, name: "initial-shared-conflict-human-clarification", apply() {
+  // Reader boundary only. Human evidence is appended explicitly after a retained
+  // initial blocked receipt; no old context, paid work or assessment is rewritten.
+} }, { version: 60, name: "append-only-initial-conflict-followup-decisions", apply() {
+  // Preserve the first human note and every paid context. Explicit follow-ups
+  // append new superseding note evidence only after another blocked reply.
+} }, { version: 61, name: "initial-lossless-shared-packing", apply() {
+  // Reader boundary only. New schedules bind lossless-v1 packing in their plan
+  // identity. Existing paid packets, human decisions and usage remain unchanged.
+} }, { version: 62, name: "guarded-complete-repair-capacity", apply() {
+  // Reader boundary only. New v2 repair contexts extend the existing guarded
+  // joint capacity to complete rejected comparisons. Paid v1 contexts stay exact.
+} }, { version: 63, name: "remaining-budget-joint-page-layouts", apply() {
+  // Reader boundary only. New v12 layouts may use the remaining existing 64-page
+  // paid/pending step budget. All old layouts, replies and usage remain exact.
+} }, { version: 64, name: "union-verification-shared-group-page-budget", apply() {
+  // Reader boundary only. Explicit Play may bind union verification to the
+  // existing group budget; old evidence, spend and read-step caps are unchanged.
+} }, { version: 65, name: "carried-draft-conflict-human-decisions", apply() {
+  // Reader boundary only. Explicit repair-stage human decisions bind the frozen
+  // draft and paid prefix. All older contexts, answers and paid work stay exact.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

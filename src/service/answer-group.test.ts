@@ -4,7 +4,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
-import type { Analysis, Project, Submission } from "../core/model.js";
+import type { Analysis, Job, Project, Submission } from "../core/model.js";
 import { ContextBudgetError } from "../core/context.js";
 import { contextDiagnostics } from "../core/discovery-diagnostics.js";
 import { ProjectStore } from "../storage/store.js";
@@ -18,11 +18,448 @@ import { discoveryPrompt, scanPrompt } from "../runtime/discovery.js";
 import { OpenCodeDiscovery } from "../runtime/discovery.js";
 import { ConnectedDiscovery } from "../providers/discovery.js";
 import { ProjectWorkflow } from "./workflow.js";
-import { authorizeAnswerGroupVerification, answerGroupVerificationPreview } from "../core/answer-group.js";
+import { authorizeAnswerGroupVerification, answerGroupVerificationPreview, adoptAnswerGroupInputCapacity, adoptAnswerGroupRepairPolicy, adoptAnswerGroupUnionPageCapacity, answerGroupPageStepLimit } from "../core/answer-group.js";
 import { startApp } from "../web/server.js";
 import { workflowInputKey } from "../core/workflow.js";
+import { answerGroupClarificationPreview, adoptAnswerGroupPlay, answerGroupClarifications } from "../core/answer-group.js";
 
 const empty = (): Analysis => ({ summary: "Shared answer integration", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
+
+function unpackShared(input: unknown): Record<string, unknown> {
+  const data = input as { identifierTable?: { values: string[] }; sharedText?: { values: Record<string, string> } };
+  const decode = (value: unknown, field = ""): unknown => {
+    if (typeof value === "number" && data.identifierTable && field !== "sharedTextID"
+      && (field === "id" || field.endsWith("ID") || field.endsWith("IDs") || field === "dependencies")) return data.identifierTable.values[value];
+    if (Array.isArray(value)) return value.map(item => decode(item, field));
+    if (!value || typeof value !== "object") return value;
+    const object = value as Record<string, unknown>;
+    if (Object.keys(object).length === 1 && typeof object.sharedTextID === "string") return data.sharedText!.values[object.sharedTextID];
+    if (Object.keys(object).length === 1 && Array.isArray(object.textParts)) return object.textParts.map(item => decode(item)).join("");
+    if (Object.keys(object).length === 1 && object.recordTable) {
+      const table = object.recordTable as { columns: string[]; rows: unknown[][]; absent?: number[][] };
+      const absent = new Set(table.absent?.map(([r, c]) => `${r}:${c}`));
+      return table.rows.map((row, r) => Object.fromEntries(table.columns.flatMap((key, c) => absent.has(`${r}:${c}`) ? [] : [[key, decode(row[c], key)]])));
+    }
+    return Object.fromEntries(Object.entries(object).map(([key, v]) => [key, decode(v, key)]));
+  };
+  return decode(input) as Record<string, unknown>;
+}
+
+test("new five-answer preflight uses lossless packing before rejecting a full-reserve unit; exact originals survive publication", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const phrase = "Keep this exact original rule, punctuation and Unicode 🧾.\r\n";
+    const literal = phrase.repeat(Math.floor(11800 / phrase.length)) + "End.";
+    const { p, items } = fixture(store, 5, true, i => `Answer ${i}:\n${literal.slice(0, 10700)}End.`, false, false, () => literal, 1), material = answerGroupMaterials(p, items);
+    assert.throws(() => planAnswerGroup(material, true, false), ContextBudgetError);
+    const work = planAnswerGroup(material, true), context = boundAnswerGroupEvidence(material, work);
+    assert.equal(work.packingPolicy, "lossless-v1");
+    assert.ok(context.manifest.characters + answerGroupLimits.draft <= answerGroupLimits.characters, "The full 24k growth reserve is not removed to make the group fit");
+    const decoded = unpackShared(context.data);
+    for (const id of context.manifest.includedIDs) {
+      const original = material.records.find(r => r.record.id === id)!;
+      assert.deepEqual((decoded[original.field] as { id: string }[]).find(r => r.id === id), original.record);
+    }
+    assert.throws(() => replayAnswerGroup(material, { ...work, packingPolicy: undefined }), /inputs changed/);
+    let calls = 0;
+    const result = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      calls++; assert.ok(context.manifest.characters <= context.manifest.budget);
+      if (context.manifest.answerGroupStage!.phase === "check") return { answerGroupCheck: { valid: true, reason: "All detailed originals agree with the complete unchanged fixture draft" } };
+      return { answerGroupDraft: { analysis: empty(), answers: items.map(s => ({ submissionID: s.id, outcome: "no-change", explanation: "No fixture changes required" })) } };
+    } }).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id), research: false });
+    assert.equal(result.status, "completed", result.diagnostic); assert.equal(calls, 2);
+    assert.ok(store.get(p.id).sources.some(s => s.text === literal));
+    assert.deepEqual(result.answerGroupWork!.submissionIDs, items.map(s => s.id));
+  } finally { store.close(); }
+});
+
+test("60 to 61 retains old/new paid packing exactly, rolls back future packing and requires portable 35 only for the new marker", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "packing-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const { p, items } = fixture(store, 2), material = answerGroupMaterials(p, items), saved: Job[] = [];
+    for (const compact of [false, true]) {
+      const work = planAnswerGroup(material, true, compact), job = store.beginJob(p.id, p.revision).job;
+      store.claimJob(job.id, Date.now() + 60000); boundAnswerGroupEvidence(material, work); work.attempts++;
+      const draft = acceptAnswerGroup(material, work, undefined, { answerGroupDraft: output(items) }, job).draft;
+      store.checkpointAnswerGroup(job.id, work, answerGroupContext(material, work, draft).manifest);
+      store.failJob(job.id, "interrupted", "Saved paid read"); saved.push(store.getJob(job.id));
+    }
+    store.close();
+    let db = new Database(path); db.pragma("user_version=60"); db.exec("DELETE FROM migration_history WHERE version>=61");
+    const future = structuredClone(saved[1]!) as unknown as { id: string; answerGroupWork: { packingPolicy: string } };
+    future.answerGroupWork.packingPolicy = "lossless-v2";
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), future.id); db.close();
+    assert.throws(() => new ProjectStore(path));
+    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 60);
+    assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM jobs WHERE id=?").get(future.id) as { payload: string }).payload), future);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(saved[1]), future.id); db.close();
+    for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(path); for (const job of saved) assert.deepEqual(store.getJob(job.id), job); if (!reopen) store.close(); }
+    const files = renderWorkspace(p, undefined, continuationState(p, saved, items, revision => store.get(p.id, revision)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 35);
+    assert.deepEqual(decodePortable(files, p.model).continuation.jobs.find(j => j.id === saved[1]!.id)!.answerGroupWork, saved[1]!.answerGroupWork);
+    const older = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 34 }) };
+    assert.throws(() => decodePortable(older, p.model), /format 35/);
+    const legacyFiles = renderWorkspace(p, undefined, continuationState(p, [saved[0]!], items, revision => store.get(p.id, revision)));
+    assert.equal(JSON.parse(legacyFiles["state.json"]!).formatVersion, 32); assert.doesNotThrow(() => decodePortable(legacyFiles, p.model));
+  } finally { try { store.close(); } catch { /* Startup failure already closed the fixture connection. */ } rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const automated of [false, true]) test(`initial shared conflict accepts explicit human evidence, preserves paid work across upgrade/clone and verifies before publication (Play origin: ${automated})`, async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "human-clarification-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const { p, items } = fixture(store, 2, false, i => i ? "Keep an unfinished collection pending after final disconnect." : "Cancel unfinished collections when the mission ends.");
+    const material = answerGroupMaterials(p, items);
+    let owner: string | undefined;
+    if (automated) {
+      const state = store.workflow(p.id); state.enabled = true; state.paused = false; state.playPolicy = { format: 1, stopped: false };
+      state.grant = { id: randomUUID(), used: 1, remainingMs: 300000, continuous: { format: 1 }, submissionIDs: items.map(s => s.id) };
+      store.saveWorkflow(p.id, state); owner = store.claimWorkflow(p.id).owner!;
+    }
+    const job = store.beginJob(p.id, p.revision, undefined, false, owner).job; store.claimJob(job.id, Date.now() + 60000);
+    const w = automated ? adoptAnswerGroupPlay(material, planAnswerGroup(material, true, false), job) : planAnswerGroup(material, true, false);
+    const context = boundAnswerGroupEvidence(material, w); w.attempts++;
+    if (w.automation) { w.automation.requests++; w.automation.failures++; }
+    acceptAnswerGroup(material, w, undefined, { answerGroupBlocked: { reason: `Saved answers ${items.map(s => s.appliedSourceID).join(" and ")} require different outcomes. Neither establishes priority.` } }, job);
+    store.checkpointAnswerGroup(job.id, w, context.manifest); store.failJob(job.id, "failed", "Shared answers need review");
+    if (owner) store.releaseWorkflow(p.id, owner);
+    for (const item of items) { item.status = "needs-attention"; item.jobID = job.id; store.saveSubmission(item); }
+    const original = store.getJob(job.id); store.close();
+    const db = new Database(path); db.pragma("user_version=58"); db.exec("DELETE FROM migration_history WHERE version>=59"); db.close();
+    for (let i = 0; i < 2; i++) {
+      store = new ProjectStore(path); assert.deepEqual(store.getJob(job.id), original);
+      if (!i) store.close();
+    }
+    assert.ok(answerGroupClarificationPreview(p, original));
+    assert.throws(() => store.clarifySharedAnswers(p.id, p.revision - 1, job.id, "Use cancellation."));
+    assert.throws(() => store.clarifySharedAnswers(p.id, p.revision, job.id, "  "));
+    assert.deepEqual(store.getJob(job.id), original);
+    const clarified = store.clarifySharedAnswers(p.id, p.revision, job.id, "Disconnection is not an exception. Cancel unconfirmed collections whenever the mission ends; keep confirmed rewards.");
+    const saved = clarified.answerGroupWork!, source = saved.humanClarification!.source;
+    store.close();
+    const futureDB = new Database(path), savedPayload = JSON.stringify(clarified);
+    const future = { ...clarified, answerGroupWork: { ...saved, humanClarification: { ...saved.humanClarification!, format: 2 } } };
+    futureDB.pragma("user_version=58"); futureDB.exec("DELETE FROM migration_history WHERE version>=59");
+    futureDB.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); futureDB.close();
+    assert.throws(() => new ProjectStore(path));
+    const recoveryDB = new Database(path);
+    assert.equal(recoveryDB.pragma("user_version", { simple: true }), 58);
+    assert.deepEqual(JSON.parse((recoveryDB.prepare("SELECT payload FROM jobs WHERE id=?").get(job.id) as { payload: string }).payload), future);
+    recoveryDB.prepare("UPDATE jobs SET payload=? WHERE id=?").run(savedPayload, job.id); recoveryDB.close();
+    store = new ProjectStore(path); assert.deepEqual(store.getJob(job.id), clarified);
+    assert.deepEqual(saved.receipts, w.receipts); assert.equal(saved.attempts, w.attempts);
+    assert.deepEqual(store.get(p.id), p, "Saving alone neither publishes nor approves anything");
+    assert.equal(answerGroupProgress(saved).completed, 0);
+    assert.equal(replayAnswerGroup(material, saved).blocked, undefined);
+    const changed = structuredClone(saved); changed.humanClarification!.prefixKey = "0".repeat(64);
+    assert.throws(() => replayAnswerGroup(material, changed), /exact initial conflict/);
+    const files = renderWorkspace(p, undefined, continuationState(p, store.jobs(p.id), store.submissions(p.id), revision => store.get(p.id, revision)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 33);
+    assert.deepEqual(decodePortable(files, p.model).continuation.jobs.find(j => j.id === job.id)!.answerGroupWork, saved);
+    const older = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 32 }) };
+    assert.throws(() => decodePortable(older, p.model), /format 33/);
+    const folder = join(directory, "clone");
+    for (const [name, value] of Object.entries(files)) { const target = join(folder, ".reqwizit", name); mkdirSync(resolve(target, ".."), { recursive: true }); writeFileSync(target, value); }
+    const clone = new ProjectStore(":memory:");
+    try {
+      const adopted = clone.openWorkspace(folder, p.model), phases: string[] = [];
+      const result = await new DiscoveryService(clone, { async analyze(_project, { context }) {
+        const phase = context.manifest.answerGroupStage!.phase; phases.push(phase);
+        assert.ok(context.manifest.includedIDs.includes(source.id));
+        assert.ok(JSON.stringify(context.data).includes(source.text));
+        if (phase === "check") return { answerGroupCheck: { valid: true, reason: "Draft preserves the explicit exception decision and both original answers" } };
+        const draft = output(items);
+        for (const requirement of draft.analysis.requirements) requirement.sourceIDs.push(source.id);
+        for (const change of draft.analysis.specificationUpdates.changes) change.sourceIDs.push(source.id);
+        return { answerGroupDraft: draft };
+      } }).analyze(adopted.id, adopted.revision, { answerGroup: true, submissionIDs: items.map(s => s.id) });
+      assert.equal(result.status, "completed", result.diagnostic); assert.deepEqual(phases, ["read", "check"]);
+      assert.deepEqual(result.answerGroupWork!.receipts.slice(0, w.receipts.length), w.receipts);
+      assert.deepEqual(clone.get(adopted.id).sources.find(s => s.id === source.id), source);
+      assert.ok(clone.get(adopted.id).requirements.every(r => r.sourceIDs.includes(source.id)));
+    } finally { clone.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("human clarification API is authenticated, exact-job/revision bound and saves no inference; paged cancellation retains the note and spent attempt", async () => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const { p, items } = fixture(store, 2, true, undefined, false, false, undefined, 40);
+  const m = answerGroupMaterials(p, items), w = planAnswerGroup(m, true, false), job = store.beginJob(p.id, p.revision).job;
+  store.claimJob(job.id, Date.now() + 60000); const context = boundAnswerGroupEvidence(m, w); w.attempts++;
+  acceptAnswerGroup(m, w, undefined, { answerGroupBlocked: { reason: `Conflicting answers ${items.map(s => s.appliedSourceID).join(" and ")}: decide which mission-end outcome applies.` } }, job);
+  store.checkpointAnswerGroup(job.id, w, context.manifest); store.failJob(job.id, "failed", "Shared conflict");
+  for (const item of items) { item.jobID = job.id; item.status = "needs-attention"; store.saveSubmission(item); }
+  const original = store.getJob(job.id);
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; assert.fail("Saving cannot infer"); } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const url = `${app.origin}/api/projects/${p.id}/clarify-shared-answers`, input = { revision: p.revision, jobID: job.id, text: "Cancel unconfirmed collections in both situations." };
+  const post = (value: unknown, auth = headers) => fetch(url, { method: "POST", headers: auth, body: JSON.stringify(value) });
+  try {
+    assert.equal((await post(input, { ...headers, "X-Reqwizit-Token": "wrong" })).status, 403);
+    assert.equal((await post(input, { ...headers, Origin: "https://foreign.invalid" })).status, 403);
+    assert.equal((await fetch(url, { headers })).status, 405);
+    assert.equal((await post({ ...input, revision: p.revision - 1 })).status, 409);
+    assert.equal((await post({ ...input, text: " " })).status, 400);
+    assert.equal((await post({ ...input, text: "x".repeat(12001) })).status, 400);
+    assert.equal((await post({ ...input, confirmAIUsage: true })).status, 400);
+    assert.deepEqual(store.getJob(job.id), original);
+    assert.equal((await post(input)).status, 200); assert.equal(calls, 0);
+    assert.equal((await post(input)).status, 409);
+    const saved = store.getJob(job.id).answerGroupWork!;
+    assert.deepEqual(saved.receipts, w.receipts); assert.equal(saved.attempts, 1);
+    const controller = new AbortController();
+    const canceled = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      calls++; assert.ok(context.manifest.includedIDs.includes(saved.humanClarification!.source.id));
+      controller.abort(); return { answerGroupDraft: output(items) };
+    } }).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id), signal: controller.signal });
+    assert.equal(canceled.status, "cancelled", canceled.diagnostic);
+    assert.deepEqual(canceled.answerGroupWork!.humanClarification, saved.humanClarification);
+    assert.deepEqual(canceled.answerGroupWork!.receipts, saved.receipts);
+    assert.equal(canceled.answerGroupWork!.attempts, 2); assert.deepEqual(store.get(p.id), p);
+    assert.equal(calls, 1);
+  } finally { await app.close(); store.close(); }
+});
+
+test("59 to 60 preserves a rejected clarification and permits an explicit follow-up without rewriting paid replies or repeating them on a clone", async () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "followup-decision-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const { p, items } = fixture(store, 2), m = answerGroupMaterials(p, items), w = planAnswerGroup(m, true, false);
+    const first = store.beginJob(p.id, p.revision).job; store.claimJob(first.id, Date.now() + 60000);
+    const context = boundAnswerGroupEvidence(m, w); w.attempts++;
+    acceptAnswerGroup(m, w, undefined, { answerGroupBlocked: { reason: `Conflicting original answers ${items.map(s => s.appliedSourceID).join(" and ")}. Neither establishes priority.` } }, first);
+    store.checkpointAnswerGroup(first.id, w, context.manifest); store.failJob(first.id, "failed", "Human conflict");
+    for (const item of items) { item.jobID = first.id; item.status = "needs-attention"; store.saveSubmission(item); }
+    const firstSaved = store.clarifySharedAnswers(p.id, p.revision, first.id, "Cancel uncertain rewards at mission end.");
+    const rejected = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      assert.ok(context.manifest.submissionAuthorizationSourceIDs!.includes(firstSaved.answerGroupWork!.humanClarification!.source.id));
+      return { answerGroupBlocked: { reason: "Your clarification repeats cancellation but does not explicitly replace the other answer. Decide whether disconnection is an exception." } };
+    } }).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id) });
+    assert.equal(rejected.status, "failed", rejected.diagnostic);
+    for (const item of items) { item.jobID = rejected.id; item.status = "needs-attention"; store.saveSubmission(item); }
+    store.close();
+    const db = new Database(path); db.pragma("user_version=59"); db.exec("DELETE FROM migration_history WHERE version>=60"); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(rejected.id), rejected); if (!i) store.close(); }
+    const preview = answerGroupClarificationPreview(p, rejected)!;
+    assert.equal(preview.previousText, "Cancel uncertain rewards at mission end.");
+    assert.deepEqual(preview.conflictIDs, items.map(s => s.appliedSourceID));
+    const clarified = store.clarifySharedAnswers(p.id, p.revision, rejected.id, "Disconnection is not an exception: cancel uncertain rewards in that case. This replaces the pending-confirmation outcome in the other saved answer for that same case.");
+    const saved = clarified.answerGroupWork!, notes = answerGroupClarifications(saved);
+    assert.equal(notes.length, 2); assert.equal(notes[1]!.source.supersedes, notes[0]!.source.id);
+    assert.deepEqual(saved.humanClarification, firstSaved.answerGroupWork!.humanClarification);
+    assert.deepEqual(saved.receipts, rejected.answerGroupWork!.receipts); assert.equal(saved.attempts, 2);
+    assert.equal(answerGroupProgress(saved).completed, 0); assert.deepEqual(store.get(p.id), p);
+    assert.equal(answerGroupClarificationPreview(p, clarified), undefined, "No repeated clarification without another paid blocked reply");
+    for (const tamper of ["prefix", "supersedes", "boundary"] as const) {
+      const changed = structuredClone(saved), next = changed.humanClarificationFollowups![0]!;
+      if (tamper === "prefix") next.prefixKey = "0".repeat(64);
+      if (tamper === "supersedes") next.source.supersedes = randomUUID();
+      if (tamper === "boundary") next.fromReceipt = notes[0]!.fromReceipt;
+      assert.throws(() => replayAnswerGroup(m, changed), /exact initial conflict/);
+    }
+    const files = renderWorkspace(p, undefined, continuationState(p, store.jobs(p.id), store.submissions(p.id), revision => store.get(p.id, revision)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 34);
+    assert.deepEqual(decodePortable(files, p.model).continuation.jobs.find(j => j.id === clarified.id)!.answerGroupWork, saved);
+    const downgrade = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 33 }) };
+    assert.throws(() => decodePortable(downgrade, p.model), /format 34/);
+    store.close();
+    const futureDB = new Database(path), future = { ...clarified, answerGroupWork: { ...saved, humanClarificationFollowups: [{ ...notes[1]!, format: 2 }] } };
+    futureDB.pragma("user_version=59"); futureDB.exec("DELETE FROM migration_history WHERE version>=60");
+    futureDB.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), clarified.id); futureDB.close();
+    assert.throws(() => new ProjectStore(path));
+    const restore = new Database(path); assert.equal(restore.pragma("user_version", { simple: true }), 59);
+    assert.deepEqual(JSON.parse((restore.prepare("SELECT payload FROM jobs WHERE id=?").get(clarified.id) as { payload: string }).payload), future);
+    restore.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(clarified), clarified.id); restore.close(); store = new ProjectStore(path);
+    const folder = join(directory, "clone");
+    for (const [name, value] of Object.entries(files)) { const target = join(folder, ".reqwizit", name); mkdirSync(resolve(target, ".."), { recursive: true }); writeFileSync(target, value); }
+    const clone = new ProjectStore(":memory:");
+    try {
+      const adopted = clone.openWorkspace(folder, p.model), phases: string[] = [];
+      const result = await new DiscoveryService(clone, { async analyze(_p, { context }) {
+        const phase = context.manifest.answerGroupStage!.phase; phases.push(phase);
+        assert.ok(notes.every(c => context.manifest.includedIDs.includes(c.source.id)));
+        assert.ok(context.manifest.submissionAuthorizationSourceIDs!.includes(notes[1]!.source.id));
+        assert.ok(!context.manifest.submissionAuthorizationSourceIDs!.includes(notes[0]!.source.id));
+        if (phase === "check") return { answerGroupCheck: { valid: true, reason: "The replacement human decision establishes explicit precedence; all original evidence agrees" } };
+        const draft = output(items);
+        for (const r of draft.analysis.requirements) r.sourceIDs.push(notes[1]!.source.id);
+        for (const c of draft.analysis.specificationUpdates.changes) c.sourceIDs = [notes[1]!.source.id];
+        return { answerGroupDraft: draft };
+      } }).analyze(adopted.id, adopted.revision, { answerGroup: true, submissionIDs: items.map(s => s.id) });
+      assert.equal(result.status, "completed", result.diagnostic); assert.deepEqual(phases, ["read", "check"]);
+      assert.equal(result.answerGroupWork!.receipts[2]!.attempt, 3);
+      assert.deepEqual(result.answerGroupWork!.receipts.slice(0, 2), rejected.answerGroupWork!.receipts);
+      for (const note of notes) assert.deepEqual(clone.get(adopted.id).sources.find(s => s.id === note.source.id), note.source);
+    } finally { clone.close(); }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const continuationFails of [false, true]) test(`save-and-continue requires explicit consent/version and acknowledges durable partial success (continuation failure: ${continuationFails})`, async t => {
+  const store = new ProjectStore(":memory:"); let calls = 0;
+  const { p, items } = fixture(store, 2), material = answerGroupMaterials(p, items), w = planAnswerGroup(material, true);
+  const job = store.beginJob(p.id, p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  const context = boundAnswerGroupEvidence(material, w); w.attempts++;
+  acceptAnswerGroup(material, w, undefined, { answerGroupBlocked: { reason: `Conflicting answers ${items.map(s => s.appliedSourceID).join(" and ")} require a human choice.` } }, job);
+  store.checkpointAnswerGroup(job.id, w, context.manifest); store.failJob(job.id, "failed", "Shared conflict");
+  for (const item of items) { item.jobID = job.id; item.status = "needs-attention"; store.saveSubmission(item); }
+  const original = store.getJob(job.id);
+  const app = await startApp({ store, port: 0, adapter: { async analyze() { calls++; return { answerGroupBlocked: { reason: "The decision needs another clarification; do not invent a preference." } }; } } });
+  const headers = { "X-Reqwizit-Token": app.token, "Content-Type": "application/json", Origin: app.origin };
+  const url = `${app.origin}/api/projects/${p.id}/clarify-shared-answers`;
+  const input = { revision: p.revision, jobID: job.id, text: "Use the cancellation outcome for overlapping cases.", continueReview: true, confirmAIUsage: true, workflowVersion: store.workflow(p.id).settingsVersion };
+  const post = (body: unknown) => fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  try {
+    assert.equal((await post({ ...input, confirmAIUsage: undefined })).status, 400);
+    assert.equal((await post({ ...input, workflowVersion: undefined })).status, 400);
+    assert.equal((await post({ ...input, continueReview: undefined })).status, 400);
+    assert.equal((await post({ ...input, workflowVersion: input.workflowVersion + 1 })).status, 409);
+    assert.deepEqual(store.getJob(job.id), original); assert.equal(calls, 0);
+    if (continuationFails) t.mock.method(ProjectWorkflow.prototype, "configure", () => { throw new Error("Injected continuation failure after durable save"); });
+    const response = await post(input); assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { saved: true, continued: !continuationFails });
+    assert.equal(store.getJob(job.id).answerGroupWork!.humanClarification!.source.text, input.text);
+    assert.deepEqual(store.getJob(job.id).answerGroupWork!.receipts, original.answerGroupWork!.receipts);
+    assert.deepEqual(store.get(p.id), p, "No partial requirement publication");
+    if (continuationFails) {
+      assert.equal(calls, 0); assert.ok(store.submissions(p.id).every(s => s.status === "saved"));
+      const snapshot = await (await fetch(`${app.origin}/api/projects/${p.id}`, { headers })).json();
+      assert.equal(snapshot.jobs.find((j: Job) => j.id === job.id).answerGroupClarification.savedText, input.text);
+    }
+    assert.equal((await post(input)).status, 409, "A repeated combined request cannot resave the decision or silently rearm work");
+  } finally { t.mock.restoreAll(); await app.close(); store.close(); }
+});
+
+test("union verification covers every original once per frozen-draft phase, preserves legacy plans and rejects relabelling", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, items } = fixture(store, 2, true, undefined, false, false, undefined, 100);
+    const m = answerGroupMaterials(p, items), legacy = planAnswerGroup(m), union = planAnswerGroup(m, true);
+    assert.deepEqual(union.batches, legacy.batches); assert.notEqual(union.planKey, legacy.planKey);
+    assert.throws(() => replayAnswerGroup(m, { ...legacy, verificationPolicy: "union-v1" }), /inputs changed/);
+    const job = store.beginJob(p.id, p.revision).job;
+    const counts: number[] = [];
+    for (const work of [legacy, union]) {
+      let draft: AnswerGroupDraft | undefined, calls = 0;
+      const checked = new Set<string>();
+      while (answerGroupProgress(work).phase !== "complete") {
+        const context = boundAnswerGroupEvidence(m, work, draft), progress = answerGroupProgress(work);
+        assert.ok(context.manifest.characters <= context.manifest.budget);
+        work.attempts++;
+        const response = progress.phase === "read" ? draft ? { answerGroupKeep: true as const } : { answerGroupDraft: output(items) }
+          : { answerGroupCheck: { valid: true, reason: "Exact detailed units agree with the frozen draft and original answers" } };
+        if (progress.phase === "check") { calls++; context.manifest.includedIDs.forEach(id => checked.add(id)); }
+        draft = acceptAnswerGroup(m, work, draft, response, job).draft;
+      }
+      assert.ok(m.evidenceIDs.every(id => checked.has(id))); counts.push(calls);
+      assert.deepEqual(replayAnswerGroup(m, work).draft, draft);
+      assert.equal(answerGroupProgress(work).total, work.batches.length + (work.verificationPolicy ? 1 : work.batches.length));
+      const missing = structuredClone(work); missing.receipts.pop();
+      assert.notEqual(answerGroupProgress(missing).phase, "complete");
+      const tampered = structuredClone(work); tampered.evidencePages!.at(-1)!.pages[0]!.pop();
+      assert.throws(() => replayAnswerGroup(m, tampered), /pages|context/);
+    }
+    assert.ok(counts[1]! < counts[0]!, `Union ${counts[1]} vs legacy ${counts[0]} check requests`);
+  } finally { store.close(); }
+});
+
+test("union verification restarts all pages after correction and retains paid reads", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, items } = fixture(store, 2, true, undefined, false, false, undefined, 60);
+    const m = answerGroupMaterials(p, items), w = planAnswerGroup(m, true), job = store.beginJob(p.id, p.revision).job;
+    let draft: AnswerGroupDraft | undefined;
+    while (answerGroupProgress(w).phase === "read") {
+      boundAnswerGroupEvidence(m, w, draft); w.attempts++;
+      draft = acceptAnswerGroup(m, w, draft, draft ? { answerGroupKeep: true } : { answerGroupDraft: output(items) }, job).draft;
+    }
+    const reads = structuredClone(w.receipts);
+    assert.throws(() => answerGroupContext(m, w, draft), ContextBudgetError, "An unpaged oversized union cannot be accepted as partial verification");
+    boundAnswerGroupEvidence(m, w, draft); w.attempts++;
+    acceptAnswerGroup(m, w, draft, { answerGroupCheck: { valid: true, reason: "First page agrees" } }, job);
+    assert.equal(answerGroupProgress(w).phase, "check", "Other union pages remain mandatory");
+    boundAnswerGroupEvidence(m, w, draft); w.attempts++;
+    acceptAnswerGroup(m, w, draft, { answerGroupCheck: { valid: false, reason: "Correct the carried wording against these exact originals" } }, job);
+    assert.equal(answerGroupProgress(w).phase, "repair");
+    w.attempts++;
+    const corrected = structuredClone(draft!); corrected.analysis.summary = "Corrected full draft";
+    draft = acceptAnswerGroup(m, w, draft, { answerGroupRepair: corrected }, job).draft;
+    const context = boundAnswerGroupEvidence(m, w, draft);
+    assert.equal(answerGroupProgress(w).completed, w.batches.length);
+    assert.equal(context.manifest.answerGroupStage!.phase, "check");
+    assert.equal(answerGroupProgress(w).evidencePage!.completed, 0);
+    assert.deepEqual(w.receipts.slice(0, reads.length), reads);
+    assert.deepEqual(replayAnswerGroup(m, w).draft, draft);
+  } finally { store.close(); }
+});
+
+test("57 to 58 preserves paid union and legacy work, rolls back unsupported protocols, and exports union progress only as portable 32", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "union-upgrade-")), path = join(directory, "state.sqlite");
+  let store = new ProjectStore(path);
+  try {
+    const { p, items } = fixture(store, 2), m = answerGroupMaterials(p, items);
+    const saved: { id: string; payload: string }[] = [];
+    for (const union of [false, true]) {
+      const work = planAnswerGroup(m, union, false), job = store.beginJob(p.id, p.revision).job;
+      store.claimJob(job.id, Date.now() + 60000); work.attempts = 1;
+      const draft = acceptAnswerGroup(m, work, undefined, { answerGroupDraft: output(items) }, job).draft;
+      store.checkpointAnswerGroup(job.id, work, answerGroupContext(m, work, draft).manifest);
+      store.failJob(job.id, "interrupted", "Saved paid read");
+      saved.push({ id: job.id, payload: JSON.stringify(store.getJob(job.id)) });
+    }
+    store.close();
+    let db = new Database(path); db.pragma("user_version=57"); db.exec("DELETE FROM migration_history WHERE version>=58; DROP TABLE portable_snapshot_cache");
+    const bad = JSON.parse(saved[1]!.payload); bad.answerGroupWork.verificationPolicy = "union-v2";
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(bad), bad.id); db.close();
+    assert.throws(() => new ProjectStore(path));
+    db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 57);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='portable_snapshot_cache'").get(), undefined);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(saved[1]!.payload, saved[1]!.id); db.close();
+    for (let startup = 0; startup < 2; startup++) {
+      store = new ProjectStore(path);
+      for (const job of saved) assert.equal(JSON.stringify(store.getJob(job.id)), job.payload);
+      if (!startup) store.close();
+    }
+    const jobs = store.jobs(p.id), continuation = continuationState(p, jobs, store.submissions(p.id), revision => store.get(p.id, revision));
+    const files = renderWorkspace(p, undefined, continuation);
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 32);
+    const decoded = decodePortable(files, p.model);
+    assert.deepEqual(decoded.continuation.jobs.find(j => j.id === saved[1]!.id)!.answerGroupWork, jobs.find(j => j.id === saved[1]!.id)!.answerGroupWork);
+    const downgraded = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 31 }) };
+    assert.throws(() => decodePortable(downgraded, p.model), /format 32/);
+    const report = store.discoveryDiagnostics(p.id, [saved[1]!.id]).runs[0]!;
+    assert.equal(report.savedWork.totalSteps, jobs.find(j => j.id === saved[1]!.id)!.answerGroupWork!.batches.length + 1);
+  } finally { try { store.close(); } catch { /* Failed startup closed the prior fixture connection. */ } rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("union checks keep indispensable joint counterparts atomic and cannot approve the remaining unseen units", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const { p, items } = fixture(store, 2, true, undefined, false, false, undefined, 80);
+    const m = answerGroupMaterials(p, items), w = planAnswerGroup(m, true), job = store.beginJob(p.id, p.revision).job;
+    let draft: AnswerGroupDraft | undefined;
+    while (answerGroupProgress(w).phase === "read") {
+      boundAnswerGroupEvidence(m, w, draft); w.attempts++;
+      draft = acceptAnswerGroup(m, w, draft, draft ? { answerGroupKeep: true } : { answerGroupDraft: output(items) }, job).draft;
+    }
+    const first = boundAnswerGroupEvidence(m, w, draft);
+    const counterpart = first.manifest.includedIDs.find(id => !m.pins.has(id))!, requested = first.manifest.omittedIDs[0]!;
+    w.attempts++;
+    acceptAnswerGroup(m, w, draft, { answerGroupEvidence: { recordIDs: [requested], withRecordIDs: [counterpart] } }, job);
+    const retained = structuredClone(w.receipts), next = boundAnswerGroupEvidence(m, w, draft);
+    assert.ok(next.manifest.includedIDs.includes(requested)); assert.ok(next.manifest.includedIDs.includes(counterpart));
+    w.attempts++;
+    acceptAnswerGroup(m, w, draft, { answerGroupCheck: { valid: true, reason: "This exact joint comparison agrees" } }, job);
+    assert.equal(answerGroupProgress(w).phase, "check"); assert.deepEqual(w.receipts.slice(0, retained.length), retained);
+    assert.deepEqual(replayAnswerGroup(m, w).draft, draft);
+    const stale = structuredClone(p); stale.sources.find(s => s.id === requested)!.text += "Changed human evidence";
+    assert.throws(() => replayAnswerGroup(answerGroupMaterials(stale, items), w), /inputs changed/);
+  } finally { store.close(); }
+});
 function fixture(store: ProjectStore, answers = 5, large = false, answerText?: (index: number) => string, waitingRule = false, supersededSupport = false, noteText?: (index: number) => string, noteCount = 150) {
   let p = store.create("Shared answers", "Keep each original human rule", { providerID: "openai", modelID: "fixture" });
   if (waitingRule) {
@@ -51,6 +488,219 @@ function output(items: Submission[]) {
       sourceIDs: [s.appliedSourceID!], reason: "Records this exact human choice" })) } },
     answers: items.map(s => ({ submissionID: s.id, outcome: "integrated" as const, explanation: "Recorded this original answer without changing another choice" })) };
 }
+
+function wideVerificationFixture(store: ProjectStore) {
+  const { p, items } = fixture(store, 5, true, () => randomBytes(4800).toString("hex"), false, false, () => randomBytes(5900).toString("hex"), 72);
+  const m = answerGroupMaterials(p, items), state = store.workflow(p.id);
+  state.enabled = true; state.paused = false; state.playPolicy = { format: 1, stopped: false };
+  state.grant = { id: randomUUID(), used: 0, remainingMs: 300000, submissionIDs: items.map(s => s.id), continuous: { format: 1 } };
+  store.saveWorkflow(p.id, state); const owner = store.claimWorkflow(p.id).owner!;
+  const job = store.beginJob(p.id, p.revision, undefined, false, owner).job; store.claimJob(job.id, Date.now() + 60000);
+  // A retained broad union schedule can grow into many pages without changing
+  // its original batch identity. Build that historical schedule explicitly.
+  const ids = m.records.filter(r => !m.pins.has(r.record.id)).map(r => r.record.id);
+  const batches = Array.from({ length: Math.ceil(ids.length / 24) }, (_, i) => ids.slice(i * 24, (i + 1) * 24));
+  const planned = answerGroupWorkSchema.parse({ format: 1, policy: "exact-answer-group-v1", materialKey: m.materialKey,
+    submissionIDs: items.map(s => s.id), epicID: m.epicID, batches, verificationPolicy: "union-v1", packingPolicy: "lossless-v1",
+    planKey: createHash("sha256").update(JSON.stringify(["exact-answer-group-v1", m.materialKey, items.map(s => s.id), batches, "union-v1", "lossless-v1"])).digest("hex"),
+    attempts: 0, receipts: [] });
+  const w = adoptAnswerGroupPlay(m, planned, job);
+  adoptAnswerGroupInputCapacity(m, w); adoptAnswerGroupRepairPolicy(w);
+  const proposed = output(items); proposed.analysis.summary = randomBytes(1000).toString("hex");
+  for (const r of proposed.analysis.requirements) r.rationale = randomBytes(250).toString("hex");
+  let draft: AnswerGroupDraft | undefined;
+  while (answerGroupProgress(w).phase === "read") {
+    boundAnswerGroupEvidence(m, w, draft); w.attempts++; w.automation!.requests++;
+    draft = acceptAnswerGroup(m, w, draft, draft ? { answerGroupKeep: true } : { answerGroupDraft: proposed }, job).draft;
+  }
+  return { p, items, m, job, w, draft: draft!, owner };
+}
+
+test("v12 fits more than 32 complete verification pages within the unchanged cumulative budget, preserves every exact original/draft and cannot publish early", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = wideVerificationFixture(store), original = structuredClone(f.w);
+    assert.throws(() => planAnswerGroupEvidencePages(f.m, f.w, f.draft, 11), e => e instanceof AnswerGroupCapacityError && e.kind === "pages in one layout");
+    let count = 0; const served = new Set<string>();
+    while (answerGroupProgress(f.w).phase !== "complete") {
+      const context = boundAnswerGroupEvidence(f.m, f.w, f.draft);
+      assert.equal(context.answerGroupPagingAdvice!.format, 12);
+      assert.equal(contextDiagnostics(context).sharedAnswer!.pageFormat, 12);
+      assertAnswerGroupPageCapacity(f.w); assert.ok(context.manifest.characters <= context.manifest.budget);
+      const decoded = unpackShared(context.data); assert.deepEqual(decoded.draft, JSON.parse(JSON.stringify(f.draft)));
+      assert.ok([...f.m.pins].every(id => context.manifest.includedIDs.includes(id)));
+      for (const id of context.manifest.includedIDs) {
+        const r = f.m.records.find(r => r.record.id === id)!;
+        assert.deepEqual((decoded[r.field] as { id: string }[]).find(v => v.id === id), JSON.parse(JSON.stringify(r.record))); served.add(id);
+      }
+      count++; f.w.attempts++; f.w.automation!.requests++;
+      acceptAnswerGroup(f.m, f.w, f.draft, { answerGroupCheck: { valid: true, reason: "Every detailed original agrees with the frozen draft" } }, f.job);
+      assert.equal(answerGroupProgress(f.w).phase, count < f.w.evidencePages!.at(-1)!.pages.length ? "check" : "complete");
+    }
+    assert.ok(count > 32 && count <= 64); assert.equal(f.w.evidencePages!.length, original.evidencePages!.length + 1);
+    assert.deepEqual(f.w.receipts.slice(0, original.receipts.length), original.receipts);
+    assert.ok(f.w.batches.flat().every(id => served.has(id))); assert.deepEqual(replayAnswerGroup(f.m, f.w).draft, f.draft);
+    const old = structuredClone(f.w); old.evidencePages!.at(-1)!.format = 11; assert.throws(() => answerGroupWorkSchema.parse(old), /32-page bound/);
+    const exhausted = { batches: f.w.batches, verificationPolicy: f.w.verificationPolicy,
+      receipts: [...Array.from({ length: 64 }, () => ({ step: f.w.batches.length, response: { answerGroupCheck: { valid: true } } })),
+        { step: f.w.batches.length, response: { answerGroupRepair: {} } }] };
+    assert.throws(() => assertAnswerGroupPageCapacity(exhausted, 1), e => e instanceof AnswerGroupCapacityError && e.kind === "pages for this original step");
+  } finally { store.close(); }
+});
+
+test("62 to 63 preserves paid layouts, new v12 checkpoints and usage across repeated reopen/clone; future formats roll back and downgrade/tampering reject", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "wide-layout-upgrade-")), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const f = wideVerificationFixture(store), context = boundAnswerGroupEvidence(f.m, f.w, f.draft);
+    f.w.attempts++; f.w.automation!.requests++;
+    acceptAnswerGroup(f.m, f.w, f.draft, { answerGroupCheck: { valid: true, reason: "First complete page agrees" } }, f.job);
+    const next = boundAnswerGroupEvidence(f.m, f.w, f.draft);
+    store.checkpointAnswerGroup(f.job.id, f.w, next.manifest); store.failJob(f.job.id, "interrupted", "Retain wide verification after one paid page");
+    store.releaseWorkflow(f.p.id, f.owner);
+    for (const s of f.items) { s.jobID = f.job.id; s.status = "needs-attention"; store.saveSubmission(s); }
+    const saved = store.getJob(f.job.id); store.close();
+    let db = new Database(path); db.pragma("user_version=62"); db.exec("DELETE FROM migration_history WHERE version>=63");
+    const future = structuredClone(saved); (future.answerGroupWork!.evidencePages!.at(-1)! as { format: number }).format = 13;
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), saved.id); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 62);
+    assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM jobs WHERE id=?").get(saved.id) as { payload: string }).payload), future);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(saved), saved.id); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(saved.id), saved); if (!i) store.close(); }
+    const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id), store.submissions(f.p.id), rev => store.get(f.p.id, rev)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 37); assert.doesNotThrow(() => decodePortable(files, f.p.model));
+    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 36 }) }, f.p.model), /format 37/);
+    const folder = join(directory, "clone");
+    for (const [name, text] of Object.entries(files)) { const target = join(folder, ".reqwizit", name); mkdirSync(resolve(target, ".."), { recursive: true }); writeFileSync(target, text); }
+    const clone = new ProjectStore(":memory:");
+    try {
+      const p = clone.openWorkspace(folder, f.p.model), retained = clone.getJob(saved.id), m = answerGroupMaterials(p, clone.submissions(p.id));
+      assert.deepEqual(retained.answerGroupWork, saved.answerGroupWork);
+      assert.deepEqual(replayAnswerGroup(m, retained.answerGroupWork!).draft, f.draft);
+      assert.deepEqual(answerGroupContext(m, retained.answerGroupWork!, f.draft).data, next.data);
+    } finally { clone.close(); }
+    const tampered = structuredClone(f.w); tampered.evidencePages!.at(-1)!.pages[0]!.pop(); assert.throws(() => replayAnswerGroup(f.m, tampered));
+    assert.equal(context.answerGroupPagingAdvice!.number, 1);
+  } finally { try { store.close(); } catch { /* Startup rejection closes itself. */ } rmSync(directory, { recursive: true, force: true }); }
+});
+
+function repairedWideUnion(store: ProjectStore) {
+  const f = wideVerificationFixture(store);
+  for (let i = 0; i < 29; i++) {
+    boundAnswerGroupEvidence(f.m, f.w, f.draft); f.w.attempts++; f.w.automation!.requests++;
+    acceptAnswerGroup(f.m, f.w, f.draft, { answerGroupCheck: { valid: true, reason: "This exact original page agrees with the then-frozen draft" } }, f.job);
+  }
+  boundAnswerGroupEvidence(f.m, f.w, f.draft); f.w.attempts++; f.w.automation!.requests++;
+  acceptAnswerGroup(f.m, f.w, f.draft, { answerGroupCheck: { valid: false, reason: "The shared draft needs a correction against these complete original answers" } }, f.job);
+  const context = boundAnswerGroupEvidence(f.m, f.w, f.draft), draft = structuredClone(f.draft);
+  draft.analysis.summary += ". Retain the complete corrected draft and all original human evidence.";
+  f.w.attempts++; f.w.automation!.requests++; acceptAnswerGroup(f.m, f.w, f.draft, { answerGroupRepair: draft }, f.job);
+  assert.throws(() => boundAnswerGroupEvidence(f.m, f.w, draft), e => e instanceof AnswerGroupCapacityError && e.kind === "pages for this original step");
+  store.checkpointAnswerGroup(f.job.id, f.w, context.manifest); store.failJob(f.job.id, "failed", "Retained union reached its cumulative old per-step page cap");
+  store.releaseWorkflow(f.p.id, f.owner);
+  for (const s of f.items) { s.status = "needs-attention"; s.jobID = f.job.id; store.saveSubmission(s); }
+  return { ...f, draft, saved: store.getJob(f.job.id) };
+}
+
+test("explicit Play adopts the shared group budget for a repaired union without refunds or valid-check reuse, then verifies all pages without rereading", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = repairedWideUnion(store), original = structuredClone(f.w), state = store.workflow(f.p.id);
+    assert.deepEqual(store.prepareAnswerGroupPlay(f.p.id, f.p.revision, state.settingsVersion), [f.job.id]);
+    const prepared = store.getJob(f.job.id).answerGroupWork!;
+    assert.equal(prepared.unionPageCapacity!.fromReceipt, original.receipts.length); assert.equal(answerGroupPageStepLimit(prepared), 256);
+    assert.equal(answerGroupPageCounts(prepared).currentStepReplies, 29); assert.equal(answerGroupProgress(prepared).evidencePage, undefined);
+    assert.deepEqual(prepared.receipts, original.receipts); assert.deepEqual(prepared.automation, original.automation); assert.equal(prepared.attempts, original.attempts);
+    const marker = structuredClone(prepared.unionPageCapacity); assert.equal(adoptAnswerGroupUnionPageCapacity(prepared), false); assert.deepEqual(prepared.unionPageCapacity, marker);
+    let checks = 0;
+    const service = new DiscoveryService(store, { async analyze(_p, { context }) {
+      assert.equal(context.manifest.answerGroupStage!.phase, "check", "Never replay paid reads or repairs"); checks++;
+      assert.deepEqual(unpackShared(context.data).draft, JSON.parse(JSON.stringify(f.draft)));
+      return { answerGroupCheck: { valid: true, reason: "This complete original page agrees with the full current draft" } };
+    } });
+    let done = await service.analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id) });
+    assert.equal(done.status, "interrupted", "The ordinary 32-request work window is not widened");
+    assert.equal(checks, 32);
+    const pendingReport = store.discoveryDiagnostics(f.p.id, [done.id]), pending = pendingReport.runs[0]!.savedWork.pageAccounting!;
+    assert.equal(pending.budgetScope, "shared-group"); assert.equal(pending.limits.pagesPerStep, 256);
+    assert.ok(!JSON.stringify(pendingReport).includes(marker!.prefixKey), "Diagnostics must not export the paid-prefix identity");
+    done = await service.analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id) });
+    assert.equal(done.status, "completed", done.diagnostic); assert.ok(checks > 32);
+    assert.deepEqual(done.answerGroupWork!.receipts.slice(0, original.receipts.length), original.receipts);
+    assert.equal(done.answerGroupWork!.automation!.requests, original.automation!.requests + checks);
+    assert.equal(done.answerGroupWork!.receipts[original.receipts.length]!.attempt, original.attempts + 1);
+    const diagnostic = store.discoveryDiagnostics(f.p.id, [done.id]).runs[0]!.savedWork.pageAccounting!;
+    assert.equal(diagnostic.budgetScope, "original-step", "A completed union no longer has an unfinished verification cursor");
+    assert.equal(diagnostic.completedReplies, answerGroupPageCounts(done.answerGroupWork!).completedReplies);
+  } finally { store.close(); }
+});
+
+test("union group-budget policy keeps the 64-page read cap, the shared 256-page ceiling and exact adoption prefix", () => {
+  const read = { batches: { length: 24 }, verificationPolicy: "union-v1" as const, unionPageCapacity: { fromReceipt: 0 },
+    receipts: Array.from({ length: 64 }, () => ({ step: 0, response: { answerGroupKeep: true } })),
+    evidencePages: [{ fromReceipt: 0, step: 0, phase: "read", pages: { length: 65 } }] };
+  assert.equal(answerGroupPageStepLimit(read), 64);
+  assert.throws(() => assertAnswerGroupPageCapacity(read, 1), e => e instanceof AnswerGroupCapacityError && e.kind === "pages for this original step");
+  const union = { batches: { length: 1 }, verificationPolicy: "union-v1" as const, unionPageCapacity: { fromReceipt: 0 }, receipts: [
+    ...Array.from({ length: 230 }, () => ({ step: 0, response: { answerGroupKeep: true } })),
+    ...Array.from({ length: 20 }, () => ({ step: 1, response: { answerGroupCheck: { valid: true } } })),
+    { step: 1, response: { answerGroupRepair: {} } }] };
+  assert.equal(answerGroupPageStepLimit(union), 256);
+  assert.throws(() => assertAnswerGroupPageCapacity(union, 7), e => e instanceof AnswerGroupCapacityError && e.kind === "completed pages");
+  delete (union as { unionPageCapacity?: unknown }).unionPageCapacity;
+  assert.equal(answerGroupPageStepLimit(union), 64);
+});
+
+test("cancelled union-budget continuation retains the policy, charged request and full repaired draft; Play cannot renew adoption", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = repairedWideUnion(store), before = structuredClone(f.w), controller = new AbortController();
+    store.prepareAnswerGroupPlay(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion);
+    const policy = structuredClone(store.getJob(f.job.id).answerGroupWork!.unionPageCapacity); let calls = 0;
+    const stopped = await new DiscoveryService(store, { async analyze() { calls++; controller.abort(new DOMException("Stopped", "AbortError")); return {}; } })
+      .analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id), signal: controller.signal });
+    assert.equal(stopped.status, "cancelled"); assert.equal(calls, 1);
+    assert.deepEqual(stopped.answerGroupWork!.unionPageCapacity, policy); assert.deepEqual(stopped.answerGroupWork!.receipts, before.receipts);
+    assert.equal(stopped.answerGroupWork!.attempts, before.attempts + 1); assert.equal(stopped.answerGroupWork!.automation!.requests, before.automation!.requests + 1);
+    assert.deepEqual(replayAnswerGroup(f.m, stopped.answerGroupWork!).draft, f.draft);
+    const retained = structuredClone(stopped.answerGroupWork!); assert.equal(adoptAnswerGroupUnionPageCapacity(retained), false);
+    assert.deepEqual(retained, stopped.answerGroupWork);
+  } finally { store.close(); }
+});
+
+test("63 to 64 startup never adopts or rewrites paid union work; explicit adoption survives reopen/clone while future formats roll back and tampering/downgrade reject", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "union-budget-upgrade-")), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const f = repairedWideUnion(store), original = store.getJob(f.job.id); store.close();
+    let db = new Database(path); db.pragma("user_version=63"); db.exec("DELETE FROM migration_history WHERE version>=64"); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(f.job.id), original); if (!i) store.close(); }
+    store.prepareAnswerGroupPlay(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion);
+    const adopted = store.getJob(f.job.id), work = adopted.answerGroupWork!, prefix = structuredClone(work.unionPageCapacity);
+    store.prepareAnswerGroupPlay(f.p.id, f.p.revision, store.workflow(f.p.id).settingsVersion); assert.deepEqual(store.getJob(f.job.id).answerGroupWork!.unionPageCapacity, prefix);
+    const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id), store.submissions(f.p.id), rev => store.get(f.p.id, rev)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 38);
+    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 37 }) }, f.p.model), /format 38/);
+    const folder = join(directory, "clone");
+    for (const [name, text] of Object.entries(files)) { const target = join(folder, ".reqwizit", name); mkdirSync(resolve(target, ".."), { recursive: true }); writeFileSync(target, text); }
+    const clone = new ProjectStore(":memory:");
+    try {
+      const p = clone.openWorkspace(folder, f.p.model), kept = clone.getJob(f.job.id).answerGroupWork!, m = answerGroupMaterials(p, clone.submissions(p.id));
+      assert.deepEqual(kept, work); assert.deepEqual(replayAnswerGroup(m, kept).draft, f.draft);
+      const context = boundAnswerGroupEvidence(m, kept, f.draft); assert.equal(context.answerGroupPagingAdvice!.number, 1);
+    } finally { clone.close(); }
+    for (const mutate of [(w: typeof work) => { w.unionPageCapacity!.prefixKey = "0".repeat(64); },
+      (w: typeof work) => { w.unionPageCapacity!.fromReceipt++; }, (w: typeof work) => { delete w.verificationPolicy; }]) {
+      const changed = structuredClone(work); mutate(changed); assert.throws(() => replayAnswerGroup(f.m, changed));
+    }
+    store.close(); db = new Database(path); const future = structuredClone(adopted); (future.answerGroupWork!.unionPageCapacity as { format: number }).format = 2;
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), f.job.id); db.pragma("user_version=63"); db.exec("DELETE FROM migration_history WHERE version>=64"); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 63);
+    assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM jobs WHERE id=?").get(f.job.id) as { payload: string }).payload), future);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(adopted), f.job.id); db.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.getJob(f.job.id), adopted);
+  } finally { try { store.close(); } catch { /* Rejected startup closes itself. */ } rmSync(directory, { recursive: true, force: true }); }
+});
 function legacySourceBlock(store: ProjectStore) {
   const { p, items } = fixture(store, 2, false, i => i === 0 ? "Let the waiting person cancel." : "Keep the usable route.", true, true);
   const target = p.requirements[0]!, historical = p.sources.find(s => s.kind === "confirmation" && p.sources.some(t => t.supersedes === s.id))!;
@@ -314,7 +964,7 @@ test("41 to 42 retains paid v5 packets across reopen and rollback; compact v6 ch
     store.checkpointAnswerGroup(job.id, w, oldContext.manifest); store.failJob(job.id, "failed", "Retained original packet");
     const original = store.getJob(job.id); store.close();
     let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 42; PRAGMA user_version=41");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); db.close();
     assert.throws(() => new ProjectStore(path));
     db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 41);
@@ -592,7 +1242,7 @@ test("44 to 45 retains a reserve-only read stop and fits its atomic joint unit w
     store.checkpointAnswerGroup(job.id, f.w, overflow.manifest); store.failJob(job.id, "failed", overflow.message);
     const original = store.getJob(job.id), paid = structuredClone(f.w.receipts), progress = answerGroupProgress(f.w);
     store.close(); let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 45; PRAGMA user_version=44");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 44);
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(original), job.id); db.close();
@@ -717,7 +1367,7 @@ test("v8 read relayout retains paid coverage and requires explicit counterparts 
     const f = legacyPageLoop(store, 2), paid = structuredClone(f.w.receipts);
     const original = store.getJob(f.job.id); store.close();
     let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 44; PRAGMA user_version=43");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), f.job.id); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
     assert.equal(db.pragma("user_version", { simple: true }), 43);
@@ -824,7 +1474,7 @@ test("37 to 38 preserves mixed-job v1 page hashes, rejects future data transacti
     const tampered = structuredClone(reordered); tampered.receipts[0]!.jobID = randomUUID();
     assert.throws(() => replayAnswerGroup(f.m, tampered), /evidence pages/);
     store.close(); let db = new Database(path);
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), f.job.id);
     db.exec("DELETE FROM migration_history WHERE version >= 38; PRAGMA user_version=37"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 37);
@@ -941,7 +1591,7 @@ for (const phase of ["read", "check"] as const) test(`oversized shared ${phase} 
     assert.deepEqual(work.receipts.slice(0, originalReceipts.length), originalReceipts);
     const tampered = structuredClone(work); tampered.evidencePages![0]!.pages[0]!.pop();
     assert.throws(() => replayAnswerGroup(m, tampered), /evidence pages/);
-    const future = structuredClone(work); (future.evidencePages![0] as { format: number }).format = 12;
+    const future = structuredClone(work); (future.evidencePages![0] as { format: number }).format = 13;
     assert.equal(answerGroupWorkSchema.safeParse(future).success, false);
   } finally { store.close(); }
 });
@@ -990,7 +1640,7 @@ test("36 to 37 retains an overflowing paid lookup; explicit paged continuation s
     assert.deepEqual(decodePortable(files, p.model).continuation.jobs.find(j => j.id === paused.id)!.answerGroupWork, paused.answerGroupWork);
     assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 18 }) }, p.model), /format 19/);
     store.close(); db = new Database(path);
-    const future = structuredClone(paused); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 12;
+    const future = structuredClone(paused); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), paused.id);
     db.exec("DELETE FROM migration_history WHERE version >= 37; PRAGMA user_version=36"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
@@ -1277,12 +1927,12 @@ test("new shared plans pack six bounded batches instead of nine, retaining a ful
     for (const batch of planned.batches) assert.ok(answerGroupContext(m, { ...planned, batches: [batch] }).manifest.characters + 24000 <= 96000);
     const sourceIDs = p.sources.map(s => s.id), originalInputs = items.map(s => s.input);
     const result = await new DiscoveryService(store, adapter(items, seen)).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id), research: false });
-    assert.equal(result.status, "completed", result.diagnostic); assert.equal(seen.length, 12); assert.equal(result.discoveryMetrics!.requests.length, 12);
+    assert.equal(result.status, "completed", result.diagnostic); assert.equal(seen.length, 10); assert.equal(result.discoveryMetrics!.requests.length, 10);
     assert.equal(store.get(p.id).requirements.length, 5); assert.ok(store.get(p.id).requirements.every(r => r.status === "accepted" && r.authority?.kind === "answer-derived"));
     assert.deepEqual(store.get(p.id).sources.map(s => s.id), sourceIDs); assert.deepEqual(store.submissions(p.id).map(s => s.input), originalInputs);
     assert.equal(store.execution(p.id).run, undefined);
     const report = store.discoveryDiagnostics(p.id, [result.id]).runs[0]!;
-    assert.equal(report.policy, "exact-answer-group-v1"); assert.equal(report.savedWork.totalSteps, 12); assert.equal(report.savedWork.completedBatches, 12);
+    assert.equal(report.policy, "exact-answer-group-v1"); assert.equal(report.savedWork.totalSteps, 7); assert.equal(report.savedWork.completedBatches, 7);
     assert.equal(report.savedWork.remainingSteps, 0); assert.ok(result.discoveryMetrics!.submissionLocalMs!.publication! >= 0);
     for (const phase of ["sharedReplay", "completionInputs", "reviewHistory", "reconciliation"] as const)
       assert.ok(result.discoveryMetrics!.publicationMs![phase]! >= 0, `Publication ${phase} is actually measured`);
@@ -1294,7 +1944,7 @@ test("a late rejected shared draft is repaired once, retains all paid reads and 
   const store = new ProjectStore(":memory:");
   try {
     const { p, items } = fixture(store, 2, true), n = planAnswerGroup(answerGroupMaterials(p, items)).batches.length;
-    const seen: string[] = []; let repaired = false;
+    const seen: string[] = []; let repaired = false, checks = 0;
     const result = await new DiscoveryService(store, { async analyze(_p, { context }) {
       const stage = context.manifest.answerGroupStage!; seen.push(`${stage.phase}:${stage.step}`);
       assert.equal(store.get(p.id).requirements.length, 0, "Rejected and partly checked drafts never publish");
@@ -1304,16 +1954,18 @@ test("a late rejected shared draft is repaired once, retains all paid reads and 
         repaired = true;
         return { answerGroupRepair: { ...output(items), analysis: { ...output(items).analysis, summary: "Corrected draft" } } };
       }
-      if (stage.phase === "check") return { answerGroupCheck: { valid: repaired || stage.step !== n + 2, reason: "cancellation restriction remains unchanged" } };
+      if (stage.phase === "check") return { answerGroupCheck: { valid: repaired || ++checks !== 3, reason: "cancellation restriction remains unchanged" } };
       return stage.step ? { answerGroupKeep: true } : { answerGroupDraft: output(items) };
     } }).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id), research: false });
     assert.equal(result.status, "completed", result.diagnostic);
     assert.equal(seen.filter(s => s.startsWith("read:")).length, n);
-    assert.deepEqual(seen.slice(n + 4), Array.from({ length: n }, (_, i) => `check:${n + i}`));
+    const restart = seen.indexOf(`repair:${n}`) + 1;
+    assert.ok(restart > 0); assert.ok(seen.slice(restart).length > 1);
+    assert.ok(seen.slice(restart).every(stage => stage === `check:${n}`));
     assert.equal(answerGroupProgress(result.answerGroupWork!).repairs, 1);
     assert.equal(result.answerGroupWork!.receipts.filter(r => "answerGroupCheck" in r.response && !r.response.answerGroupCheck.valid).length, 1);
     assert.equal(store.get(p.id).requirements.length, 2);
-    assert.equal(store.discoveryDiagnostics(p.id, [result.id]).runs[0]!.savedWork.completedBatches, n * 2);
+    assert.equal(store.discoveryDiagnostics(p.id, [result.id]).runs[0]!.savedWork.completedBatches, n + 1);
   } finally { store.close(); }
 });
 
@@ -1664,11 +2316,11 @@ test("shared saved stages survive repeated reopen, future-format rollback and ac
     for (let reopen = 0; reopen < 2; reopen++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(job.id), original); store.close(); }
     store = new ProjectStore(path);
     const files = renderWorkspace(p, undefined, continuationState(p, store.jobs(p.id), store.submissions(p.id), revision => store.get(p.id, revision)));
-    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 19);
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 35);
     const imported = decodePortable(files, p.model);
     assert.deepEqual(imported.continuation.jobs.find(j => j.id === job.id)!.answerGroupWork, original.answerGroupWork);
     const older = { ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 8 }) };
-    assert.throws(() => decodePortable(older, p.model), /format 9/);
+    assert.throws(() => decodePortable(older, p.model), /format 35/);
     const folder = join(directory, "clone");
     for (const [name, value] of Object.entries(files)) { const path = join(folder, ".reqwizit", name); mkdirSync(resolve(path, ".."), { recursive: true }); writeFileSync(path, value); }
     const clone = new ProjectStore(":memory:");
@@ -1679,12 +2331,12 @@ test("shared saved stages survive repeated reopen, future-format rollback and ac
       const completed = await new DiscoveryService(clone, adapter(items, calls)).analyze(adopted.id, adopted.revision,
         { answerGroup: true, submissionIDs: items.map(s => s.id), research: false });
       assert.equal(completed.status, "completed", completed.diagnostic);
-      assert.equal(calls.length, paused.answerGroupWork!.batches.length * 2 - 1, "A real clone retains paid shared reads under an explicitly selected connection");
+      assert.equal(calls.length, paused.answerGroupWork!.batches.length - 1 + completed.answerGroupWork!.receipts.filter(r => "answerGroupCheck" in r.response).length, "A real clone retains paid shared reads under an explicitly selected connection");
       assert.deepEqual(completed.answerGroupWork!.receipts[0], original.answerGroupWork!.receipts[0]);
     } finally { clone.close(); }
     const seen: string[] = [], next = await new DiscoveryService(store, adapter(items, seen)).analyze(p.id, p.revision,
       { answerGroup: true, submissionIDs: items.map(s => s.id), research: false });
-    assert.equal(next.status, "completed", next.diagnostic); assert.equal(seen.length, paused.answerGroupWork!.batches.length * 2 - 1);
+    assert.equal(next.status, "completed", next.diagnostic); assert.equal(seen.length, paused.answerGroupWork!.batches.length - 1 + next.answerGroupWork!.receipts.filter(r => "answerGroupCheck" in r.response).length);
     assert.deepEqual(next.answerGroupWork!.receipts[0], original.answerGroupWork!.receipts[0]);
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
 });

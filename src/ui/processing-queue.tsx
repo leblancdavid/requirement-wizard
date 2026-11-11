@@ -126,6 +126,10 @@ export function ProcessingQueue({ project, active, progress, refinementProgress,
         {workflow && configureWorkflow && <WorkflowControls workflow={workflow} disabled={disabled} pending={stopDisabled} configure={configureWorkflow}
           standaloneActive={active} stopStandalone={stop} openDecision={openWorkflowDecision && ((decision) => { setOpen(false); openWorkflowDecision(decision); })} />}
            <p>Work across your project appears here. Compatible new answers in the same feature can be integrated together; already-started or separately scoped responses keep their original paths.</p>
+           {openIssue && jobs.filter(j => j.answerGroupClarification).map(job => {
+             const item = attention.find(s => s.jobID === job.id);
+             return item ? <section key={job.id} aria-label="Saved answers need clarification"><h3>Two saved answers need your clarification</h3><p>{job.answerGroupClarification!.reason}</p><p>Save which rule should apply, then press Play. Retrying unchanged answers cannot settle this choice.</p><button className="primary" disabled={disabled || working} onClick={() => { setOpen(false); openIssue(item.id); }}>Resolve conflicting answers</button></section> : null;
+           })}
            {lastJob?.discoveryMetrics?.answerIntegration && <section aria-label="Response integration selection"><h3>How responses are being processed</h3>
              <p>{answerIntegrationReasons[lastJob.discoveryMetrics.answerIntegration.reason]}</p>
              <p>{lastJob.discoveryMetrics.answerIntegration.selectedResponses} responses available at selection · {lastJob.discoveryMetrics.answerIntegration.groupedAnswers} answers in this shared task. This explains scheduling, not approval or model quality.</p></section>}

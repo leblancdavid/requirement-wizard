@@ -1,5 +1,61 @@
 # Architecture outline
 
+SQLite 65 / conditional portable 39 extends explicit human clarification to an
+already-rejected carried-draft repair. Each v2 note binds its exact draft and paid
+prefix; unrelated decisions/actions and all usage remain intact. The existing inline
+decision/save-and-continue flow is reused, without inventing precedence or weakening
+verification. See [compatibility and checks](migrations.md#human-decisions-during-carried-draft-repair-conflicts-2026-11-10).
+
+SQLite 64 / conditional portable 38 adds explicit paid-prefix-bound Play adoption
+of the existing whole-group page budget for union verification only. Read steps
+retain 64 pages; all reads/checks share the unchanged 256-page group budget, with
+unchanged request, repair, storage and input safeguards. No startup adoption or
+reuse of old-draft checks is introduced. See [policy and qualification](migrations.md#union-verification-shares-the-existing-group-page-budget-2026-11-10).
+
+SQLite 63 / conditional portable 37 adds v12 joint layouts that may exceed 32 pages
+only within the existing cumulative 64-paid/pending-pages-per-step budget. Prior
+layout hashes, paid work, input limits and all other work ceilings remain unchanged.
+See [migration and full-layout read-only qualification](migrations.md#joint-layouts-within-the-existing-paidpending-step-budget-2026-11-10).
+
+SQLite 62 / conditional portable 36 extends the existing guarded joint-input policy
+to new complete oversized rejected-comparison repair packets. Ordinary packing stays
+96k; the 200k ceiling still requires fresh whole-prompt/model admission before dispatch.
+Paid v1 repair packets, draft identities and usage remain unchanged. See
+[compatibility and read-only qualification](migrations.md#guarded-capacity-for-complete-rejected-comparison-repairs-2026-11-10).
+
+SQLite 61 / conditional portable 35 binds initial lossless packing to new shared
+answer plans; preflight and dispatch use the same encoder without changing limits.
+Portable selection applies the existing core refinement-currentness predicate,
+reads only complete identity inputs for legacy checks, and walks required ancestors
+without recursive exports. Saved SQLite history and paid protocols remain intact.
+See [migration and measured limits](migrations.md#exact-portable-selection-and-initial-lossless-shared-packing-2026-11-10).
+
+SQLite 60 / conditional portable 34 adds append-only human follow-up notes for rejected
+initial-read clarifications. Original singleton notes, paid prefixes and all counters
+remain intact; explicit `supersedes` ancestry identifies the current note without
+choosing a product answer. Only the current note authorizes dispatch/publication.
+See [compatibility and checks](migrations.md#follow-up-decisions-after-a-rejected-clarification-2026-11-10).
+
+The initial shared-conflict decision UI now renders directly in requirement review.
+Source-choice serialization lives in `src/core/shared-answer-decision.ts`; the browser
+does not infer precedence. An additive consent/version-checked API option saves the
+existing human evidence before invoking Play, acknowledging durable save separately
+from continuation failure. No new persisted format or fingerprint is introduced.
+See [compatibility](migrations.md#inline-shared-decisions-and-explicit-continuation-2026-11-10).
+
+SQLite 59 / conditional portable 33 adds explicitly saved human clarification at an
+initial shared-answer conflict's immutable receipt-prefix boundary. It is separate
+from model replies, pinned with the exact conflicting originals after that boundary,
+and published as a stable note source only after full verification. Saving neither
+rebases material nor resets usage. See [scope and upgrade](migrations.md#initial-shared-conflict-human-clarification-2026-11-10).
+
+SQLite 58 / conditional portable 32 adds plan-key-bound union verification for new
+shared-answer work. Reads keep their batches; one complete-unit paged verification
+union checks the frozen draft and all original evidence. Old ledgers replay unchanged.
+An integrity-checked compressed local snapshot cache avoids repeatedly normalizing
+historical exports without deleting history; owned workflow windows use the existing
+workspace-publication deferral. See [migration and limits](migrations.md#union-answer-verification-and-portable-snapshot-cache-2026-11-10).
+
 SQLite 57 / conditional portable 31 preserves the v1 singleton resolution review and
 adds append-only v2 reviews for disjoint cited-answer conflicts, with eight total
 reviews maximum and unchanged shared usage/failure limits. Historical context hashes,

@@ -7,7 +7,7 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { processingPolicyChangeSchema } from "../core/processing-policy.js";
-import { answerGroupProgress } from "../core/answer-group.js";
+import { answerGroupProgress, answerGroupClarificationView } from "../core/answer-group.js";
 import { ProjectStore } from "../storage/store.js";
 import { readinessProgress } from "../core/readiness-stages.js";
 import { submissionProgress, submissionAllowance } from "../core/submission-stages.js";
@@ -319,6 +319,7 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
         const recent = options.store.workspaceJobs(id);
         const jobs = recent.jobs.map(({ result: _, researchEvidence: __, scan, scanWork, retrievalWork, readinessWork, submissionWork, answerGroupWork, refinementWork, ...job }) => ({ ...job,
           ...(answerGroupWork ? { answerGroupProgress: { answers: answerGroupWork.submissionIDs.length, ...answerGroupProgress(answerGroupWork) }, submissionProgress: answerGroupProgress(answerGroupWork) } : {}),
+          ...(answerGroupWork ? { answerGroupClarification: answerGroupClarificationView(project, { ...job, answerGroupWork }) } : {}),
           ...(refinementWork ? { refinementStageProgress: refinementStageProgress(refinementWork) } : {}),
           ...(submissionWork ? { submissionProgress: submissionProgress(submissionWork), submissionAllowance: submissionAllowance(submissionWork) } : {}),
           ...(readinessWork ? { readinessProgress: readinessProgress(readinessWork) } : {}),
@@ -362,6 +363,26 @@ export async function startApp(options: { store: ProjectStore; adapter: Discover
       }
       if (req.method !== "POST") { json(res, 405, { error: "Method not allowed." }); return; }
       const raw = await body(req);
+      if (action === "clarify-shared-answers") {
+        const input = z.object({ revision, jobID: z.string().uuid(), text: z.string().trim().min(1).max(12000),
+          continueReview: z.literal(true).optional(), confirmAIUsage: z.literal(true).optional(), workflowVersion: z.number().int().nonnegative().optional(),
+        }).strict().refine(v => v.continueReview ? v.confirmAIUsage && v.workflowVersion !== undefined : v.confirmAIUsage === undefined && v.workflowVersion === undefined,
+          "Continuation requires explicit AI consent and the displayed workflow version.").parse(raw);
+        if (queue.isActive(id) || implementation.isActive(id) || workflow.active(id)) throw new OperationConflictError("Pause active work before clarifying saved answers.");
+        if (input.continueReview && options.store.workflow(id).settingsVersion !== input.workflowVersion) throw new OperationConflictError("Processing changed. Refresh before saving and continuing.");
+        options.store.clarifySharedAnswers(id, input.revision, input.jobID, input.text);
+        if (input.continueReview) {
+          try {
+            workflow.configure(id, input.revision, input.workflowVersion!, "play");
+            json(res, 200, { saved: true, continued: true });
+          } catch {
+            // A durable human decision must not look like a failed save, nor may
+            // a caller repeat it merely because connection/continuation failed.
+            json(res, 200, { saved: true, continued: false });
+          }
+        } else json(res, 200, { saved: true });
+        return;
+      }
       if (action === "restore-assessment") {
         const input = z.object({ revision, epicID: z.string().min(1).max(500), sourceRevision: z.number().int().positive(), token: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(raw);
         json(res, 200, options.store.restoreAssessmentHistory(id, input.revision, input)); return;

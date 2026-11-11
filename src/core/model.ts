@@ -363,6 +363,7 @@ export type Job = {
   submissionWork?: import("./submission-stages.js").SubmissionWork;
   answerGroupWork?: import("./answer-group.js").AnswerGroupWork;
   answerGroupProgress?: { answers: number; completed: number; total: number; phase: "read" | "check" | "repair" | "complete"; evidencePage?: { completed: number; total: number } };
+  answerGroupClarification?: { jobID: string; reason: string; conflictIDs: string[]; savedText?: string; previousText?: string };
   refinementWork?: import("./refinement-stages.js").RefinementWork;
   /** Attempts dispatched by this job only; reused receipts are not new calls. */
   refinementRequests?: number;

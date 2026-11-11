@@ -45,8 +45,23 @@ test("malformed joint profiles, direct selections and forged character counts ca
  const ordinary=structuredClone(f.context);ordinary.data={text:"small"};ordinary.manifest.characters=JSON.stringify(ordinary.data).length;ordinary.manifest.budget=96000;delete ordinary.answerGroupInputCapacity;ordinary.answerGroupPagingAdvice!.format=9;
  assert.equal(needsJointInputAdmission(ordinary),false);assert.equal(assertJointInputAdmission(f.project,ordinary,"ordinary",undefined),undefined);
 });
-for(const accepted of [false,true])test(`OpenCode ${accepted?"admits":"rejects"} fresh joint capacity before any session/prompt creation and closes only its owned runtime`,async()=>{
- const f=fixture(),calls:string[]=[];
+test("complete repair admission requires its explicit v2 profile and rejects missing/mixed profiles and the 200k hard stop",()=>{
+ const f=fixture();delete f.context.answerGroupPagingAdvice;f.context.manifest.answerGroupStage!.phase="repair";
+ f.context.answerGroupInputCapacity!.repairFormat=2;f.prompt=discoveryPrompt(f.project,f.context,false);
+ assert.ok(assertJointInputAdmission(f.project,f.context,f.prompt,[model]));
+ for(const change of [(c:ContextPack)=>{delete c.answerGroupInputCapacity!.repairFormat;},
+   (c:ContextPack)=>{c.manifest.answerGroupStage!.phase="check";},
+   (c:ContextPack)=>{c.answerGroupPagingAdvice={scheduledIDs:[],format:11,number:1,total:1};},
+   (c:ContextPack)=>{c.data={text:"z".repeat(200001)};c.manifest.characters=JSON.stringify(c.data).length;}]){
+   const context=structuredClone(f.context);change(context);assert.throws(()=>assertJointInputAdmission(f.project,context,discoveryPrompt(f.project,context,false),[model]),JointInputCapacityError);
+ }
+ assert.throws(()=>assertJointInputAdmission(f.project,f.context,f.prompt,[]),JointInputCapacityError);
+ assert.throws(()=>assertJointInputAdmission(f.project,f.context,f.prompt,[{...model,limit:{context:128000,input:100000,output:32000}}]),JointInputCapacityError);
+});
+for(const phase of ["read","check","repair"] as const)for(const accepted of [false,true])test(`OpenCode ${accepted?"admits":"rejects"} fresh ${phase} capacity before any session/prompt creation and closes only its owned runtime`,async()=>{
+  const f=fixture(),calls:string[]=[];
+  if(phase==="repair"){delete f.context.answerGroupPagingAdvice;f.context.manifest.answerGroupStage!.phase="repair";f.context.answerGroupInputCapacity!.repairFormat=2;}
+  if(phase==="check"){f.context.answerGroupPagingAdvice!.format=12;f.context.manifest.answerGroupStage!.phase="check";}
  const bootstrap=async()=>({directory:"fixture",close:async()=>{calls.push("close");},client:{
   provider:{list:async()=>({data:{connected:["openai"],all:[{id:"openai",models:{fixture:{name:"Fixture"}}}]}})},
   native:{model:{list:async()=>{calls.push("capacity");return {data:accepted?[model]:[]};}}},

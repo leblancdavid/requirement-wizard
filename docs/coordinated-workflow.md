@@ -1,5 +1,58 @@
 # Coordinated workflow preview (DEC-032)
 
+## Proposed shared question discovery (not implemented, 2026-11-10)
+
+The supplied diagnostics show 98 question-discovery calls across eight packages after
+answer processing. A follow-on protocol could collect a small bounded cohort (initially
+up to four eligible **unstarted**, same-feature questions-only packages), read their
+exact mandatory evidence union once, then check one frozen question draft against every
+complete evidence unit. Cohort membership is structural compatibility, not proof of
+semantic independence. Required target/support units and indispensable joint comparisons
+stay complete; unavailable evidence blocks rather than becoming inferred preferences.
+
+Before implementation, the protocol needs its own versioned cohort identity bound to
+the exact specification/evidence/policy and original targets; per-target publication
+coverage; atomic publication after all mandatory checks; an honest no-question outcome;
+and durable receipts/charged usage across Pause, failure, stale edits and clone adoption.
+No area assessment, approval or completeness/readiness claim follows from question
+collection. Existing paid package schedules take precedence and must not be converted
+or replayed under a cohort. A group can fall back to individual planning only before
+any cohort request starts. Existing input/draft/request/work-window limits still apply.
+
+Required qualification: compare total real requests with the existing path on identical
+bounded fixtures, prove every original evidence/target obligation is retained, exercise
+joint lookups and genuine conflicts, and preserve old saved schedules across upgrade.
+Only then consider a bounded explicit live check. No shared-discovery model calls,
+automatic cross-feature coalescing or concurrency changes ship in the current slice.
+
+## Implemented efficiency follow-up (2026-11-10)
+
+Initial shared-answer grouping uses the same lossless preflight/dispatch policy, while
+existing paid cohorts keep their schedules. Portable continuation filters proven-stale
+completed cleanup checks using the engine's established currentness rules and preserves
+previously retained unfinished work and required ancestor chains. Latest folder-publication measurements
+are separately scoped in diagnostics. See [compatibility and read-only measurements](migrations.md#exact-portable-selection-and-initial-lossless-shared-packing-2026-11-10).
+
+A rejected initial clarification can now receive an explicit follow-up note instead
+of being trapped behind Continue. Notes append after a new blocked reply, preserve
+paid prefixes/usage, and explicitly supersede only the preceding clarification. No
+note establishes a semantic verdict by itself. See [follow-up compatibility](migrations.md#follow-up-decisions-after-a-rejected-clarification-2026-11-10).
+
+An initial shared-answer conflict now has an inline decision card on the blocked
+requirement. **Save decision & continue** saves the human's explicit priority/exception
+and authorizes the existing Play workflow through one action; no separate dialog or
+Play click is needed. Failure to continue returns a durable saved acknowledgement and
+an explicit **Continue review** action. The legacy save-only API is unchanged. No
+answer is preselected, quota is renewed, or verification bypassed. Later carried-draft
+conflicts remain out of scope. See [compatibility and limits](migrations.md#inline-shared-decisions-and-explicit-continuation-2026-11-10).
+
+New shared-answer tasks use `union-v1`: existing read batches followed by one paged
+verification union of every original and draft-linked complete support unit. Every
+page still checks the full frozen draft and all pinned answers, and corrections restart
+verification. Already-paid tasks keep their historical schedule. Coordinator windows
+defer workspace publication until release; a local exact-source snapshot cache speeds
+subsequent exports without removing history. See [upgrade and verification](migrations.md#union-answer-verification-and-portable-snapshot-cache-2026-11-10).
+
 Ordinary shared packets still target 96k characters. After explicit Play adoption,
 a single indivisible read/check unit can use a guarded 200k exception page alone;
 fresh selected-model/full-prompt capacity admission is required before inference.

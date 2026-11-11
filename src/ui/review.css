@@ -16,3 +16,10 @@
 .review-readiness { margin-bottom: 1rem; }
 .inline-question .question-title > button { display: none; }
 .change-request-form { margin-block: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: .5rem; }
+.shared-answer-clarification fieldset { min-width: 0; margin: 1rem 0; padding: 0; border: 0; }
+.shared-answer-clarification legend { font-weight: 600; margin-bottom: .75rem; }
+.shared-answer-clarification label { display: block; margin: .75rem 0; }
+.shared-answer-clarification input[type=radio] { width: auto; margin-right: .6rem; accent-color: var(--accent); }
+.shared-answer-choice { border: 1px solid var(--border); border-radius: .6rem; padding: .75rem; margin-bottom: .75rem; overflow-wrap: anywhere; }
+.shared-answer-choice p { margin: .5rem 0; }
+.shared-answer-clarification textarea { width: 100%; box-sizing: border-box; }

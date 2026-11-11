@@ -25,6 +25,12 @@ export function applySpecificationUpdates(before: Project, project: Project, res
   const included = new Set(job.context.includedIDs);
   const batch = submissions.filter((s) => job.context!.submissionIDs!.includes(s.id) && s.applied);
   const inputs = specificationAuthorizationSources(project, batch, job.context.includedIDs);
+  const clarification = job.answerGroupWork?.humanClarificationFollowups?.at(-1) ?? job.answerGroupWork?.humanClarification;
+  const repairNotes = job.answerGroupWork?.repairClarifications;
+  const decisions = repairNotes?.length ? [...job.answerGroupWork?.humanClarification ? [job.answerGroupWork.humanClarification] : [],
+    ...job.answerGroupWork?.humanClarificationFollowups ?? [], ...repairNotes].filter(c => c.fromReceipt <= job.answerGroupWork!.receipts.length) : clarification ? [clarification] : [];
+  for (const c of decisions) if (!decisions.some(other => other.source.supersedes === c.source.id)
+    && included.has(c.source.id) && project.sources.some(s => s.id === c.source.id)) inputs.add(c.source.id);
   assertSpecificationAuthorization(result, inputs);
   const waiting = submissions.filter((s) => !job.context!.submissionIDs!.includes(s.id));
   const seen = new Set<string>();

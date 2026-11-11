@@ -44,6 +44,9 @@ test("continuous-action publication defers only its own workspace, retains SQLit
     assert.equal(f.store.workspace(other.id)!.savedRevision, other.revision);
     inner(); f.store.syncWorkspace(changed.id); assert.equal(f.store.workspace(changed.id)!.savedRevision, f.project.revision);
     outer(); assert.equal(f.store.workspace(changed.id)!.savedRevision, changed.revision);
+    const metrics = f.store.workspace(changed.id)!.publicationMetrics!;
+    assert.equal(metrics.revision, changed.revision); assert.equal(metrics.format, 1);
+    for (const name of ["elapsedMs", "historyMs", "continuationMs", "renderMs", "filesMs"] as const) assert.ok((metrics[name] ?? -1) >= 0);
     const manifest = readFileSync(join(f.path, workspaceFolder, "manifest.json"), "utf8");
     outer(); inner(); assert.equal(readFileSync(join(f.path, workspaceFolder, "manifest.json"), "utf8"), manifest);
   } finally { f.cleanup(); }

@@ -456,6 +456,7 @@ export class ProjectWorkflow {
         const state = owned(); delete state.questionBatch!.activeSince; this.store.saveWorkflow(id, state);
       }
     };
+    const publishWorkspace = this.store.deferWorkspacePublication(id);
     try {
       // Yield before dispatch so the owning run is installed before any callback.
       await Promise.resolve();
@@ -638,17 +639,19 @@ export class ProjectWorkflow {
     } catch (error) {
       stop(error instanceof WorkflowBudgetPause || controller.signal.aborted ? "paused" : "blocked", safeMessage(error instanceof Error ? error.message : error), true);
     } finally {
-      clearTimeout(timer); clearInterval(heartbeat); controller.signal.removeEventListener("abort", abort); await queue.close();
-      const state = this.store.workflow(id);
-      if (state.owner === owner) {
-        if (!continuous) state.grant!.remainingMs = Math.max(0, state.grant!.remainingMs - (Date.now() - started));
-        if (this.store.processingPolicy(id).mode === "manual" && !yielded) {
-          state.paused = true;
-          state.message = `${state.message} Manual processing is on; continue explicitly for more work.`.slice(0, 1600);
-          this.armed.delete(id);
+      try {
+        clearTimeout(timer); clearInterval(heartbeat); controller.signal.removeEventListener("abort", abort); await queue.close();
+        const state = this.store.workflow(id);
+        if (state.owner === owner) {
+          if (!continuous) state.grant!.remainingMs = Math.max(0, state.grant!.remainingMs - (Date.now() - started));
+          if (this.store.processingPolicy(id).mode === "manual" && !yielded) {
+            state.paused = true;
+            state.message = `${state.message} Manual processing is on; continue explicitly for more work.`.slice(0, 1600);
+            this.armed.delete(id);
+          }
+          this.store.saveWorkflow(id, state); this.store.releaseWorkflow(id, owner);
         }
-        this.store.saveWorkflow(id, state); this.store.releaseWorkflow(id, owner);
-      }
+      } finally { publishWorkspace(); }
     }
   }
   async close() {

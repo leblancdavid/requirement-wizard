@@ -13,13 +13,15 @@ import { definitionTaskSchema } from "../core/definition-assessment.js";
 import { readinessQuestionTaskSchema } from "../core/readiness-questions.js";
 import { readinessWorkSchema } from "../core/readiness-stages.js";
 import { submissionWorkSchema } from "../core/submission-stages.js";
-import { answerGroupWorkSchema, answerGroupStageSchema } from "../core/answer-group.js";
+import { answerGroupWorkSchema, answerGroupStageSchema, answerGroupClarifications } from "../core/answer-group.js";
 import { refinementStageSchema, refinementWorkSchema } from "../core/refinement-stages.js";
 import { definitionInputKey, definitionAssessmentEvidenceIDs } from "../core/definition-identity.js";
 import { definitionBaselineKey } from "../core/definition-baseline.js";
 import { definitionInterruptionSchema } from "../core/definition-interruption.js";
 import { recoveryRevisionSchema, recoveryRevisionCurrent, definitionRevisionSchema, definitionRevisionCurrent } from "../core/implementation-revisions.js";
 import { upgradeExecutionPayload } from "./migrations.js";
+import { refinementCheckCurrentMatcher } from "../core/refinement-identity.js";
+import type { DecisionEvidenceProject } from "../core/decision-availability.js";
 
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 export const portableDigest = (value: unknown) => createHash("sha256").update(canonicalJSON(value)).digest("hex");
@@ -34,14 +36,45 @@ function needsOriginalRevision(job: Job) {
   return true;
 }
 
+function portableJob(job: Job, linked: boolean, definitionKey: (epicID: string) => string): Job {
+  const copy = structuredClone(job);
+  copy.model = withoutAccount(copy.model);
+  delete copy.sessionID; delete copy.telemetry; delete copy.diagnostic; delete copy.discoveryMetrics;
+  copy.leaseUntil = null;
+  if (["pending", "running"].includes(copy.status)) copy.status = "interrupted";
+  if (copy.scan) copy.scan.workspaceKey = "portable";
+  if (copy.scanWork) copy.scanWork.bindingID = "portable";
+  for (const stage of copy.retrievalWork?.stages ?? []) delete stage.sessionID;
+  if (copy.status === "completed" && copy.context?.definitionAssessment && linked
+    && copy.context.definitionAssessment.inputKey !== definitionKey(copy.context.definitionAssessment.epicID)) {
+    copy.portableReceipt = 1;
+    delete copy.definitionWork; delete copy.definitionBlock; delete copy.definitionInterruption;
+    const c = copy.context;
+    copy.context = { revision: c.revision, focusEpicID: c.focusEpicID, characters: c.characters, budget: c.budget,
+      includedIDs: [], omittedIDs: [], definitionAssessment: c.definitionAssessment,
+      selectionReason: "Portable original definition publication receipt; historical request bodies omitted." };
+  }
+  if (copy.status === "completed" && copy.context?.refinementOnly && !copy.refinementWork) {
+    const c = copy.context;
+    copy.portableReceipt = 1;
+    copy.context = { revision: c.revision, focusEpicID: c.focusEpicID, characters: c.characters, budget: c.budget,
+      includedIDs: [], omittedIDs: [], refinementOnly: true, refinementTarget: c.refinementTarget, refinementPair: c.refinementPair,
+      selectionReason: "Portable completed-check receipt; runtime navigation history omitted." };
+  }
+  return copy;
+}
+
 /** Retain reusable outcomes and unfinished work, not the activity stream. Snapshots
  * are exact deltas against the current project, not every intermediate revision. */
-export function continuationState(project: Project, jobs: Job[], submissions: Submission[], snapshot: (revision: number) => Project): Continuation {
+export function continuationState(project: Project, jobs: Job[], submissions: Submission[], snapshot: (revision: number) => Project,
+  portableSnapshot: (revision: number) => Project = snapshot,
+  refinementSnapshot: (revision: number) => DecisionEvidenceProject = snapshot): Continuation {
   const waiting = submissions.filter((s) => !["completed", "superseded"].includes(s.status) || s.overlapFollowup?.state === "pending");
   const waitingIDs = new Set(waiting.map((s) => s.id));
   const linked = new Set(waiting.flatMap((s) => [s.jobID, s.overlapFollowup?.discoveryJobID, ...s.overlapFollowup?.pairs.map((p) => p.jobID) ?? []]).filter(Boolean));
   const selected = new Map<string, Job>();
   const requirements = new Map(project.requirements.map((r) => [r.id, r]));
+  const refinementCurrent = refinementCheckCurrentMatcher(project);
   const definitionKeys = new Map<string, string>();
   const currentDefinitionKey = (epicID: string) => {
     if (!definitionKeys.has(epicID)) definitionKeys.set(epicID, definitionInputKey(project, epicID));
@@ -67,6 +100,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (job.answerGroupWork?.ruleRepairPermission) linked.add(job.answerGroupWork.ruleRepairPermission.sourceJobID);
     if (job.answerGroupWork?.automation) linked.add(job.answerGroupWork.automation.sourceJobID);
     if (job.answerGroupWork?.responseRecovery) linked.add(job.answerGroupWork.responseRecovery.sourceJobID);
+    for (const c of job.answerGroupWork ? answerGroupClarifications(job.answerGroupWork) : []) linked.add(c.sourceJobID);
   }
   // Only original publishers needed by current assessments and current baseline
   // work, not every obsolete definition job in the activity archive.
@@ -136,6 +170,14 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     // resulting accepted/dismissed proposals already live in the current project;
     // obsolete checks are not necessary continuation state.
     if (job.status === "completed" && target && (!current || target.fingerprint !== reviewFingerprint(current)) && !linked.has(job.id)) continue;
+    // Apply the engine's existing exact currentness rule, not a new semantic
+    // independence heuristic. Unknown keys/missing origins stay conservative.
+    // Linked outcomes and all unfinished paid work retain their original proofs.
+    if (job.status === "completed" && target && current && !linked.has(job.id)
+      && /^(?:refinement-task-v2:)?[a-f0-9]{64}$/.test(target.contextKey ?? "")) {
+      try { if (!refinementCurrent(current, job, () => refinementSnapshot(job.expectedRevision))) continue; }
+      catch { /* An unavailable/unreadable legacy origin does not prove staleness. */ }
+    }
     const useful = job.gapReport || job.epicReviewReport || context?.refinementOnly || context?.gapExploration || context?.epicReview
       || context?.readinessQuestions && context.readinessQuestions.inputKey === currentDefinitionKey(context.readinessQuestions.epicID)
          || job.definitionChangeGroupWork || job.definitionChangeWork || job.retrievalWork || job.definitionWork || job.submissionWork || job.answerGroupWork && job.status !== "completed" || job.scanWork && job.status !== "completed" || linked.has(job.id)
@@ -143,33 +185,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     if (!useful) continue;
     const key = linked.has(job.id) ? job.id : JSON.stringify([job.kind, context?.refinementPair ?? context?.refinementTarget ?? context?.gapExploration?.check
          ?? context?.epicReview ?? context?.readinessQuestions ?? job.definitionChangeGroupWork?.groupKey ?? job.definitionChangeWork?.taskKey ?? job.answerGroupWork?.submissionIDs ?? job.submissionWork?.submissionID ?? definitionIdentity(job) ?? job.gapReport ?? job.epicReviewReport ?? job.id, job.status === "completed"]);
-    const copy = structuredClone(job);
-    copy.model = withoutAccount(copy.model);
-    delete copy.sessionID; delete copy.telemetry; delete copy.diagnostic; delete copy.discoveryMetrics;
-    copy.leaseUntil = null;
-    if (["pending", "running"].includes(copy.status)) copy.status = "interrupted";
-    if (copy.scan) copy.scan.workspaceKey = "portable";
-    if (copy.scanWork) copy.scanWork.bindingID = "portable";
-    for (const stage of copy.retrievalWork?.stages ?? []) delete stage.sessionID;
-    if (copy.status === "completed" && copy.context?.definitionAssessment && linked.has(copy.id)
-      && copy.context.definitionAssessment.inputKey !== currentDefinitionKey(copy.context.definitionAssessment.epicID)) {
-      // A dated publication-origin receipt, not a replayable old ledger or an
-      // attestation that current evidence was reviewed by this historical job.
-      // Its exact published snapshot/result authenticate baseline selection.
-      copy.portableReceipt = 1;
-      delete copy.definitionWork; delete copy.definitionBlock; delete copy.definitionInterruption;
-      const c = copy.context;
-      copy.context = { revision: c.revision, focusEpicID: c.focusEpicID, characters: c.characters, budget: c.budget,
-        includedIDs: [], omittedIDs: [], definitionAssessment: c.definitionAssessment,
-        selectionReason: "Portable original definition publication receipt; historical request bodies omitted." };
-    }
-    if (copy.status === "completed" && copy.context?.refinementOnly && !copy.refinementWork) {
-      const c = copy.context;
-      copy.portableReceipt = 1;
-      copy.context = { revision: c.revision, focusEpicID: c.focusEpicID, characters: c.characters, budget: c.budget,
-        includedIDs: [], omittedIDs: [], refinementOnly: true, refinementTarget: c.refinementTarget, refinementPair: c.refinementPair,
-        selectionReason: "Portable completed-check receipt; runtime navigation history omitted." };
-    }
+    const copy = portableJob(job, linked.has(job.id), currentDefinitionKey);
     selected.set(key, copy);
   }
   // Some receipts explicitly refer to an earlier job (continuations and follow-up).
@@ -179,8 +195,10 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     for (const id of [job.retrievalWork?.originJobID, job.retrievalWork?.continuation?.sourceJobID, job.retrievalWork?.reuse?.sourceJobID]) {
       const source = id && all.get(id);
       if (source && !kept.has(source.id)) {
-        const extra = continuationState(project, [source], [], snapshot).jobs[0];
-        if (extra) kept.set(extra.id, extra);
+        // Preserve required ancestors even when they are not current standalone
+        // tasks. Walk the graph here; never recursively build/discard full exports
+        // (and their snapshots) just to obtain one sanitized job.
+        kept.set(source.id, portableJob(source, true, currentDefinitionKey));
       }
     }
   }
@@ -259,7 +277,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     // assessment publication here multiplies a large project's entire evidence
     // set by its number of areas, even when the resulting deltas are tiny.
     let original: Project;
-    try { original = snapshot(revision); }
+    try { original = portableSnapshot(revision); }
     catch (error) {
       if (optionalBaselineRevisions.has(revision) && !requiredRevisions.has(revision)
         && error instanceof Error && error.message === "Project or revision not found.") continue;
@@ -381,7 +399,7 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
   const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
   const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
-  const sharedFormat = continuation?.jobs.some(j=>j.answerGroupWork?.blockerReviews) ? 31 : continuation?.jobs.some(j=>j.answerGroupWork?.blockerReview||j.answerGroupWork?.receipts.some(r=>"answerGroupBlockerReview"in r.response)) ? 30 : continuation?.jobs.some(j=>j.answerGroupWork?.inputCapacity||j.answerGroupWork?.evidencePages?.some(p=>p.format===11)) ? 29 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupInspections || j.answerGroupWork?.receipts.some(r=>"answerGroupInspection"in r.response||"answerGroupComparisons"in r.response)) ? 28 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews?.some(p=>p.format===2)) ? 27 : continuation?.jobs.some(j=>j.answerGroupWork?.evidencePages?.some(p=>p.format===10)) ? 26 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews) ? 25 : progressRepairState ? 24 : responseCapacityState ? 23 : boundedRepairState ? 22 : playState ? 21 : undefined;
+  const sharedFormat = continuation?.jobs.some(j => j.answerGroupWork?.repairClarifications) ? 39 : continuation?.jobs.some(j => j.answerGroupWork?.unionPageCapacity) ? 38 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 12)) ? 37 : continuation?.jobs.some(j => j.answerGroupWork?.repairContexts?.some(p => p.format === 2)) ? 36 : continuation?.jobs.some(j => j.answerGroupWork?.packingPolicy) ? 35 : continuation?.jobs.some(j => j.answerGroupWork?.humanClarificationFollowups) ? 34 : continuation?.jobs.some(j => j.answerGroupWork?.humanClarification) ? 33 : continuation?.jobs.some(j=>j.answerGroupWork?.verificationPolicy) ? 32 : continuation?.jobs.some(j=>j.answerGroupWork?.blockerReviews) ? 31 : continuation?.jobs.some(j=>j.answerGroupWork?.blockerReview||j.answerGroupWork?.receipts.some(r=>"answerGroupBlockerReview"in r.response)) ? 30 : continuation?.jobs.some(j=>j.answerGroupWork?.inputCapacity||j.answerGroupWork?.evidencePages?.some(p=>p.format===11)) ? 29 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupInspections || j.answerGroupWork?.receipts.some(r=>"answerGroupInspection"in r.response||"answerGroupComparisons"in r.response)) ? 28 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews?.some(p=>p.format===2)) ? 27 : continuation?.jobs.some(j=>j.answerGroupWork?.evidencePages?.some(p=>p.format===10)) ? 26 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews) ? 25 : progressRepairState ? 24 : responseCapacityState ? 23 : boundedRepairState ? 22 : playState ? 21 : undefined;
   const efficientState = !!continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 8)
     || j.context?.epicReview?.contextPolicy === "staged-dense-records-v5" || j.retrievalWork?.epicStages?.contextPolicy === "staged-dense-records-v5");
   const evidenceState = requiresChangeReviewState(project, continuation) || answerState || efficientState;
@@ -502,8 +520,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13), z.literal(14), z.literal(15), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23), z.literal(24), z.literal(25), z.literal(26), z.literal(27), z.literal(28), z.literal(29), z.literal(30), z.literal(31)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–31 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13), z.literal(14), z.literal(15), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23), z.literal(24), z.literal(25), z.literal(26), z.literal(27), z.literal(28), z.literal(29), z.literal(30), z.literal(31), z.literal(32), z.literal(33), z.literal(34), z.literal(35), z.literal(36), z.literal(37), z.literal(38), z.literal(39)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–39 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -542,6 +560,22 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(read("continuation.json")) as Continuation;
+  if (state.formatVersion < 39 && continuation.jobs.some(j => j.answerGroupWork?.repairClarifications))
+    throw new Error("Carried-draft human conflict decisions require portable state format 39. Saved work was not overwritten.");
+  if (state.formatVersion < 38 && continuation.jobs.some(j => j.answerGroupWork?.unionPageCapacity))
+    throw new Error("Union verification group page capacity requires portable state format 38. Saved work was not overwritten.");
+  if (state.formatVersion < 37 && continuation.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 12)))
+    throw new Error("Remaining-budget joint page layouts require portable state format 37. Saved work was not overwritten.");
+  if (state.formatVersion < 36 && continuation.jobs.some(j => j.answerGroupWork?.repairContexts?.some(p => p.format === 2)))
+    throw new Error("Guarded complete repair capacity requires portable state format 36. Saved work was not overwritten.");
+  if (state.formatVersion < 35 && continuation.jobs.some(j => j.answerGroupWork?.packingPolicy))
+    throw new Error("Initial lossless shared packing requires portable state format 35. Saved work was not overwritten.");
+  if (state.formatVersion < 34 && continuation.jobs.some(j => j.answerGroupWork?.humanClarificationFollowups))
+    throw new Error("Follow-up human decisions require portable state format 34. Saved work was not overwritten.");
+  if (state.formatVersion < 33 && continuation.jobs.some(j => j.answerGroupWork?.humanClarification))
+    throw new Error("Human shared-answer clarification requires portable state format 33. Saved work was not overwritten.");
+  if (state.formatVersion < 32 && continuation.jobs.some(j => j.answerGroupWork?.verificationPolicy))
+    throw new Error("Union answer verification requires portable state format 32. Saved work was not overwritten.");
   if (state.formatVersion < 9 && continuation.jobs.some(j => j.answerGroupWork)) throw new Error("Shared answer work requires portable state format 9. Saved work was not overwritten.");
   if (state.formatVersion < 10 && continuation.jobs.some(j => j.answerGroupWork?.sourceSupport)) throw new Error("Original supporting evidence requires portable state format 10. Saved work was not overwritten.");
   if (state.formatVersion < 11 && continuation.jobs.some(j => j.answerGroupWork?.evidencePages)) throw new Error("Shared evidence pages require portable state format 11. Saved work was not overwritten.");
@@ -586,6 +620,13 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     throw new Error("Omitted human-resolution review requires portable state format 30. Saved work was not overwritten.");
   if(state.formatVersion<31&&continuation.jobs.some(j=>j.answerGroupWork?.blockerReviews))
     throw new Error("Distinct human-resolution reviews require portable state format 31. Saved work was not overwritten.");
+  for (const job of continuation.jobs) for (const c of job.answerGroupWork ? answerGroupClarifications(job.answerGroupWork) : []) {
+    const parent = continuation.jobs.find(j => j.id === c.sourceJobID);
+    if (!parent?.answerGroupWork || parent.projectID !== job.projectID || parent.expectedRevision !== job.expectedRevision
+      || JSON.stringify(answerGroupClarifications(parent.answerGroupWork).find(p => p.source.id === c.source.id)) !== JSON.stringify(c)
+      || JSON.stringify(parent.answerGroupWork.receipts.slice(0, c.fromReceipt)) !== JSON.stringify(job.answerGroupWork!.receipts.slice(0, c.fromReceipt)))
+      throw new Error("Human clarification requires its retained human-saved parent and exact paid prefix.");
+  }
   for (const job of continuation.jobs) if (job.answerGroupWork?.responseRecovery) {
     const r = job.answerGroupWork.responseRecovery, parent = continuation.jobs.find(j => j.id === r.sourceJobID), w = parent?.answerGroupWork;
     if (!parent || parent.status !== "failed" || !w || parent.projectID !== job.projectID || parent.expectedRevision !== job.expectedRevision

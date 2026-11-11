@@ -15,6 +15,9 @@ import { ReviewQueue, reviewItems, type ReviewDraft } from "./review.js";
 import { Pagination, PagedList, usePagination } from "./pagination.js";
 import "./pagination.css";
 import { ProcessingQueue } from "./processing-queue.js";
+import { SharedAnswerClarification } from "./shared-answer-clarification.js";
+import { currentSharedConflicts, sharedConflictJob, type ClarificationOutcome } from "./shared-answer-decision.js";
+import { SharedConflictNotice } from "./shared-conflict-notice.js";
 import type { MaintenanceAction } from "./maintenance-controls.js";
 import type { WorkflowConfigure } from "./workflow-controls.js";
 import { ProcessingSettings } from "./processing-settings.js";
@@ -442,11 +445,15 @@ function App() {
     }
   };
 
-  const processBlocking = (ids: string[]) => void act(async () => {
-    if (!project || !data) return;
-    if (connectionChanged) throw new Error("Save your connection and model selection in Settings before processing.");
-    await api(`projects/${project.id}/process-responses`, { revision: project.revision, submissionIDs: ids, research: project.model.connectionID ? false : research });
-  });
+  const processBlocking = (ids: string[]) => {
+    const blocked = data?.submissions.find(s => ids.includes(s.id) && data.jobs.some(j => j.id === s.jobID && j.answerGroupClarification && !j.answerGroupClarification.savedText));
+    if (blocked) { openIssue(blocked.id); return; }
+    void act(async () => {
+      if (!project || !data) return;
+      if (connectionChanged) throw new Error("Save your connection and model selection in Settings before processing.");
+      await api(`projects/${project.id}/process-responses`, { revision: project.revision, submissionIDs: ids, research: project.model.connectionID ? false : research });
+    });
+  };
   const processSavedResponses = () => void act(async () => {
     if (!project || !data) return;
     await api(`projects/${project.id}/process-responses`, { revision: project.revision,
@@ -489,6 +496,7 @@ function App() {
     if (!project || !data) return null;
     return <ReviewQueue key={`${project.id}:${focusRequirementID ?? "list"}`} draftStore={focusRequirementID ? issueDrafts : undefined} focusRequirementID={focusRequirementID} openIssue={openIssue} visible={!!focusRequirementID || tab === "review"} project={project} submissions={data.submissions} jobs={data.jobs} epicID={focusRequirementID ? "all" : epicID} sending={sending} submit={submit} itemErrors={itemErrors} resume={() => focusRequirementID ? processBlocking(data.submissions.filter((s) => s.input.type === "review" && s.input.requirementID === focusRequirementID && s.status === "needs-attention" && !s.conflict).map((s) => s.id)) : void act(explore)}
       processBlocking={processBlocking} renderClarification={focusRequirementID || tab === "review" ? renderClarification : undefined}
+      renderInputConflict={(ids, onBegin) => renderInputConflict(ids, onBegin)}
       clarifyDefinition={clarifyDefinition}
       openQuestion={(questionID) => { const q = project.questions.find((q) => q.id === questionID); if (!q) return; setIssue(undefined); setEpicID(q.epicID); setTab("discover"); setQuestionFilter(queuedQuestionIDs.has(questionID) ? "submitted" : q.status === "answered" ? "answered" : q.status === "pending" ? "open" : "later"); setExpandedQuestion(questionID); }}
       disabled={busy || connectionChanged || needsInitialization} disabledReason={discoveryReason}
@@ -507,9 +515,30 @@ function App() {
         return saved;
       }} />;
   };
+  async function saveConflictDecision(jobID: string, text: string): Promise<ClarificationOutcome> {
+    if (!project || !data?.workflow) throw new Error("Refresh before saving your decision.");
+    const result = await api<ClarificationOutcome>(`projects/${project.id}/clarify-shared-answers`, {
+      revision: project.revision, jobID, text, continueReview: true, confirmAIUsage: true, workflowVersion: data.workflow.version,
+    });
+    await load().catch((cause: Error) => setError(cause.message));
+    return result;
+  }
+  async function continueConflictReview() {
+    if (!project || !data?.workflow) throw new Error("Refresh before continuing review.");
+    await api(`projects/${project.id}/workflow`, { revision: project.revision, version: data.workflow.version, action: "play" });
+    await load().catch((cause: Error) => setError(cause.message));
+  }
+  const renderInputConflict = (ids: string[], onBegin?: () => void) => {
+    if (!project || !data) return null;
+    const job = sharedConflictJob(data.jobs, ids);
+    return job?.answerGroupClarification ? <SharedAnswerClarification key={job.answerGroupClarification.jobID} project={project} conflict={job.answerGroupClarification}
+      disabled={busy || connectionChanged} working={data.submissions.some(s => job.context?.submissionIDs?.includes(s.id) && s.status === "processing")} save={async (jobID, text) => { onBegin?.(); return saveConflictDecision(jobID, text); }} resume={async () => { onBegin?.(); await continueConflictReview(); }} /> : null;
+  };
   const issueSubmission = issue && issue.projectID === project?.id ? data?.submissions.find((s) => s.id === issue.submissionID) : undefined;
   const issueRequirementID = issue?.requirementID ?? (issueSubmission?.input.type === "review" ? issueSubmission.input.requirementID : undefined);
   const issueQuestion = issueSubmission?.input.type === "answer" ? project?.questions.find((q) => issueSubmission.input.type === "answer" && q.id === issueSubmission.input.questionID) : undefined;
+  const issueWorkJob = data?.jobs.find(j => j.id === issueSubmission?.jobID);
+  const issueConflict = issueWorkJob?.answerGroupClarification;
   const issueHistory = data?.submissions.filter((s) => issueRequirementID ? s.input.type === "review" && s.input.requirementID === issueRequirementID : issueQuestion ? s.input.type === "answer" && s.input.questionID === issueQuestion.id : s.id === issueSubmission?.id) ?? [];
   const resolvedAttempts = useMemo(() => project && data ? resolvedReviewAttempts(project, data.submissions) : new Map(), [project, data?.submissions]);
 
@@ -527,7 +556,8 @@ function App() {
         await api(`projects/${project.id}/restore-review-attempts`, { revision: project.revision, requirementID: issueRequirementID, attempts });
         await load().catch((error: Error) => setError(error.message));
       }} />}
-      {issueRequirementID ? renderReview(issueRequirementID) : issueQuestion ? renderClarification(issueQuestion) : issueSubmission ? <><p>{attentionSummary(project, data.submissions, issueSubmission, data.jobs)}</p><p className="source-excerpt">{issueSubmission.input.type === "note" ? issueSubmission.input.text : "The original item is no longer available. Its response is retained below."}</p>{["needs-attention", "saved", "queued"].includes(issueSubmission.status) && !issueSubmission.conflict && <ActionButton className="secondary" disabled={busy || connectionChanged} onClick={() => processBlocking([issueSubmission.id])}>Retry follow-up</ActionButton>}</> : <p role="status">This saved response is no longer available.</p>}
+      {issueConflict ? <SharedAnswerClarification key={issueConflict.jobID} project={project} conflict={issueConflict} disabled={busy || connectionChanged}
+        working={data.submissions.some(s => issueWorkJob?.context?.submissionIDs?.includes(s.id) && s.status === "processing")} save={saveConflictDecision} resume={continueConflictReview} /> : issueRequirementID ? renderReview(issueRequirementID) : issueQuestion ? renderClarification(issueQuestion) : issueSubmission ? <><p>{attentionSummary(project, data.submissions, issueSubmission, data.jobs)}</p><p className="source-excerpt">{issueSubmission.input.type === "note" ? issueSubmission.input.text : "The original item is no longer available. Its response is retained below."}</p>{["needs-attention", "saved", "queued"].includes(issueSubmission.status) && !issueSubmission.conflict && <ActionButton className="secondary" disabled={busy || connectionChanged} onClick={() => processBlocking([issueSubmission.id])}>Retry follow-up</ActionButton>}</> : <p role="status">This saved response is no longer available.</p>}
       <LazyDetails summary={<>Saved attempts &amp; notes · {issueHistory.length}</>}>{() => <PagedList items={issueHistory.slice().reverse()} itemID={(s) => s.id} label="Saved attempts">{(s) => <article className="queue-item" key={s.id}>
         <small>{new Date(s.submittedAt).toLocaleString()} · {s.archivedAt ? "Archived · history only" : resolvedAttempts.has(s.id) ? "Resolved · history only" : s.status}</small>
         {s.input.type === "review" && <p><strong>Wording at this attempt:</strong> {s.input.requirementText}</p>}
@@ -580,6 +610,7 @@ function App() {
       </header>
       <div className="tab-content">
       <div className="workspace-content">
+      {!showSettings && !creating && project && data && <SharedConflictNotice conflicts={currentSharedConflicts(project, data.jobs, data.submissions)} open={openIssue} />}
       {pending && <ActivityFeedback label={actionLabel} />}
       {showSettings && <nav className="page-navigation" aria-label="Page navigation"><button className="quiet" onClick={backToWorkspace}>← Back to workspace</button></nav>}
       {error && <div className="error"><DiagnosticNotice detail={error} next="Check the current screen before trying again. More information is available in Technical details." alert /><button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}

@@ -10,9 +10,9 @@ export type ContextPack = { data: unknown; manifest: NonNullable<Job["context"]>
   answerGroupLookupReviewFormat?: 2;
   answerGroupLookupInspection?: {phase:"inspect"|"plan";recordID:string|null;recordIDs:string[]};
   answerGroupBlockerReview?: true;
-  answerGroupInputCapacity?:{format:1;characters:200000;normalCharacters:96000;model:{providerID:"openai";modelID:string}};
+  answerGroupInputCapacity?:{format:1;characters:200000;normalCharacters:96000;model:{providerID:"openai";modelID:string};repairFormat?:2};
   /** Reconstructed page inventory, not persisted authority or freshness metadata. */
-  answerGroupPagingAdvice?: { scheduledIDs: string[]; format: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11; number: number; total: number };
+  answerGroupPagingAdvice?: { scheduledIDs: string[]; format: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12; number: number; total: number };
   /** Reconstructed request advice only, never persisted or used as new freshness
    * authority. It exposes the existing v3 validator's historical-source exclusions. */
   definitionChangeCitationAuthority?: { format: 1; historicalEvidenceIDs: string[];

@@ -8,8 +8,9 @@ import { analysisSchema } from "../core/model.js";
 import { ContextBudgetError } from "../core/context.js";
 import { answerGroupMaterials, planAnswerGroup, adoptAnswerGroupPlay, answerGroupProgress, answerGroupContext,
   AnswerGroupResponseCapacityError,
-  adoptAnswerGroupRepairPolicy, assertAnswerGroupRepairProgress, AnswerGroupRepairProgressError,
+  adoptAnswerGroupRepairPolicy, adoptAnswerGroupInputCapacity, assertAnswerGroupRepairProgress, AnswerGroupRepairProgressError,
   boundAnswerGroupEvidence, acceptAnswerGroup, replayAnswerGroup, answerGroupDraftSchema, type AnswerGroupDraft } from "../core/answer-group.js";
+import { answerGroupClarificationPreview, answerGroupClarifications } from "../core/answer-group.js";
 import { ProjectStore } from "../storage/store.js";
 import { continuationState, decodePortable } from "../storage/portable.js";
 import { renderWorkspace } from "../storage/workspace.js";
@@ -19,11 +20,12 @@ import { completedAnswerGroupResponse } from "../runtime/client.js";
 import { ConnectedDiscovery } from "../providers/discovery.js";
 import type { DiscoveryAdapter, DiscoveryOptions } from "./discovery.js";
 import type { Project } from "../core/model.js";
+import { assertJointInputAdmission, JointInputCapacityError } from "../runtime/input-capacity.js";
 
 const empty = () => analysisSchema.parse({ summary: "Retain original decisions", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] });
 
-function progressiveFixture(store: ProjectStore) {
-  const f = fixture(store), work = structuredClone(f.w);
+function progressiveFixture(store: ProjectStore, answerCount = 2) {
+  const f = fixture(store, 1100, false, false, answerCount), work = structuredClone(f.w);
   let draft = f.draft;
   boundAnswerGroupEvidence(f.m, work, draft); work.attempts++; work.automation!.requests++;
   draft = acceptAnswerGroup(f.m, work, draft, {answerGroupRepair:f.secondRepair}, f.job).draft!;
@@ -44,7 +46,133 @@ function progressiveFixture(store: ProjectStore) {
   }
   return {...f,job:store.getJob(job.id),w:work,draft,third,witness};
 }
-function fixture(store: ProjectStore, noteBytes = 1100, joint = false, outputFailure = false) {
+function repairConflictFixture(store: ProjectStore, answerCount = 2) {
+  const f = progressiveFixture(store, answerCount), w = structuredClone(f.w); adoptAnswerGroupRepairPolicy(w);
+  const job = store.beginJob(f.p.id, f.p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+  const context = boundAnswerGroupEvidence(f.m, w, f.draft); w.attempts++; w.automation!.requests++;
+  acceptAnswerGroup(f.m, w, f.draft, { answerGroupBlocked: { reason: `Saved answers ${f.items.slice(0, 2).map(s => s.appliedSourceID).join(" and ")} conflict in this overlap. Choose the governing answer or an explicit exception.` } }, job);
+  store.checkpointAnswerGroup(job.id, w, context.manifest); store.failJob(job.id, "failed", "Saved human decisions need precedence");
+  for (const s of f.items) { s.jobID = job.id; s.status = "needs-attention"; store.saveSubmission(s); }
+  return { ...f, w, job: store.getJob(job.id) };
+}
+
+test("a carried-draft conflict accepts an explicit human decision without replay/refunds, permits only affected corrections and rechecks every original", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = repairConflictFixture(store), original = structuredClone(f.w), preview = answerGroupClarificationPreview(f.p, f.job)!;
+    assert.equal(preview.conflictIDs.length, 2);
+    const note = "For this overlap, follow the second saved answer. Preserve unrelated decisions and all original evidence.";
+    const saved = store.clarifySharedAnswers(f.p.id, f.p.revision, f.job.id, note), work = saved.answerGroupWork!, decision = work.repairClarifications![0]!;
+    assert.equal(decision.format, 2); assert.equal(decision.fromReceipt, original.receipts.length);
+    assert.deepEqual(work.receipts, original.receipts); assert.deepEqual(work.automation, original.automation); assert.equal(work.attempts, original.attempts);
+    assert.equal(store.get(f.p.id).revision, f.p.revision); assert.ok(!store.get(f.p.id).sources.some(s => s.id === decision.source.id));
+    assert.deepEqual(replayAnswerGroup(f.m, work).draft, f.draft); assert.equal(replayAnswerGroup(f.m, work).blocked, undefined);
+    const context = boundAnswerGroupEvidence(f.m, work, f.draft), finding = assertAnswerGroupRepairProgress(f.m, work, f.draft)!;
+    assert.ok(context.manifest.includedIDs.includes(decision.source.id)); assert.deepEqual(finding.witnessIDs, [decision.source.id]);
+    const noOp = structuredClone(work); noOp.attempts++; noOp.automation!.requests++;
+    assert.throws(() => acceptAnswerGroup(f.m, noOp, f.draft, { answerGroupRepair: f.draft }, f.job), /concrete affected-rule correction/);
+    const removal = structuredClone(work), retainedOriginal = structuredClone(f.draft); retainedOriginal.analysis.specificationUpdates!.changes.pop();
+    removal.attempts++; removal.automation!.requests++;
+    acceptAnswerGroup(f.m, removal, f.draft, { answerGroupRepair: retainedOriginal }, f.job);
+    assert.equal(answerGroupProgress(removal).phase, "check", "An explicit decision may withdraw a wrong affected draft edit, never retire the original rule");
+    const corrected = structuredClone(f.draft), target = corrected.analysis.specificationUpdates!.changes.at(-1)!;
+    assert.equal(target.type, "revise"); if (target.type !== "revise") throw new Error("Fixture requires an existing revise action");
+    target.statement += ". Apply the explicitly selected exception in the conflicting overlap.";
+    target.acceptance.push("Apply only the saved human precedence for the named overlap"); target.sourceIDs.push(decision.source.id);
+    let repairs = 0, checks = 0;
+    const done = await new DiscoveryService(store, { async analyze(_p, { context }) {
+      if (context.manifest.answerGroupStage!.phase === "repair") { repairs++; assert.ok(context.manifest.includedIDs.includes(decision.source.id)); return { answerGroupRepair: corrected }; }
+      assert.equal(context.manifest.answerGroupStage!.phase, "check"); checks++;
+      return { answerGroupCheck: { valid: true, reason: "The complete corrected draft and explicit human decision agree with this original unit" } };
+    } }).analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id) });
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(repairs, 1); assert.ok(checks > 1);
+    assert.deepEqual(done.answerGroupWork!.receipts.slice(0, original.receipts.length), original.receipts);
+    assert.equal(done.answerGroupWork!.receipts[original.receipts.length]!.attempt, original.attempts + 1);
+    assert.ok(store.get(f.p.id).sources.some(s => s.id === decision.source.id && s.text === note));
+    assert.ok(f.items.every(s => store.get(f.p.id).sources.some(source => source.id === s.appliedSourceID && source.text === f.p.sources.find(p => p.id === s.appliedSourceID)!.text)));
+  } finally { store.close(); }
+});
+
+test("repair-stage clarification cancellation retains human evidence and spend; a rejected follow-up supersedes only that same conflict", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = repairConflictFixture(store), first = store.clarifySharedAnswers(f.p.id, f.p.revision, f.job.id, "Choose the second answer in the overlap"), controller = new AbortController();
+    const cancelled = await new DiscoveryService(store, { async analyze() { controller.abort(new DOMException("Stopped", "AbortError")); return {}; } })
+      .analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id), signal: controller.signal });
+    assert.equal(cancelled.status, "cancelled"); assert.deepEqual(cancelled.answerGroupWork!.repairClarifications, first.answerGroupWork!.repairClarifications);
+    assert.equal(cancelled.answerGroupWork!.attempts, first.answerGroupWork!.attempts + 1);
+    assert.equal(cancelled.answerGroupWork!.automation!.requests, first.answerGroupWork!.automation!.requests + 1);
+    const work = structuredClone(cancelled.answerGroupWork!), job = store.beginJob(f.p.id, f.p.revision).job; store.claimJob(job.id, Date.now() + 60000);
+    const context = boundAnswerGroupEvidence(f.m, work, f.draft); work.attempts++; work.automation!.requests++;
+    acceptAnswerGroup(f.m, work, f.draft, { answerGroupBlocked: { reason: "The same conflict still needs a more explicit exception." } }, job);
+    store.checkpointAnswerGroup(job.id, work, context.manifest); store.failJob(job.id, "failed", "Clarification needs detail");
+    for (const s of f.items) { s.jobID = job.id; s.status = "needs-attention"; store.saveSubmission(s); }
+    assert.ok(answerGroupClarificationPreview(f.p, store.getJob(job.id))!.previousText);
+    const next = store.clarifySharedAnswers(f.p.id, f.p.revision, job.id, "The second answer overrides the first only when both situations apply."), notes = answerGroupClarifications(next.answerGroupWork!);
+    assert.equal(notes.length, 2); assert.equal(notes[1]!.source.supersedes, notes[0]!.source.id);
+    assert.deepEqual(next.answerGroupWork!.receipts, work.receipts); assert.deepEqual(replayAnswerGroup(f.m, next.answerGroupWork!).draft, f.draft);
+  } finally { store.close(); }
+});
+
+test("distinct carried-draft decisions retain separate scope; a follow-up supersedes only its own conflict and keeps the other decision authorized", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = repairConflictFixture(store, 4);
+    let saved = store.clarifySharedAnswers(f.p.id, f.p.revision, f.job.id, "First pair: use its second answer for the overlap");
+    const first = saved.answerGroupWork!.repairClarifications![0]!;
+    const block = (pair: typeof f.items) => {
+      const w = structuredClone(saved.answerGroupWork!), job = store.beginJob(f.p.id, f.p.revision).job;
+      store.claimJob(job.id, Date.now() + 60000); const context = boundAnswerGroupEvidence(f.m, w, f.draft); w.attempts++; w.automation!.requests++;
+      acceptAnswerGroup(f.m, w, f.draft, { answerGroupBlocked: { reason: `The conflicting answers ${pair.map(s => s.appliedSourceID).join(" and ")} need explicit precedence.` } }, job);
+      store.checkpointAnswerGroup(job.id, w, context.manifest); store.failJob(job.id, "failed", "Choose this conflict's precedence");
+      for (const s of f.items) { s.jobID = job.id; s.status = "needs-attention"; store.saveSubmission(s); }
+      return store.getJob(job.id);
+    };
+    let job = block(f.items.slice(2)); assert.equal(answerGroupClarificationPreview(f.p, job)!.previousText, undefined);
+    saved = store.clarifySharedAnswers(f.p.id, f.p.revision, job.id, "Other pair: use its first answer for that separate overlap");
+    const second = saved.answerGroupWork!.repairClarifications![1]!; assert.equal(second.source.supersedes, undefined);
+    let context = boundAnswerGroupEvidence(f.m, saved.answerGroupWork!, f.draft);
+    assert.ok([first.source.id, second.source.id].every(id => context.manifest.submissionAuthorizationSourceIDs!.includes(id)));
+    job = block(f.items.slice(0, 2)); assert.equal(answerGroupClarificationPreview(f.p, job)!.previousText, first.source.text);
+    saved = store.clarifySharedAnswers(f.p.id, f.p.revision, job.id, "First pair: the exception is limited to their overlapping situation");
+    const third = saved.answerGroupWork!.repairClarifications![2]!; assert.equal(third.source.supersedes, first.source.id);
+    context = boundAnswerGroupEvidence(f.m, saved.answerGroupWork!, f.draft);
+    assert.ok(context.manifest.submissionAuthorizationSourceIDs!.includes(second.source.id)); assert.ok(context.manifest.submissionAuthorizationSourceIDs!.includes(third.source.id));
+    assert.ok(!context.manifest.submissionAuthorizationSourceIDs!.includes(first.source.id));
+    assert.deepEqual(replayAnswerGroup(f.m, saved.answerGroupWork!).draft, f.draft);
+  } finally { store.close(); }
+});
+
+test("64 to 65 preserves paid repair conflicts; saved decisions survive reopen/clone, future rollback and exact draft/prefix/parent downgrade checks", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "late-decision-upgrade-")), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const f = repairConflictFixture(store), original = structuredClone(f.job); store.close();
+    let db = new Database(path); db.pragma("user_version=64"); db.exec("DELETE FROM migration_history WHERE version>=65"); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(f.job.id), original); if (!i) store.close(); }
+    const saved = store.clarifySharedAnswers(f.p.id, f.p.revision, f.job.id, "Use the second answer for the overlapping case"), work = saved.answerGroupWork!;
+    store.close(); store = new ProjectStore(path); assert.deepEqual(store.getJob(saved.id), saved);
+    const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id), store.submissions(f.p.id), rev => store.get(f.p.id, rev)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 39);
+    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 38 }) }, f.p.model), /format 39/);
+    const folder = join(directory, "clone");
+    for (const [name, text] of Object.entries(files)) { const target = join(folder, ".reqwizit", name); mkdirSync(resolve(target, ".."), { recursive: true }); writeFileSync(target, text); }
+    const clone = new ProjectStore(":memory:");
+    try { const p = clone.openWorkspace(folder, f.p.model), kept = clone.getJob(saved.id).answerGroupWork!;
+      assert.deepEqual(kept, work); assert.deepEqual(replayAnswerGroup(answerGroupMaterials(p, clone.submissions(p.id)), kept).draft, f.draft);
+    } finally { clone.close(); }
+    for (const mutate of [(w: typeof work) => { w.repairClarifications![0]!.draftKey = "0".repeat(64); },
+      (w: typeof work) => { w.repairClarifications![0]!.prefixKey = "0".repeat(64); }, (w: typeof work) => { w.repairClarifications![0]!.conflictIDs.pop(); }]) {
+      const changed = structuredClone(work); mutate(changed); assert.throws(() => replayAnswerGroup(f.m, changed));
+    }
+    store.close(); db = new Database(path); const future = structuredClone(saved); (future.answerGroupWork!.repairClarifications![0] as { format: number }).format = 3;
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), saved.id); db.pragma("user_version=64"); db.exec("DELETE FROM migration_history WHERE version>=65"); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 64);
+    assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM jobs WHERE id=?").get(saved.id) as { payload: string }).payload), future);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(saved), saved.id); db.close(); store = new ProjectStore(path); assert.deepEqual(store.getJob(saved.id), saved);
+  } finally { try { store.close(); } catch { /* Rejected startup closes itself. */ } rmSync(directory, { recursive: true, force: true }); }
+});
+function fixture(store: ProjectStore, noteBytes = 1100, joint = false, outputFailure = false, answerCount = 2) {
   let p = store.create("Bounded second repair", "Keep actual player choices", { providerID: "openai", modelID: "fixture" });
   p = store.organize(p.id, p.revision, [{ type: "upsert", epicID: "departure", title: "Departure", purpose: "Departure behavior", dependencies: [] }]);
   const seed = store.beginJob(p.id, p.revision).job; store.claimJob(seed.id, Date.now() + 60000);
@@ -54,7 +182,7 @@ function fixture(store: ProjectStore, noteBytes = 1100, joint = false, outputFai
   for (const r of p.requirements) p = store.review(p.id, p.revision, r.id, "accepted", "Preserve original intent");
   for (let i = 0; i < 34; i++) p = store.note(p.id, p.revision, randomBytes(noteBytes).toString("hex"), "project");
   const questions = store.beginJob(p.id, p.revision).job; store.claimJob(questions.id, Date.now() + 60000);
-  store.finishJob(questions.id, { ...empty(), questions: ["May a sole survivor depart?", "Must both living players arrive?"].map(text => ({ epicID: "project", text,
+  store.finishJob(questions.id, { ...empty(), questions: Array.from({ length: answerCount }, (_, i) => ["May a sole survivor depart?", "Must both living players arrive?"][i] ?? `Settle other saved choice ${i}?`).map(text => ({ epicID: "project", text,
     evidenceIDs: p.requirements.map(r => r.id),
     whyItMatters: "Settle the survivor exception", options: [{ label: "Yes", consequence: "Keep" }, { label: "No", consequence: "Review" }] })) });
   p = store.get(p.id);
@@ -443,10 +571,16 @@ test("48 to 49 retains charged output failures and recovery through repeated reo
   } finally { store.close(); rmSync(directory, {recursive:true,force:true}); }
 });
 
-for (const failure of ["cancelled", "malformed"] as const) test(`bounded repair ${failure} retains the paid prefix, full draft, layout and charged attempts`, async () => {
+for (const guarded of [false, true]) for (const failure of ["cancelled", "malformed"] as const) test(`${guarded ? "guarded" : "bounded"} repair ${failure} retains the paid prefix, full draft, layout and charged attempts`, async () => {
   const store = new ProjectStore(":memory:");
   try {
-    const f = fixture(store), controller = new AbortController(); let calls = 0;
+    const f = guarded ? fixture(store, 1250, true) : fixture(store), controller = new AbortController(); let calls = 0;
+    if (guarded) {
+      const work = structuredClone(f.w); adoptAnswerGroupInputCapacity(f.m, work);
+      const context = boundAnswerGroupEvidence(f.m, work, f.draft), child = store.beginJob(f.p.id, f.p.revision).job;
+      store.claimJob(child.id, Date.now() + 60000); store.checkpointAnswerGroup(child.id, work, context.manifest);
+      store.failJob(child.id, "interrupted", "Retained guarded comparison");
+    }
     const service = new DiscoveryService(store, { async analyze() {
       calls++; if (failure === "cancelled") controller.abort(new DOMException("Stopped", "AbortError"));
       return failure === "cancelled" ? { answerGroupRepair: f.secondRepair } : {};
@@ -454,6 +588,7 @@ for (const failure of ["cancelled", "malformed"] as const) test(`bounded repair 
     const stopped = await service.analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id), signal: controller.signal });
     assert.equal(stopped.status, failure === "cancelled" ? "cancelled" : "failed"); assert.equal(calls, failure === "cancelled" ? 1 : 3);
     assert.ok(stopped.answerGroupWork!.repairContexts); assert.deepEqual(stopped.answerGroupWork!.receipts, f.w.receipts);
+    assert.equal(stopped.answerGroupWork!.repairContexts!.at(-1)!.format, guarded ? 2 : 1);
     assert.equal(stopped.answerGroupWork!.attempts, f.w.attempts + calls);
     assert.deepEqual(replayAnswerGroup(f.m, stopped.answerGroupWork!).draft, f.draft); assert.deepEqual(store.get(f.p.id), f.p);
   } finally { store.close(); }
@@ -475,6 +610,108 @@ test("a genuinely oversized named joint repair fails before inference rather tha
     assert.equal(store.getJob(stopped.id).status, "failed", "The pre-dispatch overflow must remain a readable exclusive work/manifest checkpoint");
     assert.deepEqual(store.getJob(f.job.id), f.job); assert.deepEqual(store.get(f.p.id), f.p);
   } finally { store.close(); }
+});
+
+function expandPacket(input: unknown): Record<string, unknown> {
+  const data = input as { identifierTable?: { values: string[] }; sharedText?: { values: Record<string, string> } };
+  const decode = (value: unknown, field = ""): unknown => {
+    if (typeof value === "number" && data.identifierTable && field !== "sharedTextID"
+      && (field === "id" || field.endsWith("ID") || field.endsWith("IDs") || field === "dependencies")) return data.identifierTable.values[value];
+    if (Array.isArray(value)) return value.map(item => decode(item, field));
+    if (!value || typeof value !== "object") return value;
+    const object = value as Record<string, unknown>;
+    if (Object.keys(object).length === 1 && typeof object.sharedTextID === "string") return data.sharedText!.values[object.sharedTextID];
+    if (Object.keys(object).length === 1 && Array.isArray(object.textParts)) return object.textParts.map(item => decode(item)).join("");
+    if (Object.keys(object).length === 1 && object.recordTable) {
+      const table = object.recordTable as { columns: string[]; rows: unknown[][]; absent?: number[][] };
+      const absent = new Set(table.absent?.map(([r, c]) => `${r}:${c}`));
+      return table.rows.map((row, r) => Object.fromEntries(table.columns.flatMap((key, c) => absent.has(`${r}:${c}`) ? [] : [[key, decode(row[c], key)]])));
+    }
+    return Object.fromEntries(Object.entries(object).map(([key, v]) => [key, decode(v, key)]));
+  };
+  return decode(input) as Record<string, unknown>;
+}
+
+test("guarded complete repair preserves exact evidence/full draft and paid usage, admits only sufficient metadata, then restarts every check without rereads", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = fixture(store, 1250, true), work = structuredClone(f.w), original = structuredClone(work);
+    assert.ok(adoptAnswerGroupInputCapacity(f.m, work));
+    const context = boundAnswerGroupEvidence(f.m, work, f.draft);
+    assert.equal(work.repairContexts!.at(-1)!.format, 2);
+    assert.ok(context.manifest.characters > 96000); assert.ok(context.manifest.characters < 200000);
+    assert.equal(context.manifest.budget, 200000); assert.equal(context.answerGroupInputCapacity!.repairFormat, 2);
+    const expanded = expandPacket(context.data);
+    assert.deepEqual(expanded.draft, JSON.parse(JSON.stringify(f.draft)));
+    const catalog = [...f.m.records, ...f.p.sources.filter(s => !f.m.records.some(r => r.record.id === s.id)).map(record => ({ field: "sources", record }))];
+    for (const id of context.manifest.includedIDs) {
+      const r = catalog.find(r => r.record.id === id)!;
+      assert.deepEqual((expanded[r.field] as { id: string }[]).find(v => v.id === id), JSON.parse(JSON.stringify(r.record)));
+    }
+    assert.ok([...f.m.pins].every(id => context.manifest.includedIDs.includes(id)));
+    assert.deepEqual(work.receipts, original.receipts); assert.equal(work.attempts, original.attempts);
+    assert.deepEqual(work.automation, original.automation);
+    assert.deepEqual(replayAnswerGroup(f.m, work).draft, f.draft);
+    const prompt = discoveryPrompt(f.p, context);
+    assert.throws(() => assertJointInputAdmission(f.p, context, prompt, []), JointInputCapacityError);
+    assert.ok(assertJointInputAdmission(f.p, context, prompt, [{ id: "fixture", modelID: "fixture", providerID: "openai", enabled: true,
+      limit: { context: 628000, input: 500000, output: 128000 } }]));
+    const huge = structuredClone(f.draft); huge.analysis.summary = randomBytes(110000).toString("hex");
+    assert.throws(() => answerGroupContext(f.m, work, huge), error => {
+      assert.ok(error instanceof ContextBudgetError); assert.equal(error.manifest.budget, 200000); return true;
+    });
+    const child = store.beginJob(f.p.id, f.p.revision).job; store.claimJob(child.id, Date.now() + 60000);
+    store.checkpointAnswerGroup(child.id, work, context.manifest); store.failJob(child.id, "interrupted", "Prepared guarded repair");
+    let repairs = 0, checks = 0;
+    const done = await new DiscoveryService(store, { async analyze(_p, { context: packet }) {
+      if (packet.manifest.answerGroupStage!.phase === "repair") { repairs++; assert.equal(packet.answerGroupInputCapacity!.repairFormat, 2); return { answerGroupRepair: f.secondRepair }; }
+      assert.equal(packet.manifest.answerGroupStage!.phase, "check", "Never reread paid originals"); checks++;
+      return { answerGroupCheck: { valid: true, reason: "This original unit agrees with the complete corrected draft" } };
+    } }).analyze(f.p.id, f.p.revision, { answerGroup: true, submissionIDs: f.items.map(s => s.id) });
+    assert.equal(done.status, "completed", done.diagnostic); assert.equal(repairs, 1); assert.ok(checks > 1);
+    assert.deepEqual(done.answerGroupWork!.receipts.slice(0, original.receipts.length), original.receipts);
+    assert.equal(done.answerGroupWork!.receipts[original.receipts.length]!.attempt, original.attempts + 1);
+    assert.deepEqual(store.getJob(f.job.id), f.job);
+  } finally { store.close(); }
+});
+
+test("61 to 62 preserves old receipts and guarded repair across repeated reopen/portable adoption; future formats roll back and downgrade/tampering reject", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "guarded-repair-upgrade-")), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const f = fixture(store, 1250, true), work = structuredClone(f.w);
+    adoptAnswerGroupInputCapacity(f.m, work); const context = boundAnswerGroupEvidence(f.m, work, f.draft);
+    const child = store.beginJob(f.p.id, f.p.revision).job; store.claimJob(child.id, Date.now() + 60000);
+    store.checkpointAnswerGroup(child.id, work, context.manifest); store.failJob(child.id, "interrupted", "Prepared guarded repair");
+    const saved = store.getJob(child.id), original = store.getJob(f.job.id); store.close();
+    let db = new Database(path); db.pragma("user_version=61"); db.exec("DELETE FROM migration_history WHERE version>=62");
+    const future = structuredClone(saved); (future.answerGroupWork!.repairContexts![0] as { format: number }).format = 3;
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), child.id); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 61);
+    assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM jobs WHERE id=?").get(child.id) as { payload: string }).payload), future);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(saved), child.id); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(child.id), saved); assert.deepEqual(store.getJob(f.job.id), original); if (!i) store.close(); }
+    const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id), store.submissions(f.p.id), rev => store.get(f.p.id, rev)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 36);
+    const adopted = decodePortable(files, f.p.model).continuation.jobs.find(j => j.id === child.id)!;
+    assert.deepEqual(replayAnswerGroup(f.m, adopted.answerGroupWork!).draft, f.draft);
+    assert.deepEqual(adopted.answerGroupWork!.receipts, saved.answerGroupWork!.receipts);
+    const folder = join(directory, "clone");
+    for (const [name, text] of Object.entries(files)) { const target = join(folder, ".reqwizit", name); mkdirSync(resolve(target, ".."), { recursive: true }); writeFileSync(target, text); }
+    const clone = new ProjectStore(":memory:");
+    try {
+      const restored = clone.openWorkspace(folder, f.p.model), retained = clone.getJob(child.id);
+      const material = answerGroupMaterials(restored, work.submissionIDs.map(id => clone.submissions(restored.id).find(s => s.id === id)!));
+      assert.deepEqual(retained.answerGroupWork, saved.answerGroupWork);
+      assert.deepEqual(replayAnswerGroup(material, retained.answerGroupWork!).draft, f.draft);
+      assert.equal(answerGroupContext(material, retained.answerGroupWork!, f.draft).manifest.budget, 200000);
+    } finally { clone.close(); }
+    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 35 }) }, f.p.model), /format 36/);
+    for (const tamper of [(w: typeof work) => { delete w.inputCapacity; }, (w: typeof work) => { w.repairContexts![0]!.recordIDs.pop(); },
+      (w: typeof work) => { w.repairContexts![0]!.draftKey = "0".repeat(64); }, (w: typeof work) => { w.repairContexts![0]!.format = 1; }]) {
+      const changed = structuredClone(work); tamper(changed); assert.throws(() => replayAnswerGroup(f.m, changed));
+    }
+  } finally { try { store.close(); } catch { /* Rejected startup closes itself. */ } rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("an unknown named rule cannot become a guessed narrow repair target", () => {
@@ -514,7 +751,7 @@ test("47 to 48 preserves old repair work, bounded layouts and paid hashes across
     const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id), store.submissions(f.p.id), rev => store.get(f.p.id, rev)));
     assert.equal(JSON.parse(files["state.json"]!).formatVersion, 22); assert.doesNotThrow(() => decodePortable(files, f.p.model));
     assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 21 }) }, f.p.model), /format 22/);
-    store.close(); db = new Database(path); const future = structuredClone(saved); (future.answerGroupWork!.repairContexts![0] as { format: number }).format = 2;
+    store.close(); db = new Database(path); const future = structuredClone(saved); (future.answerGroupWork!.repairContexts![0] as { format: number }).format = 3;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), child.id); db.exec("DELETE FROM migration_history WHERE version >= 48; PRAGMA user_version=47"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 47);
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(saved), child.id); db.close(); store = new ProjectStore(path);

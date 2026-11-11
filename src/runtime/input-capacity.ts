@@ -15,13 +15,16 @@ export function needsJointInputAdmission(context:ContextPack){
     ||JSON.stringify(context.data).length>96000||!!context.answerGroupInputCapacity);
 }
 export function assertJointInputAdmission(project:Project,context:ContextPack,prompt:string,models:unknown){
-  if(!needsJointInputAdmission(context))return undefined;
-  const policy=context.answerGroupInputCapacity;
-  if(!policy||policy.format!==1||policy.characters!==200000||policy.normalCharacters!==96000
-    ||project.model.connectionID||project.model.providerID!=="openai"||policy.model.providerID!==project.model.providerID
-    ||policy.model.modelID!==project.model.modelID||context.answerGroupPagingAdvice?.format!==11
-    ||context.answerGroupLookupInspection||context.answerGroupLookupReview
-    ||!["read","check"].includes(context.manifest.answerGroupStage!.phase))throw new JointInputCapacityError("this request has no matching guarded joint-comparison profile.");
+   if(!needsJointInputAdmission(context))return undefined;
+   const policy=context.answerGroupInputCapacity;
+   const phase=context.manifest.answerGroupStage?.phase;
+   const paged=policy?.repairFormat===undefined&&[11,12].includes(context.answerGroupPagingAdvice?.format ?? 0)&&(phase==="read"||phase==="check");
+   const repair=policy?.repairFormat===2&&phase==="repair"&&!context.answerGroupPagingAdvice;
+   if(!policy||policy.format!==1||policy.characters!==200000||policy.normalCharacters!==96000
+     ||project.model.connectionID||project.model.providerID!=="openai"||policy.model.providerID!==project.model.providerID
+     ||policy.model.modelID!==project.model.modelID||!paged&&!repair
+     ||context.answerGroupLookupInspection||context.answerGroupLookupReview
+     ||context.answerGroupBlockerReview)throw new JointInputCapacityError("this request has no matching guarded joint-comparison profile.");
   const characters=JSON.stringify(context.data).length;
   if(characters!==context.manifest.characters||characters>200000||context.manifest.budget!==200000)throw new JointInputCapacityError("the complete evidence exceeds or does not match its fixed 200,000-character ceiling.");
   if(!prompt.includes(JSON.stringify(context.data)))throw new JointInputCapacityError("the generated prompt does not contain the complete exact evidence packet.");

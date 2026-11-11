@@ -11,7 +11,9 @@ import { hash, renderWorkspace, publishWorkspace, readPortableWorkspace } from "
 import { portableExecution, continuationState, decodePortable } from "./portable.js";
 import { ImplementationService } from "../service/implementation.js";
 import { DiscoveryService, type DiscoveryOptions } from "../service/discovery.js";
-import { reviewFingerprint, type Analysis, type Project } from "../core/model.js";
+import { reviewFingerprint, type Analysis, type Project, type Job } from "../core/model.js";
+import { refinementContextKey, legacyRefinementContextKey, refinementCheckCurrent } from "../core/refinement-identity.js";
+import { readRefinementEvidence } from "./refinement-evidence.js";
 import { command } from "../service/git-delivery.js";
 import { emptyExecution, type ExecutionConfig } from "../core/execution.js";
 import { assessmentCaptureFingerprint, assessmentFootprint } from "./assessment.js";
@@ -296,6 +298,78 @@ test("portable continuation retains exact original revision evidence but exclude
     const execution = emptyExecution(); execution.planning = { format: 1, id: "plan", revision: current.revision, bindingID: "machine-binding", createdAt: "now", status: "generating", configFingerprint: "config", model: selection, sessions: ["secret-session"] };
     assert.equal(portableExecution(execution).planning?.status, "interrupted");
     assert.equal(portableExecution(execution).planning?.sessions, undefined);
+  } finally { f.cleanup(); }
+});
+
+test("portable selection uses existing scoped/legacy refinement freshness, retaining current, unknown, linked and unfinished evidence", () => {
+  const f = fixture();
+  try {
+    const before = f.project, current = f.store.note(before.id, before.revision, "Changed applicable human constraint"), target = current.requirements[0]!;
+    const make = (id: string, key: string, status: Job["status"] = "completed"): Job => ({ id, projectID: current.id, expectedRevision: before.revision,
+      status, model: selection, leaseUntil: null, result: status === "completed" ? { summary: "Dated unchanged check", goals: [], actors: [], assumptions: [], questions: [], requirements: [], retireQuestions: [] } : undefined,
+      context: { revision: before.revision, focusEpicID: target.epicID, characters: 100, budget: 1000, includedIDs: [target.id], omittedIDs: [], refinementOnly: true,
+        refinementTarget: { requirementID: target.id, fingerprint: reviewFingerprint(target), contextKey: key } } });
+    const jobs = [make("stale-v2", refinementContextKey(before, before.requirements[0]!)), make("stale-legacy", legacyRefinementContextKey(before, before.requirements[0]!)),
+      make("current-v2", refinementContextKey(current, target)), make("current-legacy", legacyRefinementContextKey(current, target)),
+      make("unknown", "future-unrecognized-key"), make("unfinished", refinementContextKey(before, before.requirements[0]!), "interrupted")];
+    const originals = structuredClone(jobs), reader = new Database(f.database, { readonly: true });
+    try {
+      const evidence = readRefinementEvidence(reader, current.id, before.revision);
+      assert.deepEqual(Object.keys(evidence).sort(), ["epics", "questions", "requirements", "sources"]);
+      assert.equal(legacyRefinementContextKey(evidence, evidence.requirements[0]!), legacyRefinementContextKey(before, before.requirements[0]!));
+      assert.equal(refinementContextKey(evidence, evidence.requirements[0]!), refinementContextKey(before, before.requirements[0]!));
+      const work = continuationState(current, jobs, [], revision => f.store.get(current.id, revision), undefined, revision => readRefinementEvidence(reader, current.id, revision));
+      assert.deepEqual(work.jobs.map(j => j.id), ["current-v2", "current-legacy", "unknown", "unfinished"]);
+      const decoded = decodePortable(renderWorkspace(current, emptyExecution(), work), selection);
+      const retained = decoded.continuation.jobs.find(j => j.id === "current-v2")!;
+      assert.equal(refinementCheckCurrent(current, target, retained, () => { throw new Error("Current v2 receipt needs no historical inference/replay"); }), true);
+      const waiting = f.store.enqueue(current.id, { id: "94c2c552-ed6a-41ab-8254-b581a63f4178", auto: false, research: false, input: { type: "note", epicID: "project", text: "Keep this linked pending task" } });
+      waiting.status = "needs-attention"; waiting.jobID = "stale-v2";
+      assert.ok(continuationState(current, jobs, [waiting], revision => f.store.get(current.id, revision)).jobs.some(j => j.id === "stale-v2"));
+      assert.throws(() => continuationState(current, [jobs[1]!], [], () => { throw new Error("Project or revision not found."); }), /not found/, "Missing legacy proof is retained, not silently treated as stale and omitted");
+      assert.deepEqual(jobs, originals, "Selection never edits the SQLite/archive originals");
+    } finally { reader.close(); }
+  } finally { f.cleanup(); }
+});
+
+test("required stale retrieval ancestors survive selection without recursive export builds, including cycles", () => {
+  const f = fixture();
+  try {
+    const before = f.project, current = f.store.note(before.id, before.revision, "New applicable constraint"), target = before.requirements[0]!;
+    const base: Job = { id: "parent", projectID: current.id, expectedRevision: before.revision, status: "completed", model: selection, leaseUntil: null,
+      context: { revision: before.revision, focusEpicID: target.epicID, characters: 1, budget: 1000, includedIDs: [], omittedIDs: [], refinementOnly: true,
+        refinementTarget: { requirementID: target.id, fingerprint: reviewFingerprint(target), contextKey: refinementContextKey(before, target) } } };
+    const jobs: Job[] = [{ ...base, id: "ancestor-a", retrievalWork: { format: 1, research: false, stages: [], attempts: 0, originJobID: "ancestor-b" } },
+      { ...base, id: "ancestor-b", retrievalWork: { format: 1, research: false, stages: [], attempts: 0, originJobID: "ancestor-a" } },
+      { ...base, id: "child", expectedRevision: current.revision, status: "interrupted", retrievalWork: { format: 1, research: false, stages: [], attempts: 0, originJobID: "ancestor-b" } }];
+    let fullReads = 0;
+    const work = continuationState(current, jobs, [], revision => { fullReads++; return f.store.get(current.id, revision); });
+    assert.deepEqual(work.jobs.map(j => j.id), ["ancestor-a", "ancestor-b", "child"]);
+    assert.equal(fullReads, 1, "One final historical delta, not an export per ancestor");
+    assert.equal(work.jobs[0]!.context!.refinementTarget!.contextKey, base.context!.refinementTarget!.contextKey);
+    assert.equal(work.jobs[0]!.retrievalWork!.originJobID, "ancestor-b");
+  } finally { f.cleanup(); }
+});
+
+test("a legacy completed check remains portable when only the broader old identity changed, not its scoped human evidence", () => {
+  const f = fixture();
+  try {
+    const before = f.project, target = before.requirements[0]!, current = structuredClone(before); current.revision++;
+    current.sources.push({ id: "unrelated-explicit-change", kind: "note", epicID: "project", requirementID: before.requirements[1]!.id,
+      changeRequest: true, text: "Change only the other requirement; no instruction about this target" });
+    const legacy = legacyRefinementContextKey(before, target);
+    assert.notEqual(legacyRefinementContextKey(current, target), legacy);
+    assert.equal(refinementContextKey(current, target), refinementContextKey(before, target));
+    const job: Job = { id: "legacy-current-after-narrowing", projectID: current.id, expectedRevision: before.revision, status: "completed", model: selection, leaseUntil: null,
+      context: { revision: before.revision, focusEpicID: target.epicID, characters: 1, budget: 1000, includedIDs: [], omittedIDs: [], refinementOnly: true,
+        refinementTarget: { requirementID: target.id, fingerprint: reviewFingerprint(target), contextKey: legacy } } };
+    const reader = new Database(f.database, { readonly: true });
+    try {
+      const continuation = continuationState(current, [job], [], revision => f.store.get(current.id, revision), undefined, revision => readRefinementEvidence(reader, current.id, revision));
+      assert.equal(continuation.jobs.length, 1); assert.equal(continuation.jobs[0]!.context!.refinementTarget!.contextKey, legacy);
+      const imported = decodePortable(renderWorkspace(current, emptyExecution(), continuation), selection);
+      assert.ok(refinementCheckCurrent(current, target, imported.continuation.jobs[0]!, () => before));
+    } finally { reader.close(); }
   } finally { f.cleanup(); }
 });
 

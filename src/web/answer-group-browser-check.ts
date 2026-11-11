@@ -10,6 +10,7 @@ import type { Analysis } from "../core/model.js";
 import { ContextBudgetError } from "../core/context.js";
 import type { Connections } from "../providers/connections.js";
 import { answerGroupMaterials, planAnswerGroup, planAnswerGroupEvidencePages, answerGroupContext, answerGroupProgress, acceptAnswerGroup, answerGroupDraftSchema, type AnswerGroupDraft } from "../core/answer-group.js";
+import { adoptAnswerGroupPlay, answerGroupClarifications } from "../core/answer-group.js";
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(".reqwizit-state/browsers");
 const { chromium, expect } = await import("@playwright/test");
@@ -118,6 +119,63 @@ function verificationFixture() {
   return { project, original: store.getJob(job.id), originalID };
 }
 const verification = verificationFixture();
+function conflictFixture(name = "Conflicting material outcomes", accepted = false, late = false) {
+  let project = store.create(name, "Preserve confirmed rewards and explicit mission rules", { providerID: "openai", modelID: "fixture" });
+  const questions = ["Cancel uncertain rewards when the mission ends?", "Keep collections pending on final disconnect?"].map(text => ({ epicID: "project", text, whyItMatters: "Settle mission-end outcomes", evidenceIDs: [project.sources[0]!.id], options: [{ label: "Yes", consequence: "Keep" }, { label: "No", consequence: "Change" }] }));
+  const seed = store.beginJob(project.id, project.revision).job; store.claimJob(seed.id, Date.now() + 60000);
+  store.finishJob(seed.id, { ...empty(), requirements: [{ epicID: "project", statement: "Keep the before-joining material rule", rationale: "Original human intent", acceptance: ["The arriving player does not share that material"], sourceIDs: [project.sources[0]!.id] }],
+    questions: accepted ? [] : questions });
+  project = store.get(project.id);
+  if (accepted) {
+    project = store.review(project.id, project.revision, project.requirements[0]!.id, "accepted", "Retain original rule until an explicit decision changes it");
+    const questionJob = store.beginJob(project.id, project.revision).job; store.claimJob(questionJob.id, Date.now() + 60000);
+    store.finishJob(questionJob.id, { ...empty(), questions }); project = store.get(project.id);
+  }
+  for (const q of project.questions) store.enqueue(project.id, { id: randomUUID(), auto: false, research: false, input: { type: "answer", questionID: q.id, questionText: q.text, sourceID: null, answer: { kind: "answer", text: "Yes" } } });
+  store.applyQueued(project.id, store.submissions(project.id).map(s => s.id)); project = store.get(project.id);
+  const items = store.submissions(project.id), m = answerGroupMaterials(project, items);
+  const initialState = store.workflow(project.id); initialState.enabled = true; initialState.paused = false; initialState.playPolicy = { format: 1, stopped: false };
+  initialState.grant = { id: randomUUID(), used: 1, remainingMs: 300000, continuous: { format: 1 }, submissionIDs: items.map(s => s.id) };
+  store.saveWorkflow(project.id, initialState); const owner = store.claimWorkflow(project.id).owner!;
+  const job = store.beginJob(project.id, project.revision, undefined, false, owner).job; store.claimJob(job.id, Date.now() + 60000);
+  const w = adoptAnswerGroupPlay(m, planAnswerGroup(m, true), job);
+  let draft: AnswerGroupDraft | undefined;
+  if (late) {
+    while (answerGroupProgress(w).phase === "read") {
+      w.attempts++; w.automation!.requests++;
+      draft = acceptAnswerGroup(m, w, draft, draft ? { answerGroupKeep: true } : { answerGroupDraft: { analysis: empty(),
+        answers: items.map(s => ({ submissionID: s.id, outcome: "no-change", explanation: "Retained provisional draft before conflict review" })) } }, job).draft;
+    }
+    w.attempts++; w.automation!.requests++;
+    acceptAnswerGroup(m, w, draft, { answerGroupCheck: { valid: false, reason: `Rule ${project.requirements[0]!.id} needs correction against both original answers` } }, job);
+  }
+  const context = answerGroupContext(m, w, draft); w.attempts++;
+  w.automation!.requests++; w.automation!.failures = 1;
+  acceptAnswerGroup(m, w, draft, { answerGroupBlocked: { reason: `Saved answers ${items.map(s => s.appliedSourceID).join(" and ")} conflict about mission-end collections. Neither answer establishes priority.` } }, job);
+  store.checkpointAnswerGroup(job.id, w, context.manifest); store.failJob(job.id, "failed", "Shared answers need review");
+  store.releaseWorkflow(project.id, owner);
+  for (const item of items) { item.status = "needs-attention"; item.jobID = job.id; store.saveSubmission(item); }
+  const state = store.workflow(project.id); state.enabled = true; state.paused = true; state.phase = "needs-decision";
+  state.current = { kind: "input", key: "0".repeat(64), jobIDs: [job.id], completed: true }; store.saveWorkflow(project.id, state);
+  return { project, original: store.getJob(job.id) };
+}
+const conflict = conflictFixture();
+const continuationConflict = conflictFixture("Saved decision continuation", true);
+const lateConflict = conflictFixture("Repair-stage decision", true, true);
+// Reproduce the real dead end: one note saved, then another blocked read that
+// describes the same conflict without repeating its original UUIDs.
+{
+  const project = continuationConflict.project, original = continuationConflict.original;
+  const clarified = store.clarifySharedAnswers(project.id, project.revision, original.id, "Cancel uncertain rewards when the mission ends.");
+  const items = store.submissions(project.id), material = answerGroupMaterials(project, items), work = structuredClone(clarified.answerGroupWork!);
+  const next = store.beginJob(project.id, project.revision).job; store.claimJob(next.id, Date.now() + 60000);
+  const context = answerGroupContext(material, work); work.attempts++; work.automation!.requests++; work.automation!.failures++;
+  acceptAnswerGroup(material, work, undefined, { answerGroupBlocked: { reason: "Your clarification repeats cancellation but does not explicitly replace the other answer. Is disconnection an exception?" } }, next);
+  store.checkpointAnswerGroup(next.id, work, context.manifest); store.failJob(next.id, "failed", "Clarification needs an explicit decision");
+  for (const item of items) { item.jobID = next.id; item.status = "needs-attention"; store.saveSubmission(item); }
+  const state = store.workflow(project.id); state.current = { kind: "input", key: "0".repeat(64), jobIDs: [next.id], completed: true }; store.saveWorkflow(project.id, state);
+  continuationConflict.original = store.getJob(next.id);
+}
 function rulePermissionFixture() {
   let project = store.create("Affected feature repair", "Retain settled original answers", { providerID: "openai", modelID: "fixture" });
   project = store.organize(project.id, project.revision, [{ type: "upsert", epicID: "departure", title: "Departure feature", purpose: "Departure rules", dependencies: [] }]);
@@ -161,11 +219,27 @@ const connections: Connections = { async accounts() { return []; }, async models
   async beginLogin() { throw new Error("No sign-in"); }, loginStatus() { throw new Error("No sign-in"); }, cancelLogin() {},
   async test() { throw new Error("No live probes"); }, cancelTest() {}, async disconnect() {}, async close() {} };
 const calls: string[] = []; let holdCheck = true, holdRepair = true, rejected = false, holdPage = true, holdLoop = true;
+let releaseConflict: (() => void) | undefined;
 const app = await startApp({ store, connections, port: 0, adapter: { async analyze(project, { context, signal, research }) {
   assert.equal(research, false);
   const stage = context.manifest.answerGroupStage;
   if (stage) {
     calls.push(`${stage.phase}:${stage.step}`);
+    const currentConflict = [conflict, continuationConflict, lateConflict].find(f => f.project.id === project.id);
+    if (currentConflict) {
+      const saved = answerGroupClarifications(store.getJob(currentConflict.original.id).answerGroupWork!).at(-1)!;
+      assert.ok(context.manifest.includedIDs.includes(saved.source.id));
+      if (stage.phase !== "check") await new Promise<void>((resolve, reject) => {
+        releaseConflict = resolve;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      const analysis = empty();
+      if (currentConflict !== conflict) analysis.specificationUpdates = { format: 1, changes: [{ type: "revise", requirementID: project.requirements[0]!.id,
+        statement: "Apply the explicitly chosen mission-end outcome", rationale: "Human conflict decision", acceptance: ["Use the chosen answer for overlapping cases"], sourceIDs: [saved.source.id], reason: "Records the user's explicitly selected precedence" }] };
+      const draft = { analysis, answers: context.manifest.submissionIDs!.map(submissionID => ({ submissionID, outcome: currentConflict !== conflict ? "integrated" as const : "no-change" as const, explanation: "Retained originals with explicit human clarification" })) };
+      return stage.phase === "check" ? { answerGroupCheck: { valid: true, reason: "Explicit human clarification and both originals agree" } }
+        : stage.phase === "repair" ? { answerGroupRepair: draft } : { answerGroupDraft: draft };
+    }
     if (project.id === rulePermission.project.id) {
       rulePermissionCalls.push(stage.phase); assert.ok(context.manifest.includedIDs.includes(rulePermission.target.id));
       if (stage.phase === "repair") return { answerGroupRepair: rulePermission.repaired };
@@ -391,7 +465,129 @@ try {
   await expect(flow).toContainText("Stopped. Saved answers and progress are kept.");
   assert.deepEqual(rulePermissionCalls, ["repair", "check"]);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  console.log("Shared answer browser passed: Play handles cross-feature repair without technical consent, collapsed advanced controls, no-call reload, preserved history, complete recheck and Stop/reload; legacy packing/source/page recovery and mobile. Fixture only; no live inference.");
+  await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await (await workspaceMenu(page)).getByRole("button", { name: "Conflicting material outcomes", exact: true }).click();
+  await page.locator(".topbar .queue-trigger").click();
+  const resolveConflict = queue.getByRole("button", { name: "Resolve conflicting answers", exact: true });
+  await expect(resolveConflict).toBeVisible();
+  const beforeClarification = calls.length;
+  await queue.getByRole("button", { name: "Close processing queue", exact: true }).click();
+  await page.getByRole("tab", { name: /^Specification/ }).click();
+  const reviewPanel = page.getByRole("region", { name: "Requirement review", exact: true });
+  await reviewPanel.getByRole("button", { name: /^Needs your decision/ }).click();
+  const group = reviewPanel.locator(".feature-group").first();
+  if (await group.getAttribute("open") === null) await group.locator(":scope > summary").click();
+  const heading = reviewPanel.locator(".review-card-heading").filter({ hasText: "Keep the before-joining material rule" });
+  if (await heading.getAttribute("aria-expanded") !== "true") await heading.click();
+  await expect(reviewPanel.getByRole("button", { name: "Process blocking input", exact: true })).toHaveCount(0);
+  const clarification = reviewPanel.getByRole("region", { name: "Resolve conflicting saved answers", exact: true });
+  await expect(clarification.getByRole("heading", { name: "Two earlier answers disagree", exact: true })).toBeVisible();
+  await expect(clarification.locator('input[type="radio"]:checked')).toHaveCount(0);
+  await expect(clarification.getByRole("button", { name: "Save decision & continue", exact: true })).toBeDisabled();
+  await clarification.getByLabel("Your decision", { exact: true }).fill("Disconnection is not an exception. Cancel unconfirmed collections at mission end; retain confirmed rewards.");
+  await expect(clarification.getByRole("radio", { name: "Describe an exception or a different rule", exact: true })).toBeChecked();
+  await clarification.getByRole("button", { name: "Save decision & continue", exact: true }).click();
+  await expect(clarification).toContainText("Applying your decision and checking related requirements");
+  await expect(page.getByRole("dialog", { name: "View & resolve", exact: true })).toHaveCount(0);
+  assert.equal(calls.length, beforeClarification + 1); assert.equal(store.get(conflict.project.id).revision, conflict.project.revision);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-inline-conflict-mobile.png", fullPage: true });
+  const sourceID = store.getJob(conflict.original.id).answerGroupWork!.humanClarification!.source.id;
+  releaseConflict!();
+  await expect.poll(() => store.submissions(conflict.project.id).every(s => s.status === "completed"), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => store.workflowBusy(conflict.project.id)).toBe(false);
+  await expect(reviewPanel).toContainText("Your decision was reviewed. This requirement's wording is unchanged.");
+  await expect(heading).toBeVisible();
+  const conflictFinished = store.jobs(conflict.project.id).filter(j => j.answerGroupWork).at(-1)!;
+  assert.equal(conflictFinished.status, "completed", conflictFinished.diagnostic);
+  assert.deepEqual(conflictFinished.answerGroupWork!.receipts.slice(0, 1), conflict.original.answerGroupWork!.receipts);
+  assert.equal(conflictFinished.answerGroupWork!.receipts[1]!.attempt, 2);
+  assert.ok(store.get(conflict.project.id).sources.some(s => s.id === sourceID));
+  const completedCalls = calls.length; await page.reload(); assert.equal(calls.length, completedCalls);
+  await (await workspaceMenu(page)).getByRole("button", { name: "Saved decision continuation", exact: true }).click();
+  await page.getByRole("tab", { name: /^Specification/ }).click();
+  await reviewPanel.getByRole("button", { name: /^Current specification/ }).click();
+  const continuationGroup = reviewPanel.locator(".feature-group").first();
+  if (await continuationGroup.getAttribute("open") === null) await continuationGroup.locator(":scope > summary").click();
+  const continuationHeading = reviewPanel.locator(".review-card-heading").filter({ hasText: "Keep the before-joining material rule" });
+  if (await continuationHeading.getAttribute("aria-expanded") !== "true") await continuationHeading.click();
+  let decisionWrites = 0;
+  await page.route(`**/api/projects/${continuationConflict.project.id}/clarify-shared-answers`, async route => {
+    decisionWrites++;
+    const input = route.request().postDataJSON();
+    // Exercise the UI's durable-save/continuation-failure response without inference.
+    const response = await route.fetch({ postData: JSON.stringify({ revision: input.revision, jobID: input.jobID, text: input.text }) });
+    assert.equal(response.status(), 200);
+    await route.fulfill({ response, json: { saved: true, continued: false } });
+  });
+  const beforeContinuation = calls.length;
+  await expect(clarification.getByRole("heading", { name: "Your decision needs clarification", exact: true })).toBeVisible();
+  await expect(clarification.locator('input[type="radio"]:checked')).toHaveCount(0);
+  await clarification.getByRole("radio", { name: "Use answer 2 where the answers conflict", exact: true }).check();
+  await clarification.getByRole("button", { name: "Save decision & continue", exact: true }).click();
+  await expect(clarification.getByRole("button", { name: "Continue review", exact: true })).toBeVisible();
+  assert.equal(calls.length, beforeContinuation);
+  const followups = answerGroupClarifications(store.getJob(continuationConflict.original.id).answerGroupWork!);
+  const chosenDecision = followups.at(-1)!.source.text;
+  assert.ok(chosenDecision.includes("explicitly establishes priority for that conflict only"));
+  assert.equal(followups.length, 2); assert.equal(followups[1]!.source.supersedes, followups[0]!.source.id);
+  assert.equal(followups[0]!.source.text, "Cancel uncertain rewards when the mission ends.");
+  await page.reload(); assert.equal(calls.length, beforeContinuation);
+  await page.getByRole("tab", { name: /^Specification/ }).click();
+  await reviewPanel.getByRole("button", { name: /^Current specification/ }).click();
+  const savedGroup = reviewPanel.locator(".feature-group").first();
+  if (await savedGroup.getAttribute("open") === null) await savedGroup.locator(":scope > summary").click();
+  const savedHeading = reviewPanel.locator(".review-card-heading").filter({ hasText: "Keep the before-joining material rule" });
+  if (await savedHeading.getAttribute("aria-expanded") !== "true") await savedHeading.click();
+  await clarification.getByRole("button", { name: "Continue review", exact: true }).click();
+  await expect(clarification).toContainText("Applying your decision and checking related requirements");
+  releaseConflict!();
+  await expect.poll(() => store.submissions(continuationConflict.project.id).every(s => s.status === "completed"), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => store.workflowBusy(continuationConflict.project.id)).toBe(false);
+  assert.equal(decisionWrites, 1, "Continuation must not resave or replace a durable human decision");
+  await expect(reviewPanel).toContainText("Your decision was reviewed. The updated requirement and acceptance scenarios are shown above.");
+  await expect(reviewPanel).toContainText("Apply the explicitly chosen mission-end outcome");
+  await (await workspaceMenu(page)).getByRole("button", { name: "Repair-stage decision", exact: true }).click();
+  await page.getByRole("tab", { name: /^Design/ }).click();
+  const conflictAction = page.getByRole("button", { name: "Resolve saved-answer conflict", exact: true });
+  await expect(conflictAction).toHaveCount(1);
+  const beforeLate = calls.length;
+  await conflictAction.click();
+  const decisionDialog = page.getByRole("dialog", { name: "View & resolve", exact: true });
+  const lateClarification = decisionDialog.getByRole("region", { name: "Resolve conflicting saved answers", exact: true });
+  await expect(lateClarification.getByRole("heading", { name: "Two earlier answers disagree", exact: true })).toBeVisible();
+  await expect(lateClarification).toContainText("Neither answer establishes priority");
+  await expect(lateClarification.locator('input[type="radio"]:checked')).toHaveCount(0);
+  await expect(lateClarification.getByRole("button", { name: "Save decision & continue", exact: true })).toBeDisabled();
+  await page.reload(); assert.equal(calls.length, beforeLate, "Reload must not replay the blocked repair");
+  await expect(conflictAction).toBeVisible();
+  await page.screenshot({ path: ".reqwizit-state/browser-saved-answer-conflict-action-mobile.png", fullPage: true });
+  await conflictAction.click();
+  await lateClarification.getByRole("radio", { name: "Use answer 2 where the answers conflict", exact: true }).check();
+  await lateClarification.getByRole("button", { name: "Save decision & continue", exact: true }).click();
+  await expect(lateClarification).toContainText("Applying your decision and checking related requirements");
+  const lateSaved = store.getJob(lateConflict.original.id).answerGroupWork!, note = lateSaved.repairClarifications![0]!;
+  assert.equal(note.format, 2); assert.deepEqual(lateSaved.receipts, lateConflict.original.answerGroupWork!.receipts);
+  assert.equal(store.get(lateConflict.project.id).revision, lateConflict.project.revision);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".reqwizit-state/browser-late-answer-decision-mobile.png", fullPage: true });
+  releaseConflict!();
+  await expect.poll(() => store.submissions(lateConflict.project.id).every(s => s.status === "completed"), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => store.workflowBusy(lateConflict.project.id)).toBe(false);
+  assert.deepEqual(calls.slice(beforeLate).map(c => c.split(":")[0]), ["repair", "check"]);
+  const lateFinished = store.jobs(lateConflict.project.id).filter(j => j.answerGroupWork).at(-1)!;
+  assert.deepEqual(lateFinished.answerGroupWork!.receipts.slice(0, lateConflict.original.answerGroupWork!.receipts.length), lateConflict.original.answerGroupWork!.receipts);
+  assert.ok(store.get(lateConflict.project.id).sources.some(s => s.id === note.source.id));
+  await expect(conflictAction).toHaveCount(0);
+  await decisionDialog.getByRole("button", { name: /Close/ }).click();
+  await page.getByRole("tab", { name: /^Specification/ }).click();
+  await reviewPanel.getByRole("button", { name: /^Current specification/ }).click();
+  const completedGroup = reviewPanel.locator(".feature-group").first();
+  if (await completedGroup.getAttribute("open") === null) await completedGroup.locator(":scope > summary").click();
+  const completedHeading = reviewPanel.locator(".review-card-heading").filter({ hasText: "Apply the explicitly chosen mission-end outcome" });
+  if (await completedHeading.getAttribute("aria-expanded") !== "true") await completedHeading.click();
+  await expect(reviewPanel).toContainText("Use the chosen answer for overlapping cases");
+  console.log("Shared answer browser passed: inline original answers, no default choice, one Save decision & continue action, live progress without a dialog/Play step, retained requirement/completion feedback, mobile and no-call reload; original paid replies/attempts preserved. Existing cross-feature and legacy recovery checks also passed. Fixture only; no live inference.");
 } catch (error) {
   console.error({ calls, workflow: store.workflow(p.id).message, jobs: store.jobs(p.id).filter(j => j.answerGroupWork).map(j => ({ status: j.status, diagnostic: j.diagnostic, attempts: j.answerGroupWork!.attempts })) });
   await diagnose?.(".reqwizit-state/browser-shared-answers-failure"); throw error;
