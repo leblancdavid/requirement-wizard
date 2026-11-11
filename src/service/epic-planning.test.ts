@@ -788,7 +788,8 @@ for (const linkedNotes of [8, 10]) test(`${linkedNotes === 8 ? "v2" : "v5"} resu
         for (const source of p.sources) assert.ok(context.manifest.includedIDs.includes(source.id), "Every exact human source remains loaded");
       }
       if (calls === batches + 1) throw new Error("Fixture validation interrupted");
-      return empty();
+      return { ...empty(), questions: calls === 1 ? [{ text: "Retain a recoverable receipt?", whyItMatters: "Recovery", evidenceIDs: [context.manifest.includedIDs[0]!],
+        options: [{ label: "Keep", consequence: "Retain" }, { label: "Discard", consequence: "Remove" }] }] : [] };
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
     assert.equal(paused.status, "failed"); assert.equal(calls, batches + 1);
     assert.equal(paused.retrievalWork!.epicStages!.receipts.length, batches);
@@ -797,8 +798,8 @@ for (const linkedNotes of [8, 10]) test(`${linkedNotes === 8 ? "v2" : "v5"} resu
     const files = renderWorkspace(p, emptyExecution(), projection);
     const portable = decodePortable(files, p.model);
     if (linkedNotes === 10) {
-      assert.equal(JSON.parse(files["state.json"]!).formatVersion, 18);
-      assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 17 }) }, p.model), /format 18/);
+      assert.equal(JSON.parse(files["state.json"]!).formatVersion, 41);
+      assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 17 }) }, p.model), /format 41/);
     }
     assert.deepEqual(portable.continuation.jobs[0]!.retrievalWork!.epicStages, paused.retrievalWork!.epicStages);
     assert.deepEqual(portable.continuation.jobs[0]!.context!.epicReview, paused.context!.epicReview);
@@ -809,7 +810,7 @@ for (const linkedNotes of [8, 10]) test(`${linkedNotes === 8 ? "v2" : "v5"} resu
       resumedCalls++;
       assert.equal((context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview.phase, "validate");
       assert.ok(context.manifest.characters <= 96000);
-      return { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+      return { guardrailVerdict: { keepQuestions: resumedCalls === batches ? [] : [0], keepRequirements: [] } };
     } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders", research: false });
     assert.equal(finished.status, "completed", finished.diagnostic); assert.equal(resumedCalls, batches);
     if (linkedNotes === 10) assert.equal(finished.discoveryMetrics!.planningProgress!.contextPreparations, 0,

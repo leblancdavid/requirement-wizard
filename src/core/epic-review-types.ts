@@ -29,6 +29,7 @@ export const epicReviewReportSchema = z.object({
   stagedProgress: z.object({ phase: z.enum(["discover", "validate", "complete"]),
     completed: z.number().int().min(0).max(32), batches: z.number().int().min(1).max(16),
     totalCalls: z.number().int().min(0).max(96),
+    emptyCompletion: z.literal("no-surviving-proposals").optional(),
   }).strict().optional(),
   explanation: z.string().min(1).max(1200),
   blockers: z.array(z.object({ packageID: z.string(), epicID: z.string(), reason: z.string().max(1200) }).strict()).max(20),

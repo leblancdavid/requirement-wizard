@@ -407,7 +407,11 @@ test("shared revision objects bound exports when scattered edits defeat simple a
     }));
     const jobs = [...originals.keys()].map((revision) => ({ id: `saved-${revision}`, projectID: large.id, expectedRevision: revision, status: "failed" as const, model: selection, leaseUntil: null,
       context: { revision, focusEpicID: null, characters: 1, budget: 100, includedIDs: [], omittedIDs: [], refinementOnly: true } }));
-    const work = continuationState(large, jobs, [], (revision) => originals.get(revision)!);
+    const profile = { selectionMs: 0, snapshotReadMs: 0, deltaMs: 0, serializedRecords: 0, digestComputations: 0, digestHits: 0 };
+    const work = continuationState(large, jobs, [], (revision) => originals.get(revision)!, undefined, undefined, profile);
+    assert.ok(profile.digestHits > profile.digestComputations, "Repeated exact historical objects reuse their digest rather than hashing per snapshot");
+    assert.ok(profile.serializedRecords > 0);
+    for (const phase of ["selectionMs", "snapshotReadMs", "deltaMs"] as const) assert.ok(profile[phase] >= 0);
     const originalBytes = [...originals.values()].reduce((n, p) => n + Buffer.byteLength(JSON.stringify(p)), 0);
     assert.ok(Buffer.byteLength(JSON.stringify(work)) < originalBytes / 5, "Repeated records are shared, not copied into each wide middle-array delta");
     const decoded = decodePortable(renderWorkspace(large, emptyExecution(), work), selection);

@@ -29,6 +29,8 @@ const withoutAccount = (model: ModelSelection): ModelSelection => ({ providerID:
 const portableProject = (project: Project) => ({ ...project, model: withoutAccount(project.model) });
 type Delta = Record<string, { value: string } | { prefix: number; suffix: number; items: string[] }>;
 export type Continuation = { formatVersion: 1; jobs: Job[]; submissions: Submission[]; snapshots: Record<string, Delta>; objects: Record<string, unknown> };
+export type ContinuationProfile = { selectionMs: number; snapshotReadMs: number; deltaMs: number;
+  serializedRecords: number; digestComputations: number; digestHits: number };
 function needsOriginalRevision(job: Job) {
   if (job.status !== "completed" || job.retrievalWork) return true;
   if (job.context?.refinementPair || job.context?.gapExploration?.check) return false;
@@ -68,7 +70,8 @@ function portableJob(job: Job, linked: boolean, definitionKey: (epicID: string) 
  * are exact deltas against the current project, not every intermediate revision. */
 export function continuationState(project: Project, jobs: Job[], submissions: Submission[], snapshot: (revision: number) => Project,
   portableSnapshot: (revision: number) => Project = snapshot,
-  refinementSnapshot: (revision: number) => DecisionEvidenceProject = snapshot): Continuation {
+  refinementSnapshot: (revision: number) => DecisionEvidenceProject = snapshot, profile?: ContinuationProfile): Continuation {
+  const started = performance.now();
   const waiting = submissions.filter((s) => !["completed", "superseded"].includes(s.status) || s.overlapFollowup?.state === "pending");
   const waitingIDs = new Set(waiting.map((s) => s.id));
   const linked = new Set(waiting.flatMap((s) => [s.jobID, s.overlapFollowup?.discoveryJobID, ...s.overlapFollowup?.pairs.map((p) => p.jobID) ?? []]).filter(Boolean));
@@ -259,6 +262,7 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
   for (const submission of waiting) if (submission.appliedRevision) {
     for (const revision of [submission.appliedRevision, submission.appliedRevision - 1]) { revisions.add(revision); requiredRevisions.add(revision); }
   }
+  if (profile) profile.selectionMs = performance.now() - started;
   const base = portableProject(project) as Record<string, unknown>;
   // The current snapshot is identical for every historical comparison. Serialize
   // each field/array item once, rather than hundreds of times on large projects.
@@ -267,8 +271,19 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     .map(([key, value]) => [key, value.map((item) => JSON.stringify(item))]));
   const snapshots: Record<string, Delta> = {};
   const objects: Record<string, unknown> = {};
-  const intern = (value: unknown) => {
-    const key = createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  // Invocation-local exact-string memo: identical historical records need one
+  // hash, not hundreds. Bound retained key bytes; never omit an uncached value.
+  const digests = new Map<string, string>(); let digestBytes = 0;
+  const intern = (value: unknown, encoded = JSON.stringify(value)) => {
+    let key = digests.get(encoded);
+    if (key) { if (profile) profile.digestHits++; }
+    else {
+      key = createHash("sha256").update(encoded).digest("hex");
+      if (profile) profile.digestComputations++;
+      if (encoded.length <= 65536 && digestBytes + encoded.length * 2 <= 8 * 1024 * 1024) {
+        digests.set(encoded, key); digestBytes += encoded.length * 2;
+      }
+    }
     objects[key] ??= value; return key;
   };
   for (const revision of [...revisions].sort((a, b) => a - b)) {
@@ -277,26 +292,35 @@ export function continuationState(project: Project, jobs: Job[], submissions: Su
     // assessment publication here multiplies a large project's entire evidence
     // set by its number of areas, even when the resulting deltas are tiny.
     let original: Project;
+    const readStarted = performance.now();
     try { original = portableSnapshot(revision); }
     catch (error) {
       if (optionalBaselineRevisions.has(revision) && !requiredRevisions.has(revision)
         && error instanceof Error && error.message === "Project or revision not found.") continue;
       throw error;
-    }
+    } finally { if (profile) profile.snapshotReadMs += performance.now() - readStarted; }
+    const deltaStarted = performance.now();
     const previous = portableProject(original) as Record<string, unknown>;
     const delta: Delta = { model: { value: intern(withoutAccount(original.model)) } };
     for (const key of new Set([...Object.keys(base), ...Object.keys(previous)])) {
       const before = previous[key], after = base[key];
-      if (JSON.stringify(before) === baseJSON.get(key)) continue;
       if (Array.isArray(before) && Array.isArray(after)) {
+        const encoded = before.map(item => JSON.stringify(item) ?? "null");
+        if (profile) profile.serializedRecords += encoded.length;
+        if (`[${encoded.join(",")}]` === baseJSON.get(key)) continue;
         const items = baseItems.get(key)!;
         let prefix = 0, suffix = 0;
-        while (prefix < Math.min(before.length, after.length) && JSON.stringify(before[prefix]) === items[prefix]) prefix++;
-        while (suffix < Math.min(before.length, after.length) - prefix && JSON.stringify(before[before.length - suffix - 1]) === items[after.length - suffix - 1]) suffix++;
-        delta[key] = { prefix, suffix, items: before.slice(prefix, before.length - suffix).map(intern) };
-      } else delta[key] = { value: intern(before ?? null) };
+        while (prefix < Math.min(before.length, after.length) && encoded[prefix] === items[prefix]) prefix++;
+        while (suffix < Math.min(before.length, after.length) - prefix && encoded[before.length - suffix - 1] === items[after.length - suffix - 1]) suffix++;
+        delta[key] = { prefix, suffix, items: before.slice(prefix, before.length - suffix).map((item, index) => intern(item, encoded[prefix + index])) };
+      } else {
+        const encoded = JSON.stringify(before);
+        if (encoded === baseJSON.get(key)) continue;
+        delta[key] = { value: intern(before ?? null, before == null ? "null" : encoded) };
+      }
     }
     snapshots[String(revision)] = delta;
+    if (profile) profile.deltaMs += performance.now() - deltaStarted;
   }
   const order = new Map(jobs.map((job, index) => [job.id, index]));
   return { formatVersion: 1, jobs: [...kept.values()].sort((a, b) => order.get(a.id)! - order.get(b.id)!), submissions: waiting.map((s) => ({ ...s, auto: false,
@@ -399,10 +423,11 @@ export function portableFiles(project: Project, execution: ExecutionState, conti
   const boundedRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairContexts);
   const responseCapacityState = !!continuation?.jobs.some(j => j.answerGroupWork?.responseCapacity || j.answerGroupWork?.responseRecovery || j.answerGroupWork?.receipts.some(r => r.recovery));
   const progressRepairState = !!continuation?.jobs.some(j => j.answerGroupWork?.repairPolicy);
-  const sharedFormat = continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 13)) ? 40 : continuation?.jobs.some(j => j.answerGroupWork?.repairClarifications) ? 39 : continuation?.jobs.some(j => j.answerGroupWork?.unionPageCapacity) ? 38 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 12)) ? 37 : continuation?.jobs.some(j => j.answerGroupWork?.repairContexts?.some(p => p.format === 2)) ? 36 : continuation?.jobs.some(j => j.answerGroupWork?.packingPolicy) ? 35 : continuation?.jobs.some(j => j.answerGroupWork?.humanClarificationFollowups) ? 34 : continuation?.jobs.some(j => j.answerGroupWork?.humanClarification) ? 33 : continuation?.jobs.some(j=>j.answerGroupWork?.verificationPolicy) ? 32 : continuation?.jobs.some(j=>j.answerGroupWork?.blockerReviews) ? 31 : continuation?.jobs.some(j=>j.answerGroupWork?.blockerReview||j.answerGroupWork?.receipts.some(r=>"answerGroupBlockerReview"in r.response)) ? 30 : continuation?.jobs.some(j=>j.answerGroupWork?.inputCapacity||j.answerGroupWork?.evidencePages?.some(p=>p.format===11)) ? 29 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupInspections || j.answerGroupWork?.receipts.some(r=>"answerGroupInspection"in r.response||"answerGroupComparisons"in r.response)) ? 28 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews?.some(p=>p.format===2)) ? 27 : continuation?.jobs.some(j=>j.answerGroupWork?.evidencePages?.some(p=>p.format===10)) ? 26 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews) ? 25 : progressRepairState ? 24 : responseCapacityState ? 23 : boundedRepairState ? 22 : playState ? 21 : undefined;
+  const sharedFormat = continuation?.jobs.some(j => j.retrievalWork?.epicStages?.completionPolicy || j.epicReviewReport?.stagedProgress?.emptyCompletion) ? 41
+    : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 13)) ? 40 : continuation?.jobs.some(j => j.answerGroupWork?.repairClarifications) ? 39 : continuation?.jobs.some(j => j.answerGroupWork?.unionPageCapacity) ? 38 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 12)) ? 37 : continuation?.jobs.some(j => j.answerGroupWork?.repairContexts?.some(p => p.format === 2)) ? 36 : continuation?.jobs.some(j => j.answerGroupWork?.packingPolicy) ? 35 : continuation?.jobs.some(j => j.answerGroupWork?.humanClarificationFollowups) ? 34 : continuation?.jobs.some(j => j.answerGroupWork?.humanClarification) ? 33 : continuation?.jobs.some(j=>j.answerGroupWork?.verificationPolicy) ? 32 : continuation?.jobs.some(j=>j.answerGroupWork?.blockerReviews) ? 31 : continuation?.jobs.some(j=>j.answerGroupWork?.blockerReview||j.answerGroupWork?.receipts.some(r=>"answerGroupBlockerReview"in r.response)) ? 30 : continuation?.jobs.some(j=>j.answerGroupWork?.inputCapacity||j.answerGroupWork?.evidencePages?.some(p=>p.format===11)) ? 29 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupInspections || j.answerGroupWork?.receipts.some(r=>"answerGroupInspection"in r.response||"answerGroupComparisons"in r.response)) ? 28 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews?.some(p=>p.format===2)) ? 27 : continuation?.jobs.some(j=>j.answerGroupWork?.evidencePages?.some(p=>p.format===10)) ? 26 : continuation?.jobs.some(j=>j.answerGroupWork?.lookupReviews) ? 25 : progressRepairState ? 24 : responseCapacityState ? 23 : boundedRepairState ? 22 : playState ? 21 : undefined;
   const efficientState = !!continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 8)
     || j.context?.epicReview?.contextPolicy === "staged-dense-records-v5" || j.retrievalWork?.epicStages?.contextPolicy === "staged-dense-records-v5");
-  const evidenceState = requiresChangeReviewState(project, continuation) || answerState || efficientState;
+  const evidenceState = requiresChangeReviewState(project, continuation) || answerState || efficientState || sharedFormat === 41;
   const recordOrder = evidenceState ? Object.fromEntries(portableRecordFields.map((field) => [field, project[field].map((record) => record.id)])) : undefined;
   return { "state.json": json({ formatVersion: sharedFormat ?? (rulePermissionState ? 20 : tightReadState ? 19 : efficientState ? 18 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 7)) ? 17 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 6)) ? 16 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 5)) ? 15 : continuation?.jobs.some(j => j.answerGroupWork?.verificationRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 4)) ? 14 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 3)) ? 13 : continuation?.jobs.some(j => j.answerGroupWork?.pageRecovery || j.answerGroupWork?.evidencePages?.some(p => p.format === 2)) ? 12 : continuation?.jobs.some(j => j.answerGroupWork?.evidencePages) ? 11 : continuation?.jobs.some(j => j.answerGroupWork?.sourceSupport) ? 10 : answerState ? 9 : requiresSharedChangeState(project, continuation) ? 8 : requiresIncrementalChangeState(project, continuation) ? 7 : requiresEvidenceChangeState(project, continuation, 3) ? 6 : evidenceState ? 5 : requiresProvenanceState(project, continuation, execution, "mixedReview") ? 3 : requiresProvenanceState(project, continuation, execution) ? 2 : 1), project: state, ...(recordOrder ? { recordOrder } : {}) }), "execution.json": json({ formatVersion: 1, execution: portableExecution(execution) }),
     "continuation.json": json(continuation ?? { formatVersion: 1, jobs: [], submissions: [], snapshots: {}, objects: {} }) };
@@ -520,8 +545,8 @@ export type PortableProject = { project: Project; execution: ExecutionState; con
 const portableRecordFields = ["epics", "sources", "questions", "requirements", "research", "scans"] as const;
 export function decodePortable(files: Record<string, string>, selection: ModelSelection): PortableProject {
   const read = (name: string) => { if (!files[name]) throw new Error(`Portable project is missing ${name}. Legacy exports must first be upgraded by the originating app.`); return JSON.parse(files[name]); };
-  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13), z.literal(14), z.literal(15), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23), z.literal(24), z.literal(25), z.literal(26), z.literal(27), z.literal(28), z.literal(29), z.literal(30), z.literal(31), z.literal(32), z.literal(33), z.literal(34), z.literal(35), z.literal(36), z.literal(37), z.literal(38), z.literal(39), z.literal(40)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
-  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–40 require exact record ordering; older formats cannot carry that new metadata.");
+  const state = z.object({ formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13), z.literal(14), z.literal(15), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23), z.literal(24), z.literal(25), z.literal(26), z.literal(27), z.literal(28), z.literal(29), z.literal(30), z.literal(31), z.literal(32), z.literal(33), z.literal(34), z.literal(35), z.literal(36), z.literal(37), z.literal(38), z.literal(39), z.literal(40), z.literal(41)]), project: z.record(z.unknown()), recordOrder: z.record(z.array(z.string())).optional() }).strict().parse(read("state.json"));
+  if ((state.formatVersion >= 5) !== !!state.recordOrder) throw new Error("Portable state formats 5–41 require exact record ordering; older formats cannot carry that new metadata.");
   const projectIndex = z.object({ formatVersion: z.literal(2), projectID: z.string(), features: z.array(z.object({ id: z.string(), data: z.string() }).passthrough()) }).passthrough().parse(read("project.json"));
   if (state.project.id !== projectIndex.projectID) throw new Error("Portable project metadata identity mismatch.");
   for (const key of ["name", "summary", "goals", "actors", "assumptions", "origin"]) if (JSON.stringify(state.project[key]) !== JSON.stringify(projectIndex[key])) throw new Error(`Portable project metadata mismatch: ${key}. Resolve the shared checkpoint before opening.`);
@@ -560,6 +585,8 @@ export function decodePortable(files: Record<string, string>, selection: ModelSe
     snapshots: z.record(z.record(z.union([z.object({ value: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), z.object({ prefix: z.number().int().nonnegative(), suffix: z.number().int().nonnegative(), items: z.array(z.string().regex(/^[a-f0-9]{64}$/)) }).strict()]))),
     objects: z.record(z.unknown()),
   }).strict().parse(read("continuation.json")) as Continuation;
+  if (state.formatVersion < 41 && continuation.jobs.some(j => j.retrievalWork?.epicStages?.completionPolicy || j.epicReviewReport?.stagedProgress?.emptyCompletion))
+    throw new Error("Empty-proposal completion requires portable state format 41. Saved work was not overwritten.");
   if (state.formatVersion < 40 && continuation.jobs.some(j => j.answerGroupWork?.evidencePages?.some(p => p.format === 13)))
     throw new Error("Group-budget union layouts require portable state format 40. Saved work was not overwritten.");
   if (state.formatVersion < 39 && continuation.jobs.some(j => j.answerGroupWork?.repairClarifications))

@@ -85,9 +85,11 @@ test("browser staged Resume upgrades a legacy six-request pause after SQLite reo
       Array.from({ length: 64 }, (_, n) => createHash("sha256").update(`resume-${i}-${n}`).digest("hex")).join(""), "project");
     const adapter = { async analyze(_p: typeof p, { context }: import("./discovery.js").DiscoveryOptions) {
       assert.equal(context.manifest.epicReview!.contextPolicy, "staged-guardrails-v1");
-      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number } }).stagedGuardrailReview;
+      const stage = (context.data as { stagedGuardrailReview: { phase: string; batch: number; batches: number } }).stagedGuardrailReview;
       const label = `${stage.phase}-${stage.batch}`; assert.ok(!calls.includes(label), "Completed calls must not repeat"); calls.push(label);
-      return stage.phase === "discover" ? empty() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+      return stage.phase === "discover" ? { ...empty(), questions: [{ text: "Retain the saved receipt?", whyItMatters: "Recovery", evidenceIDs: [context.manifest.includedIDs[0]!],
+        options: [{ label: "Keep", consequence: "Retain" }, { label: "Discard", consequence: "Remove" }] }] }
+        : { guardrailVerdict: { keepQuestions: stage.batch === stage.batches ? [] : [0], keepRequirements: [] } };
     } };
     queue = new DiscoveryQueue(new DiscoveryService(store, adapter, { stagedLimits: { requests: 6, durationMs: 900000 } }));
     queue.resumeBrowser(p.id, { focusEpicID: "orders", questionTarget: 5, research: false }); await idle(queue, p.id);
@@ -100,6 +102,7 @@ test("browser staged Resume upgrades a legacy six-request pause after SQLite reo
     // without per-action scheduling metadata. Preserve that exact old job.
     paused.status = "failed";
     delete paused.retrievalWork!.stagedRun;
+    delete paused.retrievalWork!.epicStages!.completionPolicy;
     paused.diagnostic = "Staged review paused after six requests in this package attempt. No drafts published.";
     const raw = new Database(path);
     raw.prepare("UPDATE jobs SET payload = ? WHERE id = ?").run(JSON.stringify(paused), paused.id); raw.close();

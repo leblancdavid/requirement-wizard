@@ -55,8 +55,12 @@ export const discoveryMetricsSchema = z.object({ format: z.literal(1), state: z.
   planningDecisions: planningDecisionsSchema.nullable(),
   planningProgress: planningProgressSchema.optional(),
   answerIntegration: answerIntegrationSchema.optional(),
+  epicProposals: z.object({ questions: count, requirements: count, phase: z.enum(["discover", "validate", "complete"]),
+    checksNotRequested: count, emptyCompletion: z.boolean() }).strict().optional(),
   epicSelection: z.object({ format: z.literal(1), reason: z.enum(["new-package", "saved-task-incompatible", "saved-work-resume"]),
-    priorCompleted: z.boolean() }).strict().optional(),
+    priorCompleted: z.boolean(),
+    inputChanges: z.array(z.enum(["target-records", "human-evidence", "other-evidence", "project-guidance",
+      "context-policy", "batch-layout", "exact-input", "historical-inputs-unavailable"])).optional() }).strict().optional(),
   bookkeepingMs: z.object({ metricsPersistence: duration.optional(), requestContext: duration.optional(), revisionChecks: duration.optional(),
     progress: duration.optional() }).strict().optional(),
   afterLastRequestMs: duration.optional(),
@@ -108,7 +112,9 @@ const nullableCount = (value: number | null) => value === null ? null : count.pa
 const workspacePublicationSchema = z.object({ format: z.literal(1), revision: count,
   status: z.enum(["saved", "pending", "conflict", "unavailable"]).optional(),
   elapsedMs: duration.optional(), historyMs: duration.optional(), continuationMs: duration.optional(),
-  renderMs: duration.optional(), filesMs: duration.optional(), selectedJobs: count.optional(), snapshots: count.optional() });
+  renderMs: duration.optional(), filesMs: duration.optional(), selectedJobs: count.optional(), snapshots: count.optional(),
+  continuationProfile: z.object({ selectionMs: duration, snapshotReadMs: duration, deltaMs: duration,
+    serializedRecords: count, digestComputations: count, digestHits: count }).optional() });
 export function discoveryDiagnosticReport(rows: DiagnosticSource[], workspacePublication?: unknown) {
   if (!rows.length || rows.length > 20) throw new Error("Select between one and twenty discovery runs.");
   const packages = new Map<string, string>();

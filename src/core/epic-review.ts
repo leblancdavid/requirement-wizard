@@ -31,6 +31,34 @@ export function validateEpicReviewFinal(project: Project, context: ContextPack, 
 }
 type Record = Project["requirements"][number] | Project["questions"][number] | Project["sources"][number];
 export type EpicReviewTask = { review: EpicReview; context?: ContextPack; contextCharacters?: number; batches?: ContextPack[]; reason?: string; blocker?: EpicPlanningBlocker; state: "pending" | "reviewed" | "waiting" | "blocked"; prior?: Job };
+/** Diagnostic differences only, not a replacement for exact freshness matching.
+ * Compare the union of old/current detailed evidence; never export its contents. */
+export function epicReviewInputChanges(previous: Project, project: Project, prior: Job, task: EpicReviewTask) {
+  const changes: NonNullable<NonNullable<Job["discoveryMetrics"]>["epicSelection"]>["inputChanges"] = [];
+  const old = prior.context?.epicReview, review = task.review;
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  if (old?.inputKey !== review.inputKey) changes.push("exact-input");
+  if (old?.contextPolicy !== review.contextPolicy) changes.push("context-policy");
+  if (!same(old?.guardrailBatches, review.guardrailBatches)) changes.push("batch-layout");
+  const targets = new Set([...old?.recordIDs ?? [], ...review.recordIDs]);
+  const evidence = new Set([...prior.context?.includedIDs ?? [], ...task.context?.manifest.includedIDs ?? [],
+    ...old?.guardrailBatches?.flat() ?? [], ...review.guardrailBatches?.flat() ?? [], ...targets]);
+  for (const field of ["sources", "questions", "requirements", "research"] as const) {
+    const before = new Map(previous[field].map(r => [r.id, r]));
+    const after = new Map(project[field].map(r => [r.id, r]));
+    for (const id of evidence) {
+      const a = before.get(id), b = after.get(id);
+      if (same(a, b)) continue;
+      const kind = targets.has(id) ? "target-records" : field === "sources" && [a, b].some(r => r && "kind" in r && r.kind !== "workspace")
+        ? "human-evidence" : "other-evidence";
+      if (!changes.includes(kind)) changes.push(kind);
+    }
+  }
+  const areas = new Set([...old?.epicIDs ?? [], ...review.epicIDs]);
+  const guidance = (p: Project) => [p.name, p.origin, p.goals, p.actors, p.assumptions, p.epics.filter(e => areas.has(e.id))];
+  if (!same(guidance(previous), guidance(project))) changes.push("project-guidance");
+  return changes;
+}
 type Candidate = { review: EpicReview; context?: ContextPack; batches?: ContextPack[]; batchKey?: string; error?: ContextBudgetError; batchLimit?: StagedBatchLimitError };
 export type EpicPlanningOptions = {
   firstPending?: boolean;

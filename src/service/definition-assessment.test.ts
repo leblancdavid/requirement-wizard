@@ -262,7 +262,10 @@ test("v3 checkpoints survive SQLite and portable reopen with no stage replay or 
     const adapter = { async analyze(_snapshot: Project, { context }: Parameters<import("./discovery.js").DiscoveryAdapter["analyze"]>[1]) {
       calls++; assert.equal(context.manifest.epicReview!.contextPolicy, "staged-current-spec-v3");
       assert.ok(context.manifest.characters <= 96000);
-      return (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview.phase === "discover" ? emptyEpicDraft() : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
+      return (context.data as { stagedGuardrailReview: { phase: string } }).stagedGuardrailReview.phase === "discover"
+        ? { ...emptyEpicDraft(), questions: [{ text: "Keep a recoverable receipt?", whyItMatters: "Recovery", evidenceIDs: [p.requirements[0]!.id],
+          options: [{ label: "Keep", consequence: "Retain" }, { label: "Discard", consequence: "Remove" }] }] }
+        : { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } };
     } };
     const paused = await new DiscoveryService(store, adapter, { stagedLimits: { requests: 1, durationMs: 900000 } }).analyze(p.id, p.revision, { gapMode: "epic", focusEpicID: "orders" });
     assert.equal(paused.status, "interrupted", paused.diagnostic); assert.equal(calls, 1); assert.equal(paused.retrievalWork!.epicStages!.receipts.length, 1);

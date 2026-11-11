@@ -16,6 +16,20 @@ copying or project reset is needed. See [runtime compatibility](docs/runtime-spi
 
 ## Project status
 
+New staged discovery finishes an explicit empty result when no proposals remain,
+without paying for empty verification calls. All evidence is still read and every
+surviving proposal still needs every check; started schedules keep their old protocol.
+Continuation exports reuse exact record serialization/hash work and expose finer
+local timings. Restart the backend to load these changes; existing paid work is not
+repacked. Real-project speed remains unverified. See [preservation and measurements](docs/migrations.md#empty-discovery-completion-and-exact-continuation-computation-2026-11-11).
+
+New individual saved-answer work now packs measured lossless request size rather
+than fixed raw-record chunks, retaining all evidence and verification. A synthetic
+single-answer benchmark used 10 requests instead of 18; live speed is unverified.
+Started work keeps its original schedule and paid receipts. Diagnostics now identify
+structural input-change categories behind incompatible saved checks, without
+changing freshness/reuse rules. See [compatibility](docs/migrations.md#measured-individual-answer-packing-and-input-change-diagnostics-2026-11-11).
+
 Shared-answer grouping now tries the same lossless packing used for dispatch before
 falling back to individual work. Portable exports retain unfinished work and current
 outcomes while excluding completed cleanup checks proven stale by the existing engine

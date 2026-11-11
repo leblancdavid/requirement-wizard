@@ -168,11 +168,25 @@ export function submissionStageContext(m: SubmissionMaterials, w: SubmissionWork
 export function planSubmissionStages(m: SubmissionMaterials): SubmissionWork {
   const w: SubmissionWork = { format: 1, policy: "exact-submission-batches-v1", submissionID: m.submissionID, task: m.task,
     materialKey: m.materialKey, planKey: "0".repeat(64), batches: [], attempts: 0, receipts: [] };
-  let batch: string[] = [], bytes = 0;
+  // Only new schedules are packed here. Saved batches and their plan/context keys
+  // replay verbatim, including schedules produced by the old 36k raw-size rule.
+  // Measure the same lossless wire encoder used at dispatch, leaving the entire
+  // draft allowance and conservative headroom for two-digit step/batch metadata.
+  const fits = (ids: string[]) => {
+    try {
+      return submissionStageContext(m, { ...w, batches: [ids] }, empty()).manifest.characters + draftLimit + 128 <= stageLimit;
+    } catch (error) {
+      if (!(error instanceof ContextBudgetError)) throw error;
+      return false;
+    }
+  };
+  let batch: string[] = [];
   for (const { record } of m.records.filter((r) => !m.pins.has(r.record.id))) {
-    const size = JSON.stringify(record).length;
-    if (batch.length && bytes + size > 36000) { w.batches.push(batch); batch = []; bytes = 0; }
-    batch.push(record.id); bytes += size;
+    const next = [...batch, record.id];
+    if (fits(next)) { batch = next; continue; }
+    if (batch.length) { w.batches.push(batch); batch = []; }
+    if (!fits([record.id])) throw new Error("An exact saved-response batch plus target and draft reserve cannot fit. Original human input and saved work are retained; no model call started.");
+    batch = [record.id];
   }
   if (batch.length) w.batches.push(batch);
   if (!w.batches.length) w.batches.push([...m.pins].filter((id) => m.evidenceIDs.includes(id)));

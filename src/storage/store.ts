@@ -606,9 +606,11 @@ export class ProjectStore {
       let started = performance.now();
       const jobs = this.jobs(id), submissions = this.submissions(id);
       metrics.historyMs = performance.now() - started; started = performance.now();
+      metrics.continuationProfile = { selectionMs: 0, snapshotReadMs: 0, deltaMs: 0,
+        serializedRecords: 0, digestComputations: 0, digestHits: 0 };
       const continuation = continuationState(project, jobs, submissions, (revision) => this.get(id, revision),
         (revision) => portableSnapshot(this.db, id, revision, () => this.get(id, revision)),
-        (revision) => readRefinementEvidence(this.db, id, revision));
+        (revision) => readRefinementEvidence(this.db, id, revision), metrics.continuationProfile);
       metrics.continuationMs = performance.now() - started; started = performance.now();
       metrics.selectedJobs = continuation.jobs.length; metrics.snapshots = Object.keys(continuation.snapshots).length;
       const files = renderWorkspace(project, this.execution(id), continuation);
@@ -631,6 +633,8 @@ export class ProjectStore {
         .run(JSON.stringify(binding), id, project.revision, id, owner);
     } catch (error) {
       if (publicationMetrics) publicationMetrics.elapsedMs = performance.now() - publicationStarted;
+      // An unfinished continuation profile is not a complete phase measurement.
+      if (publicationMetrics?.continuationMs === undefined) delete publicationMetrics?.continuationProfile;
       const message = error instanceof Error ? error.message : "Workspace save failed.";
       binding.status = message.includes("Workspace conflict:") ? "conflict" : "unavailable";
       binding.diagnostic = message;

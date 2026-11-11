@@ -26,8 +26,9 @@ import { definitionMixedReviewMarkerSchema } from "../core/definition-mixed-revi
 import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-publication.js";
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
+import { epicStagesSchema } from "../core/gap-retrieval.js";
 
-export const databaseSchemaVersion = 66;
+export const databaseSchemaVersion = 67;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -351,6 +352,9 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 66, name: "union-layout-shares-adopted-group-page-budget", apply() {
   // Reader boundary only. New v13 layouts use the already-adopted union group
   // budget; old layouts, paid prefixes, human notes and all other ceilings stay exact.
+} }, { version: 67, name: "empty-proposal-staged-completion", apply() {
+  // Reader boundary only: legacy ledgers retain every original call and check.
+  // New schedules explicitly bind an empty-result policy; no startup adoption.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls
@@ -383,6 +387,13 @@ export function migrateDatabase(db: Database.Database, progress?: StartupProgres
       }
     }
     reportStartup(progress, "checking-saved-work");
+    for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.retrievalWork.epicStages') AS BLOB)) <= 524288
+      THEN json_extract(payload, '$.retrievalWork.epicStages') END AS work FROM jobs
+      WHERE json_type(payload, '$.retrievalWork.epicStages.completionPolicy') IS NOT NULL
+        OR json_type(payload, '$.retrievalWork.epicStages.emptyCompletion') IS NOT NULL`).iterate() as Iterable<{ work: string | null }>) {
+      if (!row.work) throw new Error("Unsupported empty-proposal checkpoint. Saved work was not overwritten.");
+      epicStagesSchema.parse(JSON.parse(row.work));
+    }
     for (const row of db.prepare(`SELECT CASE WHEN length(CAST(json_extract(payload, '$.answerGroupWork') AS BLOB)) <= 2097152
       THEN json_extract(payload, '$.answerGroupWork') END AS work,
       json_extract(payload, '$.context.answerGroupStage') AS stage, json_extract(payload, '$.context.submissionIDs') AS ids,

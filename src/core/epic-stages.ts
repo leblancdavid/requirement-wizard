@@ -45,6 +45,16 @@ export function applyGuardrailVerdict(draft: Analysis, raw: unknown): Analysis {
     requirements: draft.requirements.filter((_, i) => verdict.keepRequirements.includes(i)) };
 }
 
+/** A local terminal outcome, never a synthetic model receipt or readiness claim. */
+export function completeEmptyEpicStages(work: EpicStages): boolean {
+  if (work.completionPolicy !== "empty-proposals-v1" || work.phase !== "validate"
+    || work.receipts.length < work.batches || work.receipts.length >= work.batches * 2
+    || work.candidates.questions.length || work.candidates.requirements.length) return false;
+  work.emptyCompletion = "no-surviving-proposals";
+  work.phase = "complete"; work.nextBatch = work.batches;
+  return true;
+}
+
 /** Reconstruct all saved transitions independently before resuming or publishing. */
 export function validateEpicStages(project: Project, review: EpicReview, work: EpicStages, contexts = epicReviewBatches(project, review)): Analysis {
   epicStagesSchema.parse(work);
@@ -55,12 +65,16 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
   if (JSON.stringify(review.guardrailBatches) !== JSON.stringify(canonical.review.guardrailBatches)) throw new Error("Staged batch plan omits or regroups mandatory decisions; saved evidence was not overwritten.");
   if (!isStagedPolicy(review.contextPolicy) || work.planKey !== epicBatchKey(contexts) || work.batches !== contexts.length) throw new Error("Staged exact evidence changed; retain dated checkpoints, do not replay them as current.");
   let draft = emptyEpicDraft();
-  for (const receipt of work.receipts) {
+  for (const [index, receipt] of work.receipts.entries()) {
     const base = contexts[receipt.batch]!;
     if (receipt.evidenceKey !== retrievalEvidenceBasis(base).key) throw new Error("Staged receipt evidence does not match its exact batch.");
     draft = receipt.phase === "discover"
       ? mergeEpicDraft(project, base, draft, analysisSchema.parse(receipt.response), receipt.batch)
       : applyGuardrailVerdict(draft, receipt.response);
+    if (work.completionPolicy && index + 1 >= work.batches && index + 1 < work.batches * 2
+      && !draft.questions.length && !draft.requirements.length
+      && (index !== work.receipts.length - 1 || !work.emptyCompletion || work.phase !== "complete"))
+      throw new Error("Empty staged completion must stop at its exact empty receipt boundary.");
   }
   if (key(draft) !== key(work.candidates)) throw new Error("Staged draft differs from its saved exact response history.");
   return draft;
@@ -68,10 +82,13 @@ export function validateEpicStages(project: Project, review: EpicReview, work: E
 
 /** Publication authority is the explicit union of completed exact batches, never a single-stage claim. */
 export function epicStagePublicationContext(contexts: ContextPack[], work: EpicStages): ContextPack {
-  if (work.phase !== "complete" || work.receipts.length !== contexts.length * 2) throw new Error("Partial staged review cannot publish proposals.");
+  epicStagesSchema.parse(work);
+  if (work.phase !== "complete" || work.batches !== contexts.length || !work.emptyCompletion && work.receipts.length !== contexts.length * 2) throw new Error("Partial staged review cannot publish proposals.");
   const context = epicStageContext(contexts.at(-1)!, work);
   context.manifest.includedIDs = [...new Set(contexts.flatMap((c) => c.manifest.includedIDs))];
   context.manifest.omittedIDs = context.manifest.omittedIDs.filter((id) => !context.manifest.includedIDs.includes(id));
-  context.manifest.selectionReason = "Publication scope is the union of separately checkpointed exact batches; these records were not all present in one model request. All draft proposals passed every guardrail batch; this is not exhaustive cross-record coverage.";
+  context.manifest.selectionReason = work.emptyCompletion
+    ? "All discovery batches were read; no proposals survived. Remaining proposal checks were not requested or credited. This empty outcome establishes no completeness, readiness or implementation approval."
+    : "Publication scope is the union of separately checkpointed exact batches; these records were not all present in one model request. All draft proposals passed every guardrail batch; this is not exhaustive cross-record coverage.";
   return context;
 }

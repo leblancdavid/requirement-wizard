@@ -1,5 +1,120 @@
 # Data migrations and upgrade compatibility
 
+## Empty discovery completion and exact continuation computation (2026-11-11)
+
+**Source → target: SQLite 66 → 67; conditional portable format 41.** This is an
+ordered transactional reader-boundary migration. It validates bounded saved
+empty-completion protocols, rejects future variants without committing the upgrade,
+and does not rewrite any human input, paid receipt, assessment, exact context,
+plan/evidence key, history, completed check or spent attempt. Repeated startup starts
+no inference and never adopts the new policy for already-started work.
+
+Only new staged discovery ledgers bind `completionPolicy: empty-proposals-v1`.
+Every mandatory discovery batch must finish, even when early batches find no gaps.
+If no questions/requirements remain after those reads, or a later verification
+receipt removes the final proposal, the app saves the explicit terminal outcome
+`emptyCompletion: no-surviving-proposals`. It does not create positive verdicts or
+credit unrequested checks. Replaying the original receipts must prove that this is
+the first eligible empty boundary and that the saved draft is exactly empty. A
+surviving proposal still requires every original verification batch. Conflicts,
+missing evidence, malformed output, stale inputs, cancellation and finite paid
+attempts keep their existing safeguards. This is not a completeness/readiness or
+implementation approval. Old ledgers continue their original full schedule with
+unchanged counters; no completed work is invalidated or repeated for this upgrade.
+
+Portable exports require 41 only when this new completion policy/report is present,
+including unfinished new schedules. Older exports retain their existing formats;
+new payloads cannot be relabelled as format 40 or earlier. Export/import retains
+exact original receipts and evidence, and neither reload nor adoption starts calls.
+The browser distinguishes an empty outcome from “all parts checked.” New local
+metrics report current proposal counts and checks not requested; older metrics stay
+unknown. No proposal text or IDs are added to the diagnostics export.
+
+Continuation delta generation now serializes each historical array item once for
+comparison/interning, and reuses exact-string SHA-256 results within that publication.
+The disposable hash-key memo retains at most 8 MiB of UTF-16 key characters and
+declines entries over 64k characters; uncached records are still fully processed.
+No historical snapshot is deleted, no persisted cache format changes, and every
+continuation delta/object/artifact byte remains identical to the prior encoder.
+This computation cache does not establish semantic freshness or source authority.
+
+Completed continuation builds now record selection, historical snapshot loading and
+delta-processing durations plus serialization/hash counts. These numeric allowlisted
+details are nested inside total publication time, not additional elapsed time.
+Incomplete profiles are omitted after failure rather than manufacturing completed
+phase timings. Snapshot selection/normalization inside the selection phase remains
+included in selection time. The change does not yet move publication to another
+thread or establish that the observed 44-second real export delay is resolved.
+
+Synthetic measurements: empty 16-batch discovery used 16 actual calls rather than 32;
+a proposal first found in the last batch still received every check. A 315-snapshot,
+400-record continuation fixture produced identical output with 1,344 SHA-256
+computations instead of 126,630, and about 0.88s versus 1.27s for the measured paths.
+These are fixtures, not live semantic/latency qualification or user-project export
+timings. `npm run benchmark:continuation` runs the no-model comparison.
+
+Upgrade/recovery tests cover old paid empty ledgers, repeated reopen, retained spent
+attempts, transactional failure/retry for future policy data, explicit new-format
+portable round trips/downgrade rejection, late proposals, final-proposal removal,
+stale/cancelled empty replies and no-call reuse of retained empty completion. Export
+tests retain independent byte-for-byte comparison and capped-heap historical loading.
+Type checking, targeted tests, UI build, the benchmark and the complete browser suite
+(including its post-test checks) passed. The full unit suite is running after fixing
+an older pause fixture that returned no proposals and now correctly finishes early;
+that fixture now retains a proposal until verification. No live model call or
+user-database modification was made.
+
+## Measured individual-answer packing and input-change diagnostics (2026-11-11)
+
+**Source → target: unchanged SQLite 66 / portable formats (up to 40).** New
+individual saved-input schedules use measured lossless wire size instead of the
+36,000-character raw-record partition. The 96k input ceiling, complete 18k draft
+reserve, 32-batch maximum, per-step attempts, exact evidence membership and mandatory
+read/frozen-draft-check passes are unchanged. A small additional metadata reserve
+covers later two-digit batch/step counters. Records are never truncated or omitted;
+missing supporting originals still require the existing exact-evidence lookup.
+
+No forward rewrite is needed: the existing persisted batch list and its plan key
+already identify the exact schedule independently of the planning algorithm.
+Previously started work resumes its saved batches, wire contexts, receipts and spent
+attempts. Completed work is not invalidated. Startup/reopen does not repack schedules
+or start model calls, and a failed request cannot obtain a fresh allowance through
+this change. Existing publication, cancellation, stale-input and recovery rules apply.
+
+Local discovery metrics gain optional allowlisted `epicSelection.inputChanges`
+categories. For a new incompatible package check, compare its latest completed
+same-package check with the current candidate: target records, human sources, other
+detailed evidence, project guidance, context policy, batch layout and exact input key.
+Evidence comparisons use the union of old/current detailed IDs and guardrail batches,
+not every unrelated record. These are observed structural differences, not proof of
+semantic impact or a complete causal explanation. Revision counters alone are not
+evidence changes. Missing historical snapshots are explicitly unavailable; old
+diagnostics remain unknown and are not backfilled. No IDs, hashes, text or model
+identifiers are added to the diagnostics export; local metrics remain excluded from
+portable continuation. Assessment/freshness identities and matching are unchanged.
+
+Upgrade coverage builds an old 36k schedule using the previous algorithm, persists
+paid work and two spent next-step attempts, reopens twice, resumes only unfinished
+steps, and round-trips its unchanged ledger through portable export/import. New
+packing tests check lossless expansion, complete read/check coverage and draft
+headroom with both repeated and uncompressible text. Oversize/cancellation/stale
+recovery coverage remains in the existing staged-input suite.
+
+Measured synthetic benchmark: 153 records, 9 legacy batches / 18 minimum requests
+versus 5 measured batches / 10 requests. This used a deterministic no-inference
+adapter, not a user project or live latency qualification. Cross-feature answer
+sharing, broader freshness reuse and portable publication acceleration are not
+implemented by this change.
+
+Verified so far: type check; focused staged-input, diagnostics and epic-review tests;
+the updated shared-answer comparison; UI build; specification browser check including
+oversized saved-review continuation/reload recovery; synthetic submission benchmark;
+diff whitespace check. The `npm test` pre-test/main phases passed 935 and 785 tests;
+its first post-test phase passed 276/277 after loading the old 90-request comparison
+before that expectation was updated to the measured 50. The complete post-test
+rerun passed 277/277 against the final files (1,997 tests across the three phases).
+No live model call or user-database modification was made.
+
 ## Independent question generation and balanced scheduling (2026-11-11)
 
 **Source → target: unchanged SQLite/portable formats.** No forward data migration is

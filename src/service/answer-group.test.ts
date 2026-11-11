@@ -2040,7 +2040,7 @@ test("new shared plans pack six bounded batches instead of nine, retaining a ful
     const individual = items.reduce((n, s) => n + planSubmissionStages(submissionMaterials(p, s, {
       requiredEpicIDs: ["project"], recordIDs: [s.appliedSourceID!, s.input.type === "answer" ? s.input.questionID : ""], isolatedTask: true, submissionFollowup: true, expandMandatory: true,
     })).batches.length * 2, 0);
-    assert.equal(planned.batches.length, 6); assert.equal(individual, 90);
+    assert.equal(planned.batches.length, 6); assert.equal(individual, 50, "Measured individual packing needs five read/check batches per answer, not the old nine");
     for (const batch of planned.batches) assert.ok(answerGroupContext(m, { ...planned, batches: [batch] }).manifest.characters + 24000 <= 96000);
     const sourceIDs = p.sources.map(s => s.id), originalInputs = items.map(s => s.input);
     const result = await new DiscoveryService(store, adapter(items, seen)).analyze(p.id, p.revision, { answerGroup: true, submissionIDs: items.map(s => s.id), research: false });

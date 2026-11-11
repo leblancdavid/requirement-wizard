@@ -7,7 +7,7 @@ import { coverage } from "../core/coverage.js";
 import { implementationNeedsReview } from "../core/implementation.js";
 import { deliveredRequirement, type ExecutionState } from "../core/execution.js";
 import { emptyExecution } from "../core/execution.js";
-import { portableFiles, type Continuation } from "./portable.js";
+import { portableFiles, type Continuation, type ContinuationProfile } from "./portable.js";
 export { requirementFingerprint } from "../core/implementation.js";
 
 export const workspaceFolder = ".reqwizit";
@@ -24,7 +24,8 @@ export type Workspace = {
   portableBase?: string;
   /** Local diagnostic durations; nested phases are not additive wall time. */
   publicationMetrics?: { format: 1; revision: number; elapsedMs?: number; historyMs?: number;
-    continuationMs?: number; renderMs?: number; filesMs?: number; selectedJobs?: number; snapshots?: number };
+    continuationMs?: number; renderMs?: number; filesMs?: number; selectedJobs?: number; snapshots?: number;
+    continuationProfile?: ContinuationProfile };
 };
 export function hash(content: string) { return createHash("sha256").update(content).digest("hex"); }
 export function canonicalDirectory(path: string, create = false) {

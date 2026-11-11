@@ -27,13 +27,18 @@ export const epicStagesSchema = z.object({
   contextPolicy: z.enum(["staged-guardrails-v1", "staged-headroom-v2", "staged-current-spec-v3", "staged-records-v4", "staged-dense-records-v5"]).optional(),
   phase: z.enum(["discover", "validate", "complete"]), nextBatch: z.number().int().min(0).max(16),
   candidates: analysisSchema,
+  completionPolicy: z.literal("empty-proposals-v1").optional(),
+  emptyCompletion: z.literal("no-surviving-proposals").optional(),
   receipts: z.array(z.object({ phase: z.enum(["discover", "validate"]), batch: z.number().int().min(0).max(15),
     evidenceKey: z.string().regex(/^[a-f0-9]{64}$/), attempts: z.number().int().min(1).max(3),
     response: z.union([analysisSchema, guardrailVerdictSchema]),
   }).strict()).max(32),
 }).strict().superRefine((work, ctx) => {
-  const done = work.phase === "discover" ? work.nextBatch : work.phase === "validate" ? work.batches + work.nextBatch : work.batches * 2;
+  const empty = !!work.emptyCompletion;
+  const done = empty ? work.receipts.length : work.phase === "discover" ? work.nextBatch : work.phase === "validate" ? work.batches + work.nextBatch : work.batches * 2;
   if (work.nextBatch >= work.batches && work.phase !== "complete" || work.phase === "complete" && work.nextBatch !== work.batches
+    || empty && (work.completionPolicy !== "empty-proposals-v1" || work.phase !== "complete" || work.receipts.length < work.batches
+      || work.receipts.length >= work.batches * 2 || work.candidates.questions.length > 0 || work.candidates.requirements.length > 0)
     || work.receipts.length !== done || JSON.stringify(work.candidates).length > 12000
     || work.receipts.some((r, i) => JSON.stringify(r.response).length > 12000 || r.batch !== i % work.batches || r.phase !== (i < work.batches ? "discover" : "validate")
       || (r.phase === "validate") !== ("guardrailVerdict" in r.response))) {

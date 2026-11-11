@@ -15,7 +15,7 @@ import { addQuotedRecordNavigation, canContinueGapExploration, checkpointEvidenc
 import { savedEvidenceSearchSchema, savedEvidencePolicySchema, searchEvidenceSchema, searchSavedEvidence, withSavedEvidenceSearch, type SavedEvidenceSearch, type SavedEvidencePolicy } from "../core/gap-navigation.js";
 import { searchPrefixAuxEvidence } from "../core/gap-prefix-aux.js";
 import { addRelatedRecordHints } from "../core/similarity.js";
-import { epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea } from "../core/epic-review.js";
+import { epicReviewContext, epicReviewBatches, epicBatchKey, validateEpicReviewFinal, epicReviewOutsideArea, epicReviewInputChanges } from "../core/epic-review.js";
 import { definitionContext } from "../core/definition-assessment.js";
 import { canRecoverDefinition } from "../core/definition-recovery.js";
 import { definitionInputKey } from "../core/definition-identity.js";
@@ -23,7 +23,7 @@ import { readinessQuestionContext, readinessQuestionTaskSchema, type ReadinessQu
 import { definitionAbortCause } from "../core/definition-interruption.js";
 import { runDefinitionStages, DefinitionEvidenceBlocked, definitionRequestReserve, type DefinitionSchedule } from "./definition-stages.js";
 import { runReadinessStages } from "./readiness-stages.js";
-import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages } from "../core/epic-stages.js";
+import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, epicStageContext, epicStagePublicationContext, validateEpicStages, completeEmptyEpicStages } from "../core/epic-stages.js";
 import { epicReviewBlockedSchema, epicReviewDiagnostic, guardrailVerdictSchema, isStagedPolicy } from "../core/epic-review-types.js";
 import { captureWorkspace, workspaceScanKey } from "../storage/scan.js";
 import { scanBatchAnalysisSchema, type ScanWork } from "../core/model.js";
@@ -558,9 +558,18 @@ export class DiscoveryService {
         if (this.store.get(projectID).revision !== project.revision) throw new StaleRevisionError();
         if (measurement && epicPlan.task) {
           const task = epicPlan.task;
-          const priorCompleted = epicHistory.some(j => j.status === "completed" && !!j.result && j.context?.epicReview?.packageID === task.review.packageID);
-          measurement.value.epicSelection = { format: 1, priorCompleted,
+          const completed = epicHistory.filter(j => j.status === "completed" && !!j.result && j.context?.epicReview?.packageID === task.review.packageID).at(-1);
+          const priorCompleted = !!completed;
+          const selection: NonNullable<typeof measurement.value.epicSelection> = { format: 1, priorCompleted,
             reason: task.prior ? "saved-work-resume" : priorCompleted ? "saved-task-incompatible" : "new-package" };
+          if (selection.reason === "saved-task-incompatible" && completed) {
+            try { selection.inputChanges = epicReviewInputChanges(this.store.get(projectID, completed.expectedRevision), project, completed, task); }
+            catch (error) {
+              if (!(error instanceof Error) || error.message !== "Project or revision not found.") throw error;
+              selection.inputChanges = ["historical-inputs-unavailable"];
+            }
+          }
+          measurement.value.epicSelection = selection;
         }
       }
       if (epicPlan && !epicPlan.task) {
@@ -727,8 +736,13 @@ export class DiscoveryService {
         const checkpoint = () => {
           context.manifest.questionTarget = options.questionTarget;
           reviewReport.modelCalls = work.attempts;
-          if (work.epicStages) reviewReport.stagedProgress = { phase: work.epicStages.phase, completed: work.epicStages.receipts.length,
-            batches: work.epicStages.batches, totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts) };
+           if (work.epicStages) reviewReport.stagedProgress = { phase: work.epicStages.phase, completed: work.epicStages.receipts.length,
+            batches: work.epicStages.batches, totalCalls: work.epicStages.receipts.reduce((sum, r) => sum + r.attempts, work.attempts),
+            ...(work.epicStages.emptyCompletion ? { emptyCompletion: work.epicStages.emptyCompletion } : {}) };
+          if (measurement && work.epicStages) measurement.value.epicProposals = {
+            questions: work.epicStages.candidates.questions.length, requirements: work.epicStages.candidates.requirements.length,
+            phase: work.epicStages.phase, emptyCompletion: !!work.epicStages.emptyCompletion,
+            checksNotRequested: work.epicStages.emptyCompletion ? work.epicStages.batches * 2 - work.epicStages.receipts.length : 0 };
           this.store.checkpointRetrieval(job.id, work, context.manifest, this.navigation.workflow?.continuous ? Date.now() + 360000 : undefined);
           this.store.attachEpicReviewReport(job.id, reviewReport);
         };
@@ -749,7 +763,7 @@ export class DiscoveryService {
           const batches = epicPlan.task.batches ?? epicReviewBatches(project, review);
           const staged = work.epicStages ??= { format: 1, planKey: epicBatchKey(batches), batches: batches.length,
             ...(review.contextPolicy === "staged-headroom-v2" || review.contextPolicy === "staged-current-spec-v3" || review.contextPolicy === "staged-records-v4" || review.contextPolicy === "staged-dense-records-v5" ? { contextPolicy: review.contextPolicy } : {}),
-            phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
+            completionPolicy: "empty-proposals-v1", phase: "discover", nextBatch: 0, candidates: emptyEpicDraft(), receipts: [] };
           validateEpicStages(project, review, staged, batches);
           stagedRun = true;
           const limits = workflowLimits ?? this.navigation.stagedLimits ?? { requests: stagedRunRequestLimit, durationMs: stagedRunDurationMs };
@@ -789,6 +803,7 @@ export class DiscoveryService {
               if (phase === "discover") { staged.phase = "validate"; staged.nextBatch = 0; }
               else staged.phase = "complete";
             }
+            if (completeEmptyEpicStages(staged)) report("All discovery evidence was read and no questions or requirements remain. Finishing this empty result without further proposal-check requests; this is not a completeness or readiness verdict.");
             checkpoint();
           }
           validateEpicStages(project, review, staged, batches);

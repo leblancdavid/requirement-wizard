@@ -34,6 +34,10 @@ test("latest workspace publication diagnostics are numeric, separately scoped, r
   assert.equal(discoveryDiagnosticReport([row]).workspacePublication, undefined);
   assert.equal(discoveryDiagnosticReport([row], { format: 999, revision: 99 }).workspacePublication, undefined);
   assert.equal(discoveryDiagnosticReport([row], { format: 1, revision: 99, elapsedMs: -1 }).workspacePublication, undefined);
+  const profile = { selectionMs: 3, snapshotReadMs: 4, deltaMs: 5, serializedRecords: 10, digestComputations: 2, digestHits: 8 };
+  const detailed = discoveryDiagnosticReport([row], { format: 1, revision: 99, status: "saved", continuationProfile: { ...profile, "PRIVATE path": "PRIVATE input" } });
+  assert.deepEqual(detailed.workspacePublication!.continuationProfile, profile);
+  assert.ok(!JSON.stringify(detailed).includes("PRIVATE"));
 });
 
 test("diagnostics export retains clarification/inspection/comparison receipt positions without exposing bodies or granting progress", async () => {
@@ -279,7 +283,12 @@ test("repeated package identities distinguish incompatible saved checks from ret
     const changed = await service.analyze(p.id, p.revision, { gapMode: "epic" });
     assert.equal(changed.status, "completed", changed.diagnostic);
     assert.equal(changed.context!.epicReview!.packageID, first.context!.epicReview!.packageID);
-    assert.deepEqual(changed.discoveryMetrics!.epicSelection, { format: 1, priorCompleted: true, reason: "saved-task-incompatible" });
+    assert.equal(changed.discoveryMetrics!.epicSelection!.reason, "saved-task-incompatible");
+    assert.equal(changed.discoveryMetrics!.epicSelection!.priorCompleted, true);
+    assert.ok(changed.discoveryMetrics!.epicSelection!.inputChanges!.includes("human-evidence"));
+    assert.ok(changed.discoveryMetrics!.epicSelection!.inputChanges!.includes("exact-input"));
+    assert.deepEqual(store.discoveryDiagnostics(p.id, [changed.id]).runs[0]!.measurements!.epicSelection!.inputChanges,
+      changed.discoveryMetrics!.epicSelection!.inputChanges);
     const report = JSON.stringify(store.discoveryDiagnostics(p.id, [first.id, changed.id]));
     assert.ok(!report.includes("PRIVATE")); assert.ok(!report.includes(changed.context!.epicReview!.inputKey));
     assert.deepEqual(store.getJob(first.id), first);

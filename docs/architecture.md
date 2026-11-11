@@ -1,5 +1,22 @@
 # Architecture outline
 
+SQLite 67 / conditional portable 41 adds a new-schedule-only empty-proposal terminal
+policy to staged discovery. Replay authenticates every original read and the exact
+empty boundary, without synthetic checks or changing old ledgers. Surviving proposals
+retain full verification. Continuation encoding reuses per-snapshot serialized items
+and a bounded invocation-local exact-string digest memo; output bytes and persisted
+snapshot-cache format remain unchanged. Finer numeric publication timings distinguish
+selection, snapshot reads and delta work. See
+[upgrade and verification boundaries](migrations.md#empty-discovery-completion-and-exact-continuation-computation-2026-11-11).
+
+Individual saved-input planning now measures its existing lossless dispatch encoder
+against 96k with the full draft reserve, rather than partitioning raw records at
+36k. Saved batch arrays/plan keys and all wire/replay semantics remain unchanged;
+only unstarted schedules are packed differently. Incompatible epic-check selection
+adds local structural input-change diagnostics against the latest completed package
+snapshot, without changing exact matching or semantic freshness. See
+[upgrade boundaries](migrations.md#measured-individual-answer-packing-and-input-change-diagnostics-2026-11-11).
+
 SQLite 66 / conditional portable 40 adds v13 layouts for the already-adopted
 union verification group budget. New layouts may exceed 64 within the unchanged
 256-page cumulative group ceiling; v12 and older paid contexts remain exact. Read,

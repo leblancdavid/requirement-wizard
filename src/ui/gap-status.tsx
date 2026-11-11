@@ -15,7 +15,9 @@ export function GapExplorationStatus({ job, project }: { job: Job; project?: Pro
     {report.total > 0 && report.blocked === report.total && <p role="status">This review could not check any groups. It has not established whether decisions are missing.</p>}
     {"planningPartial" in report && report.planningPartial && <p>These counts cover only the groups prepared so far, not the whole project.</p>}
     {!!report.blocked && <p role="status">Some checks could not finish. No new questions does not mean there are no missing decisions. Check Logs for the cause; repeating the same review may not resolve it.</p>}
-    {job.epicReviewReport?.stagedProgress && <p>{job.epicReviewReport.stagedProgress.completed} of {job.epicReviewReport.stagedProgress.batches * 2} review steps saved. {job.epicReviewReport.stagedProgress.phase === "complete" ? "All parts have been checked." : "Findings appear after all parts have been checked."}</p>}
+    {job.epicReviewReport?.stagedProgress && <p>{job.epicReviewReport.stagedProgress.emptyCompletion
+      ? "All discovery evidence was read. No suggestions remain, so further suggestion checks were not needed. This does not establish completeness or readiness."
+      : <>{job.epicReviewReport.stagedProgress.completed} of {job.epicReviewReport.stagedProgress.batches * 2} review steps saved. {job.epicReviewReport.stagedProgress.phase === "complete" ? "All parts have been checked." : "Findings appear after all parts have been checked."}</>}</p>}
     <LogLink target={job.id} />
   </section>;
 }

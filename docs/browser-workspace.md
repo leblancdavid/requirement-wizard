@@ -1,5 +1,36 @@
 # Browser workspace, epics, and estimated completeness
 
+## Empty discovery results and publication profiling (2026-11-11)
+
+Once all mandatory discovery reads finish, new staged runs can finish if no suggestions
+remain, including when verification removes the final suggestion. The progress view
+explains that further suggestion checks were unnecessary; it does not claim every
+check ran or that the specification is complete/ready. Any surviving suggestion
+still requires all original checks. Old paid schedules keep their original protocol.
+Restart the backend to load the change; reload starts no work.
+
+Diagnostics include optional `epicProposals` counts and checks not requested. Folder
+publication adds `continuationProfile` with numeric selection/snapshot-read/delta
+timings and digest-reuse counts; missing/incomplete historical measurements remain
+absent. No project prose, record IDs, hashes or paths are added to exports. The hash
+memo is local to each export and preserves every artifact byte. No live speed or
+44-second export-delay resolution is claimed. See
+[compatibility and measured fixtures](migrations.md#empty-discovery-completion-and-exact-continuation-computation-2026-11-11).
+
+## Individual-answer efficiency diagnostics (2026-11-11)
+
+New individual saved-response work uses fuller measured lossless evidence packets;
+every original record is still read and checked before publication. Already-started
+answers retain their saved schedules, so continuing a paid answer does not replan it
+or repeat its completed requests. No control/permission change is required.
+
+Diagnostics exports now include optional `epicSelection.inputChanges` categories for
+incompatible saved workflow checks. These distinguish observed target, human-source,
+other-evidence, guidance, policy, batch-layout and exact-input differences. They do
+not establish semantic impact or authorize reuse; older runs stay unknown. Missing
+historical inputs are explicitly unavailable. No project text/IDs/hashes are exported.
+See [compatibility and measured limits](migrations.md#measured-individual-answer-packing-and-input-change-diagnostics-2026-11-11).
+
 ## Independent design questions (2026-11-11)
 
 New question generation favours independently answerable decisions rather than several
