@@ -38,7 +38,8 @@ test("unknown/disabled/mismatched/inconsistent capacities and smaller input/cont
 });
 test("malformed joint profiles, direct selections and forged character counts cannot bypass admission; ordinary packets retain existing behavior",()=>{
  const f=fixture();for(const change of [(c:ContextPack)=>delete c.answerGroupInputCapacity,(c:ContextPack)=>{c.manifest.characters=12;},
-  (c:ContextPack)=>{c.answerGroupPagingAdvice!.format=9;},(c:ContextPack)=>{c.manifest.budget=256000;},(c:ContextPack)=>{c.answerGroupLookupInspection={phase:"plan",recordID:null,recordIDs:[]};}]){
+   (c:ContextPack)=>{c.answerGroupPagingAdvice!.format=9;},(c:ContextPack)=>{c.answerGroupPagingAdvice!.format=13;c.manifest.answerGroupStage!.phase="read";},
+   (c:ContextPack)=>{c.manifest.budget=256000;},(c:ContextPack)=>{c.answerGroupLookupInspection={phase:"plan",recordID:null,recordIDs:[]};}]){
    const context=structuredClone(f.context);change(context);assert.throws(()=>assertJointInputAdmission(f.project,context,f.prompt,[model]),JointInputCapacityError);
   }
  const direct=structuredClone(f.project);direct.model.connectionID="direct";assert.throws(()=>assertJointInputAdmission(direct,f.context,f.prompt,[model]),JointInputCapacityError);
@@ -58,10 +59,11 @@ test("complete repair admission requires its explicit v2 profile and rejects mis
  assert.throws(()=>assertJointInputAdmission(f.project,f.context,f.prompt,[]),JointInputCapacityError);
  assert.throws(()=>assertJointInputAdmission(f.project,f.context,f.prompt,[{...model,limit:{context:128000,input:100000,output:32000}}]),JointInputCapacityError);
 });
-for(const phase of ["read","check","repair"] as const)for(const accepted of [false,true])test(`OpenCode ${accepted?"admits":"rejects"} fresh ${phase} capacity before any session/prompt creation and closes only its owned runtime`,async()=>{
+for(const phase of ["read","check","group-check","repair"] as const)for(const accepted of [false,true])test(`OpenCode ${accepted?"admits":"rejects"} fresh ${phase} capacity before any session/prompt creation and closes only its owned runtime`,async()=>{
   const f=fixture(),calls:string[]=[];
   if(phase==="repair"){delete f.context.answerGroupPagingAdvice;f.context.manifest.answerGroupStage!.phase="repair";f.context.answerGroupInputCapacity!.repairFormat=2;}
-  if(phase==="check"){f.context.answerGroupPagingAdvice!.format=12;f.context.manifest.answerGroupStage!.phase="check";}
+   if(phase==="check"){f.context.answerGroupPagingAdvice!.format=12;f.context.manifest.answerGroupStage!.phase="check";}
+   if(phase==="group-check"){f.context.answerGroupPagingAdvice!.format=13;f.context.manifest.answerGroupStage!.phase="check";}
  const bootstrap=async()=>({directory:"fixture",close:async()=>{calls.push("close");},client:{
   provider:{list:async()=>({data:{connected:["openai"],all:[{id:"openai",models:{fixture:{name:"Fixture"}}}]}})},
   native:{model:{list:async()=>{calls.push("capacity");return {data:accepted?[model]:[]};}}},

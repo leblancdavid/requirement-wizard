@@ -18,7 +18,7 @@ export const diagnosticContextSchema = z.object({ characters: count, budget: cou
   omittedRecords: count, areas: count.nullable(), sections: sectionsSchema,
   traversal: z.object({ visitedRecords: count, examinedEdges: count, missingRecords: count }).strict().nullable(),
   sharedAnswer: z.object({ originalStep: count, phase: z.enum(["read", "check", "repair"]),
-    pageFormat: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12)]).nullable(), page: count.nullable(), pages: count.nullable() }).strict().optional(),
+    pageFormat: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13)]).nullable(), page: count.nullable(), pages: count.nullable() }).strict().optional(),
 }).strict();
 const groupProgressSchema = z.object({ batches: z.object({ length: count }).strict(),
   verificationPolicy: z.literal("union-v1").nullable().optional().transform(value => value ?? undefined),

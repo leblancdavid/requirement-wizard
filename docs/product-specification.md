@@ -131,6 +131,14 @@ scope, assumptions, and unknowns from the initial idea.
 **RW-008 — Adaptive question batches.** Generate small related batches, normally
 three to five questions, prioritized by impact, uncertainty, and dependencies.
 
+- Related questions must still be independently answerable. Prefer distinct decisions
+  across available features/dimensions; explicit feature/dimension focus stays in scope.
+  Ask foundational choices before dependent follow-ups, comparing premises and answer
+  options with both the new batch and existing unanswered questions. Prefer a smaller
+  batch over overlapping variants or speculative questions added to fill a target.
+- Feature-package scheduling prioritizes areas with fewer pending/deferred/delegated
+  questions. Generation and staged selection checks request semantic independence;
+  this reduces risk but does not prove that all question combinations are conflict-free.
 - Allow a configurable pending-question stopping target. Continue bounded packages
   until the target is reached or eligible work/safety budget runs out. Keep useful
   final-package questions even above the target; never force questions to fill it.

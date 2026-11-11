@@ -78,11 +78,12 @@ export function answerGroupLookupInventory(context: ContextPack) {
 }
 export const answerGroupStageSchema = z.object({ policy: z.literal("exact-answer-group-v1"), planKey: key,
   step: z.number().int().min(0).max(64), phase: z.enum(["read", "check", "repair"]) }).strict();
-const evidencePagesSchema = z.object({ format: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12)]), fromReceipt: z.number().int().min(0).max(1024), prefixKey: key,
+const evidencePagesSchema = z.object({ format: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12), z.literal(13)]), fromReceipt: z.number().int().min(0).max(1024), prefixKey: key,
   step: z.number().int().min(0).max(63), phase: z.enum(["read", "check"]),
-  pages: z.array(z.array(z.string().min(1)).min(1)).min(1).max(answerGroupLimits.pagesPerStep),
+  pages: z.array(z.array(z.string().min(1)).min(1)).min(1).max(answerGroupLimits.completedPages),
 }).strict().refine(p => p.format !== 1 || p.pages.length >= 2, "Legacy evidence plans require at least two pages.")
-  .refine(p => p.format === 12 || p.pages.length <= 32, "Historical layouts retain their 32-page bound.");
+  .refine(p => p.format >= 12 || p.pages.length <= 32, "Historical layouts retain their 32-page bound.")
+  .refine(p => p.format === 13 || p.pages.length <= answerGroupLimits.pagesPerStep, "Historical layouts retain their 64-page bound.");
 const repairContextSchema = z.object({ format: z.union([z.literal(1), z.literal(2)]), fromReceipt: z.number().int().positive().max(1024), prefixKey: key,
   step: z.number().int().min(0).max(63), rejectionReceipt: z.number().int().min(0).max(1023), draftKey: key,
   recordIDs: z.array(z.string().min(1)).min(1).max(512).refine(ids => new Set(ids).size === ids.length) }).strict();
@@ -1007,11 +1008,13 @@ function renderAnswerGroupContext(m: AnswerGroupMaterials, w: AnswerGroupWork, d
 }
 /** Split only an unfinished overflowing read/check. The original schedule and paid
  * receipts never change. Each page must finish before the original step can finish. */
-export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft, format?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12) {
+export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft, format?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13) {
   const progress = answerGroupProgress(w);
   const prior = activeEvidencePages(w, progress.completed, progress.phase);
-  format ??= prior?.format === 12 ? 12 : prior?.format === 11 ? 11 : prior?.format === 10 ? 10 : progress.phase === "read" ? 9 : 7;
+  format ??= prior?.format === 13 ? 13 : prior?.format === 12 ? 12 : prior?.format === 11 ? 11 : prior?.format === 10 ? 10 : progress.phase === "read" ? 9 : 7;
   if(format>=11&&!inputCapacityActive(w))throw new Error("Joint input capacity requires its exact Play adoption boundary.");
+  if (format === 13 && (progress.phase !== "check" || answerGroupPageStepLimit(w) !== answerGroupLimits.completedPages))
+    throw new Error("Group-budget layouts require the adopted union verification cursor.");
   const context = renderAnswerGroupContext(m, w, draft, undefined, { unbounded: true });
   const scopedRead = format >= 8 && progress.phase === "read";
   const scoped = format >= 7 && progress.phase === "check";
@@ -1088,7 +1091,7 @@ export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerG
     page.push(...unit);
   }
   if (page.length) pages.push(page);
-  const layoutLimit = format === 12 ? answerGroupLimits.pagesPerStep : 32;
+  const layoutLimit = format === 13 ? answerGroupLimits.completedPages : format === 12 ? answerGroupLimits.pagesPerStep : 32;
   if (format >= 3 && pages.length > layoutLimit) throw new AnswerGroupCapacityError("pages in one layout", pages.length, layoutLimit);
   if (pages.length < (format === 1 ? 2 : 1) || pages.length > layoutLimit || format < 3 && (w.evidencePages?.reduce((n, p) => n + p.pages.length - 1, 0) ?? 0) + pages.length - 1 > 32)
     throw new ContextBudgetError(context.manifest);
@@ -1099,7 +1102,7 @@ export function planAnswerGroupEvidencePages(m: AnswerGroupMaterials, w: AnswerG
   }
   return evidencePagesSchema.parse({ ...base, pages });
 }
-export function boundAnswerGroupEvidence(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft, format?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12) {
+export function boundAnswerGroupEvidence(m: AnswerGroupMaterials, w: AnswerGroupWork, draft?: AnswerGroupDraft, format?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13) {
   if (blockerReviewActive(w)?.fromReceipt === w.receipts.length) return answerGroupContext(m, w, draft);
   if(activeLookupInspection(w))return answerGroupContext(m,w,draft);
   if (activeLookupReview(w)) return answerGroupContext(m,w,draft);
@@ -1117,7 +1120,10 @@ export function boundAnswerGroupEvidence(m: AnswerGroupMaterials, w: AnswerGroup
     // historical packets, split a joint set, omit bodies or reset paid attempts.
     if (format === undefined && progressiveRepairs(w)) {
       if (layoutCapacity && !inputCapacityActive(w)) throw error;
-      for(const compactFormat of layoutCapacity ? [12] as const : inputCapacityActive(w)?[10,11,12] as const:[10] as const){
+      const groupLayout = answerGroupProgress(w).phase === "check" && answerGroupPageStepLimit(w) === answerGroupLimits.completedPages;
+      const formats = layoutCapacity ? groupLayout ? [12,13] as const : [12] as const
+        : inputCapacityActive(w) ? groupLayout ? [10,11,12,13] as const : [10,11,12] as const : [10] as const;
+      for(const compactFormat of formats){
       try {
         const compact = planAnswerGroupEvidencePages(m,w,draft,compactFormat);
         if (compact) {
@@ -1127,9 +1133,10 @@ export function boundAnswerGroupEvidence(m: AnswerGroupMaterials, w: AnswerGroup
           return context;
         }
       } catch (compactError) {
-        // Only the historical per-layout cap can use v12's remaining paid/pending
-        // budget. Never bypass per-step/group/request/byte limits or an unfit unit.
-        if (compactFormat === 11 && compactError instanceof AnswerGroupCapacityError && compactError.kind === "pages in one layout") continue;
+        // Versioned layouts can use only their already-adopted paid/pending budget.
+        // Never bypass step/group/request/byte limits or an unfit unit.
+        if ((compactFormat === 11 || compactFormat === 12 && groupLayout)
+          && compactError instanceof AnswerGroupCapacityError && compactError.kind === "pages in one layout") continue;
         if (!(compactError instanceof ContextBudgetError) || compactFormat >= 11) throw compactError;
       }
       }

@@ -1,5 +1,83 @@
 # Data migrations and upgrade compatibility
 
+## Independent question generation and balanced scheduling (2026-11-11)
+
+**Source → target: unchanged SQLite/portable formats.** No forward data migration is
+needed: this changes dispatch instructions and feature scheduling only. No schema,
+assessment semantics/fingerprint, material key, package identity, exact context data,
+saved schedule, receipt, answer, question or counter is rewritten or invalidated.
+Completed/saved results retain their original meaning; the app does not regenerate
+existing questions or repeat paid work solely to apply the new guidance. Subsequent
+model turns receive the new generation/selection guidance under their original budgets.
+
+Feature packages with fewer unanswered decisions are considered first; equal counts
+retain existing feature order and explicit focus remains enforced. Package contents,
+dependency waiting checks and saved recovery protocols stay intact. Staged checks use
+their existing unchanged-index subset protocol to remove overlapping/dependent draft
+questions. One-shot paths have generation guidance, not a new verification request.
+Semantic independence is model judgment, not a new readiness or consistency guarantee.
+
+Deterministic coverage exercises scheduling for pending/deferred/delegated decisions,
+explicit scope, unchanged source state, generation/check instructions, exact subset
+selection and the existing reopen/paid-receipt recovery flows. Live model behavior
+has not been qualified for this policy.
+
+Verified: `npm run check`; 163 tests across core epic review, service epic planning,
+readiness questions, question batches and provider ChatGPT fixtures; `git diff --check`.
+No UI change or live model call was made.
+
+## Union layouts use the already-adopted group budget (2026-11-11)
+
+**Source → target: SQLite 65 → 66; conditional portable format 40.** Ordered,
+transactional reader-boundary migration only: no project, assessment/fingerprint,
+human decision, paid receipt, context, draft, plan identity or usage is rewritten.
+Startup never adopts permissions or starts inference. Old layouts keep their exact
+format and limits. Only newly saved v13 layouts require portable 40; downgraded
+envelopes and unsupported future formats reject without replacement. Failed startup
+rolls back the version/history, preserving payloads for supported reopen/retry.
+
+After the user saved a repair-stage decision, the real revision-3401 run completed
+one repair (122 replies/requests total) and needed a 69-page verification layout.
+Union verification already had explicit prefix-bound adoption of the shared
+256-page group budget, but v12 independently stopped layouts at 64. This was a
+layout/step policy mismatch, not another product choice or an input-size verdict.
+
+New v13 layouts may exceed 64 only at that adopted union verification cursor and
+under existing guarded input adoption. Earlier v1–v11 layouts retain 32 and v12
+retains 64. Ordinary reads and unadopted/legacy verification cannot use v13. Every
+previous paid page still counts toward cumulative step/group limits; no request,
+repair, attempt, layout, byte, 96k ordinary-input or guarded 200k ceiling increases.
+The 32-request service window and cancellation charging remain unchanged. Every
+page includes the complete repaired draft and required original support; all pages
+must pass before publication. Historical old-draft checks never discharge new work.
+Oversized indivisible pages still require fresh selected-model whole-prompt capacity
+admission; v13 is admitted only as a check profile, not as a read/repair shortcut.
+
+Read-only real-checkpoint preflight and full receipt/layout replay passed with
+**122 paid replies, one repair decision, unchanged repaired draft, attempts and
+request counters**. The new layout has **69 pages**; its first page is **94,732 /
+96,000 characters**. Prior successful page replies total 103, including 65 against
+the union cursor, so planning these 69 stays within the unchanged 256-page budgets.
+No real database/folder writes, model calls or semantic verification verdicts were
+made. An initial raw-JSON inspection lacked normal project schema normalization
+and failed material-key validation; the app-equivalent schema-normalized inspection
+passed without modifying saved data.
+
+Tests cover complete >64-page verification with exact decoded originals/draft,
+no premature completion, unchanged old layouts, adoption rejection, repeated
+65→66 startup, paid-page reopen and empty-store clone continuation, downgrade,
+future-format rollback/retry and prefix/page tampering. Verification passed in
+stages: **932 pretests + 782 main tests**, followed by the final **277/277 posttest
+rerun** (1,991 total), type check, 15 capacity tests, focused shared-answer browser
+regression, UI/desktop build and diff check. Earlier full runs exposed historical
+fixtures still using now-supported format 13 as their unsupported-future example;
+those now use 14. One earlier timing-sensitive timeout test also failed, then passed
+in both later posttest runs. The final full `npm test` invocation stopped at the
+last obsolete future-format fixture; the complete posttest phase passed after its
+correction. No full browser suite was rerun for this non-UI change. Desktop rebuild
+passed after the user fully quit the app; no processes were terminated. Live
+post-upgrade verification remains unqualified.
+
 ## Workspace entry point for saved-answer conflicts (2026-11-11)
 
 UI-only discoverability fix; SQLite 65 / conditional portable 39 are unchanged.

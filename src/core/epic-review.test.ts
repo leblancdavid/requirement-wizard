@@ -7,7 +7,7 @@ import { ProjectStore } from "../storage/store.js";
 import { DiscoveryService } from "../service/discovery.js";
 import { DiscoveryQueue } from "../service/queue.js";
 import { epicReviewContext, epicReviewBatches, planEpicReview, stagedEpicReview, validateEpicReviewFinal } from "./epic-review.js";
-import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, validateEpicStages } from "./epic-stages.js";
+import { emptyEpicDraft, mergeEpicDraft, applyGuardrailVerdict, validateEpicStages, epicStageContext } from "./epic-stages.js";
 import { ContextBudgetError } from "./context.js";
 import { validateRetrieval, retrievalWorkSchema } from "./gap-retrieval.js";
 import { epicReviewDiagnostic, epicReviewReportSchema } from "./epic-review-types.js";
@@ -52,6 +52,56 @@ function seed(store: ProjectStore, count = 8) {
 }
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+test("question collection prefers features with fewer unanswered decisions without widening explicit focus", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store, 12);
+    assert.equal(planEpicReview(p, [], undefined, [], undefined, { firstPending: true }).task?.review.epicID, "orders");
+    for (const status of ["pending", "deferred", "delegated"] as const) {
+      const current = structuredClone(p);
+      current.questions.push({ id: "waiting-order-choice", epicID: "orders", text: "Which order policy applies?",
+        whyItMatters: "Settle the foundational order decision first", options: [], status,
+        evidenceIDs: [current.requirements[0]!.id] });
+      const before = structuredClone(current);
+      const next = planEpicReview(current, [], undefined, [], undefined, { firstPending: true });
+      assert.equal(next.task?.review.epicID, "billing", status);
+      const focused = planEpicReview(current, [], "orders", [], undefined, { firstPending: true });
+      assert.equal(focused.task?.review.epicID, "orders", "Independent scoped packages remain eligible");
+      assert.ok(!focused.task?.review.recordIDs.includes(current.requirements[0]!.id), "The linked waiting package is not explored");
+      assert.deepEqual(current, before, "Scheduling never rewrites questions or paid work");
+    }
+    const retired = structuredClone(p);
+    retired.questions.push({ id: "retired-choice", epicID: "orders", text: "Old choice", whyItMatters: "Historical", options: [], status: "retired" });
+    assert.equal(planEpicReview(retired, [], undefined, [], undefined, { firstPending: true }).task?.review.epicID, "orders");
+  } finally { store.close(); }
+});
+
+test("batch validation asks for independent subsets and preserves exact foundational and unrelated questions", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const p = seed(store), task = planEpicReview(p, [], "orders", [], undefined, { firstPending: true }).task!;
+    const draft = { ...empty(), questions: [
+      { localID: "new:guests", epicID: "orders", text: "Are guests allowed?", whyItMatters: "Choose the access boundary", options: [], evidenceIDs: [p.requirements[0]!.id] },
+      { localID: "new:recovery", epicID: "orders", text: "How do guest accounts recover access?", whyItMatters: "Depends on allowing guests", options: [], evidenceIDs: [p.requirements[0]!.id] },
+      { localID: "new:receipts", epicID: "orders", text: "Should receipts be printable?", whyItMatters: "Independent output decision", options: [], evidenceIDs: [p.requirements[1]!.id] },
+    ] };
+    const before = structuredClone(draft);
+    const base = task.context!;
+    const generation = discoveryPrompt(p, base, false);
+    assert.match(generation, /QUESTION BATCH INDEPENDENCE/);
+    assert.match(generation, /detailed existing pending, deferred or delegated/);
+    assert.match(generation, /Return fewer questions, including zero or one/);
+    const staged = epicStageContext(base, { phase: "validate", nextBatch: 0, batches: 1, candidates: draft });
+    const check = discoveryPrompt(p, staged, false);
+    assert.match(check, /BATCH SELECTION CHECK/);
+    assert.match(check, /keep the foundational question and drop the dependent follow-up/);
+    const selected = applyGuardrailVerdict(draft, { guardrailVerdict: { keepQuestions: [0, 2], keepRequirements: [] } });
+    assert.deepEqual(selected.questions, [draft.questions[0], draft.questions[2]]);
+    assert.deepEqual(draft, before, "Selection cannot rewrite original proposals or their evidence");
+    assert.deepEqual(applyGuardrailVerdict(draft, { guardrailVerdict: { keepQuestions: [], keepRequirements: [] } }).questions, []);
+  } finally { store.close(); }
+});
 
 test("record-staged fallback preserves exact mandatory human records, bounds every batch and rejects partial requirement authority", () => {
   const store = new ProjectStore(":memory:");

@@ -489,7 +489,7 @@ function output(items: Submission[]) {
     answers: items.map(s => ({ submissionID: s.id, outcome: "integrated" as const, explanation: "Recorded this original answer without changing another choice" })) };
 }
 
-function wideVerificationFixture(store: ProjectStore) {
+function wideVerificationFixture(store: ProjectStore, summaryBytes = 1000) {
   const { p, items } = fixture(store, 5, true, () => randomBytes(4800).toString("hex"), false, false, () => randomBytes(5900).toString("hex"), 72);
   const m = answerGroupMaterials(p, items), state = store.workflow(p.id);
   state.enabled = true; state.paused = false; state.playPolicy = { format: 1, stopped: false };
@@ -506,14 +506,15 @@ function wideVerificationFixture(store: ProjectStore) {
     attempts: 0, receipts: [] });
   const w = adoptAnswerGroupPlay(m, planned, job);
   adoptAnswerGroupInputCapacity(m, w); adoptAnswerGroupRepairPolicy(w);
-  const proposed = output(items); proposed.analysis.summary = randomBytes(1000).toString("hex");
+  const proposed = output(items); proposed.analysis.summary = randomBytes(summaryBytes).toString("hex");
   for (const r of proposed.analysis.requirements) r.rationale = randomBytes(250).toString("hex");
   let draft: AnswerGroupDraft | undefined;
+  let readContext;
   while (answerGroupProgress(w).phase === "read") {
-    boundAnswerGroupEvidence(m, w, draft); w.attempts++; w.automation!.requests++;
+    readContext = boundAnswerGroupEvidence(m, w, draft); w.attempts++; w.automation!.requests++;
     draft = acceptAnswerGroup(m, w, draft, draft ? { answerGroupKeep: true } : { answerGroupDraft: proposed }, job).draft;
   }
-  return { p, items, m, job, w, draft: draft!, owner };
+  return { p, items, m, job, w, draft: draft!, owner, readContext: readContext! };
 }
 
 test("v12 fits more than 32 complete verification pages within the unchanged cumulative budget, preserves every exact original/draft and cannot publish early", () => {
@@ -561,7 +562,7 @@ test("62 to 63 preserves paid layouts, new v12 checkpoints and usage across repe
     for (const s of f.items) { s.jobID = f.job.id; s.status = "needs-attention"; store.saveSubmission(s); }
     const saved = store.getJob(f.job.id); store.close();
     let db = new Database(path); db.pragma("user_version=62"); db.exec("DELETE FROM migration_history WHERE version>=63");
-    const future = structuredClone(saved); (future.answerGroupWork!.evidencePages!.at(-1)! as { format: number }).format = 13;
+    const future = structuredClone(saved); (future.answerGroupWork!.evidencePages!.at(-1)! as { format: number }).format = 14;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), saved.id); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 62);
     assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM jobs WHERE id=?").get(saved.id) as { payload: string }).payload), future);
@@ -582,6 +583,122 @@ test("62 to 63 preserves paid layouts, new v12 checkpoints and usage across repe
     const tampered = structuredClone(f.w); tampered.evidencePages!.at(-1)!.pages[0]!.pop(); assert.throws(() => replayAnswerGroup(f.m, tampered));
     assert.equal(context.answerGroupPagingAdvice!.number, 1);
   } finally { try { store.close(); } catch { /* Startup rejection closes itself. */ } rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("v13 admits over 64 union pages only under the adopted group budget, keeps exact evidence/draft and requires every page", () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = wideVerificationFixture(store, 5500), original = structuredClone(f.w);
+    assert.throws(() => planAnswerGroupEvidencePages(f.m, f.w, f.draft, 13), /adopted union verification cursor/);
+    assert.throws(() => boundAnswerGroupEvidence(f.m, f.w, f.draft), e => e instanceof AnswerGroupCapacityError && e.kind === "pages in one layout");
+    adoptAnswerGroupUnionPageCapacity(f.w);
+    assert.throws(() => planAnswerGroupEvidencePages(f.m, f.w, f.draft, 12), e => e instanceof AnswerGroupCapacityError && e.kind === "pages in one layout");
+    const first = boundAnswerGroupEvidence(f.m, f.w, f.draft), plan = f.w.evidencePages!.at(-1)!;
+    assert.equal(plan.format, 13); assert.ok(plan.pages.length > 64 && plan.pages.length < 128);
+    assert.equal(contextDiagnostics(first).sharedAnswer!.pageFormat, 13);
+    assert.deepEqual(f.w.receipts, original.receipts); assert.deepEqual(f.w.automation, original.automation); assert.equal(f.w.attempts, original.attempts);
+    const old = structuredClone(f.w); old.evidencePages!.at(-1)!.format = 12;
+    assert.throws(() => answerGroupWorkSchema.parse(old), /64-page bound/);
+    const unadopted = structuredClone(f.w); delete unadopted.unionPageCapacity;
+    assert.throws(() => replayAnswerGroup(f.m, unadopted), /adopted union verification cursor/);
+    const served = new Set<string>(); let checks = 0;
+    while (answerGroupProgress(f.w).phase !== "complete") {
+      const context = boundAnswerGroupEvidence(f.m, f.w, f.draft), decoded = unpackShared(context.data);
+      assert.equal(context.answerGroupPagingAdvice!.format, 13);
+      assert.deepEqual(decoded.draft, JSON.parse(JSON.stringify(f.draft)));
+      assert.ok(context.manifest.characters <= context.manifest.budget);
+      for (const id of context.manifest.includedIDs) {
+        const r = f.m.records.find(r => r.record.id === id)!;
+        assert.deepEqual((decoded[r.field] as { id: string }[]).find(v => v.id === id), JSON.parse(JSON.stringify(r.record))); served.add(id);
+      }
+      checks++; f.w.attempts++; f.w.automation!.requests++;
+      acceptAnswerGroup(f.m, f.w, f.draft, { answerGroupCheck: { valid: true, reason: "This complete page agrees with the entire current draft" } }, f.job);
+      assert.equal(answerGroupProgress(f.w).phase, checks < plan.pages.length ? "check" : "complete");
+    }
+    assert.equal(checks, plan.pages.length); assert.ok(f.w.batches.flat().every(id => served.has(id)));
+    assert.deepEqual(f.w.receipts.slice(0, original.receipts.length), original.receipts);
+    assert.equal(f.w.automation!.requests, original.automation!.requests + checks);
+    assert.deepEqual(replayAnswerGroup(f.m, f.w).draft, f.draft);
+  } finally { store.close(); }
+});
+
+test("v13 service continuation retains the 32-request window, charges cancellation and resumes paid pages without replay", async () => {
+  const store = new ProjectStore(":memory:");
+  try {
+    const f = wideVerificationFixture(store, 5500); adoptAnswerGroupUnionPageCapacity(f.w);
+    const original = structuredClone(f.w);
+    store.checkpointAnswerGroup(f.job.id, f.w, f.readContext.manifest); store.failJob(f.job.id, "failed", "Retained union layout stop");
+    store.releaseWorkflow(f.p.id, f.owner);
+    for (const s of f.items) { s.status = "needs-attention"; s.jobID = f.job.id; store.saveSubmission(s); }
+    const pages: number[] = [];
+    const service = new DiscoveryService(store, { async analyze(_p, { context }) {
+      assert.equal(context.manifest.answerGroupStage!.phase, "check"); assert.equal(context.answerGroupPagingAdvice!.format, 13);
+      pages.push(context.answerGroupPagingAdvice!.number);
+      return { answerGroupCheck: { valid: true, reason: "Entire current draft agrees with this complete original page" } };
+    } });
+    const options = { answerGroup: true, submissionIDs: f.items.map(s => s.id) };
+    let done = await service.analyze(f.p.id, f.p.revision, options);
+    assert.equal(done.status, "interrupted", done.diagnostic); assert.equal(pages.length, 32);
+    const paid = structuredClone(done.answerGroupWork!), controller = new AbortController();
+    const cancelled = await new DiscoveryService(store, { async analyze() { controller.abort(new DOMException("Stopped", "AbortError")); return {}; } })
+      .analyze(f.p.id, f.p.revision, { ...options, signal: controller.signal });
+    assert.equal(cancelled.status, "cancelled"); assert.deepEqual(cancelled.answerGroupWork!.receipts, paid.receipts);
+    assert.equal(cancelled.answerGroupWork!.automation!.requests, paid.automation!.requests + 1);
+    assert.equal(cancelled.answerGroupWork!.attempts, paid.attempts + 1);
+    while (done.status !== "completed") {
+      done = await service.analyze(f.p.id, f.p.revision, options);
+      assert.ok(["interrupted", "completed"].includes(done.status), done.diagnostic);
+    }
+    assert.deepEqual(pages, Array.from({ length: pages.length }, (_, i) => i + 1));
+    assert.ok(pages.length > 64);
+    assert.deepEqual(done.answerGroupWork!.receipts.slice(0, original.receipts.length), original.receipts);
+    assert.equal(done.answerGroupWork!.automation!.requests, original.automation!.requests + pages.length + 1);
+  } finally { store.close(); }
+});
+
+test("65 to 66 retains old union work exactly; v13 survives reopen/clone and rejects future formats, downgrade and prefix/page tampering", () => {
+  const root = resolve(".reqwizit-state/tests"); mkdirSync(root, { recursive: true });
+  const directory = mkdtempSync(join(root, "group-layout-upgrade-")), path = join(directory, "state.sqlite"); let store = new ProjectStore(path);
+  try {
+    const f = wideVerificationFixture(store, 5500); adoptAnswerGroupUnionPageCapacity(f.w);
+    store.checkpointAnswerGroup(f.job.id, f.w, f.readContext.manifest);
+    store.failJob(f.job.id, "failed", "Retained layout capacity stop"); store.releaseWorkflow(f.p.id, f.owner);
+    for (const s of f.items) { s.status = "needs-attention"; s.jobID = f.job.id; store.saveSubmission(s); }
+    const original = store.getJob(f.job.id); store.close();
+    let db = new Database(path); db.pragma("user_version=65"); db.exec("DELETE FROM migration_history WHERE version>=66"); db.close();
+    for (let i = 0; i < 2; i++) { store = new ProjectStore(path); assert.deepEqual(store.getJob(f.job.id), original); if (!i) store.close(); }
+    const nextJob = store.beginJob(f.p.id, f.p.revision).job; store.claimJob(nextJob.id, Date.now() + 60000);
+    const w = store.getJob(f.job.id).answerGroupWork!; boundAnswerGroupEvidence(f.m, w, f.draft);
+    w.attempts++; w.automation!.requests++;
+    acceptAnswerGroup(f.m, w, f.draft, { answerGroupCheck: { valid: true, reason: "First retained union page agrees" } }, nextJob);
+    const next = boundAnswerGroupEvidence(f.m, w, f.draft);
+    store.checkpointAnswerGroup(nextJob.id, w, next.manifest); store.failJob(nextJob.id, "interrupted", "Retain paid first page");
+    for (const s of f.items) { s.jobID = nextJob.id; store.saveSubmission(s); }
+    const saved = store.getJob(nextJob.id);
+    store.close(); store = new ProjectStore(path); assert.deepEqual(store.getJob(saved.id), saved);
+    const files = renderWorkspace(f.p, undefined, continuationState(f.p, store.jobs(f.p.id), store.submissions(f.p.id), rev => store.get(f.p.id, rev)));
+    assert.equal(JSON.parse(files["state.json"]!).formatVersion, 40);
+    assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 39 }) }, f.p.model), /format 40/);
+    const folder = join(directory, "clone");
+    for (const [name, text] of Object.entries(files)) { const target = join(folder, ".reqwizit", name); mkdirSync(resolve(target, ".."), { recursive: true }); writeFileSync(target, text); }
+    const clone = new ProjectStore(":memory:");
+    try {
+      const p = clone.openWorkspace(folder, f.p.model), kept = clone.getJob(saved.id).answerGroupWork!, m = answerGroupMaterials(p, clone.submissions(p.id));
+      assert.deepEqual(kept, w); assert.deepEqual(replayAnswerGroup(m, kept).draft, f.draft);
+      assert.deepEqual(answerGroupContext(m, kept, f.draft).data, next.data);
+      assert.equal(answerGroupProgress(kept).evidencePage!.completed, 1);
+    } finally { clone.close(); }
+    for (const mutate of [(work: typeof w) => { work.evidencePages!.at(-1)!.prefixKey = "0".repeat(64); },
+      (work: typeof w) => { work.evidencePages!.at(-1)!.pages[0]!.pop(); }]) {
+      const changed = structuredClone(w); mutate(changed); assert.throws(() => replayAnswerGroup(f.m, changed));
+    }
+    store.close(); db = new Database(path); const future = structuredClone(saved); (future.answerGroupWork!.evidencePages!.at(-1)! as { format: number }).format = 14;
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), saved.id); db.pragma("user_version=65"); db.exec("DELETE FROM migration_history WHERE version>=66"); db.close();
+    assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 65);
+    assert.deepEqual(JSON.parse((db.prepare("SELECT payload FROM jobs WHERE id=?").get(saved.id) as { payload: string }).payload), future);
+    db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(saved), saved.id); db.close(); store = new ProjectStore(path);
+    assert.deepEqual(store.getJob(saved.id), saved);
+  } finally { try { store.close(); } catch { /* Rejected startup closes itself. */ } rmSync(directory, { recursive: true, force: true }); }
 });
 
 function repairedWideUnion(store: ProjectStore) {
@@ -964,7 +1081,7 @@ test("41 to 42 retains paid v5 packets across reopen and rollback; compact v6 ch
     store.checkpointAnswerGroup(job.id, w, oldContext.manifest); store.failJob(job.id, "failed", "Retained original packet");
     const original = store.getJob(job.id); store.close();
     let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 42; PRAGMA user_version=41");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 14;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); db.close();
     assert.throws(() => new ProjectStore(path));
     db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 41);
@@ -1242,7 +1359,7 @@ test("44 to 45 retains a reserve-only read stop and fits its atomic joint unit w
     store.checkpointAnswerGroup(job.id, f.w, overflow.manifest); store.failJob(job.id, "failed", overflow.message);
     const original = store.getJob(job.id), paid = structuredClone(f.w.receipts), progress = answerGroupProgress(f.w);
     store.close(); let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 45; PRAGMA user_version=44");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 14;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), job.id); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 44);
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(original), job.id); db.close();
@@ -1367,7 +1484,7 @@ test("v8 read relayout retains paid coverage and requires explicit counterparts 
     const f = legacyPageLoop(store, 2), paid = structuredClone(f.w.receipts);
     const original = store.getJob(f.job.id); store.close();
     let db = new Database(path); db.exec("DELETE FROM migration_history WHERE version >= 44; PRAGMA user_version=43");
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 14;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), f.job.id); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);
     assert.equal(db.pragma("user_version", { simple: true }), 43);
@@ -1474,7 +1591,7 @@ test("37 to 38 preserves mixed-job v1 page hashes, rejects future data transacti
     const tampered = structuredClone(reordered); tampered.receipts[0]!.jobID = randomUUID();
     assert.throws(() => replayAnswerGroup(f.m, tampered), /evidence pages/);
     store.close(); let db = new Database(path);
-    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
+    const future = structuredClone(original); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 14;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), f.job.id);
     db.exec("DELETE FROM migration_history WHERE version >= 38; PRAGMA user_version=37"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path); assert.equal(db.pragma("user_version", { simple: true }), 37);
@@ -1591,7 +1708,7 @@ for (const phase of ["read", "check"] as const) test(`oversized shared ${phase} 
     assert.deepEqual(work.receipts.slice(0, originalReceipts.length), originalReceipts);
     const tampered = structuredClone(work); tampered.evidencePages![0]!.pages[0]!.pop();
     assert.throws(() => replayAnswerGroup(m, tampered), /evidence pages/);
-    const future = structuredClone(work); (future.evidencePages![0] as { format: number }).format = 13;
+    const future = structuredClone(work); (future.evidencePages![0] as { format: number }).format = 14;
     assert.equal(answerGroupWorkSchema.safeParse(future).success, false);
   } finally { store.close(); }
 });
@@ -1640,7 +1757,7 @@ test("36 to 37 retains an overflowing paid lookup; explicit paged continuation s
     assert.deepEqual(decodePortable(files, p.model).continuation.jobs.find(j => j.id === paused.id)!.answerGroupWork, paused.answerGroupWork);
     assert.throws(() => decodePortable({ ...files, "state.json": JSON.stringify({ ...JSON.parse(files["state.json"]!), formatVersion: 18 }) }, p.model), /format 19/);
     store.close(); db = new Database(path);
-    const future = structuredClone(paused); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 13;
+    const future = structuredClone(paused); (future.answerGroupWork!.evidencePages![0] as { format: number }).format = 14;
     db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future), paused.id);
     db.exec("DELETE FROM migration_history WHERE version >= 37; PRAGMA user_version=36"); db.close();
     assert.throws(() => new ProjectStore(path)); db = new Database(path);

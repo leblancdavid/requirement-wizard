@@ -39,6 +39,8 @@ test("readiness task uses current exact check/evidence, a questions-only prompt 
   try {
     const context = readinessQuestionContext(f.project, f.task), prompt = discoveryPrompt(f.project, context);
     assert.match(prompt, /NOT an assessment or requirement-writing task/);
+    assert.match(prompt, /QUESTION BATCH INDEPENDENCE/);
+    assert.match(prompt, /in an explicitly focused feature\/dimension stay within that scope/);
     assert.match(prompt, /unresolved "failures"/); assert.ok(context.manifest.characters <= 96000);
     assert.equal(context.manifest.characters, JSON.stringify(context.data).length);
     assert.ok(context.manifest.includedIDs.includes(f.project.sources[0]!.id));
@@ -442,6 +444,12 @@ test("ordinary clarification passes 32 requests and fifteen minutes with rolling
       assert.equal(f.store.get(f.project.id).questions.length, 0);
       assert.ok((f.store.jobs(f.project.id).at(-1)!.leaseUntil ?? 0) > Date.now());
       f.store.recoverExpiredJobs(); assert.equal(f.store.jobs(f.project.id).at(-1)!.status, "running");
+      const prompt = discoveryPrompt(f.project, context, false);
+      assert.match(prompt, /QUESTION BATCH INDEPENDENCE/);
+      if (context.manifest.readinessStage!.phase === "check") {
+        assert.match(prompt, /BATCH SELECTION CHECK/);
+        assert.match(prompt, /Against an existing unanswered prerequisite, drop the new dependent question/);
+      }
       return context.manifest.readinessStage!.phase === "check"
         ? { clarificationVerdict: { keepQuestions: [0], summary: "Exact batch checked" } } : f.result();
     } });

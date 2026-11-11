@@ -1,5 +1,32 @@
 # Browser workspace, epics, and estimated completeness
 
+## Independent design questions (2026-11-11)
+
+New question generation favours independently answerable decisions rather than several
+variants in one area. A foundational choice should be answered and processed before
+dependent follow-ups are generated. Existing unanswered questions count in that comparison;
+fewer questions is preferable to filling a target. Feature-focused discovery stays in scope.
+
+Feature-package scheduling now visits areas with fewer pending, deferred or delegated
+questions first, retaining the previous order for ties. Existing linked-decision waiting
+checks still apply. Staged discovery/clarification checks select an unchanged subset,
+dropping overlapping alternatives or dependent follow-ups rather than rewriting questions.
+One-shot generation uses the same independence guidance, without an extra model call.
+
+Saved questions/answers, paid receipts, budgets and review identities are unchanged.
+Scheduling balance is deterministic; semantic independence remains model judgment, not
+a guarantee that all options across all questions are conflict-free. No live-model
+qualification has been performed for this policy.
+
+## Previous updates
+
+If a repaired shared-answer run stops at **pages in one layout (69 / 64)** despite
+already sharing the group budget, restart the rebuilt app and use **Play**. New
+verification layouts can use that already-adopted budget without repeating paid
+reads/repairs or resaving the human decision. This does not expand the total request
+or page budget, and every page must still pass. See
+[compatibility and checks](migrations.md#union-layouts-use-the-already-adopted-group-budget-2026-11-11).
+
 When Play stops on two conflicting saved answers, select **Resolve saved-answer
 conflict** in the notice at the top of the workspace (including **Design**). You do
 not need to locate a requirement or open the processing queue. The existing

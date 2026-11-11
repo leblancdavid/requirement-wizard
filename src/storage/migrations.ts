@@ -27,7 +27,7 @@ import { definitionMixedSavedReviewBytes } from "../core/definition-mixed-public
 import { readMixedSavedReview, readMixedPublication } from "./definition-mixed-publication.js";
 import { reportStartup, type StartupProgress } from "../core/startup.js";
 
-export const databaseSchemaVersion = 65;
+export const databaseSchemaVersion = 66;
 const changeReviewValue = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.definitionChangeReviews') END";
 const changeReviewPredicate = `CASE WHEN json_valid(payload) THEN json_type(payload, '$.definitionChangeReviews') IS NOT NULL
   ELSE instr(payload, '"definitionChangeReviews"') > 0 END`;
@@ -348,6 +348,9 @@ const migrations = [{ version: 2, name: "execution-schema-and-assessment-identit
 } }, { version: 65, name: "carried-draft-conflict-human-decisions", apply() {
   // Reader boundary only. Explicit repair-stage human decisions bind the frozen
   // draft and paid prefix. All older contexts, answers and paid work stay exact.
+} }, { version: 66, name: "union-layout-shares-adopted-group-page-budget", apply() {
+  // Reader boundary only. New v13 layouts use the already-adopted union group
+  // budget; old layouts, paid prefixes, human notes and all other ceilings stay exact.
 } }];
 
 /** Ordered, synchronous, transactional startup upgrades; never performs model calls

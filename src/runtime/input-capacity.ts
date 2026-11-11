@@ -18,7 +18,8 @@ export function assertJointInputAdmission(project:Project,context:ContextPack,pr
    if(!needsJointInputAdmission(context))return undefined;
    const policy=context.answerGroupInputCapacity;
    const phase=context.manifest.answerGroupStage?.phase;
-   const paged=policy?.repairFormat===undefined&&[11,12].includes(context.answerGroupPagingAdvice?.format ?? 0)&&(phase==="read"||phase==="check");
+   const pageFormat=context.answerGroupPagingAdvice?.format ?? 0;
+   const paged=policy?.repairFormat===undefined&&([11,12].includes(pageFormat)&&(phase==="read"||phase==="check")||pageFormat===13&&phase==="check");
    const repair=policy?.repairFormat===2&&phase==="repair"&&!context.answerGroupPagingAdvice;
    if(!policy||policy.format!==1||policy.characters!==200000||policy.normalCharacters!==96000
      ||project.model.connectionID||project.model.providerID!=="openai"||policy.model.providerID!==project.model.providerID

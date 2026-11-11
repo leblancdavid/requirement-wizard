@@ -689,7 +689,15 @@ export function planEpicReview(project: Project, jobs: Job[], focusEpicID?: stri
     if (foundPending) return;
     checkpoint(key, start, before);
   };
-  const selected = active.filter((e) => !focusEpicID || e.id === focusEpicID);
+  // Balance new work across features before filling further packages in an area
+  // already waiting for decisions. This is scheduling, not a claim that features
+  // are semantically independent; linked-decision waiting checks still apply.
+  const waitingQuestions = new Map<string, number>();
+  for (const question of project.questions) if (["pending", "deferred", "delegated"].includes(question.status)) {
+    waitingQuestions.set(question.epicID, (waitingQuestions.get(question.epicID) ?? 0) + 1);
+  }
+  const selected = active.filter((e) => !focusEpicID || e.id === focusEpicID)
+    .sort((a, b) => (waitingQuestions.get(a.id) ?? 0) - (waitingQuestions.get(b.id) ?? 0));
   for (const epic of selected) {
     if (foundPending) break;
     const records = recordsFor(epic.id);

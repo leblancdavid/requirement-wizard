@@ -1,5 +1,11 @@
 # Architecture outline
 
+SQLite 66 / conditional portable 40 adds v13 layouts for the already-adopted
+union verification group budget. New layouts may exceed 64 within the unchanged
+256-page cumulative group ceiling; v12 and older paid contexts remain exact. Read,
+request, input, repair and storage safeguards are unchanged. See
+[compatibility and checks](migrations.md#union-layouts-use-the-already-adopted-group-budget-2026-11-11).
+
 SQLite 65 / conditional portable 39 extends explicit human clarification to an
 already-rejected carried-draft repair. Each v2 note binds its exact draft and paid
 prefix; unrelated decisions/actions and all usage remain intact. The existing inline

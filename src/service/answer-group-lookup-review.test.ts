@@ -360,7 +360,7 @@ test("51 to 52 preserves old joint work; v10 layout and paid hashes survive reop
    const material=answerGroupMaterials(project,retained.submissionIDs.map(id=>clone.submissions(project.id).find(s=>s.id===id)!));
    assert.deepEqual(replayAnswerGroup(material,retained).draft,f.draft);assert.deepEqual(boundAnswerGroupEvidence(material,retained,f.draft).data,context.data);assert.equal(clone.workflow(project.id).paused,true);
   }finally{clone.close();}
-  store.close();db=new Database(path);const future=structuredClone(saved);future.answerGroupWork!.evidencePages!.at(-1)!.format=13 as never;
+  store.close();db=new Database(path);const future=structuredClone(saved);future.answerGroupWork!.evidencePages!.at(-1)!.format=14 as never;
   db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(future),saved.id);db.exec("DELETE FROM migration_history WHERE version>=52; PRAGMA user_version=51");db.close();
   assert.throws(()=>new ProjectStore(path));db=new Database(path);assert.equal(db.pragma("user_version",{simple:true}),51);db.prepare("UPDATE jobs SET payload=? WHERE id=?").run(JSON.stringify(saved),saved.id);db.close();store=new ProjectStore(path);assert.deepEqual(store.getJob(saved.id),saved);
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
